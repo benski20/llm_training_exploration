@@ -51,8 +51,8 @@ def store_template(qwen_pack: InMemoryPack) -> Iterator[Path]:
     store = MaskStore.open(d / "store", FileKeyProvider(d / "kek", create=True), fsync=False,
                            counter=FileMonotonicCounter(d / "ctr", fsync=False))
     gen = MaskGenerator(qwen_pack, DEFAULT_RING)
-    gen.generate_into_store(store, SLOTS // 2, chunk_slots=8, factory_id="t")
-    gen.generate_into_store(store, SLOTS // 2, chunk_slots=8, factory_id="t")
+    gen.generate_into_store(store, SLOTS // 2, chunk_slots=8, store_chunk_slots=8, factory_id="t")
+    gen.generate_into_store(store, SLOTS // 2, chunk_slots=8, store_chunk_slots=8, factory_id="t")
     store.close()
     yield d
     shutil.rmtree(d, ignore_errors=True)
@@ -94,13 +94,14 @@ class _Seeded(OutboundNoiseMonitor):
 
 
 def _scenario(pack: Any, template: Path, monkeypatch: pytest.MonkeyPatch, fast: bool, nat: bool,
-              noise_async: bool = False, mode: str = "sync") -> tuple[dict[str, torch.Tensor], list[Any], Any, Any]:
+              noise_async: bool = False, mode: str = "sync", windows: tuple[int, int] = (5, 3),
+              **kw: Any) -> tuple[dict[str, torch.Tensor], list[Any], Any, Any]:
     _env(monkeypatch, fast, nat, noise_async)
     st = _Store(template, pack)
-    monkeypatch.setattr(hooks, "_res", lambda p, n, seed: st.windowed(n))
+    monkeypatch.setattr(hooks, "_res", lambda p, n, seed: st.windowed(n, *windows))
     client = LocalComputeClient(pack, record=True)
     noise = _Seeded()
-    model = _masked(pack, client=client, trip_engine=True, sync_trips=True, noise_monitor=noise)
+    model = _masked(pack, client=client, trip_engine=True, sync_trips=True, noise_monitor=noise, **kw)
     model.backend.freivalds_rate = 1.0
     be = model.backend
     calls: list[int] = []
@@ -366,3 +367,293 @@ def test_lease_rejects_bad_buffers() -> None:
                                   u, uw)
     assert lease.rows == 2 and lease.cursor == 7 and lease.ready(2) and not lease.ready(3)
     assert lease.detach() == 7 and not lease.ready(1) and lease.left == 0
+
+
+# ---- prime-field ("p31") extents through leases ----------------------------------------------------------
+@pytest.fixture(scope="module")
+def p31_template(qwen_pack: InMemoryPack) -> Iterator[Path]:
+    """:func:`store_template` in the prime-field check format (``check_field = "p31"``, one vector)."""
+    from pgw.factory import MaskGenerator
+    from pgw.maskstore import FileKeyProvider, MaskStore
+    from pgw.maskstore.counters import FileMonotonicCounter
+
+    d = Path(tempfile.mkdtemp(prefix="pgw-tn-p31-"))
+    store = MaskStore.open(d / "store", FileKeyProvider(d / "kek", create=True), fsync=False,
+                           counter=FileMonotonicCounter(d / "ctr", fsync=False))
+    gen = MaskGenerator(qwen_pack, DEFAULT_RING, check_field="p31")
+    gen.generate_into_store(store, SLOTS // 2, chunk_slots=8, store_chunk_slots=8, factory_id="t")
+    gen.generate_into_store(store, SLOTS // 2, chunk_slots=8, store_chunk_slots=8, factory_id="t")
+    store.close()
+    yield d
+    shutil.rmtree(d, ignore_errors=True)
+
+
+def test_p31_leases_equal_plain_and_bytes_identical(qwen_pack: InMemoryPack, p31_template: Path,
+                                                    monkeypatch: pytest.MonkeyPatch) -> None:
+    """Prime-field extents are leased (one native call per side) with the prime check synchronous inside
+    ``ticket.finish``: masked == plain bit for bit, byte-identical payloads and the same noise statistics
+    as the PGW_TRIP_FAST path, every check counted synchronously (never deferred)."""
+    ref = _plain_ref(qwen_pack)
+    base_out, base_sent, base_stats, (_, _, base_snap) = _scenario(
+        qwen_pack, p31_template, monkeypatch, True, False, prime_check=True, min_soundness_bits=20)
+    _same(ref, base_out)
+    out, sent, stats, (served, _tried, snap) = _scenario(
+        qwen_pack, p31_template, monkeypatch, True, True, prime_check=True, min_soundness_bits=20)
+    _same(ref, out)
+    assert served > 0
+    assert sent == base_sent and stats == base_stats
+    assert snap["integrity_failures"] == 0 and snap["deferred_checks"] == 0
+    assert snap["freivalds_checked"] == base_snap["freivalds_checked"] > 0
+
+
+@pytest.fixture
+def one_p31(qwen_pack: InMemoryPack, p31_template: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Any]:
+    _env(monkeypatch, True, True)
+    st = _Store(p31_template, qwen_pack)
+    client = LocalComputeClient(qwen_pack, record=True)
+    model = _masked(qwen_pack, client=client, trip_engine=True, sync_trips=True, prime_check=True,
+                    min_soundness_bits=20)
+    model.backend.freivalds_rate = 1.0
+    try:
+        yield st, model.backend, client
+    finally:
+        model.close()
+        st.close()
+
+
+def test_p31_lease_tamper_detected_and_single_use(one_p31: Any, qwen_pack: InMemoryPack) -> None:
+    """Through a prime lease: a tampered entry (any position) or an out-of-range reply fails closed before
+    any output is used, the row stays consumed, and the next trip (next row) is exact."""
+    from pgw.core.freivalds import P31
+
+    st, be, client = one_p31
+    spec = qwen_pack.linear_specs()[0]
+    res = st.store.reserve(qwen_pack.fingerprint, DEFAULT_RING, 16)
+    real = client.compute_sync
+    x = _x(spec, 5)
+    out0 = be.forward_many([LinearCall(spec.id, x, res)])[0]
+    lease = res.trip_leases[spec.id.key]
+    assert lease.field == P31
+    m = spec.out_features
+
+    def tamper(pos: int, delta: int) -> Any:
+        def f(req: Any) -> Any:
+            r = real(req)
+            it = r.items[0]
+            y = np.frombuffer(bytes(it.y_hat), dtype=np.uint32).copy()
+            y[pos] = (int(y[pos]) + delta) & 0xFFFFFFFF
+            return ComputeResponse(r.request_id, (ComputeResult(it.linear, it.rows, y.tobytes()),))
+        return f
+
+    for fault in (tamper(0, 1), tamper(m - 1, -3), tamper(m // 2, 1 << 20), tamper(1, 1 << 31)):
+        client.compute_sync = fault  # type: ignore[method-assign]
+        before = res.taken(spec.id)
+        with pytest.raises(IntegrityError):
+            be.forward_many([LinearCall(spec.id, x, res)])
+        assert res.taken(spec.id) == before + 1
+        assert res.trip_leases.get(spec.id.key) is lease  # served by the lease
+        client.compute_sync = real  # type: ignore[method-assign]
+    out = be.forward_many([LinearCall(spec.id, x, res)])[0]
+    assert torch.equal(out, out0)  # exact under a fresh row (masked == plain, see the scenario test)
+    assert be.stats.deferred_checks == 0 and be.pending_checks == 0
+    res.close()
+
+
+def test_p31_not_leased_without_prime_check(qwen_pack: InMemoryPack, p31_template: Path,
+                                            monkeypatch: pytest.MonkeyPatch) -> None:
+    """A gateway without prime_check gets no lease for a prime extent and refuses it before any row."""
+    _env(monkeypatch, True, True)
+    st = _Store(p31_template, qwen_pack)
+    try:
+        be = MaskedBackend(qwen_pack, None, LocalComputeClient(qwen_pack), DEFAULT_RING, qwen_pack.fingerprint,
+                           trip_engine=True, min_soundness_bits=20)
+        spec = qwen_pack.linear_specs()[0]
+        res = st.store.reserve(qwen_pack.fingerprint, DEFAULT_RING, 4)
+        assert res.trip_lease(spec.id, 1) is None
+        with pytest.raises(MaskStoreError):
+            be.forward_many([LinearCall(spec.id, _x(spec), res)])
+        assert res.taken(spec.id) == 0 and not res.trip_leases
+        res.close()
+        be.close()
+    finally:
+        st.close()
+
+
+def test_lease_field_validation() -> None:
+    k = bytes(32)
+    u64 = np.zeros((1, 4), dtype=np.uint64)
+    uw64 = np.zeros((1, 3), dtype=np.uint64)
+    with pytest.raises(ValueError):  # prime vectors must be uint32 words
+        native.fast.TripLease(k, 3, 4, 32, 12, 27, 1.0, 0, [(bytearray(16), 0, 1)], 0, u64, uw64, False, 2**31 - 1)
+    u = np.zeros((1, 4), dtype=np.uint32)
+    uw = np.zeros((1, 3), dtype=np.uint32)
+    with pytest.raises(ValueError):  # unknown field
+        native.fast.TripLease(k, 3, 4, 32, 12, 27, 1.0, 0, [(bytearray(16), 0, 1)], 0, u, uw, False, 7)
+    lease = native.fast.TripLease(k, 3, 4, 32, 12, 27, 1.0, 0, [(bytearray(16), 0, 1)], 0, u, uw, False, 2**31 - 1)
+    assert lease.field == 2**31 - 1
+
+
+# ---- W r chunks decrypted ahead (PGW_TRIP_DECRYPT_AHEAD) ---------------------------------------------------
+def _flip(path: Any, off: int, bit: int) -> None:
+    import os
+
+    fd = os.open(path, os.O_RDWR)
+    try:
+        b = os.pread(fd, 1, off)
+        os.pwrite(fd, bytes([b[0] ^ bit]), off)
+    finally:
+        os.close(fd)
+
+
+def test_native_chunk_open_matches_decrypt_into(store_template: Path, qwen_pack: InMemoryPack) -> None:
+    from pgw.maskstore import store as store_mod
+
+    if not native.native_available("chunk_open_into"):
+        pytest.skip("pgw_fast.chunk_open_into not built")
+    st = _Store(store_template, qwen_pack)
+    try:
+        res = st.store.reserve(qwen_pack.fingerprint, DEFAULT_RING, 4)
+        seg = res._extents[0].seg
+        for ref in seg.layout.chunks()[:6]:
+            assert store_mod._open_chunk(seg, ref) == seg.decrypt_into(ref)
+        ref = seg.layout.chunks()[2]
+        _flip(seg.path, ref.offset + 5, 1)  # one ciphertext bit: authentication fails
+        with pytest.raises(MaskStoreError):
+            store_mod._open_chunk(seg, ref)
+        _flip(seg.path, ref.offset + 5, 1)
+        _flip(seg.path, ref.offset + ref.plain_len + 2, 4)  # one tag bit
+        with pytest.raises(MaskStoreError):
+            store_mod._open_chunk(seg, ref)
+        res.close()
+    finally:
+        st.close()
+
+
+@pytest.mark.parametrize("p31", [False, True])
+def test_decrypt_ahead_exact_and_identical(qwen_pack: InMemoryPack, store_template: Path, p31_template: Path,
+                                           monkeypatch: pytest.MonkeyPatch, p31: bool) -> None:
+    """Decrypting the next chunk ahead changes nothing: same payloads, same outputs, same statistics; the
+    ahead buffers are used by the leases and are zero after the run."""
+    from pgw.maskstore import store as store_mod
+
+    if not native.native_available("chunk_open_into"):
+        pytest.skip("pgw_fast.chunk_open_into not built")
+    tpl = p31_template if p31 else store_template
+    kw: dict[str, Any] = {"prime_check": True, "min_soundness_bits": 20} if p31 else {}
+    ref = _plain_ref(qwen_pack)
+    base_out, base_sent, base_stats, _ = _scenario(qwen_pack, tpl, monkeypatch, True, True, windows=(40, 40),
+                                                   **kw)
+    monkeypatch.setattr(store_mod, "TRIP_DECRYPT_AHEAD", True)
+    used: list[int] = []
+    bufs: list[dict[int, bytearray]] = []
+    real_take = store_mod.MaskReservation._ahead_take_locked
+
+    def spy(self: Any, ei: int, key: str, j: int) -> Any:
+        b = real_take(self, ei, key, j)
+        used.append(len(b))
+        bufs.append(b)
+        return b
+
+    monkeypatch.setattr(store_mod.MaskReservation, "_ahead_take_locked", spy)
+    out, sent, stats, (served, _, snap) = _scenario(qwen_pack, tpl, monkeypatch, True, True, windows=(40, 40),
+                                                    **kw)
+    _same(ref, out)
+    _same(base_out, out)
+    assert sent == base_sent and stats == base_stats and served > 0
+    assert snap["integrity_failures"] == 0
+    assert all(not any(b) for d in bufs for b in d.values())  # every buffer decrypted ahead is zero after the run
+
+
+def test_decrypt_ahead_zeroed_on_close_and_tamper_fails_closed(qwen_pack: InMemoryPack, store_template: Path,
+                                                              monkeypatch: pytest.MonkeyPatch) -> None:
+    from pgw.maskstore import store as store_mod
+
+    if not native.native_available("chunk_open_into"):
+        pytest.skip("pgw_fast.chunk_open_into not built")
+    monkeypatch.setattr(store_mod, "TRIP_DECRYPT_AHEAD", True)
+    _env(monkeypatch, True, True)
+    st = _Store(store_template, qwen_pack)
+    try:
+        be = MaskedBackend(qwen_pack, None, LocalComputeClient(qwen_pack), DEFAULT_RING, qwen_pack.fingerprint,
+                           trip_engine=True)
+        spec = qwen_pack.linear_specs()[0]
+        # close with a chunk decrypted ahead and never used: zeroed
+        res = st.store.reserve(qwen_pack.fingerprint, DEFAULT_RING, 20)
+        be.forward_many([LinearCall(spec.id, _x(spec), res)])
+        hits = [v for k, v in res._ahead.items() if k[1] == spec.id.key]
+        assert len(hits) == 1
+        bufs = hits[0][1].result()
+        assert bufs and all(any(b) for b in bufs.values())
+        res.close()
+        assert not any(any(b) for b in bufs.values()) and not res._ahead
+        # a tampered chunk decrypted ahead: the lease that needs it fails closed, no row of it is handed out
+        st2 = _Store(store_template, qwen_pack)
+        try:
+            res = st2.store.reserve(qwen_pack.fingerprint, DEFAULT_RING, 40)
+            ex = res._extents[0]
+            seg = ex.seg
+            cs = seg.header.chunk_slots
+            assert ex.ext.start == 0 and cs == 8
+            lease_rows = store_mod.TRIP_LEASE_ROWS  # the first lease: rows [0, 16), chunks 0 and 1
+            ref = seg.layout.wr_chunk(ex.li[spec.id.key], lease_rows // cs + 1)  # in the next lease (ahead)
+            _flip(seg.path, ref.offset + 3, 0x80)
+            for i in range(lease_rows):
+                be.forward_many([LinearCall(spec.id, _x(spec, i), res)])
+            assert res._ahead  # the next lease's chunks are being decrypted ahead
+            with pytest.raises(MaskStoreError):
+                be.forward_many([LinearCall(spec.id, _x(spec), res)])
+            assert res.taken(spec.id) == lease_rows
+            res.close()
+        finally:
+            st2.close()
+        res.close()
+        be.close()
+    finally:
+        st.close()
+
+
+@pytest.mark.parametrize("p31", [False, True])
+def test_decrypt_ahead_feeds_leases_byte_identical(qwen_pack: InMemoryPack, store_template: Path,
+                                                   p31_template: Path, monkeypatch: pytest.MonkeyPatch,
+                                                   p31: bool) -> None:
+    """Long decode runs (leases refilled many times, chunk and extent boundaries): with the chunks decrypted
+    ahead the leases take them (counted), outputs and payloads are identical to inline decryption."""
+    from pgw.maskstore import store as store_mod
+
+    if not native.native_available("chunk_open_into"):
+        pytest.skip("pgw_fast.chunk_open_into not built")
+    tpl = p31_template if p31 else store_template
+    kw: dict[str, Any] = {"prime_check": True, "min_soundness_bits": 20} if p31 else {}
+    _env(monkeypatch, True, True)
+    used: list[int] = []
+    real_take = store_mod.MaskReservation._ahead_take_locked
+
+    def spy(self: Any, ei: int, key: str, j: int) -> Any:
+        b = real_take(self, ei, key, j)
+        used.append(len(b))
+        return b
+
+    monkeypatch.setattr(store_mod.MaskReservation, "_ahead_take_locked", spy)
+    got = []
+    for ahead in (False, True):
+        monkeypatch.setattr(store_mod, "TRIP_DECRYPT_AHEAD", ahead)
+        st = _Store(tpl, qwen_pack)
+        client = LocalComputeClient(qwen_pack, record=True)
+        be = MaskedBackend(qwen_pack, None, client, DEFAULT_RING, qwen_pack.fingerprint, trip_engine=True, **kw)
+        be.freivalds_rate = 1.0
+        try:
+            res = st.windowed(330, first=70, window=50)  # parts cross the 300-slot segment boundary
+            outs = []
+            for i in range(330):
+                for spec in qwen_pack.linear_specs()[:3]:
+                    outs.append(be.forward_many([LinearCall(spec.id, _x(spec, i % 7), res)])[0])
+            be.join_checks()
+            assert be.stats.integrity_failures == 0
+        finally:
+            be.close()
+            st.close()
+        got.append((outs, [x.numpy().tobytes() for _, x in client.received]))
+    (o0, b0), (o1, b1) = got
+    assert b0 == b1
+    assert all(torch.equal(a, b) for a, b in zip(o0, o1, strict=True))
+    assert sum(used) > 0  # leases were fed from chunks decrypted ahead

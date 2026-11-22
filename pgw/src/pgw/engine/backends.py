@@ -1906,7 +1906,10 @@ class MaskedBackend(LinearBackend):
             verify = self._verifiers.get(vkey) if self.min_soundness_bits > 0 else None
             if verify is None and self.min_soundness_bits > 0:
                 verify = self._verifiers[vkey] = self._sound_verifier(lid, n)
-            lease = res.trip_lease(lid, t, verify, float(meta.wnorm or 0.0))
+            if self.prime_check:  # prime-field extents are leased only to a gateway that runs their check
+                lease = res.trip_lease(lid, t, verify, float(meta.wnorm or 0.0), prime_ok=True)
+            else:
+                lease = res.trip_lease(lid, t, verify, float(meta.wnorm or 0.0))
             if lease is None:
                 return None
             if len(self._lease_sound) > 65536:
@@ -1926,10 +1929,21 @@ class MaskedBackend(LinearBackend):
                 plan_call = guard_packed = None
         check = self._should_check()
         sampled = bool(plan_call()) if plan_call is not None else noise is not None
-        defer = check and self._defer_ok(lid)
+        # prime-field leases check synchronously inside ticket.finish (never deferred)
+        defer = check and not lease.field and self._defer_ok(lid)
         threads = 0 if t * n >= int(self.trip_pool_min_elems) else 1
+        noise_async = False
+        dup = None
+        if noise is not None:
+            noise_async = (self.noise_async_sampled and plan_call is not None
+                           and hasattr(noise, "inspect_planned")
+                           and t * n <= int(getattr(noise, "_max_values", 0) or 0))
+            if guard_packed is not None and (not sampled or noise_async):
+                # the every-call duplicate fingerprints are computed inside lease.prepare (same keys)
+                params = getattr(noise, "packed_dup_params", None)
+                dup = params(n) if params is not None else None
         try:
-            got = lease.prepare(xn, check, sampled, threads)
+            got = lease.prepare(xn, check, sampled, threads, dup)
         except ValueError as exc:
             msg = str(exc)
             if msg.startswith(("ring_overflow", "nonfinite")):
@@ -1937,14 +1951,14 @@ class MaskedBackend(LinearBackend):
             raise ShapeError(msg) from exc
         if got is None:  # pragma: no cover - ready() was checked under the GIL just before
             raise MaskReuseError("mask lease could not serve a call it reported ready for")
-        payload, ticket, xh, xq = got
+        payload, ticket, xh, xq, keys = got
         try:
             if noise is not None:
-                noise_async = (self.noise_async_sampled and plan_call is not None
-                               and hasattr(noise, "inspect_planned")
-                               and t * n <= int(getattr(noise, "_max_values", 0) or 0))
                 if guard_packed is not None and (not sampled or noise_async):
-                    guard_packed(payload, t, n)  # every-call checks (duplicate rows)
+                    if keys is not None:
+                        noise.guard_packed_keys(keys, t)  # every-call checks (duplicate rows)
+                    else:
+                        guard_packed(payload, t, n)  # every-call checks (duplicate rows)
                     if sampled and xh is not None:
                         self._noise_submit_xq(noise, xh, xq)
                         xq = None

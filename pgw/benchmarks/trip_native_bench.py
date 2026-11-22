@@ -66,7 +66,11 @@ def run(args: argparse.Namespace, native_on: bool) -> dict[str, Any]:
     tag = f"{time.time_ns()}"
     store = MaskStore.open(work / f"tn-store-{tag}", FileKeyProvider(work / "kek", create=True), fsync=False,
                            counter=FileMonotonicCounter(work / f"tn-ctr-{tag}", fsync=False))
-    MaskGenerator(pack, ring).generate_into_store(store, slots, chunk_slots=16, factory_id="tn")
+    MaskGenerator(pack, ring, check_field="p31" if args.prime else None).generate_into_store(
+        store, slots, chunk_slots=16, factory_id="tn")
+    from pgw.maskstore import store as store_mod
+
+    store_mod.TRIP_DECRYPT_AHEAD = bool(args.decrypt_ahead and native_on)
     outm = {sp.id.key: sp.out_features for sp in specs}
     nb = ring.k // 8
     zeros = {k: bytes(m * nb) for k, m in outm.items()}
@@ -80,7 +84,8 @@ def run(args: argparse.Namespace, native_on: bool) -> dict[str, Any]:
                 for i in req.items))
 
     noise = OutboundNoiseMonitor(ring, sample_rate=0.05, fail_closed=True)
-    be = MaskedBackend(pack, None, Stub(), ring, pack.fingerprint, min_soundness_bits=20, noise_monitor=noise)
+    be = MaskedBackend(pack, None, Stub(), ring, pack.fingerprint, min_soundness_bits=20, noise_monitor=noise,
+                       **({"prime_check": True} if args.prime else {}))
     set_wnorm(be, pack, args.wnorm_frac)
     be.warm_trip_engine()
     fp = pack.fingerprint
@@ -90,8 +95,17 @@ def run(args: argparse.Namespace, native_on: bool) -> dict[str, Any]:
     xs = {sp.id.key: torch.randn(1, sp.in_features, generator=g) for sp in specs}
     per: dict[str, list[float]] = {}
     outs: list[bytes] = []
+    import resource
+
+    def proc_cpu() -> float:
+        ru = resource.getrusage(resource.RUSAGE_SELF)
+        return ru.ru_utime + ru.ru_stime
+
+    main_cpu = all_cpu = 0.0
     try:
         for tok in range(args.warm + args.tokens):
+            if tok == args.warm:
+                c0, p0 = time.thread_time(), proc_cpu()
             for sp in specs:
                 c = LinearCall(sp.id, xs[sp.id.key], res)
                 t0 = time.perf_counter()
@@ -102,6 +116,7 @@ def run(args: argparse.Namespace, native_on: bool) -> dict[str, Any]:
                 if tok == args.warm:
                     outs.append(y.numpy().tobytes())
             be.join_checks()
+        main_cpu, all_cpu = time.thread_time() - c0, proc_cpu() - p0
     finally:
         res.close()
         store.close()
@@ -111,7 +126,11 @@ def run(args: argparse.Namespace, native_on: bool) -> dict[str, Any]:
     full, lay = PRESETS[args.preset]["full_layers"], args.layers
     head = sum(per.get("lm_head", [])) / args.tokens
     return {"native": native_on, "per_kind": kinds, "ms_per_token_trips": round(1e3 * tot, 3),
+            "main_thread_cpu_ms_per_token": round(1e3 * main_cpu / args.tokens, 3),
+            "process_cpu_ms_per_token": round(1e3 * all_cpu / args.tokens, 3),
             "ms_per_token_trips_full_model": round(1e3 * (head + (tot - head) * full / lay), 2),
+            "main_thread_cpu_ms_full_model": round(1e3 * (head + (main_cpu / args.tokens - head) * full / lay), 2),
+            "process_cpu_ms_full_model": round(1e3 * (head + (all_cpu / args.tokens - head) * full / lay), 2),
             "trips_per_token": len(specs), "outputs": outs}
 
 
@@ -125,12 +144,16 @@ def main() -> None:
     ap.add_argument("--ring", default="K32A12C27")
     ap.add_argument("--wnorm-frac", type=float, default=0.3)
     ap.add_argument("--masked-head", action="store_true")
+    ap.add_argument("--prime", action="store_true", help="prime-field check segments (p31) + prime_check")
+    ap.add_argument("--decrypt-ahead", action="store_true", help="PGW_TRIP_DECRYPT_AHEAD on the native run")
+    ap.add_argument("--only", choices=["fast", "native"], default=None)
     ap.add_argument("--workdir", required=True)
     ap.add_argument("--json", default=None)
     args = ap.parse_args()
-    a = run(args, False)
-    b = run(args, True)
-    res = {"preset": args.preset, "layers": args.layers, "masked_head": args.masked_head,
+    a = run(args, False) if args.only != "native" else {"outputs": None}
+    b = run(args, True) if args.only != "fast" else {"outputs": None}
+    res = {"preset": args.preset, "layers": args.layers, "masked_head": args.masked_head, "prime": args.prime,
+           "decrypt_ahead": args.decrypt_ahead,
            "outputs_identical": a.pop("outputs") == b.pop("outputs"), "fast": a, "native": b}
     print(json.dumps(res, indent=2))
     if args.json:

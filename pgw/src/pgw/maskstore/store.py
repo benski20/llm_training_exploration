@@ -49,6 +49,7 @@ import torch
 from pgw.core import native
 from pgw.core.errors import ConfigError, MaskExhaustedError, MaskReuseError, MaskStoreError, PGWError, ShapeError
 from pgw.core.fingerprint import short_fingerprint, validate_fingerprint
+from pgw.core.freivalds import CHECK_FIELD_P31, P31
 from pgw.core.packing import pack_ring, unpack_ring
 from pgw.core.prng import SEED_BYTES, SeedExpander, max_stream_rows
 from pgw.core.ring import RingParams
@@ -73,7 +74,9 @@ from pgw.maskstore.format import (
     SegmentLayout,
     SegmentLinear,
     auto_chunk_slots,
+    chunk_aad,
     chunk_cache_bytes,
+    chunk_nonce,
     encode_header,
     seed_hash,
 )
@@ -472,6 +475,9 @@ class MaskReservation:
         #: linear key -> attached native trip lease (``PGW_TRIP_NATIVE``, :meth:`trip_lease`): while
         #: attached, the linear's cursor is the lease's (``lease.cursor``), see :meth:`_cur_locked`.
         self._lease: dict[str, Any] = {}
+        #: (extent index, linear key) -> the chunks of ``W r`` the linear's next trip lease will take,
+        #: decrypted ahead on the helper thread (:data:`TRIP_DECRYPT_AHEAD`); zeroed unless a lease takes them.
+        self._ahead: dict[tuple[int, str], tuple[int, Any]] = {}  # (first chunk, future of {chunk: buf})
         #: The gateway's per-linear lease cache (``MaskedBackend``'s native per-trip path reads it).
         self.trip_leases = self._lease
 
@@ -732,7 +738,7 @@ class MaskReservation:
             self._cursor[key] = int(lease.detach())
 
     def trip_lease(self, lid: LinearId | str, rows: int, verify: Callable[[Any], None] | None = None,
-                   wnorm: float = 0.0, *, strict: bool = True) -> Any:
+                   wnorm: float = 0.0, *, strict: bool = True, prime_ok: bool = False) -> Any:
         """A native trip lease serving the next ``rows`` (or more) rows of ``lid`` (``pgw_fast.TripLease``).
 
         The lease covers the rows from the cursor to the end of the current decrypted ``W r`` chunk (never
@@ -768,10 +774,16 @@ class MaskReservation:
             seg = ex.seg
             if not isinstance(seg, SegmentFile):  # in-memory ring segments: the ordinary path
                 return None
-            if getattr(seg.header, "check_field", None) is not None:
-                # prime-field check extents (check_field="p31"): not served by a lease yet; the ordinary
-                # PGW_TRIP_FAST path takes them (its synchronous prime check verifies before any use)
-                return None
+            cf = getattr(seg.header, "check_field", None)
+            check_mod = 0
+            if cf is not None:
+                # prime-field check extents (check_field="p31"): leased only to a caller that runs the
+                # prime check (``prime_ok``; the lease verifies every checked row synchronously, before its
+                # result is used); otherwise the ordinary path (which refuses them when the gateway does
+                # not accept the format)
+                if cf != CHECK_FIELD_P31 or not prime_ok or self.ring.k not in (8, 16, 24, 32):
+                    return None
+                check_mod = P31
             lin = self._linears[key][1]
             li = ex.li[key]
             slot0 = ex.ext.start + (start - ex.first_row)
@@ -793,7 +805,10 @@ class MaskReservation:
             self._drop_stage_locked(key)  # staged rows were never handed out: the lease derives them
             chunks: list[tuple[bytearray, int, int]] = []
             cached = self._chunk_cache.pop((ei, lin.id), None)
+            pre: dict[int, bytearray] = {}
             try:
+                if self._ahead:
+                    pre = self._ahead_take_locked(ei, key, j)  # waits for the helper; its errors raise here
                 got, jj, off = 0, j, in_chunk
                 while got < want:
                     if cached is not None and cached[0] == jj:
@@ -803,7 +818,13 @@ class MaskReservation:
                         if cached is not None:
                             reuse = cached[1]
                             _zero(reuse)
-                        buf = _decrypt_buf(seg, layout.wr_chunk(li, jj), reuse)
+                        got_ahead = pre.pop(jj, None) if pre else None
+                        if got_ahead is not None:
+                            buf = got_ahead
+                        elif TRIP_DECRYPT_AHEAD:
+                            buf = _open_chunk(seg, layout.wr_chunk(li, jj))
+                        else:
+                            buf = _decrypt_buf(seg, layout.wr_chunk(li, jj), reuse)
                     cached = None
                     take = min(want - got, layout.chunk_rows(jj) - off)
                     chunks.append((buf, off, take))
@@ -811,6 +832,9 @@ class MaskReservation:
                     jj, off = jj + 1, 0
                 if cached is not None:
                     _zero(cached[1])
+                for b in pre.values():  # decrypted ahead but not part of this lease (never handed out)
+                    _zero(b)
+                pre.clear()
                 rkey = self._rkey_cache.get((ei, key))
                 if rkey is None:
                     seed, _ = ex.secrets()
@@ -818,9 +842,11 @@ class MaskReservation:
                 ring = self.ring
                 lease = native.fast.TripLease(rkey, lin.in_features, lin.out_features, ring.k, ring.a,
                                               int(ring.cap or 0), float(wnorm), slot0, chunks, start,
-                                              chk[1], chk[2], TRIP_R_AHEAD)
+                                              chk[1], chk[2], TRIP_R_AHEAD, check_mod)
             except BaseException:
                 for b, _, _ in chunks:
+                    _zero(b)
+                for b in pre.values():
                     _zero(b)
                 raise
             n = sum(c[2] for c in chunks)
@@ -828,8 +854,80 @@ class MaskReservation:
                 done = self._rkey_cache.pop((ei, key), None)
                 if done is not None:
                     _zero(done)
+                if TRIP_DECRYPT_AHEAD and ei + 1 < len(self._extents):
+                    self._ahead_first_locked(key, ei + 1)
+            elif TRIP_DECRYPT_AHEAD:
+                self._ahead_schedule_locked(ei, key, slot0 + n)  # the next lease's chunks
             self._lease[key] = lease
             return lease
+
+    # ---- W r chunks decrypted ahead (PGW_TRIP_DECRYPT_AHEAD) --------------------------------------
+    def _ahead_schedule_locked(self, ei: int, key: str, slot: int) -> None:
+        """Decrypt, on the helper thread, the chunks the next trip lease of ``key`` starting at segment slot
+        ``slot`` of extent ``ei`` will take (lock held): the same rows :meth:`trip_lease` would lease from
+        there, all owned by this reservation (never past the extent)."""
+        if self._closed or not _native_open:
+            return
+        ex = self._extents[ei]
+        seg = ex.seg
+        if not isinstance(seg, SegmentFile) or key not in ex.li:
+            return
+        end = ex.ext.start + ex.ext.count
+        if not ex.ext.start <= slot < end:
+            return
+        cs = seg.header.chunk_slots
+        layout = seg.layout
+        j0 = slot // cs
+        lin = self._linears[key][1]
+        row_bytes = lin.out_features * layout.bpe
+        first = min(end - slot, layout.chunk_rows(j0) - (slot - j0 * cs))
+        rows = max(first, min(end - slot, TRIP_LEASE_ROWS, max(1, TRIP_LEASE_BYTES // max(1, row_bytes))))
+        j1 = (slot + rows - 1) // cs
+        old = self._ahead.pop((ei, key), None)
+        if old is not None:
+            if old[0] == j0:
+                self._ahead[(ei, key)] = old
+                return
+            self._ahead_discard(old[1])
+        li = ex.li[key]
+        refs = [(jj, layout.wr_chunk(li, jj)) for jj in range(j0, j1 + 1)]
+        self._ahead[(ei, key)] = (j0, _ahead_pool().submit(_open_chunks, seg, refs))
+
+    def _ahead_first_locked(self, key: str, ei: int) -> None:
+        """Decrypt ahead the first lease's chunks of ``key`` in extent ``ei`` (lock held)."""
+        self._ahead_schedule_locked(ei, key, self._extents[ei].ext.start)
+
+    def decrypt_ahead(self, lid: LinearId | str) -> None:
+        """Start decrypting the chunks of ``lid``'s next lease ahead (:data:`TRIP_DECRYPT_AHEAD`; no-op when
+        off, closed, exhausted or a lease or stage serves the linear). Hands out nothing."""
+        if not TRIP_DECRYPT_AHEAD:
+            return
+        key = self._key(lid)
+        with self._lock:
+            if self._closed or key in self._lease or key in self._stage:
+                return
+            cur = self._cursor[key]
+            if cur >= self._slots:
+                return
+            ei = self._cursor_extent(key, cur)
+            ex = self._extents[ei]
+            self._ahead_schedule_locked(ei, key, ex.ext.start + (cur - ex.first_row))
+
+    def _ahead_take_locked(self, ei: int, key: str, j: int) -> dict[int, bytearray]:
+        """The chunks of ``key`` in extent ``ei`` decrypted ahead for a lease starting at chunk ``j`` (waits
+        for the helper; its errors raise here, fail closed); ``{}`` if none (other chunks are discarded)."""
+        hit = self._ahead.pop((ei, key), None)
+        if hit is None:
+            return {}
+        if hit[0] != j:
+            self._ahead_discard(hit[1])
+            return {}
+        return hit[1].result()  # type: ignore[no-any-return]
+
+    @staticmethod
+    def _ahead_discard(fut: Any) -> None:
+        if not fut.cancel():
+            fut.add_done_callback(_zero_done)  # runs now if done, else when the helper finishes
 
     #: Most bytes of prefetched (staged) rows one reservation holds (``r`` and ``W r`` together).
     stage_max_bytes = 64 << 20
@@ -1137,6 +1235,9 @@ class MaskReservation:
             for _, buf in self._chunk_cache.values():
                 _zero(buf)
             self._chunk_cache.clear()
+            for _, fut in self._ahead.values():
+                self._ahead_discard(fut)
+            self._ahead.clear()
             # Shared Freivalds vectors: zeroed when the last open reservation of the segment closes.
             self._uw_cache.clear()
             for skey in self._uw_keys.values():
@@ -1223,6 +1324,73 @@ except ValueError:  # pragma: no cover - bad environment value: defaults
 #: default on with ``PGW_TRIP_NATIVE``): the same keystream bytes, used only by the trip that takes that
 #: row (zeroed if the lease detaches, closes or the row is taken before it is ready).
 TRIP_R_AHEAD = os.environ.get("PGW_TRIP_R_AHEAD", "1").strip().lower() not in ("0", "false", "no", "off")
+#: The ``W r`` chunk a linear's next trip lease will need is read, authenticated and decrypted ahead on a
+#: helper thread (``PGW_TRIP_DECRYPT_AHEAD``, default off; needs ``PGW_TRIP_NATIVE``): native AES-256-GCM
+#: with the GIL released (``pgw_fast.chunk_open_into``), so the main core no longer pays the lease refill.
+#: Only chunks holding rows this reservation already owns, in order (the next chunk of the lease's
+#: extent, or the first one of the next extent); a buffer decrypted ahead is handed to exactly one lease
+#: (the rows stay single use: a lease takes each row once) or zeroed (close, a different chunk needed, a
+#: failure). Authentication failures raise when the lease needs the chunk (fail closed, as inline).
+TRIP_DECRYPT_AHEAD = os.environ.get("PGW_TRIP_DECRYPT_AHEAD", "0").strip().lower() in ("1", "true", "yes", "on")
+_native_open = native.native_available("chunk_open_into")
+_AHEAD_POOL: Any = None
+_AHEAD_POOL_LOCK = threading.Lock()
+
+
+def _ahead_pool() -> Any:
+    global _AHEAD_POOL
+    with _AHEAD_POOL_LOCK:
+        if _AHEAD_POOL is None:
+            from concurrent.futures import ThreadPoolExecutor
+
+            _AHEAD_POOL = ThreadPoolExecutor(max_workers=1, thread_name_prefix="pgw-wr-ahead")
+        return _AHEAD_POOL
+
+
+def _open_chunk(seg: Any, ref: Any) -> bytearray:
+    """:meth:`SegmentFile.decrypt_into` (same plaintext, same errors) with the read and the cipher in native
+    code, GIL released (``pgw_fast.chunk_open_into``); falls back to ``decrypt_into`` without it."""
+    if not _native_open or not isinstance(seg, SegmentFile):
+        return _decrypt_buf(seg, ref)
+    dek, f = seg._dek, seg._f
+    if dek is None or f is None:
+        raise MaskStoreError("segment data key not available")
+    out = bytearray(ref.plain_len)
+    try:
+        native.fast.chunk_open_into(dek, chunk_nonce(seg._nonce_prefix, ref.index),
+                                    chunk_aad(seg.header_digest, ref.index), f.fileno(), ref.offset,
+                                    ref.cipher_len, out)
+    except ValueError as exc:
+        _zero(out)
+        raise MaskStoreError(
+            f"segment {seg.header.segment_id}: chunk {ref.index} failed authentication (corrupt or tampered)",
+            details={"segment_id": seg.header.segment_id, "chunk": ref.index},
+        ) from exc
+    except OSError as exc:
+        _zero(out)
+        raise MaskStoreError(f"read error in segment {seg.header.segment_id}: {exc}") from exc
+    return out
+
+
+def _open_chunks(seg: Any, refs: Sequence[tuple[int, Any]]) -> dict[int, bytearray]:
+    """:func:`_open_chunk` of every ``(chunk index, ref)``; on any failure the chunks already decrypted are
+    zeroed before the error propagates."""
+    out: dict[int, bytearray] = {}
+    try:
+        for j, ref in refs:
+            out[j] = _open_chunk(seg, ref)
+    except BaseException:
+        for b in out.values():
+            _zero(b)
+        raise
+    return out
+
+
+def _zero_done(fut: Any) -> None:
+    """Done callback of a discarded decrypt-ahead job: zero its plaintext."""
+    if not fut.cancelled() and fut.exception() is None:
+        for b in fut.result().values():
+            _zero(b)
 
 #: Threads of the native batched claim (``PGW_MASK_CLAIM_THREADS``; 0 = automatic: the CPU count,
 #: bounded by the work: about one thread per 256 KiB of output).

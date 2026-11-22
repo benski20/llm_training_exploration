@@ -440,6 +440,43 @@ class OutboundNoiseMonitor:
         if self.fail_closed and self._alarm:
             self._raise_blocked()
 
+    def packed_dup_params(self, n: int) -> tuple[np.ndarray, int, np.ndarray, int, int] | None:
+        """The duplicate-row fingerprint parameters ``(cols, shift, mult, groups, per)`` that
+        :meth:`guard_packed` uses for ``n``-wide rows, for a caller that computes the fingerprints in its own
+        native call (``TripLease.prepare(dup=...)``) and records them with :meth:`guard_packed_keys`;
+        ``None`` when :meth:`guard_packed` would compute no fingerprint natively (then call it instead)."""
+        k = self.ring.k
+        if k % 8 or self._native_keys is None or not self.config.duplicate_check or n <= 0:
+            return None
+        cols = self._dup_columns(int(n))
+        if cols.size * self._dup_bits < 64:
+            return None
+        c = int(cols.size)
+        groups = _DUP_GROUPS if c >= 2 * self._dup_cols_per_group else 1
+        return cols, k - self._dup_bits, self._dup_mult, groups, c // groups
+
+    def guard_packed_keys(self, keys: np.ndarray, rows: int) -> None:
+        """:meth:`guard_packed` for a payload whose fingerprints ``keys`` (uint64 ``(rows, groups)``) were
+        computed with :meth:`packed_dup_params` (bit-identical to the ones :meth:`guard_packed` computes):
+        the same alarm checks, the same duplicate bookkeeping and statistics, fail closed the same way.
+
+        Raises:
+            IntegrityError: The monitor alarms (now or earlier) and ``fail_closed`` is set.
+        """
+        if self.fail_closed and self._alarm:
+            self._raise_blocked()
+        new_reasons: list[str] = []
+        rows = int(rows)
+        with self._lock:
+            if rows:
+                self._dup_record(keys, rows, int(keys.shape[1]), new_reasons)
+            if new_reasons:
+                self._set_alarm(new_reasons)
+        if new_reasons:
+            self._notify()
+        if self.fail_closed and self._alarm:
+            self._raise_blocked()
+
     def inspect_planned(self, x_hat: torch.Tensor, xq: torch.Tensor | None) -> None:
         """The statistics half of :meth:`guard` (``planned=True``) for a sampled call whose every-call
         checks already ran in :meth:`guard_packed` on the same values (the gateway's one-call trip path

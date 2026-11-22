@@ -28,6 +28,13 @@ import torch
 from pgw.core.errors import MaskExhaustedError, MaskReuseError
 from pgw.core.types import LinearId
 
+
+def _decrypt_ahead() -> bool:
+    """``PGW_TRIP_DECRYPT_AHEAD`` (read by the mask store at import)."""
+    from pgw.maskstore import store
+
+    return bool(store.TRIP_DECRYPT_AHEAD)
+
 __all__ = ["WindowedReservation"]
 
 
@@ -347,21 +354,30 @@ class WindowedReservation:
         public mode (``ensure`` has no side effects there)."""
         return None if self.public else self._step_key
 
-    def trip_lease(self, lid: LinearId | str, rows: int, verify: Any = None, wnorm: float = 0.0) -> Any:
+    def trip_lease(self, lid: LinearId | str, rows: int, verify: Any = None, wnorm: float = 0.0, *,
+                   prime_ok: bool = False) -> Any:
         """:meth:`ensure` (exactly as before a take), then the current part's native trip lease
-        (``MaskReservation.trip_lease``), cached in :attr:`trip_leases`; ``None``: the ordinary path."""
+        (``MaskReservation.trip_lease``), cached in :attr:`trip_leases`; ``None``: the ordinary path.
+
+        With ``PGW_TRIP_DECRYPT_AHEAD``, a lease that covers the rest of its part starts decrypting the
+        next part's first chunk of the linear (rows this session already reserved; nothing handed out)."""
         self.ensure(lid, rows)
         with self._lock:
             if self._closed:
                 raise MaskReuseError("mask reservation is closed; its unused rows were burned")
-            part = self._current(lid)
+            i = self._current_index(lid)
+            part = self._parts[i]
+            nxt = self._parts[i + 1] if i + 1 < len(self._parts) else None
         fn = getattr(part, "trip_lease", None)
-        lease = None if fn is None else fn(lid, rows, verify, wnorm, strict=False)
+        lease = None if fn is None else fn(lid, rows, verify, wnorm, strict=False, prime_ok=prime_ok)
         key = self._k(lid)
         if lease is None:
             self.trip_leases.pop(key, None)
         else:
             self.trip_leases[key] = lease
+            ahead = getattr(nxt, "decrypt_ahead", None) if nxt is not None and _decrypt_ahead() else None
+            if ahead is not None and int(lease.left) >= int(part.remaining(lid)):
+                ahead(lid)
         return lease
 
     def prefetch(self, lid: LinearId | str, rows: int) -> int:

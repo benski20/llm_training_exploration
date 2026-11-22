@@ -15,6 +15,35 @@ SLA pilot. Three reasons:
 2. The HSM, KMS and TPM integrations have never run against real hardware or cloud services.
 3. There has been no external security audit.
 
+## Update 2026-11-22: p31 extents through native trip leases, W r decrypted ahead, fused duplicate check (W2, opt-in)
+
+- **p31 leases**: `TripLease(..., field=2**31 - 1)` serves prime-field extents on the native per-trip path; the prime
+  input half is fused in `lease.prepare` and the output half (range + `u . yq == rhs mod p`) runs synchronously inside
+  `ticket.finish` on the trip's `W r` *before* the finish kernel unmasks it (never deferred: no result is used before
+  it is verified; a failure zeroes `W r` and the outputs). Leased only to a backend with `prime_check`
+  (`trip_lease(..., prime_ok=True)`); without it the ordinary path refuses the extent before any row. Format confined
+  to `tripnative::check_iface` (`field`, `sync_only`, `prime_output`).
+- **`PGW_TRIP_DECRYPT_AHEAD=1`** (default off): the chunks the linear's *next* lease will take (same rows, in order,
+  never past the reservation's extent; also the next extent / the next windowed part) are read, authenticated and
+  decrypted on a helper thread with native AES-256-GCM, GIL released (`pgw_fast.chunk_open_into`, byte-identical to
+  `SegmentFile.decrypt_into`). Each buffer goes to exactly one lease or is zeroed (close, mismatch, failure); an
+  authentication failure raises when the lease needs the chunk (fail closed, no row of it handed out).
+- **Fused duplicate check**: `lease.prepare(..., dup=noise.packed_dup_params(n))` computes the monitor's duplicate-row
+  fingerprints in the same native call; `noise.guard_packed_keys` records them (same keys, bookkeeping, alarms).
+- Measured (4 shared vCPUs, heavily loaded by other jobs; `decode_cpu_bench.py --local off --float-ops native
+  --wnorm-frac 0.3 --service-delay-ms 0.25 --masked-head`, 2 layers, extrapolated, process CPU ms per 7B token):
+  base native 75 / 134 (noisy), this branch ring 74-75, **p31 leases 59-68**, p31 + decrypt ahead 64-84 (no
+  measurable gain here: the bench's 1-row chunks and window parts reserved lazily leave little to prefetch, and the
+  helper's GIL hand-offs cost the main thread about what they save). 0.5B: 44-47 ring, 23-50 p31 variants (noise).
+  `trip_native_bench.py --preset 7b --masked-head` (trips only, full model): main-thread CPU ring 25-33 ms, p31 24-31
+  ms; process CPU ring 40-46 ms, **p31 29-37 ms** (no deferred-check helper). Not reached: <= 25 ms of gateway CPU per
+  7B token on this box.
+- Tests: `tests/engine/test_trip_native.py` (p31 leases: masked == plain, byte-identical payloads and statistics vs
+  PGW_TRIP_FAST, tampering at any position / out of range detected through the lease with the row consumed, no lease
+  without `prime_check`, field validation; decrypt ahead: native open == `decrypt_into`, ciphertext/tag tamper
+  refused, leases fed from ahead buffers byte-identical over 330 tokens across parts and segments for ring and p31,
+  ahead buffers zero after use and on close, tampered ahead chunk fails closed at the lease boundary).
+
 ## Update 2026-11-22: one-vector Freivalds check over F_p (package W2, opt-in, local only)
 
 New opt-in segment format `check_field = "p31"` (SPEC 5.1, note `research/notes/prime-field-freivalds.md`):
