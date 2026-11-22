@@ -30,9 +30,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from decode_cpu_bench import PRESETS, build_pack, set_wnorm
 
 
-def run(args: argparse.Namespace, native_on: bool) -> dict[str, Any]:
+def run(args: argparse.Namespace, native_on: bool, split: int = 0) -> dict[str, Any]:
     os.environ["PGW_TRIP_FAST"] = "1"
     os.environ["PGW_TRIP_NATIVE"] = "1" if native_on else "0"
+    os.environ["PGW_TRIP_SPLIT"] = str(split)
     from pgw.core import RingParams
     from pgw.engine import MaskedBackend
     from pgw.engine.backends import LinearCall
@@ -62,7 +63,7 @@ def run(args: argparse.Namespace, native_on: bool) -> dict[str, Any]:
         pack = ZeroHeadPack(pack)
     ring = RingParams.from_name(args.ring)
     specs = list(pack.linear_specs())
-    slots = args.tokens + args.warm + 8
+    slots = (args.tokens + args.warm) * args.rows + 8
     tag = f"{time.time_ns()}"
     store = MaskStore.open(work / f"tn-store-{tag}", FileKeyProvider(work / "kek", create=True), fsync=False,
                            counter=FileMonotonicCounter(work / f"tn-ctr-{tag}", fsync=False))
@@ -71,14 +72,21 @@ def run(args: argparse.Namespace, native_on: bool) -> dict[str, Any]:
     from pgw.maskstore import store as store_mod
 
     store_mod.TRIP_DECRYPT_AHEAD = bool(args.decrypt_ahead and native_on)
+    store_mod.TRIP_R_AHEAD = bool(args.r_ahead)
     outm = {sp.id.key: sp.out_features for sp in specs}
     nb = ring.k // 8
     zeros = {k: bytes(m * nb) for k, m in outm.items()}
+
+    import hashlib
+
+    sent = hashlib.sha256()
 
     class Stub:
         sync_stream = True
 
         def compute_sync(self, req: Any) -> Any:
+            for i in req.items:
+                sent.update(i.x_hat)
             return ComputeResponse(req.request_id, tuple(
                 ComputeResult(i.linear, i.rows, zeros[i.linear] if i.rows == 1 else bytes(i.rows * outm[i.linear] * nb))
                 for i in req.items))
@@ -92,7 +100,7 @@ def run(args: argparse.Namespace, native_on: bool) -> dict[str, Any]:
     res = WindowedReservation(store.reserve(fp, ring, args.window), lambda s: store.reserve(fp, ring, s),
                               cap=slots - 4, window=args.window)
     g = torch.Generator().manual_seed(0)
-    xs = {sp.id.key: torch.randn(1, sp.in_features, generator=g) for sp in specs}
+    xs = {sp.id.key: torch.randn(args.rows, sp.in_features, generator=g) for sp in specs}
     per: dict[str, list[float]] = {}
     outs: list[bytes] = []
     import resource
@@ -131,7 +139,10 @@ def run(args: argparse.Namespace, native_on: bool) -> dict[str, Any]:
             "ms_per_token_trips_full_model": round(1e3 * (head + (tot - head) * full / lay), 2),
             "main_thread_cpu_ms_full_model": round(1e3 * (head + (main_cpu / args.tokens - head) * full / lay), 2),
             "process_cpu_ms_full_model": round(1e3 * (head + (all_cpu / args.tokens - head) * full / lay), 2),
-            "trips_per_token": len(specs), "outputs": outs}
+            "trips_per_token": len(specs), "rows_per_trip": args.rows, "split": split,
+            "us_per_trip": round(1e6 * tot / len(specs), 1),
+            "process_cpu_us_per_trip": round(1e6 * all_cpu / args.tokens / len(specs), 1),
+            "outputs": outs, "payload_sha256": sent.hexdigest()}
 
 
 def main() -> None:
@@ -147,14 +158,24 @@ def main() -> None:
     ap.add_argument("--prime", action="store_true", help="prime-field check segments (p31) + prime_check")
     ap.add_argument("--decrypt-ahead", action="store_true", help="PGW_TRIP_DECRYPT_AHEAD on the native run")
     ap.add_argument("--only", choices=["fast", "native"], default=None)
+    ap.add_argument("--rows", type=int, default=1, help="rows per trip (R)")
+    ap.add_argument("--split", type=int, default=0, help="also run the native path with PGW_TRIP_SPLIT=N")
+    ap.add_argument("--r-ahead", type=int, default=1, help="PGW_TRIP_R_AHEAD (r of the next trip on a helper)")
     ap.add_argument("--workdir", required=True)
     ap.add_argument("--json", default=None)
     args = ap.parse_args()
-    a = run(args, False) if args.only != "native" else {"outputs": None}
-    b = run(args, True) if args.only != "fast" else {"outputs": None}
+    a = run(args, False) if args.only != "native" else {"outputs": None, "payload_sha256": None}
+    b = run(args, True) if args.only != "fast" else {"outputs": None, "payload_sha256": None}
+    c = run(args, True, args.split) if args.split >= 2 else None
+    b_out, b_sha = b.pop("outputs"), b.pop("payload_sha256")
     res = {"preset": args.preset, "layers": args.layers, "masked_head": args.masked_head, "prime": args.prime,
-           "decrypt_ahead": args.decrypt_ahead,
-           "outputs_identical": a.pop("outputs") == b.pop("outputs"), "fast": a, "native": b}
+           "decrypt_ahead": args.decrypt_ahead, "r_ahead": args.r_ahead, "rows": args.rows,
+           "payloads_identical": a.pop("payload_sha256") == b_sha,
+           "outputs_identical": a.pop("outputs") == b_out, "fast": a, "native": b}
+    if c is not None:
+        res["split_payloads_identical"] = c.pop("payload_sha256") == b_sha
+        res["split_outputs_identical"] = c.pop("outputs") == b_out
+        res["native_split"] = c
     print(json.dumps(res, indent=2))
     if args.json:
         Path(args.json).write_text(json.dumps(res, indent=2))

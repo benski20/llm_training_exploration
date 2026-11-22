@@ -15,6 +15,45 @@ SLA pilot. Three reasons:
 2. The HSM, KMS and TPM integrations have never run against real hardware or cloud services.
 3. There has been no external security audit.
 
+## Update 2026-11-22: multi-core per-trip kernels for 32B/72B vectors (`PGW_TRIP_SPLIT`, opt-in, local CPU)
+
+Component target 1 of [research/plans/scaling-32b-70b.md](research/plans/scaling-32b-70b.md) (prepare/finish of one trip
+over many cores), first part. Default off; exact; no format change.
+
+- **Split prepare** (`rust/pgw-fast/src/trip/split.rs`; `TripLease.prepare(..., split=c)`, `trip_prepare_into(...,
+  split=c)`): each row is cut into a fixed partition of 2048-column blocks (depends on `n` only) over `c` tasks of the
+  persistent pool, in three passes (max/sum x^2; exact integer sum of q^2 per candidate width; quantize with the
+  selected width + mask + pack + x_hat + input-half partials). Merges on the calling thread in block order: max, the
+  float `sum x^2` (window start only), wrapping integer sums, ring input half mod 2^K, prime input half mod p. Payload,
+  `sx`, `x_hat`, `rhs` are bit-identical to the one-thread kernel for every `c` (plans with the float sum of squares,
+  `n < 4096` or `c > 16` vectors run the one-thread kernel). The `r` keystream of a split call is filled over the same
+  tasks (`fill_ring_split`, same bits).
+- **Split checks**: the prime output half (`prime::output_half_split`, `TripTicket.finish(..., split=c)`,
+  `trip_prime_output(..., split=c)`) by fixed 8192-column units, reduced partials summed mod p; the unmask/finish uses
+  the existing column split of the pool with `c` tasks (exact).
+- **r ahead for any rows**: a lease now derives the next trip's `r` for as many rows as the current trip (was 1-row
+  trips only), on `PGW_TRIP_R_HELPERS` helper threads (default 1); single use (used only by the trip that takes
+  exactly those rows, else zeroed; wiped on detach/close).
+- Wiring: `PGW_TRIP_SPLIT=c`, `PGW_TRIP_SPLIT_MIN_ELEMS` (default 8192) on the native per-trip path in `backends.py`.
+- Benchmarks: `native_trip_floor_bench.py --preset 7b|32b|72b --rows R --cores c [--r-offcore] [--stat min]`,
+  `trip_native_bench.py --rows R --split c --r-ahead 0|1` (payload hashes compared across runs); presets for Qwen2.5-32B
+  (64 L, 5120/27648, 40/8 heads) and Qwen2.5-72B (80 L, 8192/29568, 64/8), vocab 152064 (`PGW_BENCH_VOCAB` shrinks the
+  vocabulary of the synthetic pack for disk).
+- Tests: `tests/native/test_trip_split.py` (identical bits for c = 2, 3, 4, 7 vs one thread, ring and p31, genuine
+  replies pass, tampered replies fail identically with zeroed outputs, r ahead for 1- and 2-row trips identical and
+  single use, non-finite before any row, ticket single use), `test_native_split_equals_plain_and_bytes_identical`
+  (engine: masked == plain, byte-identical payloads and noise statistics), cargo `trip::split::tests`.
+- Measured single-core kernel cost per 72B trip (min of 150, K32A12C27, 4 vCPU dev box): gate_up R = 2 prepare 39 us,
+  finish 79-84 us, p31 output half 41 us; down R = 2 prepare 143-172 us, finish 12 us; qkv R = 2 prepare 41-44 us,
+  finish 15 us. Kernel floor per token on one core (r off-core, R = 2): 7B 12.9 ms, 32B 48 ms, 72B 61-64 ms; R = 1:
+  8.4 / 30 / 34 ms. `r` (8 bytes of ChaCha20 per element, format-fixed) at 72B R = 2 is about 36 ms per token of helper
+  time, so 72B needs about one dedicated helper core for `r` at 25 tok/s.
+- **Not reached**: the multi-core speed-up could not be measured here: the box ran at load average 40-57 on 4 vCPUs
+  (other jobs), the pool workers were rarely scheduled in time (the calling thread took ~80% of the tasks: 100 vs 121
+  us of its own CPU for a 72B down prepare at c = 4) and wall times did not improve. Needs a quiet many-core VM
+  (with `PGW_POOL_SPIN_US` raised so the workers stay awake between trips). Item 3 of the task (a native per-layer
+  driver / lane call inside the native trip, <= 20 us Python per trip) was not built.
+
 ## Update 2026-11-22: scaling design for Qwen2.5-32B and 70B-class targets (model only, local)
 
 Write-up: [research/plans/scaling-32b-70b.md](research/plans/scaling-32b-70b.md); model

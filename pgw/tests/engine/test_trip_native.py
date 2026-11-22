@@ -150,6 +150,22 @@ def test_native_equals_plain_and_bytes_identical(qwen_pack: InMemoryPack, store_
     assert snap["integrity_failures"] == 0
 
 
+@pytest.mark.parametrize("split", [2, 4])
+def test_native_split_equals_plain_and_bytes_identical(qwen_pack: InMemoryPack, store_template: Path,
+                                                       monkeypatch: pytest.MonkeyPatch, split: int) -> None:
+    """``PGW_TRIP_SPLIT`` (multi-core per-trip kernels; the kernels themselves fall back to one thread below
+    their column-block size, the bits are covered by ``tests/native/test_trip_split.py``): same logits, same
+    payloads and noise statistics as the native path without it."""
+    ref = _plain_ref(qwen_pack)
+    _, base_sent, base_stats, _ = _scenario(qwen_pack, store_template, monkeypatch, True, True)
+    monkeypatch.setenv("PGW_TRIP_SPLIT", str(split))
+    monkeypatch.setenv("PGW_TRIP_SPLIT_MIN_ELEMS", "1")
+    out, sent, stats, (served, _, snap) = _scenario(qwen_pack, store_template, monkeypatch, True, True)
+    _same(ref, out)
+    assert served > 0 and sent == base_sent and stats == base_stats
+    assert snap["integrity_failures"] == 0
+
+
 def test_native_async_mode(qwen_pack: InMemoryPack, store_template: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     ref = _plain_ref(qwen_pack)
     out, _, _, (served, _, _) = _scenario(qwen_pack, store_template, monkeypatch, True, True, mode="async")
