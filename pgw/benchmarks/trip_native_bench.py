@@ -24,10 +24,10 @@ from typing import Any
 
 os.environ.setdefault("OMP_WAIT_POLICY", "PASSIVE")
 
-import torch  # noqa: E402
+import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from decode_cpu_bench import PRESETS, build_pack, set_wnorm  # noqa: E402
+from decode_cpu_bench import PRESETS, build_pack, set_wnorm
 
 
 def run(args: argparse.Namespace, native_on: bool) -> dict[str, Any]:

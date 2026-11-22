@@ -1073,6 +1073,8 @@ class MaskedBackend(LinearBackend):
         self.trip_native = (self.trip_fast and _env_flag("PGW_TRIP_NATIVE", False)
                             and native_available("TripLease") and self.ring.k % 8 == 0 and self.ring.k <= 56)
         self._verifiers: dict[tuple[str, int], Any] = {}
+        #: id(lease) -> (min_soundness_bits, size of the soundness cache) when its extent was verified
+        self._lease_sound: dict[int, tuple[float, int]] = {}
         self._noise_pool: Any = None
         self._noise_pending: Any = None
         #: :meth:`_local_lean_one` constants per linear key (:attr:`trip_fast`).
@@ -1790,6 +1792,10 @@ class MaskedBackend(LinearBackend):
         t = int(x.shape[0])
         key = lid.key
         lease = leases.get(key)
+        sound = (float(self.min_soundness_bits), len(self._sound_ok))
+        if lease is not None and self._lease_sound.get(id(lease)) != sound:
+            # soundness policy changed since this lease's extent was verified: verify again before any row
+            lease.detach()
         if lease is None or key == res.trip_step_key or not lease.ready(t):
             vkey = (key, n)
             verify = self._verifiers.get(vkey) if self.min_soundness_bits > 0 else None
@@ -1798,6 +1804,9 @@ class MaskedBackend(LinearBackend):
             lease = res.trip_lease(lid, t, verify, float(meta.wnorm or 0.0))
             if lease is None:
                 return None
+            if len(self._lease_sound) > 65536:
+                self._lease_sound.clear()
+            self._lease_sound[id(lease)] = (float(self.min_soundness_bits), len(self._sound_ok))
         if x.dtype != torch.float32 or x.device.type != "cpu":
             x = x.to("cpu", torch.float32)
         xn = x.detach().numpy()

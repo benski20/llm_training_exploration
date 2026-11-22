@@ -768,6 +768,10 @@ class MaskReservation:
             seg = ex.seg
             if not isinstance(seg, SegmentFile):  # in-memory ring segments: the ordinary path
                 return None
+            if getattr(seg.header, "check_field", None) is not None:
+                # prime-field check extents (check_field="p31"): not served by a lease yet; the ordinary
+                # PGW_TRIP_FAST path takes them (its synchronous prime check verifies before any use)
+                return None
             lin = self._linears[key][1]
             li = ex.li[key]
             slot0 = ex.ext.start + (start - ex.first_row)

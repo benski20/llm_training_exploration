@@ -237,7 +237,7 @@ def test_fault_after_prepare_burns_the_row(one: Any, qwen_pack: InMemoryPack) ->
 
 
 def test_soundness_and_exhaustion_before_any_row(one: Any, qwen_pack: InMemoryPack) -> None:
-    st, be, client = one
+    st, be, _client = one
     spec = qwen_pack.linear_specs()[0]
     res = st.store.reserve(qwen_pack.fingerprint, DEFAULT_RING, 3)
     be.forward_many([LinearCall(spec.id, _x(spec), res)])
@@ -277,7 +277,7 @@ def test_close_burns_and_fails_inflight(one: Any, qwen_pack: InMemoryPack) -> No
 
 def test_detach_hands_over_to_ordinary_path(one: Any, qwen_pack: InMemoryPack) -> None:
     """A multi-row call (ordinary path) after lease trips continues at the lease's cursor."""
-    st, be, client = one
+    st, be, _client = one
     spec = qwen_pack.linear_specs()[0]
     res = st.store.reserve(qwen_pack.fingerprint, DEFAULT_RING, 40)
     for i in range(3):
