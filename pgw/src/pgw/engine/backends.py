@@ -58,7 +58,7 @@ from pgw.core.errors import (
     ShapeError,
 )
 from pgw.core.factory_yield import note_activity as _note_activity
-from pgw.core.freivalds import checks_to_u64, freivalds_check_u64
+from pgw.core.freivalds import P31, checks_to_u64, freivalds_check_u64, is_prime_token
 from pgw.core.masking import mask_activations, mask_pack_u32, unmask_outputs_u32, unmask_outputs_u64
 from pgw.core.native import native_available
 from pgw.core.packing import pack_ring, unpack_ring_u64
@@ -895,6 +895,7 @@ class MaskedBackend(LinearBackend):
         local_linears: str = "off",
         local_rtt_s: float | None = None,
         local_max_rows: int | None = None,
+        prime_check: bool | None = None,
     ):
         if not 0.0 <= freivalds_rate <= 1.0:
             raise ConfigError("freivalds_rate must be in [0, 1]")
@@ -979,6 +980,20 @@ class MaskedBackend(LinearBackend):
         #: visible), else ``PGW_TRIP_ENGINE`` (off).
         self.trip_engine = ((_env_flag("PGW_TRIP_ENGINE", lane_client) if trip_engine is None else bool(trip_engine))
                             and self._trip_native and ring.k % 8 == 0 and 8 <= ring.k <= 56)
+        #: Accept mask segments in the prime-field check format (``check_field = "p31"``, SPEC 5.1): one
+        #: secret vector over ``F_p``, ``p = 2^31 - 1``, checked on the unmasked ``xq`` / ``yq`` (31 bits per
+        #: call instead of the ring check's ``c * h``; 1/7 of the check-vector reads at K32A12C27). Off by
+        #: default (``PGW_PRIME_CHECK``): such segments are then refused before any row is used. On, it
+        #: needs the native trip kernels with ``trip_prime_output`` and turns the TripEngine on; the
+        #: prime check always runs synchronously (never deferred) and only on the TripEngine paths
+        #: (padded / fixed-structure calls and the non-trip fallbacks refuse prime extents, fail closed).
+        self.prime_check = _env_flag("PGW_PRIME_CHECK", False) if prime_check is None else bool(prime_check)
+        if self.prime_check:
+            if not (self._trip_native and native_available("trip_prime_output") and ring.k <= 32
+                    and ring.k % 8 == 0):
+                raise ConfigError("prime_check needs the native trip kernels (pgw_fast.trip_prime_output) "
+                                  "and a ring of at most 32 bits")
+            self.trip_engine = True
         #: Deferred Freivalds check (TripEngine only): the output half ``u . y_hat`` of a trip runs on
         #: the native helper thread while the gateway continues with the plaintext step. It is joined
         #: before the same session's next payload is built (so before its next send), and the last
@@ -1230,12 +1245,17 @@ class MaskedBackend(LinearBackend):
         if u is not None and int(getattr(u, "size", 0) or 0) > 0 and _vacuous(u, 0):
             # Wiped vectors (a reservation closed under us): Freivalds with u = 0 accepts anything.
             raise MaskReuseError("mask reservation check vectors are wiped (reservation closed)")
+        prime = is_prime_token(token)
+        if prime and not self.prime_check:
+            raise MaskStoreError(
+                f"{lid}: mask segment uses the prime-field Freivalds check (check_field='p31'), which this "
+                "gateway does not accept (prime_check is off)", details={"linear": str(lid)})
         if self.min_soundness_bits <= 0:
             return
         if token is not None and token in self._sound_ok:
             return
         checks = 0 if u is None else int(u.shape[0])
-        bits = self._soundness_bits(n, checks)
+        bits = self._soundness_bits(n, checks, prime)
         if bits < self.min_soundness_bits:
             raise MaskStoreError(
                 f"{lid}: mask segment has {checks} Freivalds vector(s) = {bits:.0f} bits of soundness for "
@@ -1248,13 +1268,14 @@ class MaskedBackend(LinearBackend):
                 self._sound_ok.clear()
             self._sound_ok.add(token)
 
-    def _soundness_bits(self, n: int, checks: int) -> float:
-        key = (n, checks)
-        hit = self._soundness_memo.get(key)
+    def _soundness_bits(self, n: int, checks: int, prime: bool = False) -> float:
+        key = (n, checks, prime)
+        hit = self._soundness_memo.get(key)  # type: ignore[call-overload]
         if hit is None:
-            from pgw.core.freivalds import soundness_bits
+            from pgw.core.freivalds import prime_soundness_bits, soundness_bits
 
-            hit = self._soundness_memo[key] = float(soundness_bits(self.ring, n, checks))
+            bits = prime_soundness_bits(self.ring, n, checks) if prime else soundness_bits(self.ring, n, checks)
+            hit = self._soundness_memo[key] = float(bits)  # type: ignore[index]
         return hit
 
     def _should_check(self) -> bool:
@@ -1471,7 +1492,8 @@ class MaskedBackend(LinearBackend):
                 while row < t:
                     check = self._should_check()
                     sampled = bool(plan_call()) if plan_call is not None else noise is not None
-                    rows, r, wr, chk = self._take(res, lid, min(t - row, max_item), check or want_soundness)
+                    rows, r, wr, chk = self._take(res, lid, min(t - row, max_item), check or want_soundness,
+                                                  prime_ok=True)
                     token = u = uw = None
                     rhs = None
                     r64 = None
@@ -1492,12 +1514,17 @@ class MaskedBackend(LinearBackend):
                         sx = np.empty(rows, dtype=np.float64)
                         xh = np.empty((rows, n), dtype=np.int64) if sampled else None
                         uw_in = None
-                        if defer_lid and u is not None and uw is not None and int(u.shape[0]) > 0:
+                        prime = u is not None and is_prime_token(token)
+                        if (prime or defer_lid) and u is not None and uw is not None and int(u.shape[0]) > 0:
                             uw_in = uw
                             rhs = np.empty((rows, int(u.shape[0])), dtype=np.uint64)
                         try:
-                            prep_into(xn[row : row + rows], r64, kbits, abits, cap, wn, buf, sx, xh, uw_in, rhs,
-                                      0 if rows * n >= pool_min else 1)
+                            if prime:  # prime input half uw . xq mod p (synchronous output half at finish)
+                                prep_into(xn[row : row + rows], r64, kbits, abits, cap, wn, buf, sx, xh, uw_in, rhs,
+                                          0 if rows * n >= pool_min else 1, field=P31)
+                            else:
+                                prep_into(xn[row : row + rows], r64, kbits, abits, cap, wn, buf, sx, xh, uw_in, rhs,
+                                          0 if rows * n >= pool_min else 1)
                         except ValueError as exc:
                             if str(exc).startswith("ring_overflow"):
                                 raise RingOverflowError(str(exc).split(":", 1)[-1].strip()) from exc
@@ -1652,7 +1679,7 @@ class MaskedBackend(LinearBackend):
                 if verify is not None:
                     rows, r, wr, chk = res.take_checked(lid, min(t - row, max_item), want, verify)
                 else:
-                    rows, r, wr, chk = self._take(res, lid, min(t - row, max_item), want)
+                    rows, r, wr, chk = self._take(res, lid, min(t - row, max_item), want, prime_ok=True)
                 token = u = uw = None
                 rhs = None
                 r64 = None
@@ -1675,12 +1702,17 @@ class MaskedBackend(LinearBackend):
                     sx = np.empty(rows, dtype=np.float64)
                     xh = np.empty((rows, n), dtype=np.int64) if sampled else None
                     uw_in = None
-                    if defer_lid and u is not None and uw is not None and int(u.shape[0]) > 0:
+                    prime = u is not None and is_prime_token(token)
+                    if (prime or defer_lid) and u is not None and uw is not None and int(u.shape[0]) > 0:
                         uw_in = uw
                         rhs = np.empty((rows, int(u.shape[0])), dtype=np.uint64)
                     try:
-                        prep_into(xn if rows == t else xn[row : row + rows], r64, kbits, abits, cap, wn, buf, sx,
-                                  xh, uw_in, rhs, threads)
+                        if prime:  # prime input half uw . xq mod p (synchronous output half at finish)
+                            prep_into(xn if rows == t else xn[row : row + rows], r64, kbits, abits, cap, wn, buf,
+                                      sx, xh, uw_in, rhs, threads, field=P31)
+                        else:
+                            prep_into(xn if rows == t else xn[row : row + rows], r64, kbits, abits, cap, wn, buf,
+                                      sx, xh, uw_in, rhs, threads)
                     except ValueError as exc:
                         if str(exc).startswith("ring_overflow"):
                             raise RingOverflowError(str(exc).split(":", 1)[-1].strip()) from exc
@@ -1933,7 +1965,17 @@ class MaskedBackend(LinearBackend):
             threads = 0 if ch.rows * meta.out_features >= pool_min else 1
             pending = None
             try:
-                if ch.u is not None and ch.rhs is not None:
+                if ch.u is not None and ch.rhs is not None and is_prime_token(ch.token):
+                    # prime-field check (synchronous): range + u . yq == rhs (mod p) before W r is wiped
+                    status, bad = native.fast.trip_prime_output(yb, wn, ch.u, ch.rhs, k, bound)
+                    ch.rhs.fill(0)
+                    ch.rhs = None
+                    if status == 0:
+                        status, bad = fin(yb, wn, sx, scale, bias, k, bound, out, threads=threads)
+                    else:
+                        wn.fill(0)  # never unmasked: zero the pad-derived W r here (fail closed)
+                        out.fill(0)
+                elif ch.u is not None and ch.rhs is not None:
                     pending = native.fast.trip_freivalds_submit(yb, ch.u, ch.rhs, k)
                     ch.rhs.fill(0)  # the helper holds its own copy (wiped after the check)
                     ch.rhs = None
@@ -2439,6 +2481,7 @@ class MaskedBackend(LinearBackend):
                 if want and res is not None:
                     try:
                         token, u, uw = self._current_checks(res, lid)
+                        self._ring_only(token, lid)
                         self._check_soundness(lid, n_in, u, token)
                     except (MaskStoreError, MaskReuseError):
                         raise
@@ -2545,7 +2588,8 @@ class MaskedBackend(LinearBackend):
         if res is None or not self._should_check():
             return None
         try:
-            _, u, uw = self._current_checks(res, call.id)
+            token, u, uw = self._current_checks(res, call.id)
+            self._ring_only(token, call.id)
         except Exception:  # no vectors (closed or checks=0): the padding is not verified
             return None
         return u, uw
@@ -3493,19 +3537,37 @@ class MaskedBackend(LinearBackend):
         lt[kind + "_s"] += dt
         return out
 
-    def _take(self, res: Any, lid: LinearId, max_rows: int, want_checks: bool) -> tuple[int, Any, Any, Any]:
-        """``(rows, r, W r, (token, u, uw) | None)``: the next rows of one extent (at most ``max_rows``)."""
+    def _take(self, res: Any, lid: LinearId, max_rows: int, want_checks: bool,
+              prime_ok: bool = False) -> tuple[int, Any, Any, Any]:
+        """``(rows, r, W r, (token, u, uw) | None)``: the next rows of one extent (at most ``max_rows``).
+
+        Prime-field vectors (:func:`pgw.core.freivalds.is_prime_token`) are refused unless the caller
+        runs the prime check (``prime_ok``, the TripEngine paths): fail closed, the rows are burned."""
         fn = getattr(res, "take_checked", None)
         if fn is not None:
-            return fn(lid, max_rows, want_checks)  # type: ignore[no-any-return]
-        boundary = int(res.rows_until_boundary(lid))
-        if boundary <= 0:
-            raise MaskExhaustedError("mask reservation has no rows left", details={"linear": lid.key})
-        rows = min(max_rows, boundary)
-        # vectors of the extent the next rows come from: read before take()
-        chk = (None, *self._checks_u64(res, lid)) if want_checks else None
-        r, wr = res.take(lid, rows)
-        return rows, r, wr, chk
+            out = fn(lid, max_rows, want_checks)
+        else:
+            boundary = int(res.rows_until_boundary(lid))
+            if boundary <= 0:
+                raise MaskExhaustedError("mask reservation has no rows left", details={"linear": lid.key})
+            rows = min(max_rows, boundary)
+            # vectors of the extent the next rows come from: read before take()
+            cf = getattr(res, "check_field", None)
+            if want_checks and callable(cf) and cf(lid) is not None:
+                chk = res.checks_compact(lid)
+            else:
+                chk = (None, *self._checks_u64(res, lid)) if want_checks else None
+            r, wr = res.take(lid, rows)
+            out = (rows, r, wr, chk)
+        if out[3] is not None and not prime_ok:
+            self._ring_only(out[3][0], lid)
+        return out  # type: ignore[no-any-return]
+
+    def _ring_only(self, token: Any, lid: Any) -> None:
+        """Raise if ``token`` names prime-field vectors on a path that runs only the ring check."""
+        if is_prime_token(token):
+            raise ConfigError(f"{lid}: prime-field check vectors on a path without the prime check "
+                              "(padded / fixed-structure calls or a non-TripEngine fallback)")
 
     def _prepare_native(self, calls: Sequence[LinearCall]) -> _Prepared:
         """:meth:`_prepare_python` with quantize + mask + pack fused in ``pgw_fast`` (bit-identical)."""
@@ -3802,7 +3864,7 @@ class MaskedBackend(LinearBackend):
                 bytes_down += len(res.y_hat)
                 if ch.u is None:
                     skipped += 1
-                elif ch.rhs is None:  # a deferred check counts once it passed
+                elif ch.rhs is None or is_prime_token(ch.token):  # a deferred check counts once it passed
                     checked += 1
             self._finish_trip(prep, results, outs)
         except IntegrityError as exc:
@@ -3859,7 +3921,7 @@ class MaskedBackend(LinearBackend):
                 bytes_down += len(res.y_hat)
                 if ch.u is None:
                     skipped += 1
-                elif not (prep.trip and ch.rhs is not None):  # a deferred check counts once it passed
+                elif not (prep.trip and ch.rhs is not None) or is_prime_token(ch.token):  # deferred: counted when it passed
                     checked += 1
             if prep.trip:
                 self._finish_trip(prep, results, outs)

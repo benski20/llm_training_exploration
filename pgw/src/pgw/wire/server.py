@@ -23,6 +23,7 @@ import logging
 import math
 import os
 import struct
+import threading
 import time
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -468,6 +469,9 @@ class ByteBudget:
     Request bodies are read into memory before decoding, then expanded ``8/(K/8)`` times into
     int64. Without a global cap a burst of large requests (long prefills, many connections and
     HTTP/2 streams) buffers tens of GB before any per-request admission runs.
+
+    One budget may be shared by several listeners of a service (the compute routes, ``/pgw/v1/maskgen`` and the
+    threaded bulk maskgen channel, :mod:`pgw.service.maskgen_bulk`), so acquire and release take a lock.
     """
 
     def __init__(self, total: int):
@@ -475,15 +479,18 @@ class ByteBudget:
             raise ValueError("ByteBudget total must be positive")
         self.total = int(total)
         self.used = 0
+        self._lock = threading.Lock()
 
     def try_acquire(self, n: int) -> bool:
-        if self.used + n > self.total:
-            return False
-        self.used += n
-        return True
+        with self._lock:
+            if self.used + n > self.total:
+                return False
+            self.used += n
+            return True
 
     def release(self, n: int) -> None:
-        self.used = max(0, self.used - n)
+        with self._lock:
+            self.used = max(0, self.used - n)
 
 
 def _budget_exhausted(budget: ByteBudget, want: int) -> PGWError:
@@ -559,6 +566,7 @@ def create_router(
     validate_responses: bool = True,
     max_deadline_s: float | None = None,
     max_inflight_bytes: int | None = None,
+    body_budget: ByteBudget | None = None,
 ) -> APIRouter:
     """FastAPI router for ``POST /pgw/v1/compute`` and ``GET /pgw/v1/models``.
 
@@ -570,6 +578,8 @@ def create_router(
             ``deadline_ms`` applies).
         max_inflight_bytes: Global cap on request-body bytes buffered at once (``None``: no cap).
             Checked against ``Content-Length`` *before* the body is read.
+        body_budget: A :class:`ByteBudget` shared with the service's other listeners (maskgen routes); it
+            takes the place of ``max_inflight_bytes``.
 
     Handlers may implement ``precheck()`` (sync): called after authentication and before the body
     is read, it raises to refuse (draining, too many in-flight requests), so refused requests
@@ -593,7 +603,8 @@ def create_router(
         )
     done_hook: Callable[..., Any] | None = getattr(handler, "on_request_done", None)
     precheck: Callable[[], Any] | None = getattr(handler, "precheck", None)
-    body_budget = ByteBudget(max_inflight_bytes) if max_inflight_bytes else None
+    if body_budget is None and max_inflight_bytes:
+        body_budget = ByteBudget(max_inflight_bytes)
 
     def _err_response(exc: BaseException, rid: str | None, accept: str | None) -> Response:
         status, body = error_response_bytes(exc, rid, json_body=_wants_json(accept))

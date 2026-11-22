@@ -53,6 +53,7 @@ MODELS = {
     "qwen2.5-0.5b-instruct": ("Qwen/Qwen2.5-0.5B-Instruct", "7ae557604adf67be50417f59c2c2f167def9a775"),
     "qwen2.5-1.5b-instruct": ("Qwen/Qwen2.5-1.5B-Instruct", "989aa7980e4cf806f80c7fef2b1adb7bc71aa306"),
     "qwen2.5-3b-instruct": ("Qwen/Qwen2.5-3B-Instruct", "aa8e72537993ba99e69dfaafa59ed015b17504d1"),
+    "qwen2.5-7b-instruct": ("Qwen/Qwen2.5-7B-Instruct", "a09a35458c702b33eeacc393d103063234e8bc28"),
 }
 MODEL_NAME = (os.environ.get("PGW_MODAL_MODEL") or "qwen2.5-0.5b-instruct").strip().lower()
 if MODEL_NAME not in MODELS:
@@ -82,7 +83,13 @@ PROVIDER_CPUS = float(os.environ.get("PGW_MODAL_PROVIDER_CPUS") or (2.0 if GPU e
 GATEWAY_CPUS = float(os.environ.get("PGW_MODAL_GATEWAY_CPUS") or 12.0)
 #: Memory: the provider's 6 GiB plus the gateway's (8 GiB; 16 GiB with a target larger than the 0.5B or the draft,
 #: = customer.py's MEMORY_MIB / pgw_modal_boot.customer_memory_mib).
-MEMORY_MIB = 6144 + (16384 if DRAFT or MODEL_NAME != "qwen2.5-0.5b-instruct" else 8192)
+#: Qwen2.5-7B: the provider stages its 7.6 GB int8 pack in host memory (16 GiB); the gateway holds its own pack
+#: (mapped), the float32 embedding (2.2 GB), packs the checkpoint in the wizard and its factory reads a 34 GB
+#: encryption hint through the page cache (48 GiB). A request, not a limit.
+MEMORY_MIB = (16384 + 49152 if MODEL_NAME == "qwen2.5-7b-instruct"
+              else 6144 + (16384 if DRAFT or MODEL_NAME != "qwen2.5-0.5b-instruct" else 8192))
+#: Disk: Modal's default ephemeral disk (at least 512 GiB, the smallest request it accepts) holds the 7B's
+#: checkpoint (15 GB), two packs (7.6 GB each), the encryption hint (34 GB) and the mask store (4.2 MB per slot).
 #: One Unix user per party (``pgw_modal_boot.PROVIDER_USER`` / ``CUSTOMER_USER``; created in the image).
 PROVIDER_USER, CUSTOMER_USER = "pgwprov", "pgwcust"
 #: Escape hatch, fixed at deploy time (``PGW_MODAL_COLOCATED_USERS=0``): run both parties as root (still
@@ -238,7 +245,8 @@ def pair(run_id: str, ttl_s: int = 80 * 60, e2e: bool = False, local_linears: st
                                                                 **boot.lane_options(lane), **gdev},
                                                  egress=boot.lane_egress(lane, LANE_PORT),
                                                  hide_gpu=not gsplit.get("gateway"),
-                                                 extra_env={**boot.colocated_gateway_env(local_linears),
+                                                 extra_env={**boot.colocated_gateway_env(local_linears,
+                                                                                        MODEL_NAME),
                                                             **gsplit.get("gateway", {}),
                                                             **boot.checked_env(gateway_env)})
             procs.append(gw)
@@ -269,6 +277,8 @@ def pair(run_id: str, ttl_s: int = 80 * 60, e2e: bool = False, local_linears: st
                     sus["factory"] = boot.factory_segments(LOGS / "gateway.log", sus["t0"], sus["t1"])
                     sus["keep_up"] = boot.keep_up(sus, sus["factory"])
                     sus["cores"] = sampler.cores(sus["t0"], sus["t1"])
+                # every factory segment of the run (rates while alone, during the chats; yielded seconds)
+                result["e2e"]["factory_all"] = boot.factory_segments(LOGS / "gateway.log", t_boot, time.time())
                 w = result["e2e"].get("warm_window")
                 if w:
                     result["e2e"]["warm_cores"] = sampler.cores(w[0] - 0.6, w[1] + 0.6)

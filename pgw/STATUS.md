@@ -15,6 +15,43 @@ SLA pilot. Three reasons:
 2. The HSM, KMS and TPM integrations have never run against real hardware or cloud services.
 3. There has been no external security audit.
 
+## Update 2026-11-22: one-vector Freivalds check over F_p (package W2, opt-in, local only)
+
+New opt-in segment format `check_field = "p31"` (SPEC 5.1, note `research/notes/prime-field-freivalds.md`):
+one secret vector per linear over `F_p`, `p = 2^31 - 1`, checked on the unmasked `xq` / `yq`
+(`u . yq == (u W8 mod p) . xq mod p`, plus the range check). Soundness per call `>= 30.99999999` bits with
+one vector (needs `2B < p`, true for K32A12C27 at any width) against 21 bits for today's 7 ring vectors;
+it also catches a wrong `W r`. Default off: factory `PGW_FACTORY_CHECK_FIELD=p31` writes it, gateways need
+`prime_check = true` (`PGW_GATEWAY_PRIME_CHECK`) and otherwise refuse such segments before any row is used;
+old segments keep the ring check and both formats run side by side. Kernels (`pgw_fast`):
+`trip_prepare_into(..., field=2**31 - 1)` (input half fused in prepare), `trip_prime_output(y_hat, wr, u, rhs,
+k, bound)` (range + output half, exact modular arithmetic, AVX-512 / AVX2 / portable). Scope: TripEngine paths,
+disk store and in-process RAM ring; speculation padding, non-trip fallbacks, MoE oblivious and `ringshm`
+refuse prime extents (fail closed). Tests: `tests/engine/test_prime_check.py` (exactness, single-entry /
+structured / adversarial-within-cap tampering, model logits bit-identical, interop, defaults, store round
+trip), Rust `prime::tests`.
+
+Measured here (`native_trip_floor_bench.py --preset 7b --wnorm-frac 0.3`, 113 trips, ms per token, two runs):
+
+| | ring, c = 7 (today) | p31, c = 1 |
+|---|---|---|
+| check vectors read per token | 66.6 MB | **9.5 MB** |
+| `uW` per segment at rest / derived `u` in RAM | 23.4 MB / 43 MB | 3.3 MB / 6.2 MB |
+| prepare (+ input half) | 5.9-6.5 | 6.1-6.2 |
+| prime check (range + output half, synchronous) | - | 2.2 |
+| finish | 4.0-4.5 (head checked inline) | 2.5-2.6 (no check) |
+| **main core** | **14.7-16.2** | **15.6-15.9** |
+| **helper core** (deferred output half) | **6.7-7.4** | **0** |
+
+Per kernel (one row, warm): output half m = 4608: 9.1 -> 3.9 us; m = 37888: 44.6 -> 16.5 us; the 7B head
+m = 152064: 376 -> 74 us; prepare n = 18944 with the input half 50-53 us (ring 7) vs 49-51 us (prime). The
+total gateway CPU per token drops by the helper core's 6.7-7.4 ms; the check now runs synchronously (never
+deferred). Run on a helper core instead (keep `W r` until it returns) it would take the main core to about
+13.5 ms. `trip_cpu_bench.py --preset 7b --layers 1 --wnorm-frac 0.3 [--prime]` (Python TripEngine path, real
+encrypted store, stub service; calling-thread CPU per call in us, two runs each): qkv 195-223 -> 165-179,
+o 155-176 -> 125-154, gate_up 227-267 -> 209-222 (ring: plus its deferred output half on the helper),
+down 326 -> 245-269; per layer 904-992 -> 769-799 us on the calling thread and nothing on the helper.
+
 ## Update 2026-11-22: factory HE on the gateway GPU (opt-in)
 
 `PGW_FACTORY_HE_ENCRYPT=gpu_ntt` / `PGW_FACTORY_HE_DECRYPT=gpu_ntt` (library and demo default off) run the encrypted
@@ -83,6 +120,26 @@ per token (66.6 MB of Freivalds vectors and 6.7 MB of r keystream per token domi
   check vectors per token), r derived off the critical path, `W r` stored mod 2^29 (-9.4%).
 - Bench fix: zero synthetic weights made the width selection evaluate all 11 widths (prepare ~2x too slow in earlier
   zero-weight benches); `--wnorm-frac 0.3` gives real norms.
+## Update 2026-11-22: Qwen2.5-1.5B and 7B co-located, measured (package L1)
+
+Both larger targets now run the co-located demo end to end, exact in every run (logprobs bit-identical, text equal,
+repeat, stream and all sustain chats identical). Details and tables: `deploy/modal/README.md`, "Larger targets".
+
+| config (Modal) | decode tok/s | TTFT | trips/token | factory alone / consumption |
+|---|---|---|---|---|
+| 1.5B, 2xT4, gateway GPU, attention_down | 20.0 | 0.81 s | 28 | 118-142 / 43.6 slots/s |
+| 7B, 2xT4, gateway GPU, attention_down | 10.0 | 1.49 s | 28 | 39-46 / 18.6 slots/s |
+| 1.5B, 1xT4, CPU-only gateway, all linears remote | 9.5 | 1.72 s | 112 | about 57 (2 workers) / 22.8 slots/s |
+| 7B, 1xT4, CPU-only gateway, all linears remote | 5.0 | 3.1 s | 112 | 18 / 9.1 slots/s |
+
+- Fixed: the co-located enrollment code listed the 0.5B whatever the target (1.5B/7B pairs could not enroll).
+- One thread-safe `ByteBudget` per service now covers the compute routes, `/pgw/v1/maskgen` (which had none) and the
+  bulk maskgen channel; the demo uses the bulk channel by default (library default off).
+- `PGW_HINT_DEVICE=cuda` (library default off): the one-time encryption hint on the gateway's GPU, same bits,
+  self-checked; 7B 213 s vs about 20 min on 16 vCPUs.
+- 7B customer storage as run: hint 34.2 GB, int8 pack 7.6 GB, embedding + LM head 2.2 GB, masks 5.56 MB per slot.
+- Not reached: 30 tokens/s at 7B. The T4s are bandwidth-bound (about 3.8 GB per token on each side with a gateway
+  GPU); the CPU-only gateway pays 112 trips of about 1 ms plus about 0.8 ms of gateway CPU per trip.
 
 ## Update 2026-11-22: mask factory keeps up with back-to-back chats (package S5)
 

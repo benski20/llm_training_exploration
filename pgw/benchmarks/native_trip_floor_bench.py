@@ -12,6 +12,11 @@ distinct per-linear buffers so the caches see a real token's working set (check 
 * ``trip_freivalds_output``: the deferred output half ``u . y_hat`` of every other linear (the gateway runs it
   on its helper thread: a second core).
 
+``--prime``: the prime-field check format (``check_field = "p31"``, SPEC 5.1) instead: ``c = 1`` vector over
+``F_p`` for every linear (head included), the input half ``uw . xq mod p`` fused in ``trip_prepare_into(...,
+field=p)``, and the output half with the range check, ``trip_prime_output`` on ``y_hat`` and ``W r``, run
+synchronously on the main core before ``trip_finish_into`` (no check there, nothing on the helper core).
+
 Reports microseconds per token for each stage (median of ``--tokens`` tokens), the main-core total and the
 helper-core total. This is what a gateway whose per-trip orchestration were native would spend; the
 measured Python path is in ``decode_cpu_bench.py``.
@@ -45,11 +50,14 @@ def main() -> None:
     ap.add_argument("--checks", type=int, default=7)
     ap.add_argument("--wnorm-frac", type=float, default=0.3)
     ap.add_argument("--no-head", action="store_true")
+    ap.add_argument("--prime", action="store_true", help="prime-field check format (one vector, p = 2^31 - 1)")
     ap.add_argument("--json", default=None)
     args = ap.parse_args()
     s = SHAPES[args.preset]
     layers = args.layers or s["layers"]
-    k, a, cap, c = 32, 12, 27, args.checks
+    k, a, cap, c = 32, 12, 27, (1 if args.prime else args.checks)
+    p31 = (1 << 31) - 1
+    hi = p31 if args.prime else 2**32
     h, i = s["hidden"], s["inter"]
     per_layer = [("qkv", h, s["q"] + 2 * s["kv"]), ("o", s["q"], h), ("gate_up", h, 2 * i), ("down", i, h)]
     lins = [(f"{li}.{kind}", n, m) for li in range(layers) for kind, n, m in per_layer]
@@ -63,14 +71,14 @@ def main() -> None:
             "key": key, "n": n, "m": m,
             "rkey": bytearray(rng.integers(0, 256, 32, dtype=np.uint8).tobytes()),
             "wr_packed": rng.integers(0, 256, slots * m * 4, dtype=np.uint8).tobytes(),
-            "uw": rng.integers(0, 2**32, (c, n), dtype=np.uint64).astype(np.uint32),
-            "u": rng.integers(0, 2**32, (c, m), dtype=np.uint64).astype(np.uint32),
+            "uw": rng.integers(0, hi, (c, n), dtype=np.uint64).astype(np.uint32),
+            "u": rng.integers(0, hi, (c, m), dtype=np.uint64).astype(np.uint32),
             "y": rng.integers(0, 256, m * 4, dtype=np.uint8).tobytes(),
             "scale": np.full(m, 1e-3, np.float32),
             "wn": float(args.wnorm_frac * 127 * np.sqrt(n)),
             "x": rng.standard_normal((1, n)).astype(np.float32),
         })
-    stages = ("r", "wr", "prepare", "finish", "freivalds_out")
+    stages = ("r", "wr", "prepare", "prime_check", "finish", "freivalds_out")
     per_tok: dict[str, list[float]] = {x: [] for x in stages}
     for t in range(args.tokens):
         acc = dict.fromkeys(stages, 0.0)
@@ -85,29 +93,40 @@ def main() -> None:
             buf = np.empty(n * 4, np.uint8)
             sx = np.empty(1)
             rhs = np.empty((1, c), np.uint64)
-            f.trip_prepare_into(e["x"], r, k, a, cap, e["wn"], buf, sx, None, None if last else e["uw"],
-                                None if last else rhs, 1)
+            if args.prime:
+                f.trip_prepare_into(e["x"], r, k, a, cap, e["wn"], buf, sx, None, e["uw"], rhs, 1, field=p31)
+            else:
+                f.trip_prepare_into(e["x"], r, k, a, cap, e["wn"], buf, sx, None, None if last else e["uw"],
+                                    None if last else rhs, 1)
             r.fill(0)
             t3 = time.perf_counter()
             out = np.empty((1, m), np.float32)
-            if last:  # synchronous full check (the logits are released right after)
+            if args.prime:  # synchronous: range + u . yq == rhs (mod p), then the finish without a check
+                f.trip_prime_output(e["y"], wr, e["u"], rhs, k, 1 << cap)
+                t35 = time.perf_counter()
+                f.trip_finish_into(e["y"], wr, sx, e["scale"], None, k, 1 << 40, out, threads=1)
+                t4 = time.perf_counter()
+                acc["prime_check"] += t35 - t3
+                t3 = t35
+            elif last:  # synchronous full check (the logits are released right after)
                 f.trip_finish_into(e["y"], wr, sx, e["scale"], None, k, 1 << 40, out, x_hat=buf.tobytes(),
                                    u=e["u"], uw=e["uw"], threads=1)
             else:
                 f.trip_finish_into(e["y"], wr, sx, e["scale"], None, k, 1 << 40, out, threads=1)
             t4 = time.perf_counter()
-            if not last:
+            if not last and not args.prime:
                 f.trip_freivalds_output(e["y"], e["u"], rhs, k)
             t5 = time.perf_counter()
-            for name, dt in zip(stages, (t1 - t0, t2 - t1, t3 - t2, t4 - t3, t5 - t4), strict=True):
+            for name, dt in (("r", t1 - t0), ("wr", t2 - t1), ("prepare", t3 - t2), ("finish", t4 - t3),
+                             ("freivalds_out", t5 - t4)):
                 acc[name] += dt
         for name in stages:
             per_tok[name].append(acc[name])
     med = {x: round(1e3 * statistics.median(v), 3) for x, v in per_tok.items()}
-    main_core = round(med["r"] + med["wr"] + med["prepare"] + med["finish"], 3)
+    main_core = round(med["r"] + med["wr"] + med["prepare"] + med["prime_check"] + med["finish"], 3)
     out = {
         "preset": args.preset, "layers": layers, "head": not args.no_head, "trips_per_token": len(lins),
-        "checks": c, "ms_per_token": med, "main_core_ms_per_token": main_core,
+        "checks": c, "check_format": "p31" if args.prime else "ring", "ms_per_token": med, "main_core_ms_per_token": main_core,
         "helper_core_ms_per_token": med["freivalds_out"],
         "check_vector_mb_per_token": round(sum(c * (e["n"] + e["m"]) * 4 for e in st) / 1e6, 2),
         "wr_mb_per_token": round(sum(e["m"] * 4 for e in st) / 1e6, 3),

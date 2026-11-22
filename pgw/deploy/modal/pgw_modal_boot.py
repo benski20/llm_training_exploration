@@ -45,6 +45,7 @@ MODELS: dict[str, tuple[str, str]] = {
     "qwen2.5-0.5b-instruct": ("Qwen/Qwen2.5-0.5B-Instruct", "7ae557604adf67be50417f59c2c2f167def9a775"),
     "qwen2.5-1.5b-instruct": ("Qwen/Qwen2.5-1.5B-Instruct", "989aa7980e4cf806f80c7fef2b1adb7bc71aa306"),
     "qwen2.5-3b-instruct": ("Qwen/Qwen2.5-3B-Instruct", "aa8e72537993ba99e69dfaafa59ed015b17504d1"),
+    "qwen2.5-7b-instruct": ("Qwen/Qwen2.5-7B-Instruct", "a09a35458c702b33eeacc393d103063234e8bc28"),
 }
 #: The speculation draft baked into the customer image with ``PGW_MODAL_DRAFT=1`` (``launch.py --spec-draft``):
 #: Qwen2.5-0.5B-Instruct, the same tokenizer as every target above. It runs in plaintext on the gateway only.
@@ -291,9 +292,13 @@ def start_service(env: dict[str, str], logfile: Path, user_kw: dict[str, Any] | 
 
 
 def create_enrollment_code(env: dict[str, str], tenant: str, ttl: str, note: str,
-                           user_kw: dict[str, Any] | None = None, cwd: Path | None = None) -> dict[str, Any]:
+                           user_kw: dict[str, Any] | None = None, cwd: Path | None = None,
+                           model: str | None = None) -> dict[str, Any]:
+    """A single-use enrollment code for ``model`` (default: the deployed target, ``PGW_MODAL_MODEL`` in the
+    image's environment, else the 0.5B; the code lists the model the service serves)."""
+    model = (model or os.environ.get("PGW_MODAL_MODEL") or MODEL_NAME).strip().lower()
     r = subprocess.run([sys.executable, "-m", "pgw.cli", "service", "enroll", "create", "--tenant", tenant,  # noqa: S603
-                        "--ttl", ttl, "--models", MODEL_NAME, "--note", note, "--json"],
+                        "--ttl", ttl, "--models", model, "--note", note, "--json"],
                        env=env, capture_output=True, text=True, check=False, cwd=cwd, **(user_kw or {}))
     if r.returncode != 0:
         raise RuntimeError(f"enroll create failed: {r.stderr[-2000:]}")
@@ -485,7 +490,23 @@ COLOCATED_FACTORY_KEEP_UP = {
 }
 
 
-def colocated_gateway_env(local_linears: str) -> dict[str, str]:
+#: Mask bytes per slot grow with the model (gate_up masks of a 0.5B slot: 0.93 MB; 1.5B 2.0 MB; 3B 3.2 MB; 7B
+#: 4.2 MB) and the factory's slots per second shrink about as much, so the keep-up's slot counts are divided by
+#: this per target (segments land in about the same time; the stock holds about the same seconds of decode).
+FACTORY_SLOT_DIVISOR = {"qwen2.5-0.5b-instruct": 1, "qwen2.5-1.5b-instruct": 2, "qwen2.5-3b-instruct": 4,
+                        "qwen2.5-7b-instruct": 4}
+_KEEP_UP_SLOT_KEYS = ("PGW_FACTORY_YIELD_MIN_SLOTS", "PGW_FACTORY_YIELD_FULL_SLOTS", "PGW_FACTORY_SEGMENT_SLOTS",
+                      "PGW_FACTORY_LOW_WATER_SLOTS", "PGW_FACTORY_TARGET_SLOTS")
+
+
+def factory_keep_up(model: str | None = None) -> dict[str, str]:
+    """:data:`COLOCATED_FACTORY_KEEP_UP` with its slot counts scaled for ``model`` (:data:`FACTORY_SLOT_DIVISOR`)."""
+    div = FACTORY_SLOT_DIVISOR.get((model or MODEL_NAME).strip().lower(), 1)
+    return {k: (str(max(64, int(v) // div)) if k in _KEEP_UP_SLOT_KEYS else v)
+            for k, v in COLOCATED_FACTORY_KEEP_UP.items()}
+
+
+def colocated_gateway_env(local_linears: str, model: str | None = None) -> dict[str, str]:
     """Gateway-party environment of the co-located demo (measured on Modal, see deploy/modal/README.md):
 
     * ``PGW_FACTORY_SKIP_LINEAR_KINDS``: with a fixed ``local_linears`` the encrypted mask factory makes masks
@@ -507,7 +528,7 @@ def colocated_gateway_env(local_linears: str) -> dict[str, str]:
       speed. Same masks, requests and bytes. The file is in the gateway party's home (``/srv/pgw/home``).
     """
     env = {"PGW_POOL_SPIN_US": "2000", "PGW_POOL_WORKERS": "4",
-           "PGW_FACTORY_YIELD_FILE": "/srv/pgw/home/factory-yield", **COLOCATED_FACTORY_KEEP_UP,
+           "PGW_FACTORY_YIELD_FILE": "/srv/pgw/home/factory-yield", **factory_keep_up(model),
            # T3: the one-call trip path and the sampled noise statistics off the critical path (same bytes,
            # checks and statistics; library defaults off, see MaskedBackend.trip_fast / noise_async_sampled)
            "PGW_TRIP_FAST": "1",
@@ -530,8 +551,11 @@ COLOCATED_PROVIDER_ENV = {"PGW_SERVICE_TRIP_STREAM_PRIORITY": "high"}
 #: PGW_LOCAL_GPU_STREAM_PRIORITY=high, PGW_THREAD_NAMES=1 (per-thread factory cores in the sustain report).
 #: ``PGW_LOCAL_GPU_PREFILL_ROWS``: a prompt pass's local linears through one captured digit-GEMM graph per linear on
 #: 64-row blocks (exact, self-checked per linear; about 145 ms to 85 ms for 41 rows on a T4).
+#: ``PGW_HINT_DEVICE``: the one-time encryption hint's GEMMs on that GPU (``pgw.hemask.hint_gpu``, the CPU path's
+#: bits, self-checked first); minutes of gateway CPU for the 1.5B and tens of minutes for the 7B otherwise.
 GATEWAY_GPU_FACTORY_ENV = {"PGW_HEMASK_ENGINE": "cpu_int8", "PGW_FACTORY_DEVICE": "cpu",
-                           "PGW_FACTORY_GPU_PRNG": "false", "PGW_LOCAL_GPU_PREFILL_ROWS": "64"}
+                           "PGW_FACTORY_GPU_PRNG": "false", "PGW_LOCAL_GPU_PREFILL_ROWS": "64",
+                           "PGW_HINT_DEVICE": "cuda"}
 
 
 def _nvidia_devices() -> list[dict[str, str]]:

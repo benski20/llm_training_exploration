@@ -862,6 +862,7 @@ class ModelRuntime:
                 deadline_ms=self.config.service_deadline_ms,
                 on_integrity_failure=self._on_integrity_failure,
                 min_soundness_bits=self.settings.min_soundness_bits,
+                prime_check=bool(getattr(self.settings, "prime_check", False)),
             )
             await self._warm_weight_norms()
             await self._configure_local_linears()

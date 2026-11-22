@@ -538,6 +538,13 @@ class GatewaySettings(PGWSettings):
     min_soundness_bits: float = Field(
         20.0, ge=0, description="Refuse mask segments giving fewer bits of Freivalds soundness for any linear"
     )
+    prime_check: bool = Field(
+        False,
+        description="Accept mask segments in the prime-field Freivalds format (check_field 'p31', SPEC 5.1): one "
+        "secret vector over F_p (p = 2^31 - 1) per linear, checked synchronously on the unmasked values (31 bits "
+        "per call; 1/7 of the check-vector reads at K32A12C27). Needs the native trip kernels; off = such "
+        "segments are refused before any mask row is used",
+    )
     pack_verify: Literal["full", "fingerprint"] = Field(
         "full",
         description="Pack verification at start-up: 'full' hashes plain tensors, tokenizer and linears "

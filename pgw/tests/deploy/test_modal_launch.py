@@ -483,9 +483,12 @@ def test_spec_flags(monkeypatch: pytest.MonkeyPatch) -> None:
     assert launch.parse_args(["--spec-rows", "3"]).spec_rows == 3
     for bad in (["--spec-rows", "1"], ["--spec-rows", "9"], ["--spec-draft"],  # the draft needs spec rows
                 ["--spec-rows", "4", "--spec-draft"],  # the 0.5B drafting for itself
-                ["--model", "qwen2.5-7b-instruct"]):
+                ["--model", "qwen2.5-14b-instruct"],
+                ["--model", "qwen2.5-7b-instruct"]):  # the 7B: co-located only
         with pytest.raises(SystemExit):
             launch.parse_args(bad)
+    a7 = launch.parse_args(["--model", "qwen2.5-7b-instruct", "--placement", "colocated"])
+    assert a7.model == "qwen2.5-7b-instruct" and a7.he_bulk
     a = launch.parse_args(["--model", "qwen2.5-1.5b-instruct", "--spec-rows", "4", "--spec-draft"])
     assert a.model == "qwen2.5-1.5b-instruct" and a.spec_draft
     monkeypatch.setenv("PGW_MODAL_MODEL", "qwen2.5-3b-instruct")
@@ -542,7 +545,7 @@ def test_colocated_serves_the_chosen_model_and_draft(monkeypatch: pytest.MonkeyP
     col2 = _load("colocated")
     assert (col2.MODEL_NAME, col2.PACK, col2.DRAFT, col2.MEMORY_MIB) == (col.MODEL_NAME, col.PACK, True,
                                                                          col.MEMORY_MIB)
-    monkeypatch.setenv("PGW_MODAL_MODEL", "qwen2.5-7b-instruct")
+    monkeypatch.setenv("PGW_MODAL_MODEL", "qwen2.5-14b-instruct")
     with pytest.raises(ValueError, match="PGW_MODAL_MODEL"):
         _load("colocated")
     text = (MODAL_DIR / "colocated.py").read_text()
@@ -559,7 +562,7 @@ def test_provider_serves_the_chosen_model(monkeypatch: pytest.MonkeyPatch) -> No
     prov = _load("provider")
     assert prov.MODEL_NAME == "qwen2.5-1.5b-instruct" and prov.MODEL_REPO == "Qwen/Qwen2.5-1.5B-Instruct"
     assert prov.PACK.endswith("qwen2.5-1.5b-instruct")
-    monkeypatch.setenv("PGW_MODAL_MODEL", "qwen2.5-7b-instruct")
+    monkeypatch.setenv("PGW_MODAL_MODEL", "qwen2.5-14b-instruct")
     with pytest.raises(ValueError, match="PGW_MODAL_MODEL"):
         _load("provider")
     monkeypatch.delenv("PGW_MODAL_MODEL")
@@ -627,8 +630,16 @@ def test_lane_tls_is_colocated_only_and_reaches_the_pair(monkeypatch: pytest.Mon
     p = spawn(FakeDict(), "colocated", 600, True)
     # co-located default --float-threads 1: the gateway's torch threads pinned (the reference follows, colocated.py)
     assert log[-1][:2] == launch.COLOCATED_FUNCTION and log[-1][2] == (
-        p.run_id, 600, True, "auto", 0, "tls", {"OMP_NUM_THREADS": "1", "PGW_FLOAT_OPS": "native"}, {}, 0.0)
-    args0 = launch.parse_args(["--placement", "colocated", "--float-threads", "0", "--float-ops", "torch"])
+        p.run_id, 600, True, "auto", 0, "tls", {"OMP_NUM_THREADS": "1", "PGW_FLOAT_OPS": "native",
+                                                "PGW_FACTORY_HE_BULK_PORT": "8445", "PGW_FACTORY_HE_BULK_SPLIT": "2"},
+        {"PGW_SERVICE_MASKGEN_BULK_PORT": "8445"}, 0.0)
+    nb = launch.parse_args(["--placement", "colocated", "--no-he-bulk"])
+    launch._spawner(nb)(FakeDict(), "colocated", 600, True)
+    assert "PGW_FACTORY_HE_BULK_PORT" not in log[-1][2][6] and log[-1][2][7] == {}
+    with pytest.raises(SystemExit):
+        launch.parse_args(["--he-bulk"])  # co-located only
+    args0 = launch.parse_args(["--placement", "colocated", "--float-threads", "0", "--float-ops", "torch",
+                               "--no-he-bulk"])
     launch._spawner(args0)(FakeDict(), "colocated", 600, True)
     assert log[-1][2][1:] == (600, True, "attention_down", 0, "uds")  # 0 = each process's default count
     with pytest.raises(SystemExit):
