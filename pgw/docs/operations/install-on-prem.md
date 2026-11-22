@@ -180,7 +180,10 @@ plaintext quantized reference, none shows the provider anything new):
   reserves `prompt + (max_tokens - 1) + min(B, floor((C - 1) (max_tokens - 1)))` slots and takes about C
   (or 1 + B/L) per generated token instead of `spec_rows`. The store is asked for slots only on that
   schedule, padded calls are one item each and cost the gateway the same work whatever their split, so
-  the provider learns nothing more than with masked fillers. Needs the native `pgw_fast` trip kernels.
+  the provider learns nothing more than with masked fillers, up to one residual: a dummy call takes no mask
+  from the store, so its gateway turnaround differs from a real call's by the store's per-take cost (within 3%
+  per call with an in-memory reservation; not yet measured with the mask ring or segment store). Re-measure
+  per-call timing with your store before enabling it in production. Needs the native `pgw_fast` trip kernels.
 * `"float_threads"`: torch threads of the gateway's decode float ops (`1` saved 2-5 ms per token on a
   4-vCPU host); enabled only if a start-up self-check gives the same bits (`PGW_FLOAT_THREADS` does
   the same for every model).

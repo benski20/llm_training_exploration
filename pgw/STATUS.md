@@ -29,7 +29,7 @@ R 2/4, C 2/R, fractional C, credit caps, mask extents ending mid-pass).
   mask-extent boundaries (now one item per padded call, and real rows kept within one extent), unverified dummy
   items (an active provider could learn which passes were dummies; now Freivalds-checked), a gateway turnaround
   that depended on the real/padding split (measured 466 / 529 / 654 us per call for dummy / real / mixed at R = 4;
-  now one fixed-structure path, within noise), and window extension, ahead reservation and part retirement driven by
+  now one fixed-structure path, within 3% per call with an in-memory reservation; a dummy call skips the store's take, so the residual must be re-measured with the real mask store before production use), and window extension, ahead reservation and part retirement driven by
   mask use (`WindowedReservation(public=True)`: extensions only by `charge_to` on the schedule).
 - Simulated on the Kaggle run 28 exact answers (`benchmarks/spec_charge_sim.py`): 1.5B target with the 0.5B draft at
   R = 4, C = 4, B = 160 keeps today's 2.84 tokens per pass at 2.50 masks per token instead of 3.96; the 0.5B with
