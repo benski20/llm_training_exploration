@@ -171,3 +171,108 @@ def test_hint_cache_falls_back_to_streaming_when_the_device_is_full(monkeypatch:
     assert eng.cache.budget == eng.cache.used == hint.nbytes
     assert eng.hint_on_device("a", hint) is not None  # resident hints stay
     assert eng.stats["hint_oom"] == 1
+
+
+def _decrypt_case(k: int = 32) -> tuple[devmm.DeviceHE, HEParams, np.ndarray, list[Any], int]:
+    p = HEParams(k=k, rank=8)
+    rng = np.random.default_rng(11)
+    n, m, rows = 40, 24, DEGREE + 7
+    a = public_matrix(bytes(range(32)), n, p)
+    eng = devmm.DeviceHE(to_planes(a)[:, :a_plane_count(p)], p, "cpu", hint_budget=0)
+    r = rng.integers(0, 1 << k, size=(rows, n), dtype=np.int64)
+    cts, b = eng.encrypt(r, n, seeds=[bytes([3 + i]) * 32 for i in range(2)])
+    w = rng.integers(-127, 128, size=(m, n)).astype(np.int64)
+    hint = to_planes(matmul_mod64(w, a, fast=False))[:, 1:p.q // 8]
+    y = matmul_mod64(w, b, fast=False) & p.q_mask
+    return eng, p, hint, [(y, cts, 0)], rows
+
+
+@pytest.mark.parametrize("fail_at", ["combine", "index_select", "copy_out"])
+def test_decrypt_wipes_block_temporaries_when_a_step_raises(fail_at: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    """An error part-way through a block (e.g. CUDA OOM) leaves no secret-bearing device tensor unwiped."""
+    eng, p, hint, items, rows = _decrypt_case()
+    m = hint.shape[0]
+    want = np.zeros((rows, m), dtype=np.int64)
+    eng.decrypt_into("k", hint, [(it[0].copy(), *it[1:]) for it in items], want, p.delta_bits, p.k)
+
+    monkeypatch.setattr(devmm, "_BLOCK_BYTES", 1)  # 8-row blocks: the second of three blocks fails
+    seen: list[torch.Tensor] = []
+    real_to_dev, real_int_mm, real_combine = eng._to_dev, devmm.int_mm, devmm.combine
+    real_index_select, real_to = torch.Tensor.index_select, torch.Tensor.to
+    calls = {"n": 0}
+
+    def boom() -> None:
+        raise torch.cuda.OutOfMemoryError("injected")
+
+    def to_dev(arr: np.ndarray) -> torch.Tensor:
+        seen.append(real_to_dev(arr))  # st (secrets) and yd (replies)
+        return seen[-1]
+
+    def int_mm(lhs: torch.Tensor, rhs: torch.Tensor) -> torch.Tensor:
+        seen.append(real_int_mm(lhs, rhs))  # part (H S planes)
+        return seen[-1]
+
+    def combine(part: torch.Tensor, offset: torch.Tensor, first_byte: int) -> torch.Tensor:
+        seen.append(offset)
+        calls["n"] += 1
+        if fail_at == "combine" and calls["n"] == 2:
+            boom()  # part, offset, st and yd are alive in the loop
+        out = real_combine(part, offset, first_byte)
+        seen.append(out)  # corr
+        return out
+
+    def index_select(self: torch.Tensor, *args: Any, **kwargs: Any) -> torch.Tensor:
+        seen.append(self)  # a view of v = y - H S
+        if fail_at == "index_select" and calls["n"] == 2:
+            boom()
+        out = real_index_select(self, *args, **kwargs)
+        seen.append(out)  # sel
+        return out
+
+    def to(self: torch.Tensor, *args: Any, **kwargs: Any) -> torch.Tensor:
+        if fail_at == "copy_out" and calls["n"] == 2 and args[:1] == ("cpu",):
+            boom()  # sel is alive and not yet wiped
+        return real_to(self, *args, **kwargs)
+
+    monkeypatch.setattr(eng, "_to_dev", to_dev)
+    monkeypatch.setattr(devmm, "int_mm", int_mm)
+    monkeypatch.setattr(devmm, "combine", combine)
+    monkeypatch.setattr(torch.Tensor, "index_select", index_select)
+    monkeypatch.setattr(torch.Tensor, "to", to)
+    out = np.zeros((rows, m), dtype=np.int64)
+    with pytest.raises(torch.cuda.OutOfMemoryError):
+        eng.decrypt_into("k", hint, [(it[0].copy(), *it[1:]) for it in items], out, p.delta_bits, p.k)
+    assert len(seen) >= 6
+    for t in seen:
+        assert not t.any(), "a secret-bearing temporary was freed without being wiped"
+    assert calls["n"] == 2
+    assert np.array_equal(out[:, :8], want[:, :8]) and not out[:, 8:].any()
+
+    monkeypatch.undo()  # the retry after the error gives the same bits
+    out2 = np.zeros((rows, m), dtype=np.int64)
+    eng.decrypt_into("k", hint, [(it[0].copy(), *it[1:]) for it in items], out2, p.delta_bits, p.k)
+    assert np.array_equal(out2, want)
+
+
+def test_combine_wipes_its_partial_sums_when_it_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    part = torch.randint(-(1 << 20), 1 << 20, (5, 6, 7), dtype=torch.int32)
+    offset = torch.arange(7, dtype=torch.int64) * 128
+    allocated: list[torch.Tensor] = []
+    real_zeros, real_add = devmm.torch.zeros, devmm.torch.add
+    adds = {"n": 0}
+
+    def zeros(*args: Any, **kwargs: Any) -> torch.Tensor:
+        allocated.append(real_zeros(*args, **kwargs))
+        return allocated[-1]
+
+    def add(*args: Any, **kwargs: Any) -> torch.Tensor:
+        adds["n"] += 1
+        if adds["n"] == 2:  # the accumulator already holds the first plane pair
+            raise torch.cuda.OutOfMemoryError("injected")
+        return real_add(*args, **kwargs)
+
+    monkeypatch.setattr(devmm.torch, "zeros", zeros)
+    monkeypatch.setattr(devmm.torch, "add", add)
+    with pytest.raises(torch.cuda.OutOfMemoryError):
+        devmm.combine(part, offset, 1)
+    assert len(allocated) == 1 and not allocated[0].any()

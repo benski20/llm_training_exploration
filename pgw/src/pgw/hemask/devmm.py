@@ -112,21 +112,28 @@ def combine(part: torch.Tensor, offset: torch.Tensor, first_byte: int) -> torch.
     acc = torch.zeros((rows, cols), dtype=torch.int64, device=part.device)
     weight = 0
     i = 0
-    while i < npl:
-        shift = 8 * (first_byte + i)
-        if i + 1 < npl:
-            term = torch.add(part[:, i], part[:, i + 1], alpha=256).to(torch.int64)
-            weight += 257 << shift
-            i += 2
-        else:
-            term = part[:, i].to(torch.int64)
-            weight += 1 << shift
-            i += 1
-        if shift:
-            term <<= shift
-        acc += term
-        del term
-    acc += offset.view(1, cols) * _signed(weight)
+    term: torch.Tensor | None = None
+    try:
+        while i < npl:
+            shift = 8 * (first_byte + i)
+            if i + 1 < npl:
+                term = torch.add(part[:, i], part[:, i + 1], alpha=256).to(torch.int64)
+                weight += 257 << shift
+                i += 2
+            else:
+                term = part[:, i].to(torch.int64)
+                weight += 1 << shift
+                i += 1
+            if shift:
+                term <<= shift
+            acc += term
+            term = None
+        acc += offset.view(1, cols) * _signed(weight)
+    except BaseException:  # e.g. out of memory part-way: the partial sums hold H S bits
+        for t in (term, acc):
+            if t is not None:
+                t.zero_()
+        raise
     return acc
 
 
@@ -353,34 +360,46 @@ class DeviceHE:
             smat_t.fill(0)
             ys.fill(0)
         assert st is not None
-        vidx = torch.from_numpy(valid).to(self.dev)
-        dev_hint = self.hint_on_device(key, hint)
         half = 1 << (delta_bits - 1)
         kmask = (1 << k) - 1
         block = max(8, min(m, _BLOCK_BYTES // (npl * cols * 4)))
-        offset = st.sum(1, dtype=torch.int64) * 128
+        # Block temporaries that hold secret values (H S partials, y - H S, the selected rows and their
+        # host copy). Each is zeroed and dropped as soon as it is consumed; the ``finally`` wipes any
+        # still alive when a step raises part-way through a block (e.g. a CUDA out-of-memory error).
+        offset = part = corr = v = sel = None
+        host: np.ndarray | None = None
         try:
+            vidx = torch.from_numpy(valid).to(self.dev)
+            dev_hint = self.hint_on_device(key, hint)
+            offset = st.sum(1, dtype=torch.int64) * 128
             for r0 in range(0, m, block):
                 nb = min(block, m - r0)
                 h = dev_hint[r0:r0 + nb] if dev_hint is not None else self._upload_block(hint[r0:r0 + nb])
                 part = int_mm(h.reshape(nb * npl, dim), st).view(nb, npl, cols)
                 corr = combine(part, offset, 1)
                 part.zero_()
+                part = None
                 v = yd[r0:r0 + nb] - corr
                 corr.zero_()
+                corr = None
                 v += half
                 v >>= delta_bits  # arithmetic shift: the K bits kept are the same (delta + K <= 64)
                 v &= kmask
                 sel = v.t().index_select(0, vidx)  # (valid slots, nb): slot-major, as the store wants
                 v.zero_()
+                v = None
                 host = sel.to("cpu", copy=True).numpy()
                 sel.zero_()
+                sel = None
                 out[dst, r0:r0 + nb] = host
                 host.fill(0)
+                host = None
         finally:
-            offset.zero_()
-            st.zero_()
-            yd.zero_()
+            for t in (part, corr, v, sel, offset, st, yd):
+                if t is not None:
+                    t.zero_()
+            if host is not None:
+                host.fill(0)
 
 
 _NO_B = np.empty((0, DEGREE), dtype=np.uint64)
