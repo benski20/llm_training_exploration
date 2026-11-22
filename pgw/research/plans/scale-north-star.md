@@ -135,6 +135,28 @@ territory, which another group owns. The hint is the other constraint. Holding i
 groups_per_call)` per slot. For 70B with 16 groups per call that is about 40 MB of hint read per slot, so
 batch more groups per call when RAM bandwidth binds.
 
+**GPU NTT on the gateway (X5, `pgw/src/pgw/hemask/gpuntt.py`, opt-in).** `A` stays on the device in NTT form,
+one fused Triton kernel does the rank-16 pointwise MAC, inverse NTT and CRT to mod 2^64, and a second
+kernel transforms hint byte planes per decryption pass. The output is bit-identical to the dense and
+`ntt_pre` paths (checked on the T4 and by a start-up self-test). Measured on a Kaggle T4 with 4 vCPU, in
+us per row and 256-slot group (`hemask_gpuntt_bench.py`, run pgw-x5-gpuntt v2):
+
+| | GPU kernels only | end to end | 0.5B slots/s, end to end |
+|---|---|---|---|
+| encrypt, gpuntt (Triton) | 0.94 | 5.0 | 281 |
+| encrypt, devmm dense int8 GEMM | - | 5.0 | 283 |
+| encrypt, ntt_pre (CPU) | - | 6.9-7.5 | 188-204 |
+| decrypt, gpuntt, hint cached / streamed | 0.96 | 2.1 / 2.5 | 396 / 338 |
+| decrypt, devmm, hint cached / streamed | - | 5.2 / 5.7 | 162 / 147 |
+
+The GPU NTT work is now 5-6x below the end-to-end cost. Encryption is bound by the CPU: the CBD noise
+sampler (1.31 us per row and group, which every engine pays) plus about 2.7 us of host-side assembly and
+transfers. The kernels alone would allow about 1.5k encrypt slots/s and 0.9k decrypt slots/s at 0.5B,
+or about 41 ms per 70B slot on one T4 (16 ms encrypt + 25 ms decrypt; estimate, kernel time scaled by the
+sum of n and the sum of m), against 0.12 s per slot for the CPU NTT on 4 vCPU above. The next levers
+are on the CPU: a faster noise sampler (for example AES-CTR instead of SHAKE, or a cryptographic
+generator on the device, which needs its own review) and pinned, overlapped transfers.
+
 **Privacy notes.** Unchanged MLWE parameters (rank 16, q = 2^56, ternary secret, eta = 21). Nothing in this
 plan changes the cryptography. For MoE, refills must not depend on routing (section 7.2).
 

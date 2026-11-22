@@ -183,6 +183,9 @@ def test_backend_ntt_pre_exact_and_same_ciphertexts(q_bits: int, monkeypatch: py
     fast = be._encrypt(r, 96)
     it2 = iter(seeds)
     monkeypatch.setattr(lwe, "new_seed", lambda: next(it2))
+    import pgw.hemask.devmm as devmm  # on CUDA the dense backend encrypts with the fused device pass
+
+    monkeypatch.setattr(devmm, "new_seed", lambda: next(it2))
     ref = dense._encrypt(r, 96)
     assert [c.rows for c in fast] == [c.rows for c in ref] == [256, 44]
     for x, y in zip(fast, ref, strict=True):

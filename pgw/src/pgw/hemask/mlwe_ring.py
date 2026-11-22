@@ -36,6 +36,7 @@ import os
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
+from typing import Any
 
 import numpy as np
 
@@ -174,6 +175,12 @@ def encrypt_cost_ops(n: int, rank: int, groups: int = 1, *, planes: int = 7) -> 
 # ---------------------------------------------------------------------------------------------
 
 
+def _secrets_of(smat: np.ndarray) -> np.ndarray:
+    from pgw.hemask.ntt_dev import secrets_from_matrix
+
+    return secrets_from_matrix(smat)
+
+
 class PretransformedEncryptor:
     """Encrypt mask groups with the public matrix held in NTT form; same ciphertexts as
     :func:`pgw.hemask.lwe.encrypt_masks`.
@@ -184,12 +191,14 @@ class PretransformedEncryptor:
         params: Encryption parameters (``a.shape[1] == params.dim``).
         groups_per_pass: Groups whose pads are computed in one pass over ``A`` (the transformed rows
             are streamed once per pass; 4 is a good default on CPUs with 1-2 MB of L2 per core).
+        device_ntt: A self-tested :class:`pgw.hemask.ntt_dev.DeviceNTT` to keep ``A`` in NTT form on a
+            device (gateway GPU) instead of the native CPU module; same ciphertexts bit for bit.
     """
 
-    def __init__(self, a: np.ndarray, params: HEParams, *, groups_per_pass: int = 4):
+    def __init__(self, a: np.ndarray, params: HEParams, *, groups_per_pass: int = 4, device_ntt: Any = None):
         from pgw.hemask import ntt
 
-        if not ntt.available():
+        if device_ntt is None and not ntt.available():
             raise ConfigError("he_encrypt='ntt_pre' needs the native NTT module pgw_ntt "
                               "(build it with python rust/tools/build_ntt.py)")
         if a.ndim != 2 or a.shape[1] != params.dim:
@@ -199,7 +208,12 @@ class PretransformedEncryptor:
         self.groups_per_pass = max(1, min(16, int(groups_per_pass)))
         # The low q bits of A determine the ciphertext (b is reduced mod 2^q); masking first keeps the
         # CRT bound for 56-bit operands (the native transform derives its bound from big_bits).
-        if params.q < 64:
+        if device_ntt is not None:
+            # A in NTT form on a device (pgw.hemask.ntt_dev, self-tested against the CPU): same pads bit for bit
+            from pgw.hemask.ntt_dev import DeviceTransformedA
+
+            self._t: Any = DeviceTransformedA(a, params.q, device_ntt)
+        elif params.q < 64:
             from pgw.hemask.fastmm import to_planes
 
             npl = -(-params.q // 8)
@@ -214,7 +228,7 @@ class PretransformedEncryptor:
     @property
     def nbytes(self) -> int:
         """Memory of the transformed public matrix."""
-        return self._t.nbytes
+        return int(self._t.nbytes)
 
     def encrypt(self, r: np.ndarray, *, _seeds: list[bytes] | None = None) -> list[MaskCiphertext]:
         """Encrypt ``(rows, n)`` masks (any number of rows) as ``ceil(rows / 256)`` groups.
@@ -249,7 +263,7 @@ class PretransformedEncryptor:
             secs = np.empty((len(seeds), p.rank, DEGREE), dtype=np.int8)
             try:
                 for gi, sm in enumerate(smats):
-                    sec = ntt.secrets_of(sm)
+                    sec = ntt.secrets_of(sm) if ntt.available() else _secrets_of(sm)
                     if sec is None:  # pragma: no cover - native module present by construction
                         raise ConfigError("secret matrix is not block-negacyclic")
                     secs[gi] = sec[0]
