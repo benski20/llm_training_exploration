@@ -773,7 +773,8 @@ _SEGMENT_RE = re.compile(r"^(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d),(\d{3}) .*segment \
                          r"\(([\d.]+) slots/s")
 _YIELDED_RE = re.compile(r"yielded to decode ([\d.]+)s")
 _HE_STAGES_RE = re.compile(r"encrypt ([\d.]+)s, provider ([\d.]+)s, decrypt ([\d.]+)s")
-_HE_ENGINE_RE = re.compile(r", on (\S+)")
+_HE_ENGINE_RE = re.compile(r", on ([^;\s]+)")
+_CHECK_FIELD_RE = re.compile(r"; check field (\S+)")
 
 
 def factory_segments(logfile: Path, t0: float, t1: float) -> dict[str, Any]:
@@ -801,6 +802,8 @@ def factory_segments(logfile: Path, t0: float, t1: float) -> dict[str, Any]:
         st = _HE_STAGES_RE.search(line)
         if st:
             row.update(encrypt_s=float(st.group(1)), provider_s=float(st.group(2)), decrypt_s=float(st.group(3)))
+        cf = _CHECK_FIELD_RE.search(line)
+        row["check_field"] = cf.group(1) if cf else "ring"  # type: ignore[assignment]
         eng = _HE_ENGINE_RE.search(line)
         if eng:
             row["engine"] = eng.group(1)  # type: ignore[assignment]

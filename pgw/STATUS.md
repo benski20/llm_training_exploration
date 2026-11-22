@@ -15,6 +15,29 @@ SLA pilot. Three reasons:
 2. The HSM, KMS and TPM integrations have never run against real hardware or cloud services.
 3. There has been no external security audit.
 
+## Update 2026-11-22: the 7B CPU-only-gateway speculation run is ready to launch (Modal launcher, opt-in)
+
+One co-located run measures Qwen2.5-7B on an H100 provider with a CPU-only, weight-free gateway (every linear remote,
+native float ops, native per-trip path, p31 check), strict speculation R = 2 with the Qwen2.5-0.5B draft
+(`native_int8`, pipelined m = 0) and, in the same container, plain decoding as the A/B. Command, sizing, cost
+(about $6.7/h, $2.5-3.5 per run, TTL 35 min) and the expected outcome: `deploy/modal/README.md`, "CPU-only 7B gateway,
+strict speculation, H100 provider". Not run yet at 7B.
+
+- Launcher: `--draft-backend`, `--spec-pipeline-steps`, run-time `--spec-mask`, `--trip-native`, `--prime-check`
+  (refused with `--spec-mask`: padded calls refuse p31; unpadded R = 2 costs the same 2 slots per pass), `--ab-plain S`
+  (restart the gateway without speculation on the same store and keys, then chats and an S-second window),
+  `--gateway-cpus/--provider-cpus/--gateway-mem-gib/--provider-mem-gib`, `--gateway-cache`, `--prepare-cache`.
+- Reports per phase: streamed decode tok/s, TTFT, tokens per verify pass, drafter hit rate and step time, trips per
+  token and trip split, gateway CPU per trip, slots per token, factory production vs consumption; exactness of every
+  phase is part of `ok`. New gateway-local admin counters `speed.spec_stats` / `speed.drafter_stats`.
+- Gateway cache (a Volume of public artefacts): the pack (reused only with `PGW_SETUP_REUSE_PACK=1`, library default
+  off, and only if it fully verifies to the enrolled fingerprint) and the hint `H = W8 A` (public weights times a
+  public matrix whose seed the customer side chose; no secret). The 7B's ~20 min CPU hint build moves to a one-off T4
+  job. Building the hint on the provider was rejected: a provider-supplied `H` would allow a selective-failure attack
+  on the per-group secrets unless re-derived. The factory's segment log now names the check field.
+- Validated on a T4 at 0.5B (self-draft, plumbing only): two runs exact in every phase, every segment p31, cache
+  restore 2.7-9.2 s for 8.4 GB, plain-phase restart 10.5 s; about $0.2 spent.
+
 ## Update 2026-11-22: p31 extents through native trip leases, W r decrypted ahead, fused duplicate check (W2, opt-in)
 
 - **p31 leases**: `TripLease(..., field=2**31 - 1)` serves prime-field extents on the native per-trip path; the prime

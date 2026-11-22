@@ -912,8 +912,8 @@ class MaskGenerator:
             stats.seconds = time.perf_counter() - t0
             stats.write_seconds = write_time[0]
             stats.segment_id = seg_id
-            log.info("segment %s: %s %s, %s", seg_id, short_fingerprint(self.fingerprint), self.ring.name,
-                     format_stats(stats))
+            log.info("segment %s: %s %s, %s%s", seg_id, short_fingerprint(self.fingerprint), self.ring.name,
+                     format_stats(stats), f"; check field {self.check_field}" if self.check_field else "")
             return seg_id
 
     def _drive(self, writer: Any, chunks: Iterator[GeneratedLinear], write_time: list[float]) -> None:

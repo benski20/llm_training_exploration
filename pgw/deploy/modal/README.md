@@ -699,6 +699,157 @@ bytes), masks 5.56 MB per slot (only `W r` mod 2^32 is stored; `r` already comes
 demo's 2048-slot target is 11.4 GB. The audit log also shows 25-33 reserved slots burned per chat (reserved for
 `max_tokens`, not used): 24-31% of the supply in these chats.
 
+### CPU-only 7B gateway, strict speculation, H100 provider: the decisive run (prepared 2026-11-22)
+
+The launcher is ready for one co-located measurement of the configuration of
+`research/plans/strict-speculation-cpu-gateway.md` (section 7): Qwen2.5-7B on the provider's H100, a CPU-only,
+weight-free customer gateway (every linear remote, native float ops, the native per-trip path), the Qwen2.5-0.5B draft
+on the gateway's cores (`draft_backend = "native_int8"`), strict speculation (R = 2, pipelined m = 0), the
+one-vector Freivalds check over F_p (`p31`), and, in the same container, the same gateway without speculation as the A/B. Everything new is opt-in (launcher flags;
+library defaults unchanged).
+
+**New launcher options** (co-located only unless noted):
+
+| option | what | where it goes |
+|---|---|---|
+| `--gpu H100` (existing) + no `--gateway-gpu` | the provider's GPU; the gateway's process sees none | deploy |
+| `--gateway-cpus N`, `--provider-cpus N`, `--gateway-mem-gib N`, `--provider-mem-gib N` | container sizing (requests) | deploy (`PGW_MODAL_GATEWAY_CPUS` ...) |
+| `--draft-backend native_int8` | the draft's CPU kernels (`GatewayModelConfig.draft_backend`) | wizard `models.json` |
+| `--spec-pipeline-steps M` | pipelined drafter (`spec_pipeline_steps`; prompt lookup off, as the config requires) | wizard `models.json` |
+| `--spec-mask C[/B]` (existing, now also at run time) | padded strict speculation, public charge of C slots per pass | wizard `models.json` |
+| `--trip-native` | `PGW_TRIP_NATIVE=1` next to the demo's `PGW_TRIP_FAST=1` | gateway environment |
+| `--prime-check` | `PGW_FACTORY_CHECK_FIELD=p31` + `PGW_GATEWAY_PRIME_CHECK=true`; **refused with `--spec-mask`** (padding rows refuse prime extents, fail closed) | factory + gateway environment |
+| `--ab-plain S` | after the speculative phase: rewrite `models.json` without the speculation keys, restart the gateway process (same pack, mask store, keys, service, enrollment; normal mode from the finished wizard), 1 warm-up + 3 streamed chats, then `S` seconds back to back | `colocated.py` |
+| `--gateway-cache`, `--prepare-cache` | the gateway side's cache Volume (below) | deploy / one-off T4 container |
+| `--allow-self-draft` | the 0.5B target drafting for itself (plumbing tests only) | deploy |
+
+**What the e2e now reports** for both phases (`e2e.speed`, `e2e.sustain`, `e2e.plain`, `e2e.plain.sustain`; a summary
+is printed at the end): streamed decode tok/s (warm chats; per chat and token-weighted over the sustain window), TTFT,
+exactness (`logprobs_bit_identical`, `text_equal`, `stream_identical`, sustain `identical`, plain-phase `identical`, all
+part of `ok`), trips per token, the 1-row trip split (service / wire), **gateway process CPU per trip**
+(`sustain.derived.gateway_cpu_ms_per_trip`: the gateway's cores x seconds / trips, factory excluded), **mask slots per
+generated token** (`derived.slots_per_token`: consumption x window / tokens, prompts and burned reservations included),
+**factory slots/s against consumption** (`derived.factory_vs_consumption`: window, commit-to-commit, stock slope), and for
+speculation **tokens per verify pass**, draft rows per pass, the pipelined drafter's hit rate, draft ms per background
+step and the foreground wait (`stream_spec`, `sustain.spec`; from new gateway-local counters `spec_stats` /
+`drafter_stats` in `/admin/status`, never sent to the provider). With strict speculation each chat starts after the
+previous answer's dummy passes have drained (`spec_drain_s`), so TTFT is not inflated by the queue. Also new:
+`--ab`-style `PGW_MODAL_AB` phases now run with speculation too.
+
+**Gateway cache (`--gateway-cache`): why it holds no customer secret.** A Modal Volume (`pgw-gateway-cache`,
+`PGW_MODAL_CACHE_VOLUME`) mounted at `/cache` (root, 0700) in the co-located container, read and written only by the
+root parent process; neither party's process sees it. It holds two public artefacts per target:
+
+* the model pack: open weights, quantized deterministically. The wizard uses a restored pack only with
+  `PGW_SETUP_REUSE_PACK=1` (new, library default off) and only if `ModelPack.open(verify="full")` (every tensor, the
+  tokenizer and the linears hashed) gives the fingerprint of the enrollment; otherwise it deletes it and downloads and
+  packs as before (tested: `tests/gateway/test_setup_pack_reuse.py`, also a tampered tensor).
+* the encrypted-mask hint `H = W8 A` (SPEC 7.9): `W8` is the int8 weights the provider holds anyway and `A` the public
+  matrix expanded from a seed. Decision-MLWE keeps `b = A s + e + Delta r` hiding `r` with `A` public; the secrets `s`
+  and `e` are fresh per 256-slot group, sampled at encryption time and never part of the hint. So `H` is a function of
+  public data only, and reusing `A` across runs is reusing a public matrix (as every LWE scheme does). What must hold
+  is that the **customer side chose the seed** (a provider-chosen `A` could expose the masks, SPEC 7.9): it is drawn
+  with `new_seed()` by the gateway's own hint build or by `prepare_cache`, a T4 container in which no provider process
+  runs.
+
+Not done, on purpose: building the hint on the provider's H100 and handing it over. Secret-free is not enough there:
+the customer would decrypt with a provider-supplied `H`, and a provider could perturb rows of `H` so that whether a
+group's decryption passes the factory's every-row check depends on bits of that group's `s` (a selective-failure
+attack: it learns those bits from which segments land), unless the customer re-derives `H` to check it, which costs
+the build it would save. The cache's integrity rests on the Modal workspace (who can write the Volume), the same trust
+the demo already places in whoever controls both containers; a real deployment keeps it on customer storage.
+
+`launch.py --prepare-cache` (with the run's deploy flags plus `--gateway-cache`) fills the cache once on a T4 container
+(8 cores; the pack copied from the image, the hint's GEMMs on the T4 with `PGW_HINT_DEVICE=cuda`: the CPU path's bits,
+self-checked first; 213 s for the 7B measured in L1). A co-located run with `--gateway-cache` then copies both into
+the gateway's data directory before the gateway starts (`cache_restore` in the result) and saves what the cache lacks
+after the run (`cache_save`; `--gateway-env PGW_MODAL_CACHE_SAVE=0` skips that). Never cached: the mask store, the
+factory's state, keys, tokens, certificates.
+
+**Mask factory sizing (estimate).** At 7B with every linear remote a slot is 5.56 MB on disk, and the encrypted
+factory moves about 11.5 MB of ciphertext per slot through the provider (2.8 GB of `b` up and 3.1 GB of `y` down per
+512-slot segment: `sum(n_in) = 831k` and `sum(m_out) = 1.39M` over the 28 layers at 53 and 35 bits per value). The
+T4 run's 37 s of provider maskgen per 512 slots is therefore mostly host work (TLS, unpacking), not the GEMM (about
+4.7e13 int8 operations per segment: under 1 s on an H100), so the H100's device time per segment is estimated at 1-3 s
+and the provider side's limit becomes its cores: give it 8 (`--provider-cpus 8`, bulk channel split 2). The gateway's
+side per worker was 27 s of every-row check per 512 slots (overlapped with maskgen; 18 slots/s per worker), so four
+workers (`PGW_FACTORY_WORKERS=4`, 4 threads each) are estimated at 60-75 slots/s if 16 gateway cores are free for them.
+Demand: strict speculation charges C = 2 slots per pass whatever the acceptance; at about 20-25 passes per second plus
+41-slot prompts that is about 50-65 slots/s. So the run (a) pre-fills a stock of 9000 slots (50 GB; the sustain
+window waits for it, `PGW_MODAL_SUSTAIN_MIN_STOCK`, at most 240 s) so a 150 s window cannot run dry, and (b) runs the
+factory unyielded at nice 10 (`PGW_FACTORY_YIELD_FILE=` empty), so the window shows the factory's real production next
+to the consumption instead of a policy-limited one (decode then shares the cores with it; nice keeps decode first).
+
+**p31 with speculation: masked fillers, not padding.** Padded calls (`spec_mask_rows`) refuse p31 extents (fail
+closed), but strict speculation without `--spec-mask` sends its filler rows as ordinary masked rows, which take the
+TripEngine / native lease paths that accept p31. At R = 2 the two modes cost the same: 2 slots per pass whatever the
+acceptance (C = 2 charges `prompt + 2j` by pass j; masked fillers take R = 2 rows every pass), and the provider sees R
+rows per pass and as many passes as tokens either way. So the run uses `--spec-rows 2 --prime-check` without
+`--spec-mask` (validated exact on the T4 below, every segment `p31`); with R > 2 and a credit cap, padding (and so the
+ring check) is the cheaper choice in slots.
+
+**The command** (one run; validated end to end at 0.5B on a T4 below; the 7B numbers are the question it answers):
+
+```bash
+cd pgw/deploy/modal
+# deploy flags shared by both steps (deploy time: GPU, sizes, draft, cache)
+FLAGS="--placement colocated --gpu H100 --model qwen2.5-7b-instruct --spec-rows 2 --spec-draft --gateway-cache \
+  --gateway-cpus 32 --provider-cpus 8 --gateway-mem-gib 80 --provider-mem-gib 24"
+# 1) once: the gateway side's pack + hint into the cache Volume (T4 container, ~6-10 min, about $0.15-0.25)
+PGW_MODAL_DEPLOY_COLOCATED_ONLY=1 python launch.py $FLAGS --prepare-cache
+# 2) the measurement (redeploys the same image from cache in seconds; a finished e2e stops the app)
+PGW_MODAL_DEPLOY_COLOCATED_ONLY=1 python launch.py $FLAGS --e2e --ttl-min 35 \
+  --local-linears off --float-ops native --trip-native \
+  --prime-check --draft-backend native_int8 --spec-pipeline-steps 0 \
+  --sustain-s 150 --ab-plain 120 \
+  --gateway-env PGW_MODAL_SUSTAIN_MIN_STOCK=9000 \
+  --gateway-env PGW_FACTORY_TARGET_SLOTS=12288 --gateway-env PGW_FACTORY_LOW_WATER_SLOTS=11264 \
+  --gateway-env PGW_FACTORY_SEGMENT_SLOTS=1024 --gateway-env PGW_FACTORY_WORKERS=4 \
+  --gateway-env PGW_FACTORY_CPU_THREADS=4 --gateway-env PGW_FACTORY_NICE=10 \
+  --gateway-env PGW_FACTORY_YIELD_FILE= --gateway-env PGW_POOL_WORKERS=8 --gateway-env PGW_THREAD_NAMES=1
+```
+
+Step 2's defaults already give `--lane uds`, `--he-bulk` (split 2), `--float-threads 1`, the trip stream priority and
+`PGW_TRIP_FAST=1`; `PGW_POOL_WORKERS=8` gives the native pool (trip kernels, float ops, the draft) 8 workers instead of
+the demo's 4 (the native LM head runs its own threads, up to 16). Alternative arm if R = 2 falls short (trips above
+0.4 ms): `--spec-rows 3 --spec-mask 3/96` without `--prime-check` (ring check; 1.9 instead of 3 slots per token).
+
+**Cost estimate** (Modal list prices, `launch.py` prints the same before deploying): H100 $3.95/h + 40 cores x
+$0.0473 + 104 GiB x $0.008 = **about $6.7/h**; the run is expected to take 22-28 min (container and provider start
+4-5 min, cache restore 1-2 min, wizard with the reused pack and hint about 2 min, first masks, chats and the CPU
+plaintext reference 3-4 min, stock pre-fill up to 4 min, 150 s speculative window, gateway restart about 2 min, plain
+chats, a second stock wait (same `PGW_MODAL_SUSTAIN_MIN_STOCK`, at most 4 min, usually less with the factory unyielded)
+and a 120 s window), so **$2.5-3.5, at most $3.9 at the 35 min TTL**; step 1 adds about $0.2 once (T4 $0.59/h
++ 8 cores + 32 GiB for about 10 min). Without the cache the gateway builds the hint on its own CPU (about 20 min, +$2.2).
+
+**Expected outcome (model, not measured).** The masked LM head is still library-only (`pgw.engine.masked_head`; not
+wired into the service, factory and runtime), so this run keeps the gateway's bfloat16 LM head on its CPU: 1.09 GB read
+per pass, about 15-30 ms on 16 threads, on top of 112 trips. With trips at 0.3-0.35 ms (H100 GEMV well under the T4's
+0.57 ms service time) and about 0.15 ms of native gateway CPU per trip, a pass costs about 55-85 ms: plain decoding
+about 12-18 tok/s, R = 2 at about 1.6-1.85 tokens per pass about 20-30 tok/s. So 25 tok/s is plausible but not
+certain with the CPU head; the head is the first lever if it falls short.
+
+**Plumbing validation (T4, Qwen2.5-0.5B target with the 0.5B as its own draft, `--allow-self-draft`; 2026-11-22,
+`PGW_MODAL_APP_SUFFIX=-prep`).** `--prepare-cache` on the T4: 68 s wall (pack 0.92 GB copied, hint 7.47 GB built on the
+T4 in 36 s). Then two e2e runs with the 7B command's options scaled down (`--gpu T4 --gateway-cpus 8 --local-linears off
+--trip-native --prime-check --spec-rows 2 --spec-draft --draft-backend native_int8 --spec-pipeline-steps 0 --gateway-cache
+--sustain-s 30|40 --ab-plain 30|40`), 216 s and 235 s from spawn to result. Both: `ok`, logprobs bit-identical, text
+equal, stream identical, every speculative and plain sustain chat identical, plain-phase chats identical; run 2's
+factory log shows every segment `p31` (none `ring`); cache restore 9.2 s then 2.7 s for 8.4 GB (0.9-3.4 GB/s), the wizard
+reused the restored pack (full verification) and found the hint (no build); gateway restart for the plain phase 10.5 s.
+
+| run 2 | decode tok/s (token-weighted / median / min) | TTFT median | tokens per verify pass | drafter hit rate | trips/token | gateway CPU per trip | slots/token | consumption vs factory (window) |
+|---|---|---|---|---|---|---|---|---|
+| speculative, 40 s | 11.7 / 12.4 / 10.2 | 0.85 s | 1.96 | 0.48 | 97.9 | 5.7 ms | 3.3 | 16.0 vs 48.7 slots/s |
+| plain, 40 s | 15.8 / 16.0 / 14.9 | 0.91 s | - | - | 97.9 | 1.35 ms | 2.1 | 26.2 vs 0 (yielding, stock 5.8k) |
+
+These numbers say nothing about the 7B: a self-draft costs as much as the target (41 ms per background draft step on
+the 8 shared cores, which is the 4.4 ms of extra gateway CPU per trip), so speculation is slower here by construction;
+they show that every report is filled in. Trips per token are equal in both phases by design (strict passes: the
+provider sees one pass per generated token). Slots per token include the 41-slot prompt of each 64-token chat. The
+speculative phase's 1-row trip split is empty (every decode item has 2 rows); the plain phase's: 0.24 ms (service
+0.07, wire 0.18). Spend for the prep and both runs: about $0.2.
+
 ## Trip latency and the `--max-trip-ms` gate
 
 `--e2e` now also reports the gateway's **client-reported round-trip latency** (`trip_latency` in the
@@ -904,8 +1055,9 @@ On i6pn or a faster link, both the speed-up and the mask supply improve.
   the gateway's certificate in the handshake and renews it without extra settings. Behind a
   TLS-terminating proxy instead, set `PGW_SERVICE_TRUSTED_CLIENT_CERT_PEM_HEADER` (see
   [onboarding.md](../../docs/operations/onboarding.md#6-for-operators-issuing-an-enrollment-code)).
-* **No volumes.** Config, secrets, packs and the mask store live on the customer container's local
-  disk. The mask store must never be on network or snapshotted storage (a restored copy could hand out
+* **No volumes** by default. Config, secrets, packs and the mask store live on the customer container's local
+  disk (`--gateway-cache` adds one Volume for public artefacts only: the pack and the hint, never masks or secrets;
+  see "CPU-only 7B gateway, strict speculation, H100 provider"). The mask store must never be on network or snapshotted storage (a restored copy could hand out
   masks twice), and the pair is single-use. A restart of the customer container starts the wizard
   from scratch.
 * **Console exposure.** `modal.forward(8080)` rather than `@modal.web_server`: a web endpoint scales to
