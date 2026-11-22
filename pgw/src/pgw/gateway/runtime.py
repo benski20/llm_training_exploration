@@ -654,8 +654,9 @@ class ModelRuntime:
                                      pool_wait_s=c.lane_pool_wait_s, tcp_ports=ports)
 
         # The lane socket is local (UDS only; a TCP ticket is refused): the egress allowlist is unaffected.
+        # lane_native (opt-in): the native TripChannel when the extension has it (None), else the Python channel
         return build_lane_client(client, uds_dir=str(c.lane_uds_dir) if c.lane_uds_dir is not None else None,
-                                 pool_wait_s=c.lane_pool_wait_s)
+                                 pool_wait_s=c.lane_pool_wait_s, native=None if c.lane_native else False)
 
     def _on_service_attempt(self, path: str, status: int | None, seconds: float, code: str | None) -> None:
         """``ComputeClient`` hook: every HTTP attempt (incl. retries) by outcome."""

@@ -166,7 +166,9 @@ plaintext quantized reference, none shows the provider anything new):
   everything else, or any call the lane refuses, byte-identically over the stream channel.
   `"required"` keeps the model `connecting` until the service grants a lane. `"lane_uds_dir"` accepts
   a lane socket in that directory when the service URL is not a loopback address;
-  `"lane_pool_wait_s"` bounds the wait for a free lane connection. `"tls"` uses the service's TCP trip
+  `"lane_pool_wait_s"` bounds the wait for a free lane connection; `"lane_native": true` (default false)
+  uses the native extension's channel on that socket (same bytes, GIL released per trip; needed by the
+  per-trip native driver). `"tls"` uses the service's TCP trip
   lane instead (`PGW_SERVICE_LANE=tcp`, `PGW_SERVICE_LANE_PORT`; any network): TLS 1.3 only, to the
   `service_url` host on the port the service names, verified against `service_ca_file`, presenting the
   client certificate when one is configured (the service binds the lane ticket to it). It needs an

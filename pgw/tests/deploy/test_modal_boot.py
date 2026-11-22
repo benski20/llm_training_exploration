@@ -235,7 +235,13 @@ def test_lane_tls_options_validate_against_the_gateway_config(tmp_path: Path) ->
                            **{**boot.GATEWAY_MODEL_OPTIONS, **boot.lane_options("tls")})
     assert c.lane == "tls"
     col = (MODAL_DIR / "colocated.py").read_text()
-    assert "lane_port=LANE_PORT if lane == \"tls\" else None" in col and "boot.lane_options(lane)" in col
+    assert "lane_port=LANE_PORT if lane == \"tls\" else None" in col and "boot.lane_options(lane, native=" in col
+    # --lane uds in the demo: the native UDS channel unless --lane-python (PGW_MODAL_LANE_NATIVE=0)
+    assert '"PGW_MODAL_LANE_NATIVE", "1") != "0"' in col
+    nat = boot.lane_options("uds", native=True)
+    assert nat == {"lane": "auto", "lane_native": True} and boot.lane_options("tls", native=True) == {"lane": "tls"}
+    assert GatewayModelConfig(name="m", pack_path=tmp_path, fingerprint="ab" * 32, service_url="https://127.0.0.1:8443",
+                              **{**boot.GATEWAY_MODEL_OPTIONS, **nat}).lane_native is True
     # the gateway connects to a TCP lane port only when it is on its egress allowlist
     assert "egress=boot.lane_egress(lane, LANE_PORT)" in col
     assert boot.lane_egress("tls", 8444) == ["https://127.0.0.1:8444"] and boot.lane_egress("stream", None) == []

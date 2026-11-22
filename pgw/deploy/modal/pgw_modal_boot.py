@@ -339,17 +339,19 @@ GATEWAY_MODEL_OPTIONS: dict[str, Any] = {"local_linears": "auto", "float_threads
 LANES = ("stream", "tls", "uds")
 
 
-def lane_options(lane: str) -> dict[str, Any]:
+def lane_options(lane: str, native: bool = False) -> dict[str, Any]:
     """Gateway model options for ``launch.py --lane``: ``stream`` (default, as :data:`GATEWAY_MODEL_OPTIONS`) or
     ``tls``, the native TCP+TLS trip lane of a provider started with ``lane_port`` (:func:`start_provider_party`):
     binary header and rustls instead of WebSocket/msgpack and Python ssl, the GIL released per trip, the same
     masked bytes, request ids and schedule; any call it cannot take goes to the blocking stream lane. ``uds``: the
     product's same-host lane (a provider started with ``lane_socket``): the gateway's ``lane = "auto"`` takes the
-    UDS ticket of its loopback service (peer uid checked by the service), else the stream channel."""
+    UDS ticket of its loopback service (peer uid checked by the service), else the stream channel. ``native``
+    (``uds`` only): ``lane_native`` = the native ``TripChannel`` instead of the Python socket channel (same bytes;
+    needed by the per-trip native driver ``PGW_TRIP_DRIVER``)."""
     if lane not in LANES:
         raise ValueError(f"lane must be one of {LANES}, got {lane!r}")
     if lane == "uds":
-        return {"lane": "auto"}
+        return {"lane": "auto", "lane_native": True} if native else {"lane": "auto"}
     return {"lane": lane}
 
 

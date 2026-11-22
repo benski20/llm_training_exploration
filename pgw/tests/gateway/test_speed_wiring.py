@@ -388,6 +388,59 @@ async def test_lane_over_the_service_uds_lane_is_bit_identical(tiny_pack_dir: Pa
     assert set(sp["lane_fallbacks"]) <= {"ineligible:rows", "ineligible:items", "off", "busy:pool"}
 
 
+@pytest.mark.parametrize("driver", [False, True])
+async def test_lane_native_over_the_service_uds_lane_is_bit_identical(tiny_pack_dir: Path, tmp_path: Path,
+                                                                      gw_pack: Any, make_store: Any,
+                                                                      keys: ApiKeyStore, key: str,
+                                                                      reference: dict[str, Any], sock_dir: Path,
+                                                                      monkeypatch: pytest.MonkeyPatch,
+                                                                      driver: bool) -> None:
+    """``lane_native = true`` on the UDS lane: the native ``TripChannel`` (service frames) instead of the Python
+    channel, same outputs; with ``PGW_TRIP_FAST``/``PGW_TRIP_NATIVE``/``PGW_TRIP_DRIVER`` the per-trip native
+    driver serves decode trips on it (it needs a native channel)."""
+    from pgw.service.lane import lane_native_available
+    from pgw.wire.lane import native_channel_class
+
+    native = native_channel_class()
+    if not lane_native_available() or native is None or not hasattr(native, "connect_service_uds"):
+        pytest.skip("pgw_fast without the service trip lane / native service channel")
+    driven: list[int] = []
+    if driver:
+        from pgw.wire.lane import LaneComputeClient
+
+        for k in ("PGW_TRIP_FAST", "PGW_TRIP_NATIVE", "PGW_TRIP_DRIVER"):
+            monkeypatch.setenv(k, "1")
+        orig = LaneComputeClient.trip_ticket
+
+        def counting(self: Any, *a: Any, **kw: Any) -> Any:
+            res = orig(self, *a, **kw)
+            driven.append(res is not None)
+            return res
+
+        monkeypatch.setattr(LaneComputeClient, "trip_ticket", counting)
+    svc_app = _lane_service(tiny_pack_dir, sock_dir)
+    async with svc_app.router.lifespan_context(svc_app):
+        out, status, rt = await _masked(tiny_pack_dir, tmp_path, make_store(200), httpx.ASGITransport(app=svc_app),
+                                        keys, key, {"lane": "auto", "lane_native": True, "local_linears": "attention",
+                                                    "float_threads": 1})
+        lane_requests = svc_app.state.pgw.handler.lane_requests
+    assert out["message"] == reference["message"] and out["logprobs"] == reference["logprobs"]
+    sp = status["speed"]
+    assert sp["lane_state"] == "open" and sp["lane_stats"]["trips"] > 0 and sp["lane_stats"]["native"]
+    assert lane_requests == sp["lane_stats"]["trips"]
+    assert status["backend"]["integrity_failures"] == 0 and status["backend"]["freivalds_checked"] > 0
+    assert set(sp["lane_fallbacks"]) <= {"ineligible:rows", "ineligible:items", "off", "busy:pool"}
+    # (a non-native channel would show "ineligible:channel" under the driver: excluded above)
+    if driver:
+        assert rt.backend.trip_driver
+        assert sum(driven) > 0  # the native per-trip driver served decode trips on the native UDS channel
+
+
+def test_lane_native_defaults_off() -> None:
+    assert _cfg().lane_native is False
+    assert _cfg(lane="auto", lane_native=True).lane_native is True
+
+
 @pytest.fixture(scope="module")
 def lane_pki(tmp_path_factory: pytest.TempPathFactory) -> dict[str, Path]:
     from tests.service.test_lane_tls import _ca, _leaf, _pem

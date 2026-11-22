@@ -39,7 +39,7 @@ log = logging.getLogger(__name__)
 #: :attr:`GatewaySettings.setup_model_options` keys: speed settings that never change outputs or weaken a
 #: check (exactness is kept bit for bit; privacy is unchanged), so a deployment may preset them for the wizard.
 SETUP_MODEL_OPTION_KEYS: frozenset[str] = frozenset({
-    "lane", "lane_uds_dir", "lane_pool_wait_s", "local_linears", "local_linears_device", "local_rtt_ms",
+    "lane", "lane_uds_dir", "lane_pool_wait_s", "lane_native", "local_linears", "local_linears_device", "local_rtt_ms",
     "local_max_rows", "lm_head_device", "float_threads",
     "spec_rows", "spec_strict_passes", "spec_mask_rows", "spec_mask_credit", "spec_lookup", "spec_lookup_min_n",
     "spec_tokens", "inline_max_rows",
@@ -255,6 +255,14 @@ class GatewayModelConfig(BaseModel):
     lane_pool_wait_s: float = Field(
         0.01, ge=0, le=1.0, description="When every lane connection is busy, wait this long for one before sending "
         "the call on the stream channel",
+    )
+    lane_native: bool = Field(
+        False, description="UDS lane ('auto' / 'required') only: use the native channel (pgw_fast.TripChannel "
+        "service frames: GIL released for the whole trip, one writev per request, spin-then-block reply wait) "
+        "instead of the Python socket channel, when the extension has it (else the Python channel). The same "
+        "header fields and body bytes, the same ticket and peer-uid check by the service, the same byte-identical "
+        "resend on the stream channel for any call the lane cannot take. It is also what the native per-trip "
+        "driver (PGW_TRIP_DRIVER) needs on the UDS lane. Default off (the Python channel, as before)",
     )
     local_linears: Literal["off", "attention", "auto", "attention_down", "all", "auto_kinds"] = Field(
         "off", description="Exact local linears: 'off' (default) = every linear goes to the service; 'attention' = "

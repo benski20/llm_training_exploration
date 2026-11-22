@@ -741,6 +741,13 @@ def test_cpu_gateway_speculation_flags(monkeypatch: pytest.MonkeyPatch) -> None:
     assert genv["PGW_MODAL_DRAFT_BACKEND"] == "native_int8" and genv["PGW_MODAL_SPEC_PIPELINE_STEPS"] == "0"
     assert genv["PGW_TRIP_NATIVE"] == "1" and genv["PGW_MODAL_AB_PLAIN"] == "60"
     assert genv["PGW_MODAL_SPEC_MASK"] == "2"
+    # co-located default lane uds: the native UDS channel, and with --trip-native the per-trip native driver
+    assert genv["PGW_TRIP_DRIVER"] == "1" and "PGW_MODAL_LANE_NATIVE" not in genv
+    launch._spawner(launch.parse_args([*argv, "--lane-python"]))({}, "colocated", 600, True)
+    genv = calls[-1]["gateway_env"]
+    assert genv["PGW_MODAL_LANE_NATIVE"] == "0" and "PGW_TRIP_DRIVER" not in genv
+    with pytest.raises(SystemExit):
+        launch.parse_args(["--lane-python"])  # co-located only
     for bad in (["--prime-check"], ["--spec-pipeline-steps", "2"]):
         with pytest.raises(SystemExit):
             launch.parse_args([*argv, *bad])

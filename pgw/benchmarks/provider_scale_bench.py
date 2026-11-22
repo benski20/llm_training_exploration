@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import statistics
 import sys
 import tempfile
@@ -128,7 +129,8 @@ def _floor_us(kern: Any, rows: int, iters: int) -> float | None:
         return float(a.elapsed_time(b)) * 1e3 / iters
 
 
-def bench(preset: str, tp: int, rows_list: list[int], iters: int, cpu: bool, modes: list[str]) -> dict[str, Any]:
+def bench(preset: str, tp: int, rows_list: list[int], iters: int, cpu: bool, modes: list[str],
+          persistent_bps: list[int] | None = None) -> dict[str, Any]:
     from pgw.core.native import fast
     from pgw.core.packing import pack_ring
     from pgw.core.ring import RingParams
@@ -174,33 +176,70 @@ def bench(preset: str, tp: int, rows_list: list[int], iters: int, cpu: bool, mod
         res["trip_mean_us"] = round(statistics.fmean([res[k]["mean_us"] for k in KINDS]), 2)
         return res, bad
 
-    try:
-        if "kernel" in modes:
-            for r in rows_list:
-                def run_kernel(i: int, r: int, j: int) -> bytes:
-                    return pack_ring(kerns[i].run_compact(torch.from_numpy(bodies[r][i][j]), ring), ring)
+    def guarded(mode: str, fn: Any) -> None:
+        """One serving path; an exception is recorded (``errors``) and the other paths still run."""
+        t = time.perf_counter()
+        try:
+            fn()
+        except Exception as exc:  # a GPU run is expensive: keep what the other paths measured
+            import traceback
 
-                res, bad = timed(run_kernel, r)
-                out["rows"][r]["kernel"] = {**res, "mismatches": bad}
-        if "graph" in modes and not cpu:
-            grep = capture_lane_graphs(mgr, rows_list=rows_list)  # type: ignore[arg-type]
-            out["graph_report"] = {"captured": grep.captured, "checked": grep.checked, "disabled": grep.disabled,
-                                   "skipped": grep.skipped, "s": round(grep.seconds, 1)}
-            if not grep.disabled:
-                for r in rows_list:
-                    res, bad = timed(lambda i, r, j: bytes(svc.run_graph(0, i, 0, r, packed[r][i][j])), r)
-                    out["rows"][r]["graph"] = {**res, "mismatches": bad}
-        if "persistent" in modes:
-            prow = [r for r in rows_list if r <= 4]
+            out.setdefault("errors", {})[mode] = f"{type(exc).__name__}: {exc}"[:2000]
+            out.setdefault("tracebacks", {})[mode] = traceback.format_exc()[-3000:]
+        print(f"  {preset} tp={tp} {mode}: {time.perf_counter() - t:.1f}s "
+              f"{out.get('errors', {}).get(mode, 'ok')}", flush=True)
+
+    def run_kernel_mode() -> None:
+        for r in rows_list:
+            def run_kernel(i: int, r: int, j: int) -> bytes:
+                return pack_ring(kerns[i].run_compact(torch.from_numpy(bodies[r][i][j]), ring), ring)
+
+            res, bad = timed(run_kernel, r)
+            out["rows"][r]["kernel"] = {**res, "mismatches": bad}
+
+    def run_graph_mode() -> None:
+        grep = capture_lane_graphs(mgr, rows_list=rows_list)  # type: ignore[arg-type]
+        out["graph_report"] = {"captured": grep.captured, "checked": grep.checked, "disabled": grep.disabled,
+                               "skipped": grep.skipped, "s": round(grep.seconds, 1)}
+        if not grep.disabled:
+            for r in rows_list:
+                res, bad = timed(lambda i, r, j: bytes(svc.run_graph(0, i, 0, r, packed[r][i][j])), r)
+                out["rows"][r]["graph"] = {**res, "mismatches": bad}
+
+    def run_persistent_mode(tag: str = "persistent") -> None:
+        prow = [r for r in rows_list if r <= 4]
+        try:
             prep = start_lane_persistent(mgr, emulate=cpu, rows_list=prow)
-            out["persistent_report"] = {"groups": prep.groups, "checked": prep.checked, "disabled": prep.disabled,
+            out[f"{tag}_report"] = {"groups": prep.groups, "checked": prep.checked, "disabled": prep.disabled,
                                         "s": round(prep.seconds, 1),
-                                        "grid": [getattr(w, "grid", None) for g in mgr._persistent for w in g.workers]}
+                                        "grid": [getattr(w, "grid", None) for g in mgr._persistent
+                                                 for w in g.workers]}
             if not prep.disabled:
                 for r in prow:
                     res, bad = timed(lambda i, r, j: bytes(svc.run_persistent(0, i, 0, r, packed[r][i][j])), r)
-                    out["rows"][r]["persistent"] = {**res, "mismatches": bad}
+                    out["rows"][r][tag] = {**res, "mismatches": bad}
+        finally:
             stop_lane_persistent(mgr)
+
+    try:
+        if "kernel" in modes:
+            guarded("kernel", run_kernel_mode)
+        if "graph" in modes and not cpu:
+            guarded("graph", run_graph_mode)
+        if "persistent" in modes:
+            env = "PGW_SERVICE_PERSISTENT_BLOCKS_PER_SM"
+            old = os.environ.get(env)
+            try:
+                for k, bps in enumerate(persistent_bps or [None]):
+                    if bps is not None:
+                        os.environ[env] = str(bps)
+                    tag = "persistent" if k == 0 else f"persistent_bps{bps}"
+                    guarded(tag, lambda tag=tag: run_persistent_mode(tag))
+            finally:
+                if old is None:
+                    os.environ.pop(env, None)
+                else:
+                    os.environ[env] = old
     finally:
         svc.clear_graphs()
         svc.stop(1.0)
@@ -214,7 +253,7 @@ def bench(preset: str, tp: int, rows_list: list[int], iters: int, cpu: bool, mod
         if all(v is not None for v in fl.values()):
             fmean = statistics.fmean(fl.values())
             row["floor_trip_mean_us"] = round(fmean, 2)
-            for mode in ("kernel", "graph", "persistent"):
+            for mode in [k for k, v in row.items() if isinstance(v, dict) and "trip_mean_us" in v]:
                 if mode in row:
                     row[mode]["overhead_trip_mean_us"] = round(row[mode]["trip_mean_us"] - fmean, 2)
     return out
@@ -227,6 +266,9 @@ def main() -> int:
     ap.add_argument("--rows", default="1,2")
     ap.add_argument("--iters", type=int, default=400)
     ap.add_argument("--modes", default="kernel,graph,persistent")
+    ap.add_argument("--persistent-bps", default="",
+                    help="resident blocks per SM to time the persistent worker with, e.g. 1,2 (default: the "
+                         "PGW_SERVICE_PERSISTENT_BLOCKS_PER_SM setting); the first is reported as 'persistent'")
     ap.add_argument("--cpu", action="store_true", help="CPU smoke test (emulated persistent workers)")
     ap.add_argument("--json", default="")
     a = ap.parse_args()
@@ -240,7 +282,8 @@ def main() -> int:
         for tp in (int(t) for t in a.tp.split(",")):
             if not a.cpu and tp > ngpu:
                 continue
-            r = bench(preset, tp, [int(x) for x in a.rows.split(",")], a.iters, a.cpu, a.modes.split(","))
+            r = bench(preset, tp, [int(x) for x in a.rows.split(",")], a.iters, a.cpu, a.modes.split(","),
+                      [int(b) for b in a.persistent_bps.split(",") if b.strip()] or None)
             results["runs"].append(r)
             line = {rows: {m: v.get("trip_mean_us") for m, v in d.items()
                            if isinstance(v, dict) and "trip_mean_us" in v} for rows, d in r["rows"].items()}

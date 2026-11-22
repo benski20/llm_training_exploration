@@ -809,7 +809,9 @@ PGW_MODAL_DEPLOY_COLOCATED_ONLY=1 python launch.py $FLAGS --e2e --ttl-min 35 \
   --gateway-env PGW_FACTORY_YIELD_FILE= --gateway-env PGW_POOL_WORKERS=8 --gateway-env PGW_THREAD_NAMES=1
 ```
 
-Step 2's defaults already give `--lane uds`, `--he-bulk` (split 2), `--float-threads 1`, the trip stream priority and
+Step 2's defaults already give `--lane uds` (since 2026-11-22 with the gateway's native UDS channel, `lane_native`,
+and with `--trip-native` the per-trip native driver `PGW_TRIP_DRIVER=1`, which needs that channel; `--lane-python`
+restores the Python channel and leaves the driver off), `--he-bulk` (split 2), `--float-threads 1`, the trip stream priority and
 `PGW_TRIP_FAST=1`; `PGW_POOL_WORKERS=8` gives the native pool (trip kernels, float ops, the draft) 8 workers instead of
 the demo's 4 (the native LM head runs its own threads, up to 16). Alternative arm if R = 2 falls short (trips above
 0.4 ms): `--spec-rows 3 --spec-mask 3/96` without `--prime-check` (ring check; 1.9 instead of 3 slots per token).

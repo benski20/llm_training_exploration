@@ -1,0 +1,319 @@
+{
+ "cmd": "python benchmarks/provider_scale_bench.py --presets 7b --tp 1 --rows 1,2 --iters 300 --persistent-bps 1,2 --json /tmp/ps1.json",
+ "rc": 0,
+ "wall_s": 40.1,
+ "cpus": 20,
+ "gpu": "NVIDIA H100 80GB HBM3, 81559 MiB",
+ "stdout_tail": "ent_bps2': 5664.86}, 2: {'kernel': 351.16, 'graph': 167.83, 'persistent': 2980.47, 'persistent_bps2': 5669.52}} floors [65.18, 82.82]\n{\n \"gpus\": [\n  \"NVIDIA H100 80GB HBM3\"\n ],\n \"torch\": \"2.15.0+cu132\",\n \"runs\": [\n  {\n   \"preset\": \"7b\",\n   \"tp\": 1,\n   \"build_s\": 10.5,\n   \"shapes\": {\n    \"qkv\": [\n     4608,\n     3584\n    ],\n    \"o\": [\n     3584,\n     3584\n    ],\n    \"gate_up\": [\n     37888,\n     3584\n    ],\n    \"down\": [\n     3584,\n     18944\n    ]\n   },\n   \"rows\": {\n    \"1\": {\n     \"floor_us\": {\n      \"qkv\": 65.95647811889648,\n      \"o\": 64.48319911956787,\n      \"gate_up\": 64.86591815948486,\n      \"down\": 65.40031909942627\n     },\n     \"kernel\": {\n      \"qkv\": {\n       \"mean_us\": 257.42,\n       \"p50_us\": 252.49,\n       \"p90_us\": 275.92,\n       \"n\": 300\n      },\n      \"o\": {\n       \"mean_us\": 256.17,\n       \"p50_us\": 251.7,\n       \"p90_us\": 275.69,\n       \"n\": 300\n      },\n      \"gate_up\": {\n       \"mean_us\": 398.55,\n       \"p50_us\": 396.89,\n       \"p90_us\": 419.44,\n       \"n\": 300\n      },\n      \"down\": {\n       \"mean_us\": 270.29,\n       \"p50_us\": 264.43,\n       \"p90_us\": 291.35,\n       \"n\": 300\n      },\n      \"trip_mean_us\": 295.61,\n      \"mismatches\": 0,\n      \"overhead_trip_mean_us\": 230.43\n     },\n     \"graph\": {\n      \"qkv\": {\n       \"mean_us\": 43.73,\n       \"p50_us\": 43.07,\n       \"p90_us\": 45.35,\n       \"n\": 300\n      },\n      \"o\": {\n       \"mean_us\": 40.1,\n       \"p50_us\": 39.71,\n       \"p90_us\": 41.47,\n       \"n\": 300\n      },\n      \"gate_up\": {\n       \"mean_us\": 191.48,\n       \"p50_us\": 190.95,\n       \"p90_us\": 201.34,\n       \"n\": 300\n      },\n      \"down\": {\n       \"mean_us\": 79.39,\n       \"p50_us\": 78.42,\n       \"p90_us\": 81.47,\n       \"n\": 300\n      },\n      \"trip_mean_us\": 88.67,\n      \"mismatches\": 0,\n      \"overhead_trip_mean_us\": 23.49\n     },\n     \"persistent\": {\n      \"qkv\": {\n       \"mean_us\": 2801.64,\n       \"p50_us\": 2798.94,\n       \"p90_us\": 2821.16,\n       \"n\": 300\n      },\n      \"o\": {\n       \"mean_us\": 2799.08,\n       \"p50_us\": 2795.62,\n       \"p90_us\": 2815.02,\n       \"n\": 300\n      },\n      \"gate_up\": {\n       \"mean_us\": 3136.45,\n       \"p50_us\": 3132.06,\n       \"p90_us\": 3160.61,\n       \"n\": 300\n      },\n      \"down\": {\n       \"mean_us\": 3026.75,\n       \"p50_us\": 3022.39,\n       \"p90_us\": 3047.66,\n       \"n\": 300\n      },\n      \"trip_mean_us\": 2940.98,\n      \"mismatches\": 0,\n      \"overhead_trip_mean_us\": 2875.8\n     },\n     \"persistent_bps2\": {\n      \"qkv\": {\n       \"mean_us\": 5526.71,\n       \"p50_us\": 5532.42,\n       \"p90_us\": 5565.97,\n       \"n\": 300\n      },\n      \"o\": {\n       \"mean_us\": 5519.65,\n       \"p50_us\": 5526.84,\n       \"p90_us\": 5560.5,\n       \"n\": 300\n      },\n      \"gate_up\": {\n       \"mean_us\": 5856.17,\n       \"p50_us\": 5859.1,\n       \"p90_us\": 5905.87,\n       \"n\": 300\n      },\n      \"down\": {\n       \"mean_us\": 5756.91,\n       \"p50_us\": 5753.78,\n       \"p90_us\": 5785.81,\n       \"n\": 300\n      },\n      \"trip_mean_us\": 5664.86,\n      \"mismatches\": 0,\n      \"overhead_trip_mean_us\": 5599.68\n     },\n     \"floor_trip_mean_us\": 65.18\n    },\n    \"2\": {\n     \"floor_us\": {\n      \"qkv\": 64.4601583480835,\n      \"o\": 64.67264175415039,\n      \"gate_up\": 128.04160118103027,\n      \"down\": 74.1107177734375\n     },\n     \"kernel\": {\n      \"qkv\": {\n       \"mean_us\": 267.94,\n       \"p50_us\": 263.46,\n       \"p90_us\": 288.36,\n       \"n\": 300\n      },\n      \"o\": {\n       \"mean_us\": 262.32,\n       \"p50_us\": 257.2,\n       \"p90_us\": 282.08,\n       \"n\": 300\n      },\n      \"gate_up\": {\n       \"mean_us\": 550.58,\n       \"p50_us\": 547.26,\n       \"p90_us\": 573.78,\n       \"n\": 300\n      },\n      \"down\": {\n       \"mean_us\": 323.8,\n       \"p50_us\": 321.17,\n       \"p90_us\": 340.09,\n       \"n\": 300\n      },\n      \"trip_mean_us\": 351.16,\n      \"mismatches\": 0,\n      \"overhead_trip_mean_us\": 268.34\n     },\n     \"graph\": {\n      \"qkv\": {\n       \"mean_us\": 76.43,\n       \"p50_us\": 75.74,\n       \"p90_us\": 79.97,\n       \"n\": 300\n      },\n      \"o\": {\n       \"mean_us\": 65.33,\n       \"p50_us\": 65.11,\n       \"p90_us\": 66.87,\n       \"n\": 300\n      },\n      \"gate_up\": {\n       \"mean_us\": 388.66,\n       \"p50_us\": 388.06,\n       \"p90_us\": 401.51,\n       \"n\": 300\n      },\n      \"down\": {\n       \"mean_us\": 140.88,\n       \"p50_us\": 140.75,\n       \"p90_us\": 145.03,\n       \"n\": 300\n      },\n      \"trip_mean_us\": 167.83,\n      \"mismatches\": 0,\n      \"overhead_trip_mean_us\": 85.01\n     },\n     \"persistent\": {\n      \"qkv\": {\n       \"mean_us\": 2816.85,\n       \"p50_us\": 2814.85,\n       \"p90_us\": 2838.17,\n       \"n\": 300\n      },\n      \"o\": {\n       \"mean_us\": 2809.28,\n       \"p50_us\": 2805.94,\n       \"p90_us\": 2830.54,\n       \"n\": 300\n      },\n      \"gate_up\": {\n       \"mean_us\": 3357.42,\n       \"p50_us\": 3352.23,\n       \"p90_us\": 3397.58,\n       \"n\": 300\n      },\n      \"down\": {\n       \"mean_us\": 2938.35,\n       \"p50_us\": 2934.62,\n       \"p90_us\": 2965.88,\n       \"n\": 300\n      },\n      \"trip_mean_us\": 2980.47,\n      \"mismatches\": 0,\n      \"overhead_trip_mean_us\": 2897.65\n     },\n     \"persistent_bps2\": {\n      \"qkv\": {\n       \"mean_us\": 5506.7,\n       \"p50_us\": 5493.4,\n       \"p90_us\": 5549.77,\n       \"n\": 300\n      },\n      \"o\": {\n       \"mean_us\": 5487.47,\n       \"p50_us\": 5472.8,\n       \"p90_us\": 5532.39,\n       \"n\": 300\n      },\n      \"gate_up\": {\n       \"mean_us\": 6073.32,\n       \"p50_us\": 6058.76,\n       \"p90_us\": 6116.94,\n       \"n\": 300\n      },\n      \"down\": {\n       \"mean_us\": 5610.6,\n       \"p50_us\": 5594.44,\n       \"p90_us\": 5654.26,\n       \"n\": 300\n      },\n      \"trip_mean_us\": 5669.52,\n      \"mismatches\": 0,\n      \"overhead_trip_mean_us\": 5586.7\n     },\n     \"floor_trip_mean_us\": 82.82\n    }\n   },\n   \"graph_report\": {\n    \"captured\": 8,\n    \"checked\": 8,\n    \"disabled\": null,\n    \"skipped\": {},\n    \"s\": 0.1\n   },\n   \"persistent_report\": {\n    \"groups\": 1,\n    \"checked\": 4,\n    \"disabled\": null,\n    \"s\": 1.0,\n    \"grid\": [\n     132\n    ]\n   },\n   \"persistent_bps2_report\": {\n    \"groups\": 1,\n    \"checked\": 4,\n    \"disabled\": null,\n    \"s\": 0.2,\n    \"grid\": [\n     264\n    ]\n   }\n  }\n ]\n}\n",
+ "stderr_tail": "/usr/local/lib/python3.13/site-packages/triton/knobs.py:504: UserWarning: TRITON_DEFAULT_FP_FUSION is unset: defaulting to FP fusion ENABLED for backward compatibility in Triton 3.9. The default will change to DISABLED in Triton 3.10; set TRITON_DEFAULT_FP_FUSION=1 to keep fusion enabled or =0 to adopt the new default early and silence this warning.\n  warn_once(FP_FUSION_DEFAULT_WARNING)\n",
+ "json": {
+  "/tmp/ps1.json": {
+   "gpus": [
+    "NVIDIA H100 80GB HBM3"
+   ],
+   "torch": "2.15.0+cu132",
+   "runs": [
+    {
+     "preset": "7b",
+     "tp": 1,
+     "build_s": 10.5,
+     "shapes": {
+      "qkv": [
+       4608,
+       3584
+      ],
+      "o": [
+       3584,
+       3584
+      ],
+      "gate_up": [
+       37888,
+       3584
+      ],
+      "down": [
+       3584,
+       18944
+      ]
+     },
+     "rows": {
+      "1": {
+       "floor_us": {
+        "qkv": 65.95647811889648,
+        "o": 64.48319911956787,
+        "gate_up": 64.86591815948486,
+        "down": 65.40031909942627
+       },
+       "kernel": {
+        "qkv": {
+         "mean_us": 257.42,
+         "p50_us": 252.49,
+         "p90_us": 275.92,
+         "n": 300
+        },
+        "o": {
+         "mean_us": 256.17,
+         "p50_us": 251.7,
+         "p90_us": 275.69,
+         "n": 300
+        },
+        "gate_up": {
+         "mean_us": 398.55,
+         "p50_us": 396.89,
+         "p90_us": 419.44,
+         "n": 300
+        },
+        "down": {
+         "mean_us": 270.29,
+         "p50_us": 264.43,
+         "p90_us": 291.35,
+         "n": 300
+        },
+        "trip_mean_us": 295.61,
+        "mismatches": 0,
+        "overhead_trip_mean_us": 230.43
+       },
+       "graph": {
+        "qkv": {
+         "mean_us": 43.73,
+         "p50_us": 43.07,
+         "p90_us": 45.35,
+         "n": 300
+        },
+        "o": {
+         "mean_us": 40.1,
+         "p50_us": 39.71,
+         "p90_us": 41.47,
+         "n": 300
+        },
+        "gate_up": {
+         "mean_us": 191.48,
+         "p50_us": 190.95,
+         "p90_us": 201.34,
+         "n": 300
+        },
+        "down": {
+         "mean_us": 79.39,
+         "p50_us": 78.42,
+         "p90_us": 81.47,
+         "n": 300
+        },
+        "trip_mean_us": 88.67,
+        "mismatches": 0,
+        "overhead_trip_mean_us": 23.49
+       },
+       "persistent": {
+        "qkv": {
+         "mean_us": 2801.64,
+         "p50_us": 2798.94,
+         "p90_us": 2821.16,
+         "n": 300
+        },
+        "o": {
+         "mean_us": 2799.08,
+         "p50_us": 2795.62,
+         "p90_us": 2815.02,
+         "n": 300
+        },
+        "gate_up": {
+         "mean_us": 3136.45,
+         "p50_us": 3132.06,
+         "p90_us": 3160.61,
+         "n": 300
+        },
+        "down": {
+         "mean_us": 3026.75,
+         "p50_us": 3022.39,
+         "p90_us": 3047.66,
+         "n": 300
+        },
+        "trip_mean_us": 2940.98,
+        "mismatches": 0,
+        "overhead_trip_mean_us": 2875.8
+       },
+       "persistent_bps2": {
+        "qkv": {
+         "mean_us": 5526.71,
+         "p50_us": 5532.42,
+         "p90_us": 5565.97,
+         "n": 300
+        },
+        "o": {
+         "mean_us": 5519.65,
+         "p50_us": 5526.84,
+         "p90_us": 5560.5,
+         "n": 300
+        },
+        "gate_up": {
+         "mean_us": 5856.17,
+         "p50_us": 5859.1,
+         "p90_us": 5905.87,
+         "n": 300
+        },
+        "down": {
+         "mean_us": 5756.91,
+         "p50_us": 5753.78,
+         "p90_us": 5785.81,
+         "n": 300
+        },
+        "trip_mean_us": 5664.86,
+        "mismatches": 0,
+        "overhead_trip_mean_us": 5599.68
+       },
+       "floor_trip_mean_us": 65.18
+      },
+      "2": {
+       "floor_us": {
+        "qkv": 64.4601583480835,
+        "o": 64.67264175415039,
+        "gate_up": 128.04160118103027,
+        "down": 74.1107177734375
+       },
+       "kernel": {
+        "qkv": {
+         "mean_us": 267.94,
+         "p50_us": 263.46,
+         "p90_us": 288.36,
+         "n": 300
+        },
+        "o": {
+         "mean_us": 262.32,
+         "p50_us": 257.2,
+         "p90_us": 282.08,
+         "n": 300
+        },
+        "gate_up": {
+         "mean_us": 550.58,
+         "p50_us": 547.26,
+         "p90_us": 573.78,
+         "n": 300
+        },
+        "down": {
+         "mean_us": 323.8,
+         "p50_us": 321.17,
+         "p90_us": 340.09,
+         "n": 300
+        },
+        "trip_mean_us": 351.16,
+        "mismatches": 0,
+        "overhead_trip_mean_us": 268.34
+       },
+       "graph": {
+        "qkv": {
+         "mean_us": 76.43,
+         "p50_us": 75.74,
+         "p90_us": 79.97,
+         "n": 300
+        },
+        "o": {
+         "mean_us": 65.33,
+         "p50_us": 65.11,
+         "p90_us": 66.87,
+         "n": 300
+        },
+        "gate_up": {
+         "mean_us": 388.66,
+         "p50_us": 388.06,
+         "p90_us": 401.51,
+         "n": 300
+        },
+        "down": {
+         "mean_us": 140.88,
+         "p50_us": 140.75,
+         "p90_us": 145.03,
+         "n": 300
+        },
+        "trip_mean_us": 167.83,
+        "mismatches": 0,
+        "overhead_trip_mean_us": 85.01
+       },
+       "persistent": {
+        "qkv": {
+         "mean_us": 2816.85,
+         "p50_us": 2814.85,
+         "p90_us": 2838.17,
+         "n": 300
+        },
+        "o": {
+         "mean_us": 2809.28,
+         "p50_us": 2805.94,
+         "p90_us": 2830.54,
+         "n": 300
+        },
+        "gate_up": {
+         "mean_us": 3357.42,
+         "p50_us": 3352.23,
+         "p90_us": 3397.58,
+         "n": 300
+        },
+        "down": {
+         "mean_us": 2938.35,
+         "p50_us": 2934.62,
+         "p90_us": 2965.88,
+         "n": 300
+        },
+        "trip_mean_us": 2980.47,
+        "mismatches": 0,
+        "overhead_trip_mean_us": 2897.65
+       },
+       "persistent_bps2": {
+        "qkv": {
+         "mean_us": 5506.7,
+         "p50_us": 5493.4,
+         "p90_us": 5549.77,
+         "n": 300
+        },
+        "o": {
+         "mean_us": 5487.47,
+         "p50_us": 5472.8,
+         "p90_us": 5532.39,
+         "n": 300
+        },
+        "gate_up": {
+         "mean_us": 6073.32,
+         "p50_us": 6058.76,
+         "p90_us": 6116.94,
+         "n": 300
+        },
+        "down": {
+         "mean_us": 5610.6,
+         "p50_us": 5594.44,
+         "p90_us": 5654.26,
+         "n": 300
+        },
+        "trip_mean_us": 5669.52,
+        "mismatches": 0,
+        "overhead_trip_mean_us": 5586.7
+       },
+       "floor_trip_mean_us": 82.82
+      }
+     },
+     "graph_report": {
+      "captured": 8,
+      "checked": 8,
+      "disabled": null,
+      "skipped": {},
+      "s": 0.1
+     },
+     "persistent_report": {
+      "groups": 1,
+      "checked": 4,
+      "disabled": null,
+      "s": 1.0,
+      "grid": [
+       132
+      ]
+     },
+     "persistent_bps2_report": {
+      "groups": 1,
+      "checked": 4,
+      "disabled": null,
+      "s": 0.2,
+      "grid": [
+       264
+      ]
+     }
+    }
+   ]
+  }
+ }
+}

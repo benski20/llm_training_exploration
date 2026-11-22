@@ -326,7 +326,11 @@ def pair(run_id: str, ttl_s: int = 80 * 60, e2e: bool = False, local_linears: st
             gw, token = boot.start_gateway_party(croot, GATEWAY_PORT, user=cuser, log_dir=LOGS,
                                                  model_options={**boot.GATEWAY_MODEL_OPTIONS,
                                                                 "local_linears": local_linears, **spec,
-                                                                **boot.lane_options(lane), **gdev},
+                                                                # --lane uds: the native UDS channel unless
+                                                                # --lane-python (PGW_MODAL_LANE_NATIVE=0)
+                                                                **boot.lane_options(lane, native=genv.get(
+                                                                    "PGW_MODAL_LANE_NATIVE", "1") != "0"),
+                                                                **gdev},
                                                  egress=boot.lane_egress(lane, LANE_PORT),
                                                  hide_gpu=not gsplit.get("gateway"),
                                                  extra_env={**boot.colocated_gateway_env(local_linears,

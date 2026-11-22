@@ -20,9 +20,12 @@ Device side (:data:`KERNEL_SOURCE`, compiled at run time with NVRTC, loaded and 
 API with ``ctypes``): block 0 polls the doorbell (``__nanosleep`` between reads) and publishes it in device
 memory for the other blocks; the grid then (1) copies ``x`` from host memory to a device buffer, (2) runs the
 ring GEMV ``y = W8 x mod 2^32`` with wrapping u32 arithmetic (one warp per group of output rows, 16-byte weight
-loads, x from L2), (3) writes ``y`` to the mapped output with coalesced stores, and (4) block 0 publishes
-``status`` and ``done`` after a system-scope fence. Grid-wide barriers between the phases (all blocks are
-co-resident: grid <= SMs x occupancy). Exact: every product and sum is a u32 wrap, i.e. arithmetic mod 2^32, the
+loads, x from L2; 4 instead of 16 rows per warp when 16 would leave warps idle) and each warp stores its outputs
+straight into the mapped reply, and (3) after a grid barrier whose arrival is preceded by one system-scope fence
+per block, block 0 publishes ``status`` and ``done``. Grid-wide barriers between the phases (all blocks are
+co-resident: grid <= SMs x occupancy). System fences are per block, never per thread: per-thread fences cost
+~2.8 ms per trip on the first H100 run (2026-11-22, exact but 30x slower than graphs). Exact: every product
+and sum is a u32 wrap, i.e. arithmetic mod 2^32, the
 same values as the fused Triton GEMV and the digit-GEMM path. Rows per trip: 1..:data:`MAX_ROWS` (larger calls
 fall back to the graph path).
 
@@ -126,12 +129,16 @@ struct LinDesc { u64 w; u64 ld; u32 n; u32 m; u32 col0; u32 m_total; };  // 32 b
 #define C_STATUS 33
 
 // bar: [0] arrivals, [1] generation, [2] published doorbell, [3] quit
+// SYS: thread 0 makes the block's earlier writes (ordered before it by __syncthreads) visible system-wide
+// (mapped host memory) before it arrives. One system fence per block, not per thread: a per-thread
+// __threadfence_system() serialises on every SM and cost ~2.8 ms per trip on an H100 (132 x 256 threads).
+template <bool SYS>
 __device__ __forceinline__ void grid_sync(u32* bar) {
   __syncthreads();
   if (threadIdx.x == 0) {
     volatile u32* vgen = bar + 1;
     const u32 gen = *vgen;
-    __threadfence();
+    if (SYS) __threadfence_system(); else __threadfence();
     if (atomicAdd(bar, 1u) == gridDim.x - 1u) {
       atomicExch(bar, 0u);
       __threadfence();
@@ -144,8 +151,10 @@ __device__ __forceinline__ void grid_sync(u32* bar) {
   __syncthreads();
 }
 
+// y = W8 x mod 2^32 for R rows; warp g owns output rows [g*RPW, g*RPW+RPW) and writes them straight into the
+// mapped reply (row-major, row stride m_total, columns from col0): lane k < RPW stores output row row0+k.
 template <int R, int RPW>
-__device__ __forceinline__ void gemv(const LinDesc& L, const u32* __restrict__ d_x, u32* __restrict__ d_y,
+__device__ __forceinline__ void gemv(const LinDesc& L, const u32* __restrict__ d_x, u32* __restrict__ h_out,
                                      u32 warp, u32 nwarps, u32 lane) {
   const u32 n = L.n, m = L.m;
   const signed char* W = (const signed char*)L.w;
@@ -200,17 +209,15 @@ __device__ __forceinline__ void gemv(const LinDesc& L, const u32* __restrict__ d
       for (int r = 0; r < R; ++r) {
         u32 v = acc[k][r];
 #pragma unroll
-        for (int off = 16; off > 0; off >>= 1) v += __shfl_down_sync(0xffffffffu, v, off);
+        for (int off = 16; off > 0; off >>= 1) v += __shfl_xor_sync(0xffffffffu, v, off);  // every lane: the sum
         acc[k][r] = v;
       }
-    if (lane == 0) {
 #pragma unroll
-      for (int k = 0; k < RPW; ++k) {
-        const u32 row = row0 + k;
-        if (row < m) {
+    for (int k = 0; k < RPW; ++k) {
+      const u32 row = row0 + k;
+      if (lane == (u32)k && row < m) {
 #pragma unroll
-          for (int r = 0; r < R; ++r) d_y[(u64)r * m + row] = acc[k][r];
-        }
+        for (int r = 0; r < R; ++r) h_out[(u64)r * L.m_total + L.col0 + row] = acc[k][r];
       }
     }
   }
@@ -220,7 +227,7 @@ extern "C" __global__ void __launch_bounds__(256) pgw_persistent(const LinDesc* 
                                                                  volatile u32* ctrl,
                                           const u32* h_in, u32* h_out, u32* d_x, u32* d_y, u32* bar,
                                           u32 max_rows, u32 x_cap, u32 y_cap) {
-  __shared__ u32 s_seq, s_go;
+  __shared__ u32 s_seq, s_go, s_li, s_rows;
   const u32 tid = threadIdx.x;
   const u32 gtid = blockIdx.x * blockDim.x + tid;
   const u32 gthreads = gridDim.x * blockDim.x;
@@ -233,22 +240,25 @@ extern "C" __global__ void __launch_bounds__(256) pgw_persistent(const LinDesc* 
       for (;;) {
         if (blockIdx.x == 0) {
           const u32 d = ctrl[C_DOORBELL];
-          if (d != seen) { *pub = d; __threadfence(); s_seq = d; s_go = 1u; break; }
+          if (d != seen) { *pub = d; __threadfence(); s_seq = d; s_go = 1u; __threadfence_system(); break; }
           if (ctrl[C_QUIT] != 0u) { *pquit = 1u; __threadfence(); break; }
         } else {
           const u32 d = *pub;
-          if (d != seen) { s_seq = d; s_go = 1u; break; }
+          if (d != seen) { s_seq = d; s_go = 1u; __threadfence_system(); break; }
           if (*pquit != 0u) break;
         }
         __nanosleep(64);
       }
+      if (s_go) {  // one read of the trip's words per block (mapped host memory), after the system fence
+        s_li = ctrl[C_LINEAR];
+        s_rows = ctrl[C_ROWS];
+      }
     }
     __syncthreads();
     if (s_go == 0u) return;
-    seen = s_seq;
-    __threadfence_system();
-    const u32 li = ctrl[C_LINEAR];
-    const u32 rows = ctrl[C_ROWS];
+    seen = s_seq;  // thread 0's system fence after the doorbell, then __syncthreads, order the reads below
+    const u32 li = s_li;
+    const u32 rows = s_rows;
     u32 bad = (li >= nlin || rows == 0u || rows > max_rows || rows > 4u) ? 1u : 0u;
     LinDesc L = {0ull, 0ull, 0u, 0u, 0u, 0u};
     if (!bad) {
@@ -257,28 +267,29 @@ extern "C" __global__ void __launch_bounds__(256) pgw_persistent(const LinDesc* 
     }
     if (!bad) {
       const u32 total = rows * L.n;
-      for (u32 i = gtid; i < total; i += gthreads) d_x[i] = __ldcv(h_in + i);
+      if ((total & 3u) == 0u) {  // 16-byte reads over the bus (h_in and d_x are 128-byte aligned)
+        const uint4* src = (const uint4*)h_in;
+        uint4* dst = (uint4*)d_x;
+        for (u32 i = gtid; i < total / 4u; i += gthreads) dst[i] = __ldcv(src + i);
+      } else {
+        for (u32 i = gtid; i < total; i += gthreads) d_x[i] = __ldcv(h_in + i);
+      }
     }
-    grid_sync(bar);
+    grid_sync<false>(bar);
     if (!bad) {
       const u32 lane = tid & 31u, warp = gtid >> 5, nwarps = gthreads >> 5;
+      // fewer rows per warp when 16 would leave warps idle (small m): more warps stream the weight
+      const bool wide = L.m >= 16u * nwarps;
       switch (rows) {
-        case 1: gemv<1, 16>(L, d_x, d_y, warp, nwarps, lane); break;
-        case 2: gemv<2, 8>(L, d_x, d_y, warp, nwarps, lane); break;
-        case 3: gemv<3, 5>(L, d_x, d_y, warp, nwarps, lane); break;
-        default: gemv<4, 4>(L, d_x, d_y, warp, nwarps, lane); break;
+        case 1: if (wide) gemv<1, 16>(L, d_x, h_out, warp, nwarps, lane);
+                else gemv<1, 4>(L, d_x, h_out, warp, nwarps, lane); break;
+        case 2: if (wide) gemv<2, 8>(L, d_x, h_out, warp, nwarps, lane);
+                else gemv<2, 4>(L, d_x, h_out, warp, nwarps, lane); break;
+        case 3: gemv<3, 5>(L, d_x, h_out, warp, nwarps, lane); break;
+        default: gemv<4, 4>(L, d_x, h_out, warp, nwarps, lane); break;
       }
     }
-    grid_sync(bar);
-    if (!bad) {
-      const u32 total = rows * L.m;
-      for (u32 i = gtid; i < total; i += gthreads) {
-        const u32 r = i / L.m, c = i - r * L.m;
-        h_out[(u64)r * L.m_total + L.col0 + c] = __ldcg(d_y + i);
-      }
-    }
-    __threadfence_system();
-    grid_sync(bar);
+    grid_sync<true>(bar);  // every block's reply stores visible to the host before done
     if (blockIdx.x == 0 && tid == 0) {
       ctrl[C_STATUS] = bad;
       __threadfence_system();

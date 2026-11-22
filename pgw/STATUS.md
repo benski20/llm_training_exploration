@@ -15,6 +15,46 @@ SLA pilot. Three reasons:
 2. The HSM, KMS and TPM integrations have never run against real hardware or cloud services.
 3. There has been no external security audit.
 
+## Update 2026-11-22: native UDS lane channel (opt-in), persistent GPU worker's first H100 run
+
+Toward the 7B CPU-only-gateway target (25 tok/s, <= ~0.35 ms per trip all-in; provider wait per trip today ~0.38 ms).
+
+- **`lane_native`** (gateway model option, default `false`; `SETUP_MODEL_OPTION_KEYS`): the UDS lane (`lane = "auto"` /
+  `"required"`) uses the native `pgw_fast.TripChannel.connect_service_uds` (A1 frames, GIL released for the whole
+  trip, one `writev`, spin-then-block wait) instead of the Python socket channel; without the extension the Python
+  channel as before. Same header fields and body bytes, same single-use tickets and peer-uid check by the service, same
+  status mapping (closing statuses drop the lane and cool down), same byte-identical resend under the same request id on
+  the stream channel, same `lane_stats` (`native: true`). It is what the per-trip native driver (`PGW_TRIP_DRIVER`)
+  needs on the UDS lane (on the Python channel the driver stays off). Tests: `tests/gateway/test_speed_wiring.py`
+  (`test_lane_native_over_the_service_uds_lane_is_bit_identical`, with and without `PGW_TRIP_FAST`/`NATIVE`/`DRIVER`:
+  outputs and logprobs equal to the plaintext reference, every lane call counted by the service, the driver served
+  trips). Local transport round trip (`benchmarks/lane_tls_bench.py --modes native-uds,py-uds --preset 7b`, stub
+  executor, this shared 4-vCPU box): native-uds p50 22 us / mean 35 us, py-uds p50 23 us / mean 25 us: the socket hop
+  itself is ~20 us either way, so the ~0.2 ms "wire" of the H100 run is not the channel; it is the gateway process
+  around the call (GIL hand-offs: with 2 GIL-busy threads both channels' means rise to 0.4-0.6 ms) and, on the
+  provider, the device-lock wait, which the lane reports as `queue_us` (not in `compute_us`, so the client counts it
+  as wire). The native channel's gain is therefore expected from the driver (one native call for lane + finish).
+- **Co-located demo**: `launch.py --lane uds` (the co-located default) now sets `lane_native` (opt out:
+  `--lane-python`), and with `--trip-native` also `PGW_TRIP_DRIVER=1`.
+- **Persistent GPU worker, first GPU run** (`deploy/modal/gpu_bench.py --target h100_c4`, new: H100, 4 cores, 12 min
+  hard timeout; `provider_scale_bench.py --presets 7b --tp 1 --rows 1,2 --iters 300 --persistent-bps 1,2`; 40 s wall,
+  ~$0.1): NVRTC compile, launch and the startup self-check all passed, and every timed persistent trip was **exact**
+  (0 mismatches), but it was **slow: 2.94 ms per 1-row trip (5.66 ms with 2 blocks/SM)** vs graph replay 0.089 ms and
+  the kernel path 0.296 ms. 1-row service time per 7B trip (us, mean): graph qkv 44 / o 40 / gate_up 191 / down 79
+  (trip mean 89; rows 2: 168); kernel path 257 / 256 / 399 / 270 (296; rows 2: 351); persistent 2802 / 2799 / 3136 /
+  3027. Cause (cost proportional to resident threads): every thread executed `__threadfence_system()` twice per trip.
+  Fixed (one system fence per block after `__syncthreads`, the second grid barrier and the `d_y` round trip removed:
+  warps store their outputs straight into the mapped reply; trip words read once per block; 16-byte input reads;
+  4 rows per warp when 16 would idle warps): **not yet run on a GPU** (a second short run was not approved in this
+  session); arithmetic unchanged (u32 wrap), and the start-up self-check still guards it. Not wired into the demo
+  (it was not faster). Caveat for serving: while the resident kernel runs, any device-wide synchronisation on that
+  GPU (`torch.cuda.synchronize`, `torch.cuda.graph` capture, `empty_cache`, Triton autotuning) blocks forever, so a
+  provider with `PGW_SERVICE_EXEC=persistent` must not capture graphs or tune lazily after start-up.
+  Graph replay's gate_up (191 us for 136 MB, ~0.7 TB/s) is the largest single provider cost per token.
+  Re-run (~$0.1): `PGW_MODAL_APP_SUFFIX=-pw modal run deploy/modal/gpu_bench.py --target h100_c4 --timeout-min 6
+  --cmd "python benchmarks/provider_scale_bench.py --presets 7b --tp 1 --rows 1,2,4 --iters 300 --persistent-bps
+  1,2,4 --json /tmp/ps.json"` (the bench now records a failing path's error and still reports the others).
+
 ## Update 2026-11-22: Qwen2.5-32B co-located Modal run prepared (CPU-only gateway, H100 provider; not run)
 
 `launch.py --model qwen2.5-32b-instruct` (H100 only, `--gateway-cache` required): the provider's 37.5 GB pack from a
