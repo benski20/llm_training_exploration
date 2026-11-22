@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 import torch
 
 from pgw.core.errors import ConfigError, ErrorCode, PGWError
@@ -58,6 +60,7 @@ class KVCache:
         self._v = torch.zeros_like(self._k)
         self._len = 0
         self._hi = 0  # highest committed length since the last clear (positions still hold valid K/V)
+        self._np: tuple[Any, Any, Any] | None = None  # (storage tensor, k numpy view, v numpy view)
 
     @property
     def length(self) -> int:
@@ -90,6 +93,14 @@ class KVCache:
         k[:, : self._len] = self._k[:, : self._len]
         v[:, : self._len] = self._v[:, : self._len]
         self._k, self._v = k, v
+
+    def numpy_views(self) -> tuple[Any, Any]:
+        """``(k, v)`` numpy views ``(layers, capacity, kvh, hd)`` of the storage (CPU only; the native float
+        path writes a pass's keys and values into them). Valid until :meth:`reserve` grows the storage."""
+        hit = self._np
+        if hit is None or hit[0] is not self._k:
+            hit = self._np = (self._k, self._k.numpy(), self._v.numpy())
+        return hit[1], hit[2]
 
     def append(self, layer: int, k: torch.Tensor, v: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         """Write ``(T, kvh, hd)`` keys/values for ``layer``; return full ``(length + T, kvh, hd)`` views.

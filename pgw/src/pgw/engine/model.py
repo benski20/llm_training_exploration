@@ -49,9 +49,9 @@ from pgw.engine.pack import linear_split_sizes
 from pgw.engine.rope import RotaryEmbedding, apply_rope
 
 __all__ = [
-    "FloatOps", "GatewayHead", "HeadMode", "PassState", "Schedule", "SequenceInput", "StandardSchedule",
-    "TorchFloatOps", "TransformerModel",
-    "causal_self_check", "float_threads_self_check", "rms_norm",
+    "FloatOps", "GatewayHead", "HeadMode", "NativeFloatOps", "PassState", "Schedule", "SequenceInput",
+    "StandardSchedule", "TorchFloatOps", "TransformerModel",
+    "causal_self_check", "float_threads_self_check", "native_float_available", "rms_norm",
 ]
 
 log = logging.getLogger(__name__)
@@ -505,6 +505,67 @@ class FloatOps:
 TorchFloatOps = FloatOps
 _TORCH_OPS = FloatOps()
 
+#: ``pgw_fast`` functions of the native float path (``float_ops = "native"``).
+_NATIVE_FLOAT_FNS = ("float_rms_norm", "float_add_rms_norm", "float_add", "float_silu_mul", "float_rope_attend",
+                     "float_attend")
+
+
+def native_float_available() -> bool:
+    """The loaded ``pgw_fast`` has the native float path (``float_ops = "native"``)."""
+    return native.native_available(*_NATIVE_FLOAT_FNS)
+
+
+def _np32(t: torch.Tensor) -> Any:
+    """A C-contiguous float32 numpy view of a CPU tensor (a copy only when it is not one already)."""
+    if t.dtype != torch.float32:
+        t = t.to(torch.float32)
+    if not t.is_contiguous():
+        t = t.contiguous()
+    return t.numpy()
+
+
+class NativeFloatOps(FloatOps):
+    """The pinned native float formulation of a layer (``float_ops = "native"``; opt-in).
+
+    RMSNorm of the layers, the residual adds, RoPE, attention over the KV cache and the SiLU gate run in
+    ``pgw_fast`` (``layer.rs``, ``attn.rs``): a fixed order of IEEE operations without FMA or libm, so the
+    bits do not depend on the CPU's instruction set, the thread count or how many rows share a pass
+    (every output row depends only on that row and the cache prefix it sees). The standard layer then
+    runs as one native call between consecutive linears (:meth:`TransformerModel._layer_native`).
+
+    It is a **new reference**: RMSNorm, attention and SiLU differ from torch's in the last bits (RoPE and
+    the residual adds are torch's bits), so the gateway and the plaintext reference must both use it;
+    logits stay within the HF closeness tolerances. The final norm before the LM head (``rms_norm`` /
+    ``norm_rows`` of this class) stays torch's. CPU and float32 only.
+    """
+
+    name = "native"
+
+    def __init__(self) -> None:
+        if not native_float_available():
+            raise ConfigError("float_ops='native' needs the pgw_fast native extension with the float path "
+                              "(rust/tools/build_fast.py)")
+        self.fast = native.fast
+
+    def attention(self, model: TransformerModel, q: torch.Tensor, k: torch.Tensor, v: torch.Tensor,
+                  start: int) -> torch.Tensor:
+        t = int(q.shape[0])
+        out = torch.empty((t, int(q.shape[1]) * int(q.shape[2])), dtype=torch.float32)
+        self.fast.float_attend(_np32(q), _np32(k), _np32(v), int(start), float(model.scale), out.numpy())
+        return out
+
+    def silu_mul(self, gate: torch.Tensor, up: torch.Tensor) -> torch.Tensor:
+        gu = torch.cat([gate.to(torch.float32), up.to(torch.float32)], dim=1)
+        out = torch.empty((int(gate.shape[0]), int(gate.shape[1])), dtype=torch.float32)
+        self.fast.float_silu_mul(gu.numpy(), out.numpy())
+        return out
+
+    def layer_norm(self, x: torch.Tensor, weight: torch.Tensor, eps: float) -> torch.Tensor:
+        """RMSNorm of a layer (input / post-attention norm), native."""
+        out = torch.empty((int(x.shape[0]), int(x.shape[1])), dtype=torch.float32)
+        self.fast.float_rms_norm(_np32(x), _np32(weight), float(eps), out.numpy())
+        return out
+
 
 class HeadMode:
     """Turns a step's final hidden rows into logits (WP-B2 adds a provider int8 head as a round trip).
@@ -566,7 +627,7 @@ class PassState:
         ops: The pass's float ops.
     """
 
-    __slots__ = ("caches", "hs", "ids", "ops", "rope", "seqs", "sessions", "starts")
+    __slots__ = ("caches", "hs", "ids", "normed", "ops", "rope", "rope_np", "seqs", "sessions", "starts")
 
     def __init__(self, seqs: Sequence[SequenceInput], ids: list[torch.Tensor], caches: list[KVCache],
                  starts: list[int], rope: list[tuple[torch.Tensor, torch.Tensor]], hs: list[torch.Tensor],
@@ -579,6 +640,10 @@ class PassState:
         self.hs = hs
         self.sessions = [s.session for s in seqs]
         self.ops = ops
+        #: Native float path: ``(layer, normed rows per sequence)`` computed with the previous layer's
+        #: residual add (its input norm, fused), and the RoPE tables as numpy views.
+        self.normed: tuple[int, list[torch.Tensor]] | None = None
+        self.rope_np: list[tuple[Any, Any]] | None = None
 
 
 def _norm_rows(h: torch.Tensor, norm: torch.Tensor, eps: float) -> torch.Tensor:
@@ -733,6 +798,10 @@ class TransformerModel:
             # prefill on a thread with a different count) runs it once more, mid-pass, then it is cached
             self._use_causal()
         self.sync_decode = _env_bool("PGW_SYNC_DECODE", type(self).sync_decode)
+        self._norm_np: tuple[list[Any], list[Any]] | None = None  # layer norm weights as numpy (native path)
+        env_ops = os.environ.get("PGW_FLOAT_OPS", "").strip().lower()
+        if env_ops:
+            self.set_float_ops(env_ops)
         env_threads = _env_int("PGW_FLOAT_THREADS")
         if env_threads is not None and env_threads > 0:
             self.enable_float_threads(env_threads)
@@ -740,6 +809,21 @@ class TransformerModel:
             "engine model ready: arch=%s layers=%d hidden=%d heads=%d/%d vocab=%d backend=%s",
             a.arch, a.num_layers, a.hidden_size, a.num_heads, a.num_kv_heads, a.vocab_size, type(backend).__name__,
         )
+
+    def set_float_ops(self, name: str) -> None:
+        """Select the float path by name: ``"torch"`` (default, today's reference) or ``"native"``
+        (:class:`NativeFloatOps`, a new pinned reference; CPU float32 models only). The gateway and its
+        plaintext reference must select the same one (``PGW_FLOAT_OPS`` sets it at load)."""
+        name = (name or "torch").strip().lower()
+        if name == "torch":
+            self.float_ops = None
+            return
+        if name != "native":
+            raise ConfigError(f"unknown float_ops {name!r} (torch or native)")
+        if self.device.type != "cpu" or self.dtype != torch.float32:
+            raise ConfigError("float_ops='native' needs a CPU float32 model")
+        self.float_ops = NativeFloatOps()
+        log.info("float ops: native pinned formulation (RMSNorm, RoPE, attention, SiLU in pgw_fast)")
 
     @property
     def supports_pad_rows(self) -> bool:
@@ -895,7 +979,8 @@ class TransformerModel:
         count, since the scoped bits were never compared with that count's.
         """
         n = self._float_threads
-        if n is None or rows > self._float_rows:
+        if n is None or rows > self._float_rows or isinstance(self.float_ops, NativeFloatOps):
+            # the native float path does not use torch threads: no scope (two OpenMP calls a step saved)
             return self._advance(gen, value)
         prev = torch.get_num_threads()
         setter = _omp_set()
@@ -927,7 +1012,8 @@ class TransformerModel:
         if any(c.id != calls[0].id for c in calls):  # pragma: no cover - schedules yield one linear per step
             raise ShapeError("a step mixes linears; local linears need one linear per step")
         rows_ok = getattr(self.backend, "local_rows_ok", None)
-        if rows_ok is not None and not rows_ok(sum(int(c.x.shape[0]) for c in calls)):
+        if rows_ok is not None and not rows_ok(
+                int(calls[0].x.shape[0]) if len(calls) == 1 else sum(int(c.x.shape[0]) for c in calls)):
             return None  # a large (prefill) pass sends every linear (R1: local_max_rows)
         return self._check_results(calls, self.backend.forward_local(calls))  # type: ignore[attr-defined]
 
@@ -1067,6 +1153,9 @@ class TransformerModel:
     def _layer_standard(self, layer: int, st: PassState) -> PyGenerator[list[LinearCall], list[torch.Tensor], None]:
         """One layer, four round trips: qkv, o, gate_up, down (the default :class:`Schedule`)."""
         ops = st.ops
+        if isinstance(ops, NativeFloatOps):
+            yield from self._layer_native(layer, st, ops)
+            return
         hs, sessions, caches, starts, seqs = st.hs, st.sessions, st.caches, st.starts, st.seqs
         nh, kvh, hd = self.num_heads, self.num_kv_heads, self.head_dim
         nq, nk, _ = self.split_qkv
@@ -1104,6 +1193,73 @@ class TransformerModel:
         acts = [ops.silu_mul(y[:, :inter].to(self.dtype), y[:, inter:].to(self.dtype)) for y in gu]
         down = yield [LinearCall(lid_down, x, sess) for x, sess in zip(acts, sessions, strict=True)]
         st.hs = [h + y.to(self.dtype) for h, y in zip(hs, down, strict=True)]
+
+    def _layer_native(self, layer: int, st: PassState,
+                      ops: NativeFloatOps) -> PyGenerator[list[LinearCall], list[torch.Tensor], None]:
+        """:meth:`_layer_standard` on the native float path: one ``pgw_fast`` call between consecutive
+        linears (input norm, fused with the previous layer's residual add; RoPE + cache write + attention;
+        residual add + post norm; SiLU gate; residual add + the next layer's input norm). Every row is
+        computed on its own, so serial-tail rows need nothing special. Writes new tensors only (captured
+        hidden states keep theirs)."""
+        fast = ops.fast
+        hs, sessions, caches, starts = st.hs, st.sessions, st.caches, st.starts
+        nh, hidden, eps = self.num_heads, int(self.arch.hidden_size), float(self.eps)
+        lid_qkv, lid_o, lid_gu, lid_down = self._lids[layer]
+        norms = self._norm_np
+        if norms is None:
+            norms = self._norm_np = ([_np32(w) for w in self.input_norms], [_np32(w) for w in self.post_norms])
+        f32 = torch.float32
+        pre = st.normed
+        st.normed = None
+        if pre is not None and pre[0] == layer:
+            normed = pre[1]
+        else:
+            normed = []
+            for h in hs:
+                x = torch.empty((int(h.shape[0]), hidden), dtype=f32)
+                fast.float_rms_norm(_np32(h), norms[0][layer], eps, x.numpy())
+                normed.append(x)
+        qkv = yield [LinearCall(lid_qkv, x, sess) for x, sess in zip(normed, sessions, strict=True)]
+        rope_np = st.rope_np
+        if rope_np is None:
+            rope_np = st.rope_np = [(_np32(c), _np32(s)) for c, s in st.rope]
+        attn_out = []
+        for si, y in enumerate(qkv):
+            rows = int(y.shape[0])
+            out = torch.empty((rows, nh * self.head_dim), dtype=f32)
+            kc, vc = caches[si].numpy_views()
+            cos, sin = rope_np[si]
+            fast.float_rope_attend(_np32(y), cos, sin, kc, vc, layer, starts[si], nh, self.scale, out.numpy())
+            attn_out.append(out)
+        o = yield [LinearCall(lid_o, x, sess) for x, sess in zip(attn_out, sessions, strict=True)]
+        hs2, normed = [], []
+        for h, y in zip(hs, o, strict=True):
+            h2, x = torch.empty_like(h), torch.empty_like(h)
+            fast.float_add_rms_norm(_np32(h), _np32(y), norms[1][layer], eps, h2.numpy(), x.numpy())
+            hs2.append(h2)
+            normed.append(x)
+        gu = yield [LinearCall(lid_gu, x, sess) for x, sess in zip(normed, sessions, strict=True)]
+        inter = self.split_gate_up[0]
+        acts = []
+        for y in gu:
+            a = torch.empty((int(y.shape[0]), inter), dtype=f32)
+            fast.float_silu_mul(_np32(y), a.numpy())
+            acts.append(a)
+        down = yield [LinearCall(lid_down, x, sess) for x, sess in zip(acts, sessions, strict=True)]
+        nxt = layer + 1 if layer + 1 < self.num_layers else None
+        hs3, normed = [], []
+        for h, y in zip(hs2, down, strict=True):
+            h3 = torch.empty_like(h)
+            if nxt is None:
+                fast.float_add(h.numpy(), _np32(y), h3.numpy())
+            else:
+                x = torch.empty_like(h)
+                fast.float_add_rms_norm(h.numpy(), _np32(y), norms[0][nxt], eps, h3.numpy(), x.numpy())
+                normed.append(x)
+            hs3.append(h3)
+        st.hs = hs3
+        if nxt is not None:
+            st.normed = (nxt, normed)
 
     def _logits(self, seqs: Sequence[SequenceInput], hs: list[torch.Tensor]) -> list[Any]:
         """Final norm and LM head of a step: per sequence the last row's logits ``(vocab,)``, all rows'

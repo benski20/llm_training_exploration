@@ -627,8 +627,8 @@ def test_lane_tls_is_colocated_only_and_reaches_the_pair(monkeypatch: pytest.Mon
     p = spawn(FakeDict(), "colocated", 600, True)
     # co-located default --float-threads 1: the gateway's torch threads pinned (the reference follows, colocated.py)
     assert log[-1][:2] == launch.COLOCATED_FUNCTION and log[-1][2] == (
-        p.run_id, 600, True, "auto", 0, "tls", {"OMP_NUM_THREADS": "1"}, {}, 0.0)
-    args0 = launch.parse_args(["--placement", "colocated", "--float-threads", "0"])
+        p.run_id, 600, True, "auto", 0, "tls", {"OMP_NUM_THREADS": "1", "PGW_FLOAT_OPS": "native"}, {}, 0.0)
+    args0 = launch.parse_args(["--placement", "colocated", "--float-threads", "0", "--float-ops", "torch"])
     launch._spawner(args0)(FakeDict(), "colocated", 600, True)
     assert log[-1][2][1:] == (600, True, "attention_down", 0, "tls")  # 0 = each process's default count
     with pytest.raises(SystemExit):
@@ -666,3 +666,11 @@ def test_spec_mask_flag(monkeypatch: pytest.MonkeyPatch) -> None:
                 ["--spec-rows", "4", "--spec-mask", "x"], ["--spec-rows", "4", "--spec-mask", "0.5"]):
         with pytest.raises(SystemExit):
             launch.parse_args(bad)
+
+
+def test_float_ops_native_is_the_colocated_default() -> None:
+    assert launch.parse_args(["--placement", "colocated"]).float_ops == "native"
+    assert launch.parse_args([]).float_ops == "torch"
+    assert launch.parse_args(["--placement", "colocated", "--float-ops", "torch"]).float_ops == "torch"
+    with pytest.raises(SystemExit):
+        launch.parse_args(["--float-ops", "native"])

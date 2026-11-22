@@ -191,6 +191,9 @@ def pair(run_id: str, ttl_s: int = 80 * 60, e2e: bool = False, local_linears: st
     # (CPU SDPA) compute the same way in both; the gateway's float_threads self-check then compares N with N.
     pin = int((gateway_env or {}).get("OMP_NUM_THREADS") or 0) or None
     result["float_threads_pin"] = pin
+    # launch.py --float-ops native: the gateway's pinned native float path (PGW_FLOAT_OPS); the reference follows it
+    float_ops = (gateway_env or {}).get("PGW_FLOAT_OPS") or None
+    result["float_ops"] = float_ops or "torch"
     # launch.py --gateway-gpu: one GPU per party (provider: the first, gateway: the second), else the gateway has none
     gsplit: dict = {}
     if os.environ.get("PGW_MODAL_GATEWAY_GPU", "0") == "1":
@@ -245,7 +248,7 @@ def pair(run_id: str, ttl_s: int = 80 * 60, e2e: bool = False, local_linears: st
                                                f"http://127.0.0.1:{GATEWAY_PORT}", croot / "config",
                                                spec_rows=spec_rows, sustain_s=sustain_s,
                                                sampler_path=(gateway_env or {}).get("PGW_STACK_SAMPLER"),
-                                               float_threads=pin)
+                                               float_threads=pin, float_ops=float_ops)
                 if sustain_s and result["e2e"].get("sustain"):
                     sus = result["e2e"]["sustain"]
                     sus["factory"] = boot.factory_segments(LOGS / "gateway.log", sus["t0"], sus["t1"])

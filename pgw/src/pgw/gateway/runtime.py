@@ -988,6 +988,8 @@ class ModelRuntime:
             # decode passes on the plaintext thread when the backend says a trip is fast (lane + TripEngine)
             self.model.sync_decode = True
         # default 1 (an explicit model setting wins; without one, PGW_FLOAT_THREADS as the model applied it)
+        if "float_ops" in c.model_fields_set:  # an explicit setting wins over PGW_FLOAT_OPS (read by the model)
+            self.model.set_float_ops(c.float_ops)
         env_set = os.environ.get("PGW_FLOAT_THREADS", "").strip() != "" and "float_threads" not in c.model_fields_set
         if (c.float_threads is not None and not env_set
                 and getattr(getattr(self.model, "device", None), "type", "cpu") == "cpu"):
@@ -1401,6 +1403,7 @@ class ModelRuntime:
             "sync_decode": bool(getattr(self.model, "sync_decode", False)),
             "pipeline_blocks": getattr(self.model, "pipeline_blocks", None),
             "float_threads": getattr(self.model, "float_threads", None),
+            "float_ops": getattr(getattr(self.model, "float_ops", None), "name", "torch"),
             "spec_rows": c.spec_rows, "spec_strict_passes": c.spec_strict_passes, "spec_mask_rows": c.spec_mask_rows,
             "spec_mask_credit": c.spec_mask_credit,
         }
