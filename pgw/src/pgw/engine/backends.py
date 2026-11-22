@@ -941,6 +941,9 @@ class MaskedBackend(LinearBackend):
         #: Calls with more rows than this (prefill) are not prefetched for: the next call of that
         #: linear is a decode step.
         self.prefetch_max_rows = 8
+        #: Prompt passes: the engine stages the next remote linear's rows ahead (:meth:`prefetch_prompt`).
+        #: Off by default (``PGW_PROMPT_PREFETCH=1``); needs :attr:`mask_prefetch`.
+        self.prompt_prefetch = self.mask_prefetch and _env_flag("PGW_PROMPT_PREFETCH", False)
         #: Steps staged ahead per (reservation, linear); the reservation's byte budget also bounds it.
         self.prefetch_depth = 2
         self._prefetch_pool: Any = None
@@ -2535,6 +2538,36 @@ class MaskedBackend(LinearBackend):
             with self._prefetch_lock:
                 self._prefetch_pending -= 1
 
+    def prefetch_prompt(self, items: Sequence[tuple[Any, LinearId, int]]) -> bool:
+        """Prompt-pass mask prefetch (:attr:`prompt_prefetch`; the engine calls it, off by default): stage
+        ``rows`` next rows of ``(reservation, linear)`` on the prefetch thread, e.g. the next remote linear of
+        a prompt pass while this one's trip and the local work in between run. The staged rows are exactly
+        the rows the next takes would derive (same rows, same order, still single-use and owned by that
+        reservation); the row count is the prompt's, which the provider sees anyway. Returns whether a
+        prefetch was queued (never more than two at a time)."""
+        if not self.prompt_prefetch:
+            return False
+        todo = [(res, lid, int(rows)) for res, lid, rows in items
+                if res is not None and hasattr(res, "prefetch") and int(rows) > 0]
+        if not todo:
+            return False
+        with self._prefetch_lock:
+            if self._prefetch_pending >= 2:
+                return False
+            if self._prefetch_pool is None:
+                from concurrent.futures import ThreadPoolExecutor
+
+                self._prefetch_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="pgw-prefetch")
+            self._prefetch_pending += 1
+            pool = self._prefetch_pool
+        try:
+            pool.submit(self._run_prefetch, todo)
+        except RuntimeError:  # shut down
+            with self._prefetch_lock:
+                self._prefetch_pending -= 1
+            return False
+        return True
+
     def _run_prefetch(self, items: Sequence[tuple[Any, LinearId, int]]) -> None:
         staged = 0
         try:
@@ -2802,7 +2835,13 @@ class MaskedBackend(LinearBackend):
         tiny = (rng.standard_normal((1, meta.in_features)) * 1e-30).astype(np.float32)
         many = (rng.standard_normal((12, meta.in_features)) * 2).astype(np.float32)
         self._local_gpu_mismatch = ""
-        for case, xs in enumerate((x[:1], x[1:2], x[2:3], tiny, x, many)):
+        cases = [x[:1], x[1:2], x[2:3], tiny, x, many]
+        blk = int(getattr(gp, "prefill_block_rows", 0) or 0)
+        if blk:  # prompt blocks: full blocks, a padded short block, and a spike in the last block
+            long = (rng.standard_normal((2 * blk + 5, meta.in_features)) * 2).astype(np.float32)
+            long[-2] = x[1]
+            cases.append(long)
+        for case, xs in enumerate(cases):
             xt = torch.from_numpy(xs.copy())
             ref: Any
             got: Any
@@ -2839,9 +2878,18 @@ class MaskedBackend(LinearBackend):
         if rows == 0:
             return torch.from_numpy(out)
         sx = np.empty(rows, dtype=np.float64)
+        wn = float(meta.wnorm or 0.0) if self.ring.cap else 0.0
+        blk = int(getattr(gp, "prefill_block_rows", 0) or 0)
         try:
-            status = gp.forward(lid.key, xf, float(meta.wnorm or 0.0) if self.ring.cap else 0.0, scale, bias,
-                                bound, out, sx)
+            if blk and rows > blk:  # a prompt pass in blocks of graph replays (rows are independent: same bits)
+                status = 0
+                for a in range(0, rows, blk):
+                    b = min(rows, a + blk)
+                    status = gp.forward(lid.key, xf[a:b], wn, scale, bias, bound, out[a:b], sx[a:b])
+                    if status:
+                        break
+            else:
+                status = gp.forward(lid.key, xf, wn, scale, bias, bound, out, sx)
         except ValueError as exc:
             if str(exc).startswith("ring_overflow"):
                 raise RingOverflowError(str(exc).split(":", 1)[-1].strip()) from exc

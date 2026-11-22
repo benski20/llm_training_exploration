@@ -325,6 +325,9 @@ class ActiveSession:
             self.finish_reason = str(res.finish_reason)
             if "ttft_ms" in res.timings_ms:
                 self.ttft_s = res.timings_ms["ttft_ms"] / 1e3
+            prof = getattr(self.runtime.model, "prefill_profile", None)
+            if prof is not None:
+                prof["last_timings_ms"] = {k: round(float(v), 2) for k, v in res.timings_ms.items()}
             self.runtime._observe_result(res)
             return res
         except PGWError as exc:
@@ -982,6 +985,8 @@ class ModelRuntime:
         c = self.config
         self.model = TransformerModel(pack, self.backend, device=c.device)
         self.model.inline_max_rows = c.inline_max_rows
+        if os.environ.get("PGW_PREFILL_PROFILE", "").strip() == "1":  # prompt-pass timings (gateway-local)
+            self.model.prefill_profile = {}
         head_dev = os.environ.get("PGW_LM_HEAD_DEVICE", "").strip().lower() or c.lm_head_device
         if head_dev not in ("", "cpu"):
             from pgw.engine.lm_head_gpu import enable_gpu_lm_head
@@ -995,6 +1000,12 @@ class ModelRuntime:
             # the TripEngine prepares/finishes each prefill block on its native pool: quarters overlap better
             # than halves (rows are independent and masks are taken in row order: same bits)
             self.model.pipeline_blocks = max(2, int(getattr(self.backend, "pipeline_blocks", 2)))
+        pb = os.environ.get("PGW_PIPELINE_BLOCKS", "").strip()
+        if pb.isdigit() and int(pb) >= 1:  # prompt trips: blocks per round trip (1 = no split; a public, fixed setting)
+            if int(pb) == 1:
+                self.model.pipeline_min_rows = 0
+            else:
+                self.model.pipeline_blocks = int(pb)
         if c.lane != "off" and os.environ.get("PGW_SYNC_DECODE", "").strip() == "":
             # decode passes on the plaintext thread when the backend says a trip is fast (lane + TripEngine)
             self.model.sync_decode = True
@@ -1270,6 +1281,7 @@ class ModelRuntime:
         that times out in the queue never burns masks. Each returned session owns one slot.
         """
         rid = request_id or uuid.uuid4().hex
+        t_open = time.perf_counter()
         self.check_available()
         ids_list = [[int(t) for t in p] for p in prompts]
         n = len(ids_list)
@@ -1300,6 +1312,9 @@ class ModelRuntime:
                 await self.admission.release(n - released)
             raise
         self._active_gauge.labels(model=self.name).set(len(self._sessions))
+        prof = getattr(self.model, "prefill_profile", None)
+        if prof is not None:  # admission + mask reservation of the last request (gateway-local timing)
+            prof["last_open_ms"] = round(1e3 * (time.perf_counter() - t_open), 2)
         return sessions
 
     async def _reserve_for(self, ids: list[int], params: SamplingParams, rid: str) -> tuple[Any, int]:
@@ -1426,6 +1441,9 @@ class ModelRuntime:
             "spec_mask_credit": c.spec_mask_credit,
         }
         out["local_linears"]["kinds"] = list(out["local_linears"].get("kinds", ()))
+        prof = getattr(self.model, "prefill_profile", None)
+        if prof is not None:
+            out["prefill_profile"] = prof
         stats = getattr(self.client, "lane_stats", None)
         if stats is not None:
             out["lane_stats"] = {k: v for k, v in vars(stats).items() if isinstance(v, int | float | bool)}

@@ -480,11 +480,19 @@ def colocated_gateway_env(local_linears: str) -> dict[str, str]:
     * ``PGW_POOL_SPIN_US`` / ``PGW_POOL_WORKERS``: the native pool's workers stay awake 2 ms between jobs
       (a futex wake-up under Modal's gVisor costs more than a decode step's gap between local linears) and
       are capped at 4, leaving cores to the factory and the service.
+    * ``PGW_PROMPT_PREFETCH``: a prompt pass stages the next remote linear's mask rows on the prefetch thread
+      (the same rows in the same order, single-use; the row count is the prompt's, which the provider sees
+      anyway): mask reads leave the first token's critical path (about 100 ms to 20-35 ms for 41 rows).
+    * ``PGW_PIPELINE_BLOCKS=1``: a prompt round trip goes out as one item of all its rows instead of four
+      overlapping row blocks (a fixed, public split of the public row count; the provider sees one larger
+      item per prompt trip): half the gateway hops of a prompt pass (prompt pass 550 ms median vs 700-800).
     """
     env = {"PGW_POOL_SPIN_US": "2000", "PGW_POOL_WORKERS": "4",
            # T3: the one-call trip path and the sampled noise statistics off the critical path (same bytes,
            # checks and statistics; library defaults off, see MaskedBackend.trip_fast / noise_async_sampled)
-           "PGW_TRIP_FAST": "1"}
+           "PGW_TRIP_FAST": "1",
+           # prompt pass: mask prefetch and one item per prompt trip (see below)
+           "PGW_PROMPT_PREFETCH": "1", "PGW_PIPELINE_BLOCKS": "1"}
     if local_linears in SKIP_KINDS_BY_LOCAL:
         env["PGW_FACTORY_SKIP_LINEAR_KINDS"] = SKIP_KINDS_BY_LOCAL[local_linears]
     return env
@@ -492,8 +500,10 @@ def colocated_gateway_env(local_linears: str) -> dict[str, str]:
 
 #: The gateway party's environment when it has its own GPU (``split_gpus``): its encrypted mask factory stays on the
 #: CPU (it keeps up there, and a factory GEMM on the GPU would queue ahead of the latency-bound local linears).
+#: ``PGW_LOCAL_GPU_PREFILL_ROWS``: a prompt pass's local linears through one captured digit-GEMM graph per linear on
+#: 64-row blocks (exact, self-checked per linear; about 145 ms to 85 ms for 41 rows on a T4).
 GATEWAY_GPU_FACTORY_ENV = {"PGW_HEMASK_ENGINE": "cpu_int8", "PGW_FACTORY_DEVICE": "cpu",
-                           "PGW_FACTORY_GPU_PRNG": "false"}
+                           "PGW_FACTORY_GPU_PRNG": "false", "PGW_LOCAL_GPU_PREFILL_ROWS": "64"}
 
 
 def _nvidia_devices() -> list[dict[str, str]]:

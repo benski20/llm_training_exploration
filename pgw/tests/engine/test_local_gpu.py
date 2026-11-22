@@ -31,7 +31,7 @@ class _CpuProducts:
     """:class:`pgw.engine.local_gpu.LocalGpuProducts` with the product in numpy (no CUDA)."""
 
     def __init__(self, device: torch.device, k: int, a: int, cap: int, *, graph_rows: tuple[int, ...],
-                 max_n: int, max_m: int, wrong: bool = False):
+                 max_n: int, max_m: int, wrong: bool = False, block: int = 0):
         from pgw.core.native import fast
 
         assert k == 32
@@ -40,6 +40,8 @@ class _CpuProducts:
         self.w: dict[str, np.ndarray] = {}
         self.wrong = wrong
         self.calls = 0
+        self.prefill_block_rows = block
+        self.max_rows_seen = 0
 
     def add(self, key: str, w8: torch.Tensor) -> None:
         self.w[key] = w8.contiguous().numpy().astype(np.int64)  # (m, n)
@@ -51,6 +53,7 @@ class _CpuProducts:
                 bound: int, out: np.ndarray, sx: np.ndarray) -> int:
         w = self.w[key]
         rows, n = xf.shape
+        self.max_rows_seen = max(self.max_rows_seen, rows)
         payload = np.empty(rows * n * 4, dtype=np.uint8)
         self.fast.trip_prepare_into(xf, np.zeros((rows, n), dtype=np.int64), self.k, self.a, self.cap, wnorm,
                                     payload, sx)
@@ -87,6 +90,23 @@ def test_gpu_path_composition_is_bit_identical(qwen_pack: InMemoryPack) -> None:
         for c, y in zip(calls, be.forward_local(calls), strict=True):
             assert torch.equal(y, plain.forward(c))
         assert be._local_gpu.calls > before  # served by the GPU path (calls of one linear are grouped)
+    be.close()
+
+
+def test_prompt_blocks_are_bit_identical(qwen_pack: InMemoryPack) -> None:
+    """``PGW_LOCAL_GPU_BLOCK_ROWS``: a prompt-sized call runs in row blocks (the last one short); same bits."""
+    be, policy = _backend(qwen_pack, block=4)
+    assert be._local_gpu is not None and policy["gpu_graphs_reason"] == "identical outputs"
+    plain = PlainBackend(qwen_pack, DEFAULT_RING)
+    g = torch.Generator().manual_seed(9)
+    lid = LinearId(1, LinearKind.DOWN)
+    n = qwen_pack.load_linear(lid).w8.shape[1]
+    x = torch.randn(11, n, generator=g) * 5
+    x[9, 3] = 400.0
+    before = be._local_gpu.calls
+    (y,) = be.forward_local([LinearCall(lid, x)])
+    assert torch.equal(y, plain.forward(LinearCall(lid, x)))
+    assert be._local_gpu.calls - before == 3 and be._local_gpu.max_rows_seen == 4
     be.close()
 
 
