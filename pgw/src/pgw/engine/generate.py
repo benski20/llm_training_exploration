@@ -31,6 +31,7 @@ __all__ = [
     "FinishReason",
     "GenerationResult",
     "Generator",
+    "PipelinedDrafter",
     "SessionFactory",
     "TokenEvent",
 ]
@@ -452,6 +453,296 @@ class BuiltinDrafter:
         if tv is not None and lg.numel() != tv:  # align with the target's vocabulary (RNG draws)
             lg = lg[:tv] if lg.numel() > tv else torch.cat([lg, lg.new_full((tv - lg.numel(),), float("-inf"))])
         return fk.propose(lg, job.generated + job.out)
+
+
+@dataclass
+class _PipeState:
+    cache: KVCache | None
+    fed: list[int] = field(default_factory=list)  # tokens held in ``cache``, in order
+    #: The context the background block assumed for the next pass (``context + out + [guess]``) and its
+    #: ``k`` drafts; ``None`` until a block ran.
+    hyp_ctx: list[int] | None = None
+    hyp_out: list[int] = field(default_factory=list)
+    #: Length of the context prefix the hypothesis shares with the pass it was drafted in (the comparison
+    #: on the next call looks only at the tokens after it: constant work).
+    hyp_base: int = 0
+
+
+class PipelinedDrafter:
+    """A draft model that drafts the next pass's block while the current pass is in flight (opt-in).
+
+    Strict speculation (``Generator(spec_rows=R, spec_strict=True)``) on a CPU-only gateway: the draft runs
+    on the gateway's spare cores. Plain drafting (:class:`BuiltinDrafter`) puts ``k = R - 1`` draft steps
+    between two passes, on the critical path. This drafter splits the work into:
+
+    * a **background block** started as :meth:`propose` returns (it runs while the generator sends the pass's
+      trips): exactly ``k + 1`` draft steps per sequence that assume the pass accepts every draft and that
+      the target's bonus token is the draft's own next token (``guess``), and draft the next pass's ``k``
+      tokens after it;
+    * a **foreground part** in the next :meth:`propose`: exactly ``post_steps`` (``m``) draft steps per
+      sequence, whatever happened. If the pass's outcome matches the hypothesis (every draft accepted and
+      the bonus equal to the guess), the next proposal is the background block's ``k`` drafts and the ``m``
+      steps are dummy steps (filler token, cache rolled back); otherwise the ``m`` steps draft afresh from
+      the real context (``m`` drafts; the generator fills the other rows with padding / filler rows).
+
+    Privacy (strict mode): the provider sees the same rows and passes either way (fixed R, strict pass
+    count, padding rows), and the gateway's work between two passes is ``m`` draft steps of one fed row per
+    sequence plus the wait for the background block, which always runs ``k + 1`` steps: neither depends on
+    whether the hypothesis held (hit or miss only changes which tokens fill the rows, which is private).
+    The background block runs concurrently with the pass's trips on other cores; its CPU and memory traffic
+    is the same every pass (a constant load next to the trips, not an acceptance signal). Residuals, as in
+    :class:`BuiltinDrafter`: the first step of a block feeds the tokens the draft has not seen (usually 1,
+    up to 2 after a miss); attention cost grows with the context.
+
+    Drafts are proposals only (the masked target decides every token), so outputs are exact whatever this
+    drafter does. Greedy guesses are used for sampled requests too (lower acceptance, same outputs).
+
+    Args:
+        model: Draft model (same tokenizer as the target), e.g. on :class:`~pgw.engine.backends.NativeInt8DraftBackend`.
+        post_steps: ``m``, foreground draft steps per pass (``0 <= m <= k``; 0 = nothing on the critical path).
+        target_vocab: The target's vocabulary size (a proposal ends at the first id at or above it).
+        background: Run the block in a background thread (default); False runs it inline (tests).
+    """
+
+    needs_prefill = True
+
+    def __init__(self, model: TransformerModel, *, post_steps: int = 0, target_vocab: int | None = None,
+                 background: bool = True):
+        if model is None:
+            raise ConfigError("PipelinedDrafter needs a draft model")
+        if post_steps < 0:
+            raise ConfigError("post_steps must be >= 0")
+        self.model = model
+        self.post_steps = int(post_steps)
+        self.target_vocab = target_vocab
+        dv = getattr(getattr(model, "arch", None), "vocab_size", None)
+        self.draft_vocab = int(dv) if dv is not None else None
+        self.background = bool(background)
+        self._lock = threading.Lock()  # the draft model: one forward at a time
+        self._inflight: threading.Thread | None = None
+        self._error: BaseException | None = None
+        #: ``calls``, foreground ``steps``/``ms``, background ``bg_steps``/``bg_ms``, ``hits``/``misses``,
+        #: ``wait_ms`` (foreground time spent waiting for a background block).
+        self.stats: dict[str, float] = {"calls": 0.0, "steps": 0.0, "ms": 0.0, "bg_steps": 0.0, "bg_ms": 0.0,
+                                        "hits": 0.0, "misses": 0.0, "wait_ms": 0.0}
+
+    # ---- helpers ---------------------------------------------------------------------------------------
+    def _din(self, ids: Sequence[int]) -> list[int]:
+        dv = self.draft_vocab
+        return [int(t) for t in ids] if dv is None else [int(t) if t < dv else dv - 1 for t in ids]
+
+    def _filler(self) -> int:
+        return secrets.randbelow(self.draft_vocab or self.target_vocab or 1)
+
+    def _ok_token(self, tok: int) -> bool:
+        return tok >= 0 and (self.target_vocab is None or tok < self.target_vocab)
+
+    def _wait(self) -> None:
+        th = self._inflight
+        if th is not None:
+            t0 = time.perf_counter()
+            th.join()
+            self.stats["wait_ms"] += (time.perf_counter() - t0) * 1e3
+            self._inflight = None
+
+    def _catch_up(self, st: _PipeState, ctx: Sequence[int]) -> list[int]:
+        """Truncate the draft cache to its longest prefix shared with ``ctx`` (keeping at least the last
+        token to feed) and return the tokens to feed."""
+        assert st.cache is not None
+        n = min(len(st.fed), len(ctx))
+        lcp = 0
+        while lcp < n and st.fed[lcp] == ctx[lcp]:
+            lcp += 1
+        lcp = min(lcp, len(ctx) - 1)
+        st.cache.truncate(lcp)
+        del st.fed[lcp:]
+        new = [int(x) for x in ctx[lcp:]]
+        st.fed.extend(new)
+        return new
+
+    # ---- Drafter protocol --------------------------------------------------------------------------------
+    def open(self, prompt: Sequence[int], max_len: int) -> _PipeState:
+        return _PipeState(self.model.new_cache(max_len + 2))
+
+    def prefill(self, states: Sequence[Any], prompts: Sequence[Sequence[int]]) -> None:
+        live = [(st, p) for st, p in zip(states, prompts, strict=True) if st.cache is not None]
+        if not live:
+            return
+        self._wait()
+        with self._lock:
+            try:
+                for st, _ in live:
+                    st.cache.truncate(0)
+                    st.fed = []
+                    st.hyp_ctx = None
+                self.model.forward_batch([SequenceInput(self._din(p), st.cache) for st, p in live])
+                for st, p in live:
+                    st.fed = [int(t) for t in p]
+            except Exception:
+                log.warning("draft prefill failed; model drafts disabled for %d sequence(s)", len(live),
+                            exc_info=True)
+                for st, _ in live:
+                    self._close_now(st)
+
+    def close(self, state: Any) -> None:
+        self._wait()
+        self._close_now(state)
+
+    @staticmethod
+    def _close_now(state: Any) -> None:
+        if state.cache is not None:
+            state.cache.clear()
+        state.cache = None
+        state.fed = []
+        state.hyp_ctx = None
+        state.hyp_out = []
+
+    def propose(self, jobs: Sequence[DraftJob]) -> None:
+        self._wait()  # the previous pass's background block (always the same work)
+        for job in jobs:
+            job.out = []
+        live = [j for j in jobs if j.k > 0 and isinstance(j.state, _PipeState) and j.state.cache is not None]
+        if not live:
+            return
+        t0 = time.perf_counter()
+        try:
+            with self._lock:
+                self._foreground(live)
+        except Exception:
+            log.warning("draft model failed; model drafts disabled for %d sequence(s)", len(live), exc_info=True)
+            for job in live:
+                self._close_now(job.state)
+                job.out = []
+            return
+        finally:
+            self.stats["calls"] += 1
+            self.stats["ms"] += (time.perf_counter() - t0) * 1e3
+        blocks = [(j.state, list(j.context), list(j.out), j.k) for j in live if j.state.cache is not None]
+        if not blocks:
+            return
+        if self.background:
+            th = threading.Thread(target=self._block_safe, args=(blocks,), name="pgw-draft-block", daemon=True)
+            self._inflight = th
+            th.start()
+        else:
+            self._block_safe(blocks)
+
+    # ---- foreground: m steps per job, hit or miss -----------------------------------------------------
+    def _foreground(self, live: Sequence[DraftJob]) -> None:
+        m = self.post_steps
+        plan: list[dict[str, Any]] = []
+        for job in live:
+            st: _PipeState = job.state
+            ctx = job.context
+            hit = False
+            if st.hyp_ctx is not None and len(ctx) == len(st.hyp_ctx):
+                b = st.hyp_base  # ctx[:b] is the processed prefix the hypothesis was drafted on (append-only)
+                hit = ctx[b:] == st.hyp_ctx[b:]
+            self.stats["hits" if hit else "misses"] += 1
+            if hit:
+                job.out = [t for t in st.hyp_out[: job.k]]
+                cut = next((i for i, t in enumerate(job.out) if not self._ok_token(t)), len(job.out))
+                job.out = job.out[:cut]
+            st.hyp_ctx = None
+            plan.append({"job": job, "hit": hit, "stopped": hit, "base": 0, "first": True})
+        for _ in range(min(m, max(j.k for j in live))):
+            feeds: list[SequenceInput] = []
+            kinds: list[tuple[dict[str, Any], str]] = []
+            for p in plan:
+                job = p["job"]
+                st = job.state
+                if p["stopped"] or len(job.out) >= job.k:  # dummy step on a filler token, rolled back
+                    p["base"] = st.cache.length
+                    feeds.append(SequenceInput(self._din([self._filler()]), st.cache))
+                    kinds.append((p, "dummy"))
+                elif p["first"]:
+                    new = self._catch_up(st, job.context)
+                    feeds.append(SequenceInput(self._din(new), st.cache))
+                    kinds.append((p, "real"))
+                    p["first"] = False
+                else:
+                    last = int(job.out[-1])
+                    st.fed.append(last)
+                    feeds.append(SequenceInput(self._din([last]), st.cache))
+                    kinds.append((p, "real"))
+            outs = self.model.forward_batch(feeds)
+            self.stats["steps"] += 1
+            for (p, kind), lg in zip(kinds, outs, strict=True):
+                st = p["job"].state
+                tok = int(torch.argmax(lg))
+                if kind == "dummy":
+                    st.cache.truncate(p["base"])
+                    continue
+                if not self._ok_token(tok):
+                    p["stopped"] = True
+                    continue
+                p["job"].out.append(tok)
+
+    # ---- background: k + 1 steps per job, assuming the pass accepts everything -------------------------
+    def _block_safe(self, blocks: list[tuple[_PipeState, list[int], list[int], int]]) -> None:
+        t0 = time.perf_counter()
+        try:
+            with self._lock:
+                self._block(blocks)
+        except Exception:  # the next propose sees no hypothesis (a miss); drafts stay proposals only
+            log.warning("draft block failed; model drafts disabled for %d sequence(s)", len(blocks),
+                        exc_info=True)
+            for st, *_ in blocks:
+                self._close_now(st)
+        finally:
+            self.stats["bg_ms"] += (time.perf_counter() - t0) * 1e3
+
+    def _block(self, blocks: list[tuple[_PipeState, list[int], list[int], int]]) -> None:
+        steps = max(k for *_, k in blocks) + 1
+        plan = []
+        for st, ctx, out, k in blocks:
+            plan.append({"st": st, "ctx": ctx, "out": out, "k": k, "hyp": [], "stopped": False, "base": 0,
+                         "first": True})
+        for t in range(steps):
+            feeds: list[SequenceInput] = []
+            kinds: list[tuple[dict[str, Any], str]] = []
+            for p in plan:
+                st = p["st"]
+                if t > p["k"]:
+                    continue
+                if p["stopped"]:
+                    p["base"] = st.cache.length
+                    feeds.append(SequenceInput(self._din([self._filler()]), st.cache))
+                    kinds.append((p, "dummy"))
+                elif p["first"]:  # the context and this pass's drafts, as if all accepted
+                    new = self._catch_up(st, p["ctx"] + p["out"])
+                    feeds.append(SequenceInput(self._din(new), st.cache))
+                    kinds.append((p, "real"))
+                    p["first"] = False
+                else:
+                    last = int(p["hyp"][-1])
+                    st.fed.append(last)
+                    feeds.append(SequenceInput(self._din([last]), st.cache))
+                    kinds.append((p, "real"))
+            if not feeds:
+                break
+            outs = self.model.forward_batch(feeds)
+            self.stats["bg_steps"] += 1
+            for (p, kind), lg in zip(kinds, outs, strict=True):
+                tok = int(torch.argmax(lg))
+                if kind == "dummy":
+                    p["st"].cache.truncate(p["base"])
+                    continue
+                if not self._ok_token(tok):
+                    p["stopped"] = True
+                    continue
+                p["hyp"].append(tok)  # hyp[0] = the guess for the bonus token, then the k drafts after it
+                if len(p["hyp"]) > p["k"]:
+                    p["stopped"] = True
+        for p in plan:
+            st = p["st"]
+            if len(p["hyp"]) >= 1:
+                st.hyp_ctx = p["ctx"] + p["out"] + [p["hyp"][0]]
+                st.hyp_out = p["hyp"][1:]
+                st.hyp_base = max(0, len(p["ctx"]) - 1)
+            else:
+                st.hyp_ctx = None
+                st.hyp_out = []
 
 
 class _ConvGate:

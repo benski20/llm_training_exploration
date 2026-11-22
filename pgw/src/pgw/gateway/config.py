@@ -44,6 +44,7 @@ SETUP_MODEL_OPTION_KEYS: frozenset[str] = frozenset({
     "spec_rows", "spec_strict_passes", "spec_mask_rows", "spec_mask_credit", "spec_lookup", "spec_lookup_min_n",
     "spec_tokens", "inline_max_rows",
     "batch_lm_head", "engine_pingpong", "max_concurrent_sessions", "draft_pack_path", "draft_device",
+    "draft_backend", "spec_pipeline_steps",
 })
 #: Draft sources among the presets: a preset that enables one must also enable strict fixed-row speculation
 #: (``spec_rows`` + ``spec_strict_passes``), so a deployment preset can never switch on the variable-row mode,
@@ -170,6 +171,22 @@ class GatewayModelConfig(BaseModel):
         "proposal is always spec_tokens long: a shorter match is completed by the draft model, or dropped",
     )
     draft_device: str | None = Field(None, description="Device of the draft model (default: the model's device)")
+    draft_backend: Literal["auto", "native_int8", "torch_int8", "float"] = Field(
+        "auto", description="CPU draft model kernels: 'auto' (default, today's choice: torch weight-only int8 when "
+        "it measures faster than float32, else float32); 'native_int8' = the native exact local-linear kernel "
+        "(pgw_fast.local_linear_into: int8 weights, 1 byte per weight resident, columns over the native pool's "
+        "cores; the draft's int8 head too), measured 3-5x faster than torch int8 on a 4-vCPU Xeon; 'torch_int8'; "
+        "'float'. Drafts are proposals only: outputs are unchanged by this setting",
+    )
+    spec_pipeline_steps: int | None = Field(
+        None, ge=0, le=7, description="Strict speculation with a draft model (spec_rows, draft_pack_path, no "
+        "spec_lookup): draft the next pass's block in a background thread while the current pass's trips are in "
+        "flight, assuming every draft is accepted and the bonus token is the draft's own guess "
+        "(pgw.engine.generate.PipelinedDrafter). Then exactly this many draft steps (m) run between two passes, "
+        "hit or miss (a miss proposes m drafts, the other rows are padding), so the inter-pass gap does not "
+        "depend on the acceptance. 0 = no draft step on the critical path. None (default) = drafting between "
+        "passes (spec_rows - 1 steps)",
+    )
     service_url: str | None = None
     service_token: SecretStr | None = None
     service_token_file: Path | None = Field(
@@ -388,6 +405,12 @@ class GatewayModelConfig(BaseModel):
                 # padding rows are not range-checked (no W r): with sampled checks a provider that corrupts a row
                 # would learn from the (missing) range-check abort whether that row was a real draft
                 raise ValueError(f"model {self.name!r}: spec_mask_rows needs freivalds_rate = 1.0")
+        if self.spec_pipeline_steps is not None:
+            if self.spec_rows is None or self.draft_pack_path is None or self.spec_lookup > 0:
+                raise ValueError(f"model {self.name!r}: spec_pipeline_steps needs spec_rows and draft_pack_path "
+                                 "(and no spec_lookup)")
+            if self.spec_pipeline_steps > self.spec_rows - 1:
+                raise ValueError(f"model {self.name!r}: spec_pipeline_steps must be at most spec_rows - 1")
         if self.spec_mask_credit is not None and self.spec_mask_rows is None:
             raise ValueError(f"model {self.name!r}: spec_mask_credit needs spec_mask_rows")
         if self.speculates and self.device.split(":", 1)[0].strip().lower() != "cpu":
