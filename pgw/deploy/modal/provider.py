@@ -37,7 +37,7 @@ PACK = "/opt/packs/" + MODEL_NAME
 #: Deploy-time choices the container needs at run time. Modal re-imports this file inside the container without
 #: the deploy shell's environment, so MODEL_NAME (hence PACK and the "model" published to the customer) would fall
 #: back to the 0.5B there; the image's environment carries them instead.
-#: Optional name suffix of the apps and the Dict (``PGW_MODAL_NS``): parallel runs from separate checkouts do not collide.
+#: Optional suffix of the app and Dict names (``PGW_MODAL_NS``): parallel runs from other checkouts do not collide.
 NS = os.environ.get("PGW_MODAL_NS", "").strip()
 RUNTIME_ENV = {"PGW_MODAL_MODEL": MODEL_NAME, **({"PGW_MODAL_NS": NS} if NS else {})}
 MAX_LIFETIME_S = 88 * 60  # hard cap (function timeout): nothing outlives 90 minutes

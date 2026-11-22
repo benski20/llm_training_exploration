@@ -10,7 +10,8 @@ gateway instead of the provider. This module runs exactly that, with the product
    ring GEMV (:mod:`pgw.core.triton_gemv`; wrapping unsigned 32-bit arithmetic, so any reduction order gives
    the same bits; gated on its own device self-check). Calls with more rows than the fused kernel serves
    (prompt passes) take the digit-GEMM path :func:`pgw.engine.backends.exact_int_matmul` instead (exact int64
-   product, then its low 32 bits);
+   product, then its low 32 bits), or, with ``PGW_LOCAL_GPU_PREFILL_ROWS=P``, a second captured graph per
+   linear on P-row blocks (two int8 digits, one exact int32 GEMM, ``lo + (hi << 8)`` mod 2^32);
 3. ``pgw_fast.trip_finish_into`` with ``W r = 0`` lifts the centered result, applies the range check and
    rescales (the TripEngine's finish kernel).
 
@@ -97,15 +98,31 @@ class LocalGpuProducts:
         self._zr = np.zeros(r * max_n, dtype=np.int64)  # zero masks (flat: any (rows, n) view is contiguous)
         self._zwr = np.zeros(r * max_m, dtype=np.int64)
         self.stats = {"graph_calls": 0, "eager_calls": 0}
-        #: Prompt passes in blocks of graph replays (``PGW_LOCAL_GPU_BLOCK_ROWS=B``, B one of ``graph_rows``;
-        #: 0 = off, the default): the backend splits a call of more than B rows into B-row blocks, and a
-        #: block of fewer rows replays the smallest larger graph on zero-padded rows. Each output row is
-        #: its own row's exact product (rows are independent), so the bits are those of one call.
+        #: Prompt passes through one more captured graph per linear (``PGW_LOCAL_GPU_PREFILL_ROWS=P``, a multiple
+        #: of 8 from 16; 0 = off, the default): ``[H2D, two balanced int8 digits, one int8 GEMM (cuBLASLt
+        #: _int_mm, int32 accumulation, exact), lo + (hi << 8) mod 2^32, D2H]`` on P rows. The backend splits a
+        #: call of more than P rows into P-row blocks; a shorter block runs on zero-padded rows (the pinned
+        #: input is all zero outside a call, and a zero row's product is zero). Each output row is its own row's
+        #: exact product mod 2^32, the ring GEMV's bits (self-checked per linear like every path here).
         try:
-            blk = int(os.environ.get("PGW_LOCAL_GPU_BLOCK_ROWS", "0") or 0)
+            p_rows = int(os.environ.get("PGW_LOCAL_GPU_PREFILL_ROWS", "0") or 0)
         except ValueError:
-            blk = 0
-        self.prefill_block_rows = blk if blk in self.graph_rows and blk > 1 else 0
+            p_rows = 0
+        if p_rows < 16 or p_rows % 8 or self.a > 15 or max_n > 131_040:
+            p_rows = 0  # digits: |x| < 2^14 keeps the high digit in int8 and every int32 partial sum exact
+        self.prefill_block_rows = p_rows
+        if p_rows:
+            with torch.cuda.device(device):
+                self._hp_in = torch.zeros(p_rows * max_n, dtype=torch.int32, pin_memory=True)
+                self._hp_out = torch.zeros(p_rows * max_m, dtype=torch.int32, pin_memory=True)
+                self._dp_in = torch.zeros(p_rows * max_n, dtype=torch.int32, device=device)
+                self._dp_a8 = torch.zeros(2 * p_rows * max_n, dtype=torch.int8, device=device)
+                self._dp_out = torch.zeros(p_rows * max_m, dtype=torch.int32, device=device)
+            self._pp_in = self._hp_in.numpy().view(np.uint8)
+            self._pp_out = self._hp_out.numpy().view(np.uint8)
+            self._pzr = np.zeros(p_rows * max_n, dtype=np.int64)
+            self._pzwr = np.zeros(p_rows * max_m, dtype=np.int64)
+        self.stats["prefill_calls"] = 0
 
     def add(self, key: str, w8: torch.Tensor) -> None:
         """Upload ``w8`` (int8 ``(m, n)``, any device) and capture its graphs. Call at start-up."""
@@ -138,9 +155,46 @@ class LocalGpuProducts:
                 with torch.cuda.graph(g, pool=self._pool, stream=stream, capture_error_mode="thread_local"):
                     body()
                 lin.graphs[rows] = g
+            if self.prefill_block_rows and n % 32 == 0 and m % 32 == 0:
+                try:
+                    lin.graphs[-1] = self._capture_prefill(w, n, m)
+                except Exception as exc:  # the prompt-block graphs are an option: eager prompt products instead
+                    log.warning("local GPU prompt graphs off (%s: %s)", type(exc).__name__, str(exc)[:200])
+                    self.prefill_block_rows = 0
         self._h_in.zero_()
         self._h_out.zero_()
         self._lin[key] = lin
+
+    def _capture_prefill(self, w: torch.Tensor, n: int, m: int) -> Any:
+        """The prompt-block graph of one linear (see :attr:`prefill_block_rows`)."""
+        p = self.prefill_block_rows
+        d_in = self._dp_in[: p * n].view(p, n)
+        h_in = self._hp_in[: p * n].view(p, n)
+        a8 = self._dp_a8[: 2 * p * n].view(2 * p, n)
+        d_out = self._dp_out[: p * m].view(p, m)
+        h_out = self._hp_out[: p * m].view(p, m)
+        wt = w[:m, :n].t()  # column-major view of the (m, n) weight (n and m: multiples of 32, so no padding)
+
+        def body() -> None:
+            d_in.copy_(h_in, non_blocking=True)
+            lo = ((d_in + 128) & 255) - 128
+            a8[:p].copy_(lo)
+            a8[p:].copy_((d_in - lo) >> 8)
+            y = torch._int_mm(a8, wt)  # (2p, m) int32: exact (|digit| <= 128, n <= 131040)
+            torch.add(y[:p], torch.bitwise_left_shift(y[p:], 8), out=d_out)  # mod 2^32 (int32 wraps)
+            h_out.copy_(d_out, non_blocking=True)
+
+        stream = self._stream
+        stream.wait_stream(torch.cuda.current_stream(self.device))
+        with torch.cuda.stream(stream):
+            body()
+        stream.synchronize()
+        g = torch.cuda.CUDAGraph()
+        with torch.cuda.graph(g, pool=self._pool, stream=stream, capture_error_mode="thread_local"):
+            body()
+        self._hp_in.zero_()
+        self._hp_out.zero_()
+        return g
 
     def has(self, key: str) -> bool:
         return key in self._lin
@@ -157,14 +211,15 @@ class LocalGpuProducts:
         with self._lock:
             zr, zwr = self._zeros(rows, n, m)
             g = lin.graphs.get(rows)
-            g_rows = rows
-            if g is None and self.prefill_block_rows and rows < self.prefill_block_rows:
-                # a short block of a prompt pass: the smallest larger graph, its extra rows zero (the pinned
-                # input is all zero outside a call, and a zero row's product is zero)
-                g_rows = min(r for r in self.graph_rows if r > rows)
-                g = lin.graphs.get(g_rows)
+            pin_in_all, pin_out_all, g_rows = self._pin_in, self._pin_out, rows
+            if g is None and 1 < rows <= self.prefill_block_rows and -1 in lin.graphs:
+                # a prompt block: the digit-GEMM graph on P rows, the rows past ``rows`` zero
+                g, g_rows = lin.graphs[-1], self.prefill_block_rows
+                pin_in_all, pin_out_all = self._pp_in, self._pp_out
+                zr, zwr = self._pzr[: rows * n].reshape(rows, n), self._pzwr[: rows * m].reshape(rows, m)
+                self.stats["prefill_calls"] += 1
             if g is not None:
-                pin_in, pin_out = self._pin_in[: rows * n * 4], self._pin_out[: rows * m * 4]
+                pin_in, pin_out = pin_in_all[: rows * n * 4], pin_out_all[: rows * m * 4]
                 try:
                     _fast.trip_prepare_into(xf, zr, k, a, cap, wnorm, pin_in, sx)
                     ev = self._event
@@ -185,7 +240,7 @@ class LocalGpuProducts:
                     status, _ = _fast.trip_finish_into(pin_out, zwr, sx, scale, bias, k, bound, out)
                 finally:
                     pin_in.fill(0)
-                    self._pin_out[: g_rows * m * 4].fill(0)
+                    pin_out_all[: g_rows * m * 4].fill(0)
                 self.stats["graph_calls"] += 1
                 return int(status)
             # more rows than a graph serves (prompt passes): the same three steps without a graph

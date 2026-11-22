@@ -66,7 +66,7 @@ DRAFT = os.environ.get("PGW_MODAL_DRAFT", "0") == "1"
 DRAFT_REPO, DRAFT_REVISION = "Qwen/Qwen2.5-0.5B-Instruct", "7ae557604adf67be50417f59c2c2f167def9a775"
 DRAFT_PACK = "/opt/packs/draft"  # = pgw_modal_boot.DRAFT_PACK
 MAX_LIFETIME_S = 88 * 60  # hard cap (function timeout): nothing outlives 90 minutes
-#: Optional name suffix of the apps and the Dict (``PGW_MODAL_NS``): parallel runs from separate checkouts do not collide.
+#: Optional suffix of the app and Dict names (``PGW_MODAL_NS``): parallel runs from other checkouts do not collide.
 NS = os.environ.get("PGW_MODAL_NS", "").strip()
 DICT_NAME = "pgw-live" + NS
 REGION = os.environ.get("PGW_MODAL_REGION", "us-east") or None

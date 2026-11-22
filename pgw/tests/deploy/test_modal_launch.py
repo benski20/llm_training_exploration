@@ -645,6 +645,9 @@ def test_colocated_gateway_env_skips_only_fixed_local_kinds() -> None:
     assert boot.colocated_gateway_env("attention")["PGW_FACTORY_SKIP_LINEAR_KINDS"] == "qkv,o"
     for mode in ("auto", "auto_kinds", "off"):  # decided at start-up or nothing local: every linear's masks
         assert "PGW_FACTORY_SKIP_LINEAR_KINDS" not in boot.colocated_gateway_env(mode)
+    env = boot.colocated_gateway_env("attention_down")  # prompt-pass settings of the co-located demo
+    assert env["PGW_PROMPT_PREFETCH"] == "1" and env["PGW_PIPELINE_BLOCKS"] == "1"
+    assert boot.GATEWAY_GPU_FACTORY_ENV["PGW_LOCAL_GPU_PREFILL_ROWS"] == "64"
     with pytest.raises(ValueError):
         boot.checked_env({"LD_PRELOAD": "x"})
     assert boot.checked_env({"PGW_X": 1}) == {"PGW_X": "1"}

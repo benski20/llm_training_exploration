@@ -297,7 +297,9 @@ def test_prompt_prefetch_is_byte_identical(twin: Any, tiny_pack: Any, wait: bool
         outs.append(asyncio.run(gen.agenerate(prompt, params, session=res)))
     assert outs[0].token_ids == outs[1].token_ids
     assert outs[0].logprobs == outs[1].logprobs
-    assert ca.items == cb.items  # the provider sees exactly the same bytes
+    # the provider sees exactly the same bytes (sorted: the halves of a pipelined prompt trip are sent
+    # concurrently, so the recording order of those two items may differ between runs)
+    assert sorted(ca.items) == sorted(cb.items) and len(ca.items) == len(cb.items)
     assert staged and set(staged) == {len(prompt)}  # prompt rows only (a public count), never decode rows
     assert bb.wait_prefetch(10.0) and bb.prefetched_rows > 0
     for key in sessions[0].linear_keys:

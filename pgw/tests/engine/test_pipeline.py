@@ -61,3 +61,4 @@ def test_prefill_profile_records_prompt_pass_only(qwen_pack: InMemoryPack) -> No
     assert prof["passes"] == 1 and prof["last"]["rows"] == len(ids)
     assert prof["last"]["pass_ms"] > 0 and prof["last"]["trips"] == 4 * qwen_pack.arch.num_layers
     assert "take_ms" in prof["last"] and "_take" not in vars(masked.backend)
+

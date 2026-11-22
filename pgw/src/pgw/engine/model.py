@@ -27,6 +27,7 @@ import asyncio
 import contextlib
 import ctypes
 import functools
+import itertools
 import logging
 import os
 import threading
@@ -1402,7 +1403,7 @@ class TransformerModel:
             lids = self.schedule.linears(self, layer) if self.schedule is not None else self._lids[layer]
             order.extend(lid for lid in lids if not (local_ok and is_local(lid)))
         nxt: dict[Any, Any] = {None: order[0]} if order else {}
-        for a, b in zip(order, order[1:]):
+        for a, b in itertools.pairwise(order):
             nxt[a] = b
         return nxt
 
@@ -1536,14 +1537,20 @@ class TransformerModel:
                     tasks: list[asyncio.Future[Any]] = []
                     try:
                         for blk in parts:  # mask block j+1 while the service computes block j
+                            ts = time.perf_counter()
                             p = await self.run_plain(prepare, blk)
+                            acc("hop_ms", ts)
                             preps.append(p)
                             tasks.append(asyncio.ensure_future(backend.send_prepared(p)))
                         self._prompt_prefetch_kick(backend, plan, calls)  # after this linear's last take
                         got: list[list[torch.Tensor]] = [[] for _ in calls]
                         for j in range(len(parts) - 1):  # verify block j while later blocks compute
+                            ts = time.perf_counter()
                             r, s = await tasks[j]
+                            acc("block_wait_ms", ts)
+                            ts = time.perf_counter()
                             y = await self.run_plain(finish, preps[j], r, s)
+                            acc("hop_ms", ts)
                             for pos, part in zip(where[j], y, strict=True):
                                 got[pos].append(part)
                         ts = time.perf_counter()
@@ -1557,7 +1564,9 @@ class TransformerModel:
                     if prof is not None:
                         prof["trips"] = prof.get("trips", 0.0) + 1
                         prof["pipelined_trips"] = prof.get("pipelined_trips", 0.0) + 1
+                    ts = time.perf_counter()
                     finished, out = await self.run_plain(hop, preps[-1], rl, sl, (got, where[-1]))
+                    acc("hop_ms", ts)
                     continue
                 prep = out
                 ts = time.perf_counter()
@@ -1570,7 +1579,9 @@ class TransformerModel:
                         and rows(getattr(prep, "calls", ())) <= inline_rows):
                     finished, out = hop(prep, response, remote_s, None)  # small: no thread hand-off
                 else:
+                    ts = time.perf_counter()
                     finished, out = await self.run_plain(hop, prep, response, remote_s, None)
+                    acc("hop_ms", ts)
             return out  # type: ignore[no-any-return]
         finally:
             for prep in owned:

@@ -67,7 +67,7 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import trip_gate  # noqa: E402  (no Modal imports; also shipped into the customer image)
 
-#: Optional name suffix of the apps and the Dict (``PGW_MODAL_NS``): parallel runs from separate checkouts do not collide.
+#: Optional suffix of the app and Dict names (``PGW_MODAL_NS``): parallel runs from other checkouts do not collide.
 NS = os.environ.get("PGW_MODAL_NS", "").strip()
 DICT_NAME = "pgw-live" + NS
 APPS = ("pgw-provider" + NS, "pgw-customer" + NS)

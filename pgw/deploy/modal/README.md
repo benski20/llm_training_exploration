@@ -304,6 +304,44 @@ The GPU halves the local linears in isolation (`benchmarks/local_gpu_bench.py`, 
 local linears take about 10 ms per token either way (the CUDA sync of 72 calls per token under load); the GPU
 mainly frees about 2.5 gateway cores. Time to first token is 0.5-1.1 s per chat (about 15% of a 64-token chat).
 
+### Prompt pass (time to first token), 2026-11-22
+
+`PGW_PREFILL_PROFILE=1` (gateway, off by default) adds `speed.prefill_profile` to `/admin/status` (so to the
+e2e's `speed`): wall time per part of the last prompt passes (local linears, mask takes, prepare, finish, plaintext
+steps, waits for the service, thread hops), gateway-local only. The co-located demo now also sets (all exact; the
+library defaults stay off; `--gateway-env KEY=0` turns one off):
+
+* `PGW_PROMPT_PREFETCH=1`: a prompt pass stages the next remote linear's mask rows on the prefetch thread while the
+  current trip and the local work in between run (`MaskedBackend.prefetch_prompt`; the same rows in the same order,
+  single-use, owned by the reservation; the count is the prompt's row count, which the provider sees anyway).
+  Mask takes per 41-row pass: about 100 ms to 20-37 ms.
+* `PGW_LOCAL_GPU_PREFILL_ROWS=64` (with `--gateway-gpu`): the T4's fused ring GEMV serves one row only, so prompt
+  rows took the eager digit-GEMM path (many small kernels per call). Now one more captured graph per local linear
+  on 64-row blocks (`[H2D, two int8 digits, one cuBLASLt int8 GEMM with exact int32 sums, lo + (hi << 8) mod 2^32,
+  D2H]`), zero-padded short blocks, self-checked per linear (a 133-row case included). Local linears per pass:
+  about 145 ms to 85 ms.
+* `PGW_PIPELINE_BLOCKS=1`: a prompt round trip goes out as one item of all its rows instead of four overlapping
+  row blocks (a fixed, public split of the public row count: the provider sees one 41-row item per prompt trip
+  instead of four of about 10). The four blocks cost about 200 ms of extra gateway hops and the service answers
+  small multi-row items no faster.
+
+Measured (T4:2, `--gateway-gpu`, factory capped, 41-token prompt; every run logprobs bit-identical, text equal,
+repeat identical; prompt pass = median of the last 6 passes, ms):
+
+| config | prompt pass | local | takes | service wait | warm chat | back to back |
+|---|---|---|---|---|---|---|
+| before | 880 (541-904) | 145 | 100-121 | 66-460 | 11.7 | 13.8 |
+| prompt prefetch | 700 (515-907) | 145 | 32-69 | 67-449 | 13.2 | 13.3 |
+| + GPU prompt graphs + one item per trip | 550 (452-761) | 82-89 | 19-74 | 212-523 | 12.6 | 14.0 |
+| + GPU prompt graphs, four blocks | 800 (572-852) | 85-96 | 34-74 | 53-431 | 11.8 | 13.2 |
+
+What is left of a prompt pass is mostly the service's answers to multi-row items (200-500 ms for 24 trips,
+host-dependent: the provider's T4 has no fused multi-row kernel and the replies take the Python stream channel)
+and the gateway's plaintext steps (about 75 ms). Tried and dropped: prompt trips in blocks of at most 8 rows over
+the native trip lane (`ineligible:rows` otherwise): the lane took them, but each 7-row block cost about 5 ms on
+the provider (720-820 ms per pass), and sending them concurrently broke the lane (one `RuntimeError`, then the
+lane was off for the rest of the run).
+
 ## Trip latency and the `--max-trip-ms` gate
 
 `--e2e` now also reports the gateway's **client-reported round-trip latency** (`trip_latency` in the

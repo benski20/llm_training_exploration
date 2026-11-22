@@ -39,7 +39,7 @@ HERE = Path(__file__).resolve().parent
 # Inside the container this file is /root/<name>.py and the source tree is not there (nor needed).
 PGW = HERE.parents[1] if modal.is_local() else Path("/opt/pgw-src")
 MAX_LIFETIME_S = 88 * 60  # hard cap (function timeout): nothing outlives 90 minutes
-#: Optional name suffix of the apps and the Dict (``PGW_MODAL_NS``): parallel runs from separate checkouts do not collide.
+#: Optional suffix of the app and Dict names (``PGW_MODAL_NS``): parallel runs from other checkouts do not collide.
 NS = os.environ.get("PGW_MODAL_NS", "").strip()
 DICT_NAME = "pgw-live" + NS
 # Both parties in one region: every token makes ~100 sequential round trips between them, so a

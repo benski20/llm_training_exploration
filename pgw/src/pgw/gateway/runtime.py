@@ -989,6 +989,12 @@ class ModelRuntime:
             # the TripEngine prepares/finishes each prefill block on its native pool: quarters overlap better
             # than halves (rows are independent and masks are taken in row order: same bits)
             self.model.pipeline_blocks = max(2, int(getattr(self.backend, "pipeline_blocks", 2)))
+        pb = os.environ.get("PGW_PIPELINE_BLOCKS", "").strip()
+        if pb.isdigit() and int(pb) >= 1:  # prompt trips: blocks per round trip (1 = no split; a public, fixed setting)
+            if int(pb) == 1:
+                self.model.pipeline_min_rows = 0
+            else:
+                self.model.pipeline_blocks = int(pb)
         if c.lane != "off" and os.environ.get("PGW_SYNC_DECODE", "").strip() == "":
             # decode passes on the plaintext thread when the backend says a trip is fast (lane + TripEngine)
             self.model.sync_decode = True
