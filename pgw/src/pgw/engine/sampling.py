@@ -181,8 +181,10 @@ class Sampler:
         if logits.ndim != 1:
             raise ValueError(f"logits must be 1-D, got shape {tuple(logits.shape)}")
         raw = logits.detach().to(torch.float32).cpu()
-        work = self._penalize(raw.clone(), generated)
         p = self.params
+        # penalties write into a copy; without them nothing below writes into ``raw`` (no 0.6 MB clone)
+        penalized = p.repetition_penalty != 1.0 or bool((p.presence_penalty or p.frequency_penalty) and generated)
+        work = self._penalize(raw.clone(), generated) if penalized else raw
         if p.greedy:
             token = fast_argmax(work)
         else:

@@ -8,6 +8,7 @@ identical segments (same seeds), so the same reservations exist in both; every r
 from __future__ import annotations
 
 import dataclasses
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -40,8 +41,10 @@ class RecordingClient:
     def __init__(self, pack: Any):
         self.inner = LocalComputeClient(pack)
         self.items: list[tuple[str, int, bytes]] = []
+        self.ids: list[str] = []
 
     def compute_sync(self, request: Any) -> Any:
+        self.ids.append(request.request_id)
         self.items.extend((it.linear, it.rows, bytes(it.x_hat)) for it in request.items)
         return self.inner.compute_sync(request)
 
@@ -152,6 +155,42 @@ def test_single_stream_decode_does_not_prefetch(twin: Any, tiny_pack: Any) -> No
     assert bb.wait_prefetch(5.0)
     assert bb.prefetched_rows == 0 and bb._prefetch_pool is None and not res._stage
     res.close()
+
+
+@native_many
+@pytest.mark.parametrize("wait", [True, False], ids=["staged", "racing"])
+def test_single_session_decode_prefetch_is_byte_identical(twin: Any, tiny_pack: Any, wait: bool) -> None:
+    """L2: with ``prefetch_decode`` (default with synchronous trips) one session's 1-row decode stages its next
+    rows in the background: same payloads, outputs and consumption as no prefetch, across extent ends,
+    whether the stage is ready (``staged``) or still running when the next take comes (``racing``)."""
+    sa, sb = twin
+    tok = ChatTokenizer.from_pack(tiny_pack)
+    ca, cb = RecordingClient(tiny_pack), RecordingClient(tiny_pack)
+    ba = _backend(tiny_pack, ca, mask_prefetch=False)
+    bb = _backend(tiny_pack, cb)
+    assert not bb.prefetch_decode  # off without a synchronous-trip client
+    bb.prefetch_decode = True
+    if wait:
+        bb = _waiting(bb)
+    params = SamplingParams(max_tokens=24, temperature=0, ignore_eos=True)
+    prompt = [256, 72, 105, 33]
+    outs, sessions = [], []
+    for store, backend in ((sa, ba), (sb, bb)):
+        res = store.reserve(tiny_pack.fingerprint, RING, 40)
+        sessions.append(res)
+        outs.append(Generator(TransformerModel(tiny_pack, backend), tok).generate(prompt, params, session=res))
+    assert outs[0].token_ids == outs[1].token_ids
+    assert outs[0].logprobs == outs[1].logprobs
+    assert ca.items == cb.items  # the provider sees exactly the same bytes
+    # request ids are uuid4 on every path (filler-only trips use uuid4 too): no per-path id format
+    assert ca.ids and all(uuid.UUID(hex=i).version == 4 and uuid.UUID(hex=i).hex == i for i in ca.ids + cb.ids)
+    assert bb.wait_prefetch(10.0) and bb.prefetched_rows > 0
+    for key in sessions[0].linear_keys:
+        assert sessions[0].taken(key) == sessions[1].taken(key)
+    for s in sessions:
+        s.close()
+    assert not sessions[1]._stage
+    bb.close()
 
 
 @native_many

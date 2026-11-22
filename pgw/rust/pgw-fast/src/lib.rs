@@ -10,6 +10,8 @@
 //! | [`store`] | `MaskReservation.take`: decrypt `W r` chunks, derive `r` |
 //! | [`bitpack`] | `pgw.hemask.wire.pack_bits` / `unpack_bits` around maskgen requests (fused modulus switch, reply shift) |
 //! | [`writer`] | `SegmentWriter.write_linear` / `RawSegmentWriter.write_chunk`: pack, AES-256-GCM, `pwrite` (Unix only) |
+//! | [`local`] | `MaskedBackend._local_fast`: exact local linear (quantize, int8 GEMV, range check, rescale) for `local_linears` |
+//! | [`noise`] | `OutboundNoiseMonitor.guard_packed`: duplicate-row fingerprints of a packed payload |
 //! | [`lmhead`] | `h @ lm_head^T` (float32, several rows per pass over the head, fixed summation order; same bits as `pgw.engine.lm_head.lm_head_reference`) |
 //! | [`lane`] | stub (chat-speed WP-A3): native trip lane client; registers nothing yet |
 //! | [`lane_service`] | chat-speed WP-A1: Python bindings of the service trip lane (`rust/pgw-lane`): `LaneService`, `LaneDeviceLock` |
@@ -30,6 +32,8 @@ pub mod lane;
 pub mod lane_service;
 pub mod layer;
 pub mod lmhead;
+pub mod local;
+pub mod noise;
 pub mod prepare;
 pub mod store;
 pub mod trip;
@@ -54,6 +58,8 @@ fn pgw_fast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     lane_service::register(m)?;
     layer::register(m)?;
     lmhead::register(m)?;
+    local::register(m)?;
+    noise::register(m)?;
     prepare::register(m)?;
     store::register(m)?;
     trip::register(m)?;
