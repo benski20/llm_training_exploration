@@ -449,7 +449,7 @@ JOBS: dict[str, dict] = {
     "pgw-spec-accept": {"exclude": ["scripts", "tests", "docs", "research", "console", "SPEC.md", "INTERFACE_NOTES.md",
                                     "STATUS.md", "benchmarks/gpu_validate.py", "benchmarks/profile_token.py",
                                     "benchmarks/results"],
-                               "steps": [
+                        "steps": [
         BUILD_NATIVE,
         {"kind": "shell", "name": "cpu_info", "cmd": "lscpu; nproc; nvidia-smi || true", "timeout": 60},
         *[{"kind": "shell", "name": f"pack_{tag}", "required": True,
