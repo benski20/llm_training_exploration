@@ -92,12 +92,17 @@ and, indirectly, the mask factory's demand (encrypted maskgen requests to the pr
    answer. **Fixed** by a fixed-structure path for padded and dummy calls (`MaskedBackend._prepare_fixed` /
    `_finish_fixed`): one `trip_prepare_into` over all R rows (padding rows: zero activations, fresh ChaCha `r`),
    one Freivalds pass over all R rows, one finish of the real rows and one of the padding rows (together R rows,
-   the padding verdict dropped); padding rows also copy and wipe a `W r`-sized row like a take, and a call without
-   real rows does a one-row ballast standing in for the take's fixed cost. In pad mode every decode call of the
-   session takes this path, 1-row passes included, so real and dummy passes run the same code. Residual: within
-   3% per call here; a real store's take (decrypting `W r` from a segment or copying it out of the mask ring) costs
-   more per real row than this bench's reservation, so the residual must be re-measured with the real store (the
-   GPU runs in section 7 report per-trip timings). The path needs the native trip kernels
+   the padding verdict dropped); padding rows also copy and wipe a `W r`-sized row like a take. A dummy call
+   takes ONE mask row from the store (zero activations, result discarded; review fix): the public schedule always
+   leaves that slot (every pass charges at least one and dummy passes come after the real ones), so it costs the
+   factory nothing, and every call, real or dummy, makes the same store take (the earlier one-row ballast left a
+   dummy call 18 us / 3% cheaper per call, about 0.9 ms per pass, enough to count real passes over many
+   answers). In pad mode every decode call of the session takes this path, 1-row passes included, so real and
+   dummy passes run the same code. Residual: the per-row cost of a store take versus a padding row (1 real + 3
+   padding vs 4 real: padding rows about 3% slower per call here, ~12 us of ~420 us on the 0.5B down linear; dummy vs 1 real + 3 padding within 0.5%), which tracks how many drafts a pass carries; a real store's take
+   (decrypting `W r` from a segment or copying it out of the mask ring) may cost more per real row than this
+   bench's reservation, so it must be re-measured with the real store (the GPU runs in section 7 report
+   per-trip timings). The path needs the native trip kernels
    (`supports_fixed_pad`); without them pad mode is refused.
 5. **Mask store behaviour.** `WindowedReservation` extended on demand (`ensure`) and reserved the next window in the
    background once few rows were left, and retired exhausted parts at step starts: all three track the masks

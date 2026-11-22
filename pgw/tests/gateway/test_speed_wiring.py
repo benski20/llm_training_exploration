@@ -447,6 +447,8 @@ def test_phase_a_settings_are_no_longer_pending() -> None:
     ({"spec_rows": 3, "spec_strict_passes": True, "spec_lookup": 3, "spec_mask_rows": 4}, "at most spec_rows"),
     ({"spec_rows": 3, "spec_strict_passes": True, "spec_lookup": 3, "spec_mask_credit": 4}, "needs spec_mask_rows"),
     ({"spec_rows": 3, "spec_strict_passes": True, "spec_lookup": 3, "spec_mask_rows": 0.5}, "greater than or equal"),
+    ({"spec_rows": 3, "spec_strict_passes": True, "spec_lookup": 3, "spec_mask_rows": 2, "freivalds_rate": 0.5},
+     "freivalds_rate = 1.0"),
     ({"lane": "tcp"}, "lane"),
     ({"lane": "auto", "mode": "plain", "service_url": None}, "lane needs masked mode"),
     ({"local_linears": "always"}, "local_linears"),

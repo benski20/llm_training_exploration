@@ -244,7 +244,19 @@ def test_dummy_call_is_checked(qwen_pack: InMemoryPack) -> None:
     res = LocalMaskReservation(qwen_pack, DEFAULT_RING, 4)
     with pytest.raises(IntegrityError):
         be.forward(LinearCall(lid, torch.randn(3, n), res, {DUMMY: True}))
-    assert res.remaining(lid) == 4  # still mask-free
+    assert res.remaining(lid) == 3  # one row taken, like the pending token's row of a real call
+
+
+def test_dummy_call_takes_one_row_and_returns_zeros(qwen_pack: InMemoryPack) -> None:
+    """A dummy call runs a real call's store take (one row, zero activations: the per-call take cost must not
+    tell dummy passes from real ones) and its result is zeros; the slot is one the public schedule charged."""
+    lid = LinearId(0, LinearKind.QKV)
+    n = int(qwen_pack.load_linear(lid).w8.shape[1])
+    be = MaskedBackend(qwen_pack, None, LocalComputeClient(qwen_pack), DEFAULT_RING, qwen_pack.fingerprint)
+    res = LocalMaskReservation(qwen_pack, DEFAULT_RING, 4)
+    y = be.forward(LinearCall(lid, torch.randn(3, n), res, {DUMMY: True}))
+    assert res.remaining(lid) == 3
+    assert y.shape[0] == 3 and not bool(y.any())
 
 
 def test_split_blocks_pads_by_wire_rows() -> None:

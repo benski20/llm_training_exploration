@@ -1422,6 +1422,8 @@ class Generator:
         rows = st.rows
         base = st.cache.length - rows
         st.masks += rows - st.pad
+        if st.dummy and self._pad_ok and bool(getattr(getattr(self.model, "backend", None), "dummy_takes_row", False)):
+            st.masks += 1  # the backend takes one mask row per dummy call (a real call's take; charged slot)
         stats["fill_rows"] += len(st.fill)
         stats["pad_rows"] += st.pad
         if st.dummy:  # no output; the cache goes back to where it was

@@ -621,6 +621,7 @@ class _FixedItem:
     sx: np.ndarray  # float64 (rows,)
     wr: np.ndarray  # int64 (rows, m): real rows' W r, zeros for padding rows
     parts: list[tuple[int, Any, Any]]  # (rows, u, uw) per extent of the real rows (u None: unchecked)
+    dummy: bool = False  # a dummy call: its one taken row (``real``) carries zero activations; result zeros
 
     def wipe(self) -> None:
         self.wr.fill(0)
@@ -1798,6 +1799,12 @@ class MaskedBackend(LinearBackend):
         return ok
 
     @property
+    def dummy_takes_row(self) -> bool:
+        """A dummy call takes one mask row (zero activations) on the fixed-structure path, so its store take
+        matches a real call's (L3 timing); the public charge schedule always holds that slot."""
+        return self.fixed_pad
+
+    @property
     def supports_fixed_pad(self) -> bool:
         """Engine hook (``TransformerModel.supports_pad_rows``): padding rows cost the same gateway work as real
         rows here, so strict padded speculation may use this backend."""
@@ -1826,18 +1833,31 @@ class MaskedBackend(LinearBackend):
         xs: dict[int, np.ndarray] = {}
         for i in fixed_idx:
             c = calls[i]
-            if not _is_dummy(c) and int(c.x.shape[0]):
-                xn = c.x.detach().to("cpu", torch.float32).numpy()
+            dummy = _is_dummy(c)
+            if dummy:
+                # a dummy call takes ONE mask row (zero activations), like the pending token's row of a real
+                # call: the per-call store take then happens on every call, real or dummy (L3 timing). The
+                # public charge schedule always leaves this row (each pass charges >= 1 slot and dummy passes
+                # come after the real ones), so it costs the factory nothing: the slot is charged either way.
+                need = 1 if int(c.x.shape[0]) + _pad_rows(c) >= 1 and (
+                    c.session is not None or self.mask_source is not None) else 0
+            else:
+                need = int(c.x.shape[0])
+            if need:
+                # the same conversion and finiteness check as a real row (a dummy's row is zeros)
+                xsrc = self._zero_row(metas_all[i].in_features) if dummy else c.x
+                xn = xsrc.detach().to("cpu", torch.float32).numpy()
                 if not np.isfinite(xn).all():
                     raise RingOverflowError("non-finite activation values cannot be quantized")
                 xs[i] = xn
+            if need:
                 res = self._reservation(c)
                 ensure = getattr(res, "ensure", None)
                 if ensure is not None:
-                    ensure(c.id, int(c.x.shape[0]))
-                if int(res.remaining(c.id)) < int(c.x.shape[0]):
+                    ensure(c.id, need)
+                if int(res.remaining(c.id)) < need:
                     raise MaskExhaustedError("session mask reservation exhausted",
-                                             details={"linear": c.id.key, "needed": int(c.x.shape[0])})
+                                             details={"linear": c.id.key, "needed": need})
         core = self._prepare_core([calls[i] for i in normal_idx]) if normal_idx else \
             _Prepared([], [], [], [], None, 0.0)
         fixed: list[_FixedItem] = []
@@ -1887,19 +1907,27 @@ class MaskedBackend(LinearBackend):
             for fx in fixed:
                 fx.wipe()
             raise
-        self.stats.add(pad_rows=sum(fx.rows - fx.real for fx in fixed),
+        self.stats.add(pad_rows=sum(fx.rows - (0 if fx.dummy else fx.real) for fx in fixed),
                        dummy_calls=sum(1 for i in fixed_idx if _is_dummy(calls[i])))
         return prep
+
+    def _zero_row(self, n: int) -> torch.Tensor:
+        """A cached ``(1, n)`` float32 zero row: a dummy call's activations (read only)."""
+        cache = self.__dict__.setdefault("_zero_rows", {})
+        z = cache.get(n)
+        if z is None:
+            z = cache[n] = torch.zeros((1, n), dtype=torch.float32)
+        return z
 
     def _fixed_item(self, i: int, c: LinearCall, meta: _MaskedMeta, xn: np.ndarray | None) -> _FixedItem:
         n_in, m = meta.in_features, meta.out_features
         own = int(c.x.shape[0])
-        if _is_dummy(c):
-            real, rows = 0, own + _pad_rows(c)
-        else:
-            real, rows = own, own + _pad_rows(c)
+        dummy = _is_dummy(c)
         lid = c.id
         res = c.session if c.session is not None else self.mask_source
+        rows = own + _pad_rows(c)
+        # a dummy call takes one mask row (zero activations; see _prepare_fixed), so it runs a real call's take
+        real = (1 if rows >= 1 and res is not None else 0) if dummy else own
         check = self._should_check()
         want = check or self.min_soundness_bits > 0
         r_all = np.empty((rows, n_in), dtype=np.int64)
@@ -1921,7 +1949,7 @@ class MaskedBackend(LinearBackend):
                     self._check_soundness(lid, n_in, u, token)
                 parts.append((n, u if check else None, uw if check else None))
                 got += n
-            if not parts:  # no real row: the reservation's current vectors (the same draw and lookup)
+            if not parts:  # no row taken (no reservation): the current vectors (the same draw and lookup)
                 u = uw = None
                 if want and res is not None:
                     try:
@@ -1968,7 +1996,7 @@ class MaskedBackend(LinearBackend):
             raise
         finally:
             r_all.fill(0)
-        return _FixedItem(i, lid, real, rows, own, payload, sx, wr_all, parts)
+        return _FixedItem(i, lid, real, rows, own, payload, sx, wr_all, parts, dummy)
 
     def _finish_fixed(self, fx: _FixedItem, meta: _MaskedMeta, y_hat: Any) -> torch.Tensor:
         """Verify every row (Freivalds against the item's vectors), then unmask + range-check the real rows and
@@ -2021,8 +2049,9 @@ class MaskedBackend(LinearBackend):
                 self._raise_status(int(st_r), 0, fx.lid, r, bound)
         finally:
             fx.wipe()
-        if fx.real == 0:
-            return torch.zeros((fx.out_rows, m), dtype=torch.float32)
+        if fx.real == 0 or fx.dummy:
+            out.fill(0)
+            return torch.from_numpy(np.zeros((fx.out_rows, m), dtype=np.float32))
         return torch.from_numpy(out)
 
     def _filler_checks(self, call: LinearCall) -> tuple[Any, Any] | None:

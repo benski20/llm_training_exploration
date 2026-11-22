@@ -107,7 +107,8 @@ def test_dummy_call(qwen_pack: InMemoryPack, path: str, session: bool) -> None:
     assert torch.equal(y, torch.zeros(4, m)) and y.dtype == torch.float32
     assert client.received[-1][1].shape == (4, n)
     if res is not None:
-        assert res.remaining(QKV) == 8  # mask-free
+        # fixed-structure path (L3): a dummy call takes one mask row like a real call's take; else mask-free
+        assert res.remaining(QKV) == 8 - (1 if be.fixed_pad else 0)
     y = be.forward(LinearCall(QKV, _x(2, n, 2), res, {DUMMY: True, PAD_ROWS: 3}))  # R = 5, result: own rows
     assert y.shape == (2, m) and client.received[-1][1].shape == (5, n)
     assert be.stats.dummy_calls == 2
@@ -128,7 +129,7 @@ def test_mixed_batch(qwen_pack: InMemoryPack, path: str, mode: str) -> None:
     assert torch.equal(out[0], plain.forward(calls[0])) and torch.equal(out[1], plain.forward(calls[1]))
     assert not out[2].any() and out[2].shape[0] == 3 and out[3].shape[0] == 0
     assert [x.shape[0] for _, x in client.received[-4:]] == [4, 1, 3, 3]
-    assert (r1.remaining(QKV), r2.remaining(QKV), r3.remaining(QKV)) == (6, 7, 8)
+    assert (r1.remaining(QKV), r2.remaining(QKV), r3.remaining(QKV)) == (6, 7, 8 - (1 if be.fixed_pad else 0))
 
 
 @pytest.mark.parametrize("path", PATHS)

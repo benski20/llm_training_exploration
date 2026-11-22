@@ -366,10 +366,14 @@ class GatewayModelConfig(BaseModel):
             if self.spec_tokens == 0:
                 raise ValueError(f"model {self.name!r}: spec_rows needs spec_tokens > 0 (0 disables speculation)")
         if self.spec_mask_rows is not None:
-            if self.spec_rows is None:
+            if self.spec_rows is None or not self.spec_strict_passes:
                 raise ValueError(f"model {self.name!r}: spec_mask_rows needs spec_rows and spec_strict_passes")
             if self.spec_mask_rows > self.spec_rows:
                 raise ValueError(f"model {self.name!r}: spec_mask_rows must be at most spec_rows")
+            if self.freivalds_rate < 1.0:
+                # padding rows are not range-checked (no W r): with sampled checks a provider that corrupts a row
+                # would learn from the (missing) range-check abort whether that row was a real draft
+                raise ValueError(f"model {self.name!r}: spec_mask_rows needs freivalds_rate = 1.0")
         if self.spec_mask_credit is not None and self.spec_mask_rows is None:
             raise ValueError(f"model {self.name!r}: spec_mask_credit needs spec_mask_rows")
         if self.speculates and self.device.split(":", 1)[0].strip().lower() != "cpu":

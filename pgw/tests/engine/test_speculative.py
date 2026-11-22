@@ -895,7 +895,7 @@ def test_padding_rows_keep_r_rows_at_mask_exhaustion(qwen_pack: InMemoryPack, ti
     assert all(pad >= 2 for _, pad in model.seen[1:])  # at most C = 2 real rows per pass here (no spare credit)
     if strict:
         assert len(model.seen) == params.max_tokens
-        assert any(pad == 4 for _, pad in model.seen)  # a dummy pass: mask-free
+        assert any(pad == 4 for _, pad in model.seen)  # a dummy pass (this mock backend takes no row for it)
 
 
 def test_fixed_rows_async_streams_identical(qwen_pack: InMemoryPack, other_draft_pack: InMemoryPack,
