@@ -15,6 +15,27 @@ SLA pilot. Three reasons:
 2. The HSM, KMS and TPM integrations have never run against real hardware or cloud services.
 3. There has been no external security audit.
 
+## Update 2026-11-22: mask factory keeps up with back-to-back chats (package S5)
+
+The S4 demo ran out of masks after 130 s of back-to-back chats (HTTP 503 `mask_exhausted`): all-or-nothing yield
+at 1000 slots, refill only below low water 1000, 30 s scheduler poll, 4096-slot segments. Now 302 s of
+back-to-back chats (146 chats, about 51 slots/s consumed) with no exhaustion: the stock settles into a sawtooth
+of about 4100-6300 slots (a 2048-slot segment every 40-45 s, segment-to-segment production 50.6 slots/s),
+streamed decode 31.7 tokens/s token-weighted (median 32.4), every chat exact. Details: `deploy/modal/README.md`,
+"Factory keep-up under back-to-back chats".
+
+- `PGW_FACTORY_YIELD_FULL_SLOTS` / `_PERIOD_S` / `_HORIZON_S` / `_FULL_HORIZON_S` (`pgw.core.factory_yield`;
+  library defaults off = all or nothing as before; co-located demo on): partial yield whose duty cycle grows as the
+  stock falls, never below the stock covering 45 s of observed consumption, full yield when the stock covers 120 s
+  (occasional chats unaffected). Same masks, requests and bytes; the timing depends on decode activity and stock,
+  both of which the provider can already derive from its own trips and maskgen requests.
+- Demo factory sizing: 2048-slot segments, refill below 6144 to 8192, 2 s poll.
+- `--sustain-s` streams every chat, checks all are identical, samples the stock and reports consumption vs the
+  factory's production (`keep_up`); `factory.committed` fixes the empty `segments` list for long segments.
+- Over a window that starts at the top of the sawtooth the factory's committed slots read below consumption
+  (40.9-47.6 vs 49-52 slots/s): the stock starts above its equilibrium; slope -1.1 to -2.2 slots/s. Not done:
+  moving the factory's encryption/decryption to the gateway GPU (lever 3).
+
 ## Update 2026-11-22: decode at 30 ms per token co-located (package S4)
 
 Reached in the co-located demo: 29.9-30.3 ms per decoded token (33 tokens/s after the first, streamed), from 36,

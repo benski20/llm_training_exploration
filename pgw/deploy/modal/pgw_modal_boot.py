@@ -474,11 +474,12 @@ SKIP_KINDS_BY_LOCAL = {"attention": "qkv,o", "attention_down": "qkv,o,down"}
 #: keep-up under back-to-back chats"). The all-or-nothing yield at 1000 slots starved the store after 130 s of
 #: back-to-back chats: the factory made nothing above 1000 slots and a 4096-slot segment could not land below it.
 #: Now: partial yield between 2500 and 6000 slots (the factory's duty cycle grows as the stock falls), no yield
-#: below 45 s of observed consumption, 2048-slot segments (about half the time to land), refill whenever the stock
+#: below 45 s of observed consumption, full yield above 120 s of it (an occasional chat: full yield as before),
+#: 2048-slot segments (about half the time to land), refill whenever the stock
 #: is below 6144 (to 8192) and a 2 s scheduler poll (was 30 s: up to 30 s of no production after a drain started).
 COLOCATED_FACTORY_KEEP_UP = {
     "PGW_FACTORY_YIELD_MIN_SLOTS": "2500", "PGW_FACTORY_YIELD_FULL_SLOTS": "6000",
-    "PGW_FACTORY_YIELD_HORIZON_S": "45", "PGW_FACTORY_YIELD_PERIOD_S": "3",
+    "PGW_FACTORY_YIELD_HORIZON_S": "45", "PGW_FACTORY_YIELD_PERIOD_S": "3", "PGW_FACTORY_YIELD_FULL_HORIZON_S": "120",
     "PGW_FACTORY_SEGMENT_SLOTS": "2048", "PGW_FACTORY_LOW_WATER_SLOTS": "6144", "PGW_FACTORY_TARGET_SLOTS": "8192",
     "PGW_FACTORY_POLL_INTERVAL_S": "2",
 }
@@ -649,9 +650,26 @@ def keep_up(sustain: dict[str, Any], factory: dict[str, Any]) -> dict[str, Any]:
                if series[0][0] <= x["end_offset_s"] <= series[-1][0] + 0.5)
     cons = (s0 + prod - s1) / span
     half = [x for x in series if x[0] >= series[-1][0] / 2]
+    # Production lands in whole segments, so over a window it is quantized (one 2048-slot segment = 13.6 slots/s
+    # over 150 s). Also reported: the rate between the window's first and last commit (whole segment periods)
+    # and the stock's least-squares slope (slots/s; about 0 when the factory keeps up in steady state).
+    ends = sorted(float(x["end_offset_s"]) for x in factory.get("committed") or []
+                  if series[0][0] <= x["end_offset_s"] <= series[-1][0] + 0.5)
+    c2c = None
+    if len(ends) >= 2:
+        slots_after = sum(int(x["slots"]) for x in factory.get("committed") or []
+                          if ends[0] < x["end_offset_s"] <= ends[-1])
+        c2c = round(slots_after / max(1e-9, ends[-1] - ends[0]), 2)
+    n = len(series)
+    mx = sum(x[0] for x in series) / n
+    my = sum(x[1] for x in series) / n
+    sxx = sum((x[0] - mx) ** 2 for x in series)
+    slope = sum((x[0] - mx) * (x[1] - my) for x in series) / sxx if sxx else None
     return {"consumption_slots_per_s": round(cons, 2), "production_slots_per_s": round(prod / span, 2),
             "produced_slots": prod, "stock_start": s0, "stock_end": s1, "stock_min": sustain.get("stock_min"),
             "stock_second_half_change": (half[-1][1] - half[0][1]) if len(half) >= 2 else None,
+            "production_commit_to_commit_slots_per_s": c2c,
+            "stock_slope_slots_per_s": None if slope is None else round(slope, 2),
             "keeps_up": prod / span >= cons or s1 >= s0}
 
 

@@ -538,6 +538,63 @@ decode demand during continuous chatting, and full speed otherwise. Local linear
 about 79 µs per call (factory paused or not): that part is not contention. The lane client's Python per trip is
 7 µs (`LaneComputeClient.compute_into` with an instant fake channel), not worth trimming.
 
+### Factory keep-up under back-to-back chats (2026-11-22, package S5)
+
+**Problem (lead's run, S4 defaults).** 62 back-to-back chats (41-token prompt + 52 tokens, about 93 mask slots each,
+about 44 slots/s) for 130 s, then HTTP 503 `mask_exhausted`. Three causes, all policy, none capacity: (1) the yield
+was all or nothing at 1000 slots, so the factory made nothing while chats decoded above it; (2) the factory refilled
+only below its low water (1000; the wizard's default) and re-polled every 30 s; (3) below 1000 slots a 4096-slot
+segment (33 s unloaded, longer under decode) could not land before the stock ran out.
+
+**Changes.**
+
+* `pgw.core.factory_yield` (library defaults unchanged: all or nothing): `PGW_FACTORY_YIELD_FULL_SLOTS` turns on
+  a **partial yield**: between the low mark and FULL the gateway refreshes the yield file only during the first
+  `(stock - low) / (FULL - low)` of each `PGW_FACTORY_YIELD_PERIOD_S` cycle, so the factory's duty cycle grows as
+  the stock falls. `PGW_FACTORY_YIELD_HORIZON_S` raises the low mark to the observed consumption rate (stock
+  decreases over 30 s) times the horizon, so a store draining fast never yields below the stock a segment needs to
+  land. `PGW_FACTORY_YIELD_FULL_HORIZON_S` lowers the full mark to that many seconds of consumption: an occasional
+  chat consumes little, so it still gets the full yield (single-chat decode unchanged); only sustained consumption
+  brings the duty cycle in. Privacy: the yield timing is a function of the decode activity (which the provider sees
+  as trips) and the stock (which follows from the maskgen requests the provider serves and the trips that consume
+  the slots); same masks, requests and bytes.
+* Co-located demo (`pgw_modal_boot.COLOCATED_FACTORY_KEEP_UP`): band 2500-6000 slots, horizon 45 s, full horizon
+  120 s, period 3 s; `PGW_FACTORY_SEGMENT_SLOTS=2048` (lands in about 40 s under load instead of 80+);
+  `PGW_FACTORY_LOW_WATER_SLOTS=6144`, `PGW_FACTORY_TARGET_SLOTS=8192` (refill whenever below 6144);
+  `PGW_FACTORY_POLL_INTERVAL_S=2`. The factory's threads and nice stay as passed (`--gateway-env
+  PGW_FACTORY_CPU_THREADS=3 --gateway-env PGW_FACTORY_NICE=10` in the runs below; an unprivileged process cannot
+  lower its nice again, so no adaptive nice).
+* `--sustain-s` now streams every chat on loopback (`decode_tokens_per_s_*` per chat and token-weighted
+  `decode_tokens_per_s_overall`; `identical`: every chat's text and logprobs equal the first's, whose first 32
+  tokens equal the exactness-checked chat; part of `ok`), samples the stock every 2 s (`stock`), and `keep_up`
+  gives consumption = (stock at start + slots committed - stock at end) / window, the factory's committed slots per
+  second over the window (quantized: one 2048-slot segment is 13.6 slots/s over 150 s), the segment-to-segment rate
+  and the stock's least-squares slope. `factory.committed` lists every segment that landed in the window (the old
+  `segments` list only those that also started inside it, hence `segments: []` with long segments).
+  `--gateway-env PGW_MODAL_SUSTAIN_MIN_STOCK=N` starts the window once N slots are in stock (at most 240 s).
+
+Measured (T4:2, `--gateway-gpu`, factory capped 3 threads / nice 10; 41-token prompt, 52-token answers; every run
+logprobs bit-identical, text equal, repeat identical, stream identical, all sustain chats identical):
+
+| run | window | chats | consumption | factory (window / segment-to-segment) | stock start -> end (min) | stock slope | decode tok/s median / token-weighted (min) | warm stream |
+|---|---|---|---|---|---|---|---|---|
+| lead, S4 defaults | 130 s, then 503 | 62 | about 44 slots/s | 0 segments landed | -> 37 | - | (24.9 overall wall) | 33 |
+| 1: partial yield, 2048 segments | 150 s | 74 | 51.7 slots/s | 40.9 / 50.5 | 6547 -> 4921 (4133) | - | 32.7 / - (18.8) | 30.5 |
+| 2: same, longer | 302 s | 146 | 51.0 slots/s | 47.6 / 50.6 | 6547 -> 5553 (4081) | -1.1 slots/s | 32.4 / 31.7 (17.0) | 30.3 |
+| 3: + full horizon 120 s (demo default) | 242 s | 113 | 49.3 slots/s | 42.5 / 47.4 | 6547 -> 4922 (3766) | -2.2 slots/s | 30.6 / 30.6 (22.4) | 31.6 |
+
+The stock settles into a sawtooth between about 4100 and 6300 slots (a 2048-slot segment lands every 40-45 s; troughs
+4342, 4185, 4133, 4081, 4344, 4187, 4240 in run 2), i.e. production equals consumption at about 51 slots/s with the
+factory yielding about half of the time; no exhaustion. Over a window that starts at the top of the sawtooth the
+committed production reads a little below consumption (the stock starts above its equilibrium); the segment-to-segment
+rate and the slope (-1.1 slots/s over 300 s, +422 slots over the second half) show steady state. Decode with the
+factory's duty cycle: 30.6-32.4 tokens/s token-weighted (run 3 ran at 29-31 for its middle 100 s on that host); a few chats dip to 17-25 tokens/s (2-3 per 150 s). Factory 2.0-2.1 cores.
+
+Not done (lever 3): moving the factory's encryption/decryption to the gateway's T4 (`ntt_dev`, `gpuntt`). The factory
+uses about 2 gateway cores at nice 10 and the provider's maskgen is the larger share of its wall time; a factory
+kernel on the gateway's GPU would queue ahead of the 1-row local-linear graphs (79 µs each) without a priority
+stream there. Left for a measured follow-up.
+
 ## Trip latency and the `--max-trip-ms` gate
 
 `--e2e` now also reports the gateway's **client-reported round-trip latency** (`trip_latency` in the

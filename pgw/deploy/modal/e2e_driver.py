@@ -241,9 +241,12 @@ def _sustain(local_url: str, key: str, adm: str, model_name: str, ref_out: dict[
     toks = n = 0
     dec_rates: list[float] = []
     ttfts: list[float] = []
+    starts: list[float] = []
+    dec_s = dec_n = 0.0
     identical = True
     err = None
     while time.time() - t0 < sustain_s:
+        starts.append(round(time.time() - t0, 1))
         try:
             o = wiz.chat_stream(local_url, key, model_name, PROMPT, 64)
         except Exception as exc:  # e.g. masks ran out: report, never fail the exactness result
@@ -258,6 +261,8 @@ def _sustain(local_url: str, key: str, adm: str, model_name: str, ref_out: dict[
         n += 1
         if o.get("decode_tokens_per_s"):
             dec_rates.append(float(o["decode_tokens_per_s"]))
+            dec_s += float(o["decode_s"])
+            dec_n += int(o["tokens"]) - 1
         if o.get("ttft_s") is not None:
             ttfts.append(float(o["ttft_s"]))
     t1 = time.time()
@@ -270,7 +275,9 @@ def _sustain(local_url: str, key: str, adm: str, model_name: str, ref_out: dict[
             "decode_tokens_per_s_median": ts[len(ts) // 2] if ts else None,
             "decode_tokens_per_s_mean": round(sum(ts) / len(ts), 2) if ts else None,
             "decode_tokens_per_s_min": ts[0] if ts else None,
-            "decode_tokens_per_s_all": dec_rates, "ttft_s_median": sorted(ttfts)[len(ttfts) // 2] if ttfts else None,
+            "decode_tokens_per_s_all": dec_rates, "chat_start_s": starts[:len(dec_rates)],
+            # all decoded tokens after each chat's first over all decode time (token-weighted)
+            "decode_tokens_per_s_overall": round(dec_n / dec_s, 2) if dec_s else None, "ttft_s_median": sorted(ttfts)[len(ttfts) // 2] if ttfts else None,
             "stock": series, "stock_start": series[0][1] if series else None,
             "stock_end": series[-1][1] if series else None,
             "stock_min": min(x[1] for x in series) if series else None}

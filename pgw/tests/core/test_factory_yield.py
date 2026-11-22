@@ -91,6 +91,28 @@ def test_default_is_all_or_nothing(tmp_path: Path) -> None:
     assert all(got)
 
 
+def test_full_horizon_keeps_full_yield_for_occasional_chats(tmp_path: Path) -> None:
+    stock = [6000]
+    w = fy.YieldWriter(tmp_path / "y", lambda: stock[0], min_slots=2500, full_slots=6000, horizon_s=45.0,
+                       full_horizon_s=120.0, duty_period_s=1.0, stock_period_s=1.0)
+    t = 8e6
+    for _ in range(10):  # an occasional chat: about 3 slots/s
+        fy._activity[0] = t
+        w.tick(now=t)
+        stock[0] -= 3
+        t += 1.0
+    fy._activity[0] = t
+    assert w.tick(now=t) and w.duty == 1.0  # 120 s of 3 slots/s is far below the stock: full yield
+    for _ in range(30):  # sustained: 50 slots/s -> full mark min(6000, 6000), partial yield at about 4470
+        fy._activity[0] = t
+        w.tick(now=t)
+        stock[0] -= 50
+        t += 1.0
+    fy._activity[0] = t
+    w.tick(now=t)
+    assert 0.0 < w.duty < 1.0
+
+
 def test_horizon_raises_low_mark_when_draining(tmp_path: Path) -> None:
     p = tmp_path / "yield"
     stock = [5000]

@@ -501,7 +501,10 @@ def run_e2e(live: Any, args: argparse.Namespace, ttl_s: int) -> int:
                   f"{sus.get('decode_tokens_per_s_min')}) tok/s, identical {sus.get('identical')}, error "
                   f"{sus.get('error')}; masks: consumption {ku.get('consumption_slots_per_s')} slots/s, factory "
                   f"{ku.get('production_slots_per_s')} slots/s, stock {ku.get('stock_start')} -> "
-                  f"{ku.get('stock_end')} (min {ku.get('stock_min')})", flush=True)
+                  f"{ku.get('stock_end')} (min {ku.get('stock_min')}), segment-to-segment "
+                  f"{ku.get('production_commit_to_commit_slots_per_s')} slots/s, stock slope "
+                  f"{ku.get('stock_slope_slots_per_s')} slots/s; token-weighted decode "
+                  f"{sus.get('decode_tokens_per_s_overall')} tok/s", flush=True)
         if pair.colocated:  # one call: the service's log comes with the result
             print("---- service log tail ----\n" + str(res.get("service_log_tail", ""))[-2500:])
         else:
