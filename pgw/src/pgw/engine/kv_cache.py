@@ -144,6 +144,31 @@ class KVCache:
         self._len = length
         self._hi = length
 
+    def rebind(self, length: int, max_len: int) -> None:
+        """Keep the first ``length`` committed positions for a new request whose context limit is ``max_len``
+        (conversation prefix reuse, :mod:`pgw.engine.prefix_cache`): positions ``>= length`` are dropped and
+        the storage grows on demand up to the new limit."""
+        if not 0 <= length <= self._len:
+            raise ConfigError(f"rebind length {length} outside [0, {self._len}]")
+        if max_len < length or max_len <= 0:
+            raise ConfigError(f"rebind max_len {max_len} below the kept length {length}")
+        self.truncate(length)
+        self.max_len = int(max_len)
+
+    def compact(self) -> None:
+        """Shrink the storage to the committed positions (plus none): the old storage is zeroed first, so a
+        cache kept between requests holds exactly its committed positions."""
+        n = max(self._len, 1)
+        if n >= self.capacity:
+            return
+        k = self._k[:, :n].clone()
+        v = self._v[:, :n].clone()
+        self._k.zero_()
+        self._v.zero_()
+        self._k, self._v = k, v
+        self._np = None
+        self._hi = self._len
+
     def clear(self) -> None:
         """Zero the storage (plaintext hygiene) and reset the length."""
         self._k.zero_()

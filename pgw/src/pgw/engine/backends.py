@@ -176,6 +176,9 @@ class LinearBackend(abc.ABC):
     """
 
     ring: RingParams
+    #: Each output row is the same bits whatever other rows share the call (per-row activation scales and an
+    #: exact integer product). Conversation KV-prefix reuse (:mod:`pgw.engine.prefix_cache`) needs it.
+    rows_exact: bool = False
 
     @abc.abstractmethod
     def forward(self, call: LinearCall) -> torch.Tensor:
@@ -343,6 +346,8 @@ def _to_int_weight(lw: Any, device: torch.device) -> _IntWeight:
 class PlainBackend(LinearBackend):
     """Exact local quantized product: ``quantize(x) @ W8^T`` then rescale.
 
+    ``rows_exact``: activations are quantized per row and the product is exact integers.
+
     Numerically identical to :class:`MaskedBackend` (same quantization, exact integers), so it is
     the reference for end-to-end exactness tests and the backend for ``dev`` mode.
 
@@ -353,6 +358,8 @@ class PlainBackend(LinearBackend):
         device: Where to run the integer product.
         preload: Load every linear at construction instead of on first use.
     """
+
+    rows_exact = True
 
     def __init__(self, pack: object, ring: RingParams, device: str = "cpu", *, preload: bool = False):
         self.pack = pack
@@ -932,6 +939,8 @@ class MaskedBackend(LinearBackend):
     ``ComputeClient.compute`` -> ``yq = centered(y_hat - W r)`` with range check -> Freivalds check
     (always, or with probability ``freivalds_rate``) -> rescale + bias.
 
+    ``rows_exact``: per-row quantization, an exact ring product and per-row rescaling (local linears too).
+
     The mask reservation is taken from ``call.session`` (SPEC 9.4); ``mask_source`` is used when a
     call carries no session (single-session tools). Calls are split at segment-extent boundaries
     because Freivalds vectors differ per segment. All calls of one :meth:`forward_many` go out as a
@@ -977,6 +986,8 @@ class MaskedBackend(LinearBackend):
     Raises (from forward):
         MaskExhaustedError, IntegrityError, FingerprintMismatchError, ServiceUnavailableError.
     """
+
+    rows_exact = True
 
     def __init__(
         self,
@@ -2243,18 +2254,25 @@ class MaskedBackend(LinearBackend):
         """Join every deferred check now (raises like :meth:`forward_many` on a failed one)."""
         self._join_pending(None)
 
-    def release_session_checks(self, session: Any) -> None:
+    def release_session_checks(self, session: Any) -> bool:
         """Gateway hook for a session that ends or aborts (e.g. between gate_up and down): wait for
         its deferred checks and drop every reference to it. Failures are reported (log, stats,
-        ``on_integrity_failure``), never raised: no output of that session is used any more."""
+        ``on_integrity_failure``), never raised: no output of that session is used any more.
+
+        Returns True when every check of the session joined here passed and none had failed before
+        (a session's KV cache may then be kept for the next turn of its conversation)."""
         with self._pending_lock:
             mine = [p for p in self._pending if any(r is session for r in p.reservations)]
             if mine:
                 self._pending = [p for p in self._pending if not any(r is session for r in p.reservations)]
+            failed_before = any(f.owned_by({id(session)}) for f in self._failed)
             self._failed = [f for f in self._failed if not f.owned_by({id(session)}) and f.alive()]
+        ok = not failed_before
         for p, err in self._wait_checks(mine):
             if err is not None:
+                ok = False
                 self._report_deferred(err, p)
+        return ok
 
     @property
     def pending_checks(self) -> int:

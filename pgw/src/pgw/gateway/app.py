@@ -56,6 +56,10 @@ __all__ = ["GatewayState", "create_app", "error_body"]
 
 log = logging.getLogger(__name__)
 
+#: Optional client conversation id (``prefix_cache``): narrows the conversation key of KV-prefix reuse below the
+#: API key and OpenAI ``user`` (gateway-local; never sent to the compute service).
+CONVERSATION_HEADER = "x-pgw-conversation-id"
+
 _OPENAI_TYPE: dict[int, str] = {
     400: "invalid_request_error",
     401: "authentication_error",
@@ -635,14 +639,15 @@ def create_app(
     # ---- inference core -------------------------------------------------------------------------------
     async def _admit(
         rt: ModelRuntime, key: ApiKey, prompts: list[list[int]], params: SamplingParams, rid: str,
-        conversation: str | None = None,
+        conversation: str | None = None, prefix_key: str | None = None,
     ) -> tuple[_KeyLease, list[ActiveSession]]:
         est = sum(len(p) + params.max_tokens for p in prompts)
         rt.check_available()
         lease = state.lease(key, est)
         try:
             # all admission slots at once (no hold-and-wait); masks are reserved only afterwards
-            sessions = await rt.open_sessions(prompts, params, request_id=rid, conversation=conversation)
+            sessions = await rt.open_sessions(prompts, params, request_id=rid, conversation=conversation,
+                                              prefix_key=prefix_key)
         except BaseException:
             lease.finish(0)
             raise
@@ -677,6 +682,7 @@ def create_app(
             masks_reserved=sum(s.masks_reserved for s in sessions),
             masks_consumed=sum(s.masks_consumed for s in sessions),
             masks_burned=sum(s.masks_burned for s in sessions),
+            prefix_reused=sum(s.prefix_reused for s in sessions) or None,
             queue_ms=round(max((s.queue_s for s in sessions), default=0.0) * 1e3, 1),
             ttft_ms=round(sessions[0].ttft_s * 1e3, 1) if sessions and sessions[0].ttft_s is not None else None,
             finish_reason=",".join(s.finish_reason or "" for s in sessions) if sessions else None,
@@ -714,7 +720,15 @@ def create_app(
             # passes. The API has no conversation id: requests of one API key (and OpenAI ``user``) count as
             # one conversation (gateway-local key, never sent to the service).
             conversation = f"key:{key.key_id}\x00user:{getattr(req, 'user', None) or ''}"
-            lease, sessions = await _admit(rt, key, prompts, params, rid, conversation)
+            # Conversation KV-prefix reuse (prefix_cache, opt-in): the same key, optionally narrowed by a client
+            # conversation id so one key's parallel chats keep their own cached turns (never wider than the key)
+            prefix_key = None
+            if rt.prefix_cache is not None:
+                conv_id = request.headers.get(CONVERSATION_HEADER, "")
+                if len(conv_id) > 128:
+                    raise InvalidRequestError(f"{CONVERSATION_HEADER} is longer than 128 characters")
+                prefix_key = f"{conversation}\x00conv:{conv_id}"
+            lease, sessions = await _admit(rt, key, prompts, params, rid, conversation, prefix_key)
         except PGWError as exc:
             _audit_request(endpoint, rid, key, rt, exc.http_status, str(exc.code), t0, sessions, req.stream)
             raise
@@ -725,10 +739,13 @@ def create_app(
         model_rt: ModelRuntime = rt
         the_lease: _KeyLease = lease
 
-        def _usage() -> dict[str, int]:
+        def _usage() -> dict[str, Any]:
             p = sum(len(s.prompt_ids) for s in sessions)
             c = sum(s.completion_tokens for s in sessions)
-            return {"prompt_tokens": p, "completion_tokens": c, "total_tokens": p + c}
+            out: dict[str, Any] = {"prompt_tokens": p, "completion_tokens": c, "total_tokens": p + c}
+            if model_rt.prefix_cache is not None:  # OpenAI's field for prompt tokens served from a cache
+                out["prompt_tokens_details"] = {"cached_tokens": sum(s.prefix_reused for s in sessions)}
+            return out
 
         if not req.stream:
             status, code = 200, None

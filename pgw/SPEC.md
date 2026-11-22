@@ -104,7 +104,9 @@ forward pass. Prefill sends all prompt tokens of a group in one round trip.
 The service learns the model, the number of tokens per round (prompt length, generation length),
 timing, and the tenant. Optional mitigations: batch several sessions per request (implemented),
 pad prompt rows to buckets (`pad_rows_to`) and send constant-rate dummy rounds (both planned, not
-implemented in v1). Each costs masks and compute.
+implemented in v1). Each costs masks and compute. With conversation KV-prefix reuse (opt-in, 9.4b) the prompt
+pass of a continued turn carries only the uncached rows, and the provider can tell that a request continued a
+cached conversation.
 
 ## 4. Components and ownership
 
@@ -625,6 +627,52 @@ sends the service anything it does not already see (`docs/operations/install-on-
 - Ending or aborting a session waits for and drops its deferred checks (`release_session_checks`) before
   the reservation is burned; a deferred-check failure is an integrity failure (9.5) and the session and its
   KV cache are discarded, never resumed.
+
+### 9.4b Conversation KV-prefix reuse (`prefix_cache = "conversation"`; opt-in, default off)
+A chat client resends the whole conversation every turn. With `prefix_cache = "conversation"` the gateway keeps
+the KV cache of a finished turn (prompt + generated tokens, i.e. every position that went through the model) and
+a later request runs only the tokens after the longest common token prefix (after the chat template) through the
+prompt pass (`pgw.engine.prefix_cache`, `Generator.generate/astream(..., prefix=, prefix_sink=)`).
+- **Exactness.** The answer, logprobs and every sample are bit-identical to recomputing the whole prompt. This
+  holds because each K/V row and each logit row depends only on its own token and the cache prefix it attends
+  to, never on which rows share a pass: the native float path (`float_ops = "native"`: fixed-order per-row
+  RMSNorm, RoPE, attention and SiLU, no FMA or libm) and `rows_exact` backends (per-row activation scales, exact
+  integer products: `PlainBackend`, `MaskedBackend` incl. local linears). The earlier turn computed its generated
+  tokens one row per pass; the recompute would put them inside one prompt block. torch's float kernels (SDPA,
+  RMSNorm reductions) choose blockings by shape and thread count, so the configuration refuses `prefix_cache`
+  without `float_ops = "native"` (and on a GPU target or with `mode = "float"`), and the engine refuses a prefix
+  off that path (`Generator.prefix_reuse_supported`). Tests: `tests/engine/test_prefix_cache.py` (greedy, seeded
+  sampling, variable-row and strict speculation, masked, padded strict), `tests/gateway/test_prefix_cache.py`.
+- **Key and lifetime.** Key = API key id + OpenAI `user` + optional header `x-pgw-conversation-id` (at most 128
+  characters; it only narrows the key). One entry per key; a request *takes* it (no two requests share a cache),
+  a prompt that shares no token with it wipes it. An entry is stored only when the request ended `stop` or
+  `length` (not cancelled, strict-mode dummy passes done) and its session's deferred checks were joined without
+  a failure (`release_session_checks` returns `True`). A new turn waits up to `prefix_cache_wait_s` (30 s) for
+  the previous turn's commit, then recomputes. Multi-prompt requests never reuse.
+- **Storage.** Gateway RAM only, never spilled to disk or logged (the OS may still swap process memory: deploy
+  without swap or with encrypted swap, as for the live KV caches). TTL `prefix_cache_ttl_s` (600 s; swept by a
+  thread and on every use), budget `prefix_cache_max_mb` (1024 MiB) and `prefix_cache_max_entries` (1024) with
+  LRU eviction. Every eviction, expiry, mismatch, refusal and failure zeroes the KV tensors and the token array.
+  Any integrity failure or noise alarm of the model wipes every entry and bumps an epoch, so a request that was
+  running at that moment cannot store its cache afterwards; reload and stop wipe as well.
+- **Masks and schedule.** The reused positions take no prompt-pass row and no mask: the reservation is
+  `(prompt - reused) + max_tokens` (strict speculation: `mask_rows_needed(prompt, max_tokens, reused)`, the same
+  decode term; padded: the public charge `prompt - reused + j + min(B, floor((C - 1) j))`). Strict speculation is
+  unchanged otherwise: one prompt pass, then exactly one pass per generated token with `spec_rows` rows each.
+- **What the provider sees (privacy argument).** For a continued turn the provider sees a prompt pass of
+  `prompt - reused` rows instead of `prompt` rows; the decode passes, their row counts and the pass count are
+  unchanged. Row counts are public already (3.4), and so is turn linkability to a large extent: without reuse the
+  prompt lengths of one conversation grow as `P(n+1) = P(n) + L(n) + new message + template`, which links turns
+  by arithmetic on public counts, and in strict mode the turns of one API key and `user` are serialized behind
+  each other's dummy passes (9.4a). What is **new** and stated plainly: (1) a continued turn's short prompt pass is
+  followed by decode passes over a long context, and the gateway's per-trip turnaround grows with the context it
+  attends over (already true for decode passes), so the provider can tell, with good confidence, that a request
+  continued a cached conversation (a hit/miss bit per request) and roughly how long its context is; (2) the hit
+  bit makes linking a turn to the previous turn of the same conversation more certain than length arithmetic
+  alone (it shows *that* the request continues an earlier one, not which, but timing usually narrows it to one);
+  (3) less is shown elsewhere: the full prompt length of a continued turn is no longer sent as a row count. No
+  token, activation or mask information changes: every row is still masked with a fresh single-use mask.
+  Because of (1) and (2) the setting stays opt-in; deployments that must hide conversation structure keep it off.
 
 ### 9.5 Failure handling
 - Service unavailable: retry with backoff (wire client), then fail the request (`unavailable`). KV
