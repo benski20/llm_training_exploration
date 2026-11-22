@@ -15,6 +15,22 @@ SLA pilot. Three reasons:
 2. The HSM, KMS and TPM integrations have never run against real hardware or cloud services.
 3. There has been no external security audit.
 
+## Update 2026-11-22: scaling design for Qwen2.5-32B and 70B-class targets (model only, local)
+
+Write-up: [research/plans/scaling-32b-70b.md](research/plans/scaling-32b-70b.md); model
+`benchmarks/scaling_model.py` (tests: `tests/benchmarks/test_scaling_model.py`), calibrated on the measured 7B
+native-kernel floor and the 7B H100 run (lane 0.26 ms per trip; tau 1.19 at R = 2 -> alpha 0.49). Estimates, ctx
+2048, alpha 0.70 (0.49): today's paths 2.1 tok/s at 32B and 1.2 at 72B (single-core attention); engineered
+gateway + service + network floors + fast draft: **32B 40 (33)**, 72B 27 (23); plus fused 2 trips per layer:
+**72B 33 (29), Llama-3-70B 31 (27)**. The binding component at 32B-72B is the gateway's attention over the
+private KV cache (655 KB per context token per pass at 72B), then trips x (RTT + service). Minimum targets:
+<= 20 us orchestration per trip and trips split over 16 cores, attention >= 100 GB/s and 600 GFLOP/s, RTT <= 30
+us, service <= 15-25 us per trip (persistent kernel), TP 4 with a <= 5 us gather (no all-reduce: output-row
+split), draft step <= 4-5 ms; for 70B-class also fused chains. Masks at 72B: 28 MB per slot, 1.1 GB/s decode-only
+and 2.6 GB/s with prompts; recommended factory: a plain `W8 r` factory on a customer-cloud GPU (0.2 of an L4, no
+hint) instead of today's MLWE factory (~44 cores and a 172-345 GB hint per 72B stream). Not reached: nothing was
+built or measured at 32B/72B.
+
 ## Update 2026-11-22: the 7B CPU-only-gateway speculation run is ready to launch (Modal launcher, opt-in)
 
 One co-located run measures Qwen2.5-7B on an H100 provider with a CPU-only, weight-free gateway (every linear remote,

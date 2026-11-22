@@ -223,6 +223,9 @@ class Scenario:
     usd_per_vcpu_h: float = 0.045  # estimate: on-demand general-purpose cloud vCPU-hour
     # masks
     narrow_wr: bool = False  # W r stored mod 2^(C+2) = 29 bits (-9.4%; not implemented)
+    # prompt tokens and burned reservations per generated token (each takes a slot): measured 1.7 at 7B in the
+    # H100 run (2.7 slots per generated token plain); 0 = decode only
+    prompt_slots_per_token: float = 0.0
 
     def with_(self, **kw: Any) -> Scenario:
         return replace(self, **kw)
@@ -494,7 +497,8 @@ def slot_bytes(shape: Shape, sc: Scenario) -> float:
 
 
 def mask_demand(shape: Shape, sc: Scenario, res: Result) -> dict[str, float]:
-    slots_per_token = res.rows / res.tau  # masked fillers: every row of a pass takes a slot
+    # masked fillers: every row of a pass takes a slot; plus prompt rows and burned reservations
+    slots_per_token = res.rows / res.tau + sc.prompt_slots_per_token
     slots_s = res.tok_s * slots_per_token
     sb = slot_bytes(shape, sc)
     return {"slot_mb": sb / MB, "slots_per_token": slots_per_token, "slots_per_s": slots_s,
