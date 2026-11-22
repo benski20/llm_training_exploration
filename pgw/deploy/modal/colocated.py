@@ -89,9 +89,18 @@ SEPARATE_USERS = os.environ.get("PGW_MODAL_COLOCATED_USERS", "1") != "0"
 #: Deploy-time choices the container needs at run time. Modal re-imports this file inside the container without
 #: the deploy shell's environment, so MODEL_NAME / PACK would fall back to the 0.5B there and DRAFT to False (the
 #: baked draft never used); the image's environment carries them instead (as RUNTIME_ENV in customer.py).
+#: ``launch.py --gateway-gpu`` (``PGW_MODAL_GATEWAY_GPU=1`` at deploy time; needs a provider GPU): the container
+#: gets two GPUs of the provider's tier. The provider's process sees only the first, the gateway's only the second
+#: (``CUDA_VISIBLE_DEVICES`` by UUID; best effort, the device nodes are also given to their party's user), and the
+#: gateway computes its exact local linears there (``local_linears_device = "cuda"``: the same integers, so the same
+#: bits; self-checked at start-up, else the CPU). The gateway's mask factory stays on the CPU.
+GATEWAY_GPU = os.environ.get("PGW_MODAL_GATEWAY_GPU", "0") == "1" and GPU is not None
+GPU_SPEC = f"{GPU.split(':')[0]}:2" if GATEWAY_GPU and GPU else GPU
 RUNTIME_ENV = {"PGW_MODAL_MODEL": MODEL_NAME, "PGW_MODAL_DRAFT": "1" if DRAFT else "0",
                "PGW_MODAL_SPEC_MASK": os.environ.get("PGW_MODAL_SPEC_MASK", ""),
-               "PGW_MODAL_COLOCATED_USERS": "1" if SEPARATE_USERS else "0"}
+               "PGW_MODAL_COLOCATED_USERS": "1" if SEPARATE_USERS else "0",
+               "PGW_MODAL_GATEWAY_GPU": "1" if GATEWAY_GPU else "0",
+               "PGW_MODAL_GPU_NODE_OWNERS": os.environ.get("PGW_MODAL_GPU_NODE_OWNERS", "1")}
 SERVICE_PORT, GATEWAY_PORT = 8443, 8080
 #: The provider's TCP+TLS trip lane (``launch.py --lane tls``; 127.0.0.1 only, like the service port).
 LANE_PORT = 8444
@@ -138,7 +147,7 @@ image = (
 app = modal.App("pgw-colocated", image=image)
 
 
-@app.function(gpu=GPU, cpu=PROVIDER_CPUS + GATEWAY_CPUS, memory=MEMORY_MIB, timeout=MAX_LIFETIME_S,
+@app.function(gpu=GPU_SPEC, cpu=PROVIDER_CPUS + GATEWAY_CPUS, memory=MEMORY_MIB, timeout=MAX_LIFETIME_S,
               max_containers=1, min_containers=0, retries=0, region=REGION)
 def pair(run_id: str, ttl_s: int = 80 * 60, e2e: bool = False, local_linears: str = "auto",
          spec_rows: int = 0, lane: str = "stream", gateway_env: dict | None = None,
@@ -171,13 +180,19 @@ def pair(run_id: str, ttl_s: int = 80 * 60, e2e: bool = False, local_linears: st
     pwork = Path("/srv/pgw-provider")
     croot = Path("/srv/pgw")
     token = ""
+    # launch.py --gateway-gpu: one GPU per party (provider: the first, gateway: the second), else the gateway has none
+    gsplit: dict = {}
+    if os.environ.get("PGW_MODAL_GATEWAY_GPU", "0") == "1":
+        gsplit = boot.split_gpus(puser, cuser)
+        result["gpu_split"] = gsplit.get("report")
+        boot.log(f"GPU split: {gsplit.get('report')}")
     try:
         # ---- provider: own user, own directory, loopback listener only (pgw_modal_boot.start_provider_party)
         # launch.py --lane tls: the service also serves its native trip lane over TLS on LANE_PORT (opt-in)
         prov = boot.start_provider_party(pwork, Path(PACK), SERVICE_PORT, device="auto", user=puser,
                                          log_dir=LOGS, note=f"modal co-located demo {run_id}",
                                          lane_port=LANE_PORT if lane == "tls" else None,
-                                         extra_env=boot.checked_env(provider_env))
+                                         extra_env={**boot.checked_env(provider_env), **gsplit.get("provider", {})})
         svc = prov["proc"]
         procs.append(svc)
         url, code = prov["url"], prov["code"]
@@ -193,12 +208,16 @@ def pair(run_id: str, ttl_s: int = 80 * 60, e2e: bool = False, local_linears: st
             # launch.py --spec-rows: strict speculation (prompt lookup; plus the image's draft with --spec-draft,
             # on the CPU: the gateway's process sees no GPU)
             spec = boot.spec_options(spec_rows, DRAFT_PACK if DRAFT else None, None)
+            # with its own GPU (gsplit), the gateway's exact local linears run there (self-checked, else the CPU)
+            gdev = {"local_linears_device": "cuda"} if gsplit.get("gateway") else {}
             gw, token = boot.start_gateway_party(croot, GATEWAY_PORT, user=cuser, log_dir=LOGS,
                                                  model_options={**boot.GATEWAY_MODEL_OPTIONS,
                                                                 "local_linears": local_linears, **spec,
-                                                                **boot.lane_options(lane)},
+                                                                **boot.lane_options(lane), **gdev},
                                                  egress=boot.lane_egress(lane, LANE_PORT),
+                                                 hide_gpu=not gsplit.get("gateway"),
                                                  extra_env={**boot.colocated_gateway_env(local_linears),
+                                                            **gsplit.get("gateway", {}),
                                                             **boot.checked_env(gateway_env)})
             procs.append(gw)
             info = {"run_id": run_id, "console_url": gurl.rstrip("/") + "/console/", "base_url": gurl,

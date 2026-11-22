@@ -130,6 +130,8 @@ def cost_per_h(gpu: str | None, cpus: float | None = None) -> dict[str, float]:
     """Hourly list price of each party (provider cores: ``cpus``, else :func:`provider_cpus`)."""
     cores = provider_cpus(gpu) if cpus is None else float(cpus)
     prov = (GPU_PRICE_H[gpu] if gpu else 0.0) + cores * CORE_H
+    if gpu and os.environ.get("PGW_MODAL_GATEWAY_GPU", "0") == "1":  # co-located --gateway-gpu: a second GPU
+        prov += GPU_PRICE_H[gpu]
     cgpu = normalize_gpu(os.environ.get("PGW_MODAL_CUSTOMER_GPU"))
     cust = (GPU_PRICE_H[cgpu] if cgpu else 0.0) + 4 * CORE_H + customer_gib() * GIB_H
     return {"pgw-provider": prov + 6 * GIB_H, "pgw-customer": cust}
@@ -589,6 +591,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                     help="--e2e --placement colocated: after the exactness check, chat back to back for this many "
                          "seconds and report tokens/s and the mask factory's segments finished meanwhile (slots/s "
                          "while a chat decodes)")
+    ap.add_argument("--gateway-gpu", action="store_true",
+                    default=os.environ.get("PGW_MODAL_GATEWAY_GPU", "0") == "1",
+                    help="--placement colocated with --gpu: a second GPU of the same tier for the gateway (deploy "
+                         "time; PGW_MODAL_GATEWAY_GPU=1). Each party's process sees only its own GPU; the gateway "
+                         "computes its exact local linears there (self-checked bit-identical, else the CPU). "
+                         "Default off")
     args = ap.parse_args(argv)
     try:
         parse_env_pairs(args.gateway_env)
@@ -633,6 +641,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         args.lane = "tls" if args.placement == "colocated" else "stream"
     if args.lane == "tls" and args.placement != "colocated":
         ap.error("--lane tls needs --placement colocated (the provider's lane port is on its loopback only)")
+    if args.gateway_gpu and (args.placement != "colocated" or not args.gpu):
+        ap.error("--gateway-gpu needs --placement colocated and a provider --gpu (two GPUs of that tier)")
     if args.max_trip_ms is not None and args.max_trip_ms <= 0:
         ap.error("--max-trip-ms must be positive")
     args.model = args.model.strip().lower()
@@ -664,6 +674,7 @@ def main(argv: list[str] | None = None) -> None:
     # the deploy-time choices also drive the cost estimate (customer memory) in this process
     for var, val in (("PGW_MODAL_MODEL", args.model if args.model != DEFAULT_MODEL else None),
                      ("PGW_MODAL_DRAFT", "1" if args.spec_draft else None),
+                     ("PGW_MODAL_GATEWAY_GPU", "1" if args.gateway_gpu else None),
                      ("PGW_MODAL_SPEC_MASK", args.spec_mask.strip() or None)):
         if val:
             os.environ[var] = val

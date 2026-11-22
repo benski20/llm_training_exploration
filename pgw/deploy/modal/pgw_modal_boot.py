@@ -483,6 +483,63 @@ def colocated_gateway_env(local_linears: str) -> dict[str, str]:
     return env
 
 
+#: The gateway party's environment when it has its own GPU (``split_gpus``): its encrypted mask factory stays on the
+#: CPU (it keeps up there, and a factory GEMM on the GPU would queue ahead of the latency-bound local linears).
+GATEWAY_GPU_FACTORY_ENV = {"PGW_HEMASK_ENGINE": "cpu_int8", "PGW_FACTORY_DEVICE": "cpu",
+                           "PGW_FACTORY_GPU_PRNG": "false"}
+
+
+def _nvidia_devices() -> list[dict[str, str]]:
+    """``[{"uuid", "minor"}]`` per GPU in CUDA order, from ``nvidia-smi -q`` (empty if it fails)."""
+    try:
+        text = subprocess.run(["nvidia-smi", "-q"], capture_output=True, text=True,  # noqa: S607
+                              timeout=60).stdout
+    except (OSError, subprocess.SubprocessError):
+        return []
+    out: list[dict[str, str]] = []
+    for line in text.splitlines():
+        key, _, val = line.partition(":")
+        key, val = key.strip(), val.strip()
+        if key == "GPU UUID":
+            out.append({"uuid": val, "minor": ""})
+        elif key == "Minor Number" and out:
+            out[-1]["minor"] = val
+    return out
+
+
+def split_gpus(provider_user: str | None, gateway_user: str | None) -> dict[str, Any]:
+    """One GPU per co-located party (``launch.py --gateway-gpu``): the provider's process sees only the first
+    GPU and the gateway's only the second (``CUDA_VISIBLE_DEVICES`` by UUID); best effort, each device node
+    ``/dev/nvidia<minor>`` is also given to its party's user with mode 0600 (shared control nodes stay
+    shared). Returns ``{"provider": env, "gateway": env, "report": ...}``; ``gateway`` is empty (the gateway
+    keeps no GPU) when fewer than two GPUs are visible."""
+    devs = _nvidia_devices()
+    if len(devs) < 2:
+        return {"provider": {}, "gateway": {}, "report": {"ok": False, "reason": f"{len(devs)} GPU(s) visible"}}
+    prov, gate = devs[0], devs[1]
+    report: dict[str, Any] = {"ok": True, "provider_gpu": prov["uuid"], "gateway_gpu": gate["uuid"], "nodes": {}}
+    owners = os.environ.get("PGW_MODAL_GPU_NODE_OWNERS", "1") != "0"
+    for dev, user in ((prov, provider_user), (gate, gateway_user)):
+        node = f"/dev/nvidia{dev['minor']}"
+        if not owners:
+            report["nodes"][node] = "unchanged (PGW_MODAL_GPU_NODE_OWNERS=0)"
+            continue
+        if not dev["minor"] or user is None:
+            report["nodes"][node] = "unchanged (no minor number or no party user)"
+            continue
+        try:
+            import pwd
+
+            pw = pwd.getpwnam(user)
+            os.chown(node, pw.pw_uid, pw.pw_gid)
+            os.chmod(node, 0o600)
+            report["nodes"][node] = f"{user} 0600"
+        except OSError as exc:
+            report["nodes"][node] = f"unchanged ({type(exc).__name__}: {exc.strerror or exc})"
+    return {"provider": {"CUDA_VISIBLE_DEVICES": prov["uuid"]},
+            "gateway": {"CUDA_VISIBLE_DEVICES": gate["uuid"], **GATEWAY_GPU_FACTORY_ENV}, "report": report}
+
+
 #: Variable prefixes a run may add to a party's environment (``launch.py --gateway-env`` / ``--provider-env``).
 EXTRA_ENV_PREFIXES = ("PGW_", "OMP_", "MKL_")
 
