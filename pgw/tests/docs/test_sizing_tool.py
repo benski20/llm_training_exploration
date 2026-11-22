@@ -30,7 +30,7 @@ def test_ring_math_matches_core(ring: str, sizing: ModuleType) -> None:
 
 @pytest.mark.parametrize("model", ["qwen2.5-0.5b", "qwen2.5-7b", "llama-3-8b", "llama-3-70b"])
 def test_linear_shapes_match_modelpack(model: str, sizing: ModuleType) -> None:
-    from pgw.core.types import LinearId, LinearKind
+    from pgw.core.types import LINEAR_ORDER, LinearId
     from pgw.modelpack.arch import expected_linear_shape
     from pgw.modelpack.manifest import ArchConfig
 
@@ -41,7 +41,7 @@ def test_linear_shapes_match_modelpack(model: str, sizing: ModuleType) -> None:
         head_dim=s.hd, vocab_size=32000, rms_norm_eps=1e-6, rope_theta=1e6, max_position_embeddings=4096,
         tie_word_embeddings=False,
     )
-    for kind in LinearKind:
+    for kind in LINEAR_ORDER:
         m, n, _parts = expected_linear_shape(arch, LinearId(0, kind))
         assert s.linears()[kind.value] == (m, n), (model, kind)
 

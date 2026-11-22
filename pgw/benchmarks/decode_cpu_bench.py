@@ -54,7 +54,8 @@ def build_pack(work: Path, preset: str, layers: int) -> Path:
     from pgw.modelpack import pack_checkpoint
 
     p = PRESETS[preset]
-    ck, pk = work / f"ckpt-{preset}-{layers}", work / f"pack-{preset}-{layers}"
+    ck_root = Path(os.environ.get("PGW_BENCH_CKPT_DIR", str(work)))  # e.g. /dev/shm: the transient checkpoint
+    ck, pk = ck_root / f"ckpt-{preset}-{layers}", work / f"pack-{preset}-{layers}"
     if (pk / "manifest.json").exists():
         return pk
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -117,10 +118,25 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
     work = Path(args.workdir or tempfile.mkdtemp(prefix="pgw-dec-"))
     work.mkdir(parents=True, exist_ok=True)
     pack = ModelPack.open(build_pack(work, args.preset, args.layers))
+    if args.masked_head:  # the LM head as one more masked remote linear (weight-free gateway)
+        from pgw.engine.masked_head import MaskedHeadPack
+        from pgw.modelpack.loader import LinearWeights
+
+        class ZeroHeadPack(MaskedHeadPack):
+            """The head's int8 weight is zero like the layers' (the stub's zero answer is exact)."""
+
+            def _head(self) -> Any:
+                if self._w is None:
+                    s = self._spec
+                    self._w = LinearWeights(self._lid, torch.zeros((s.out_features, s.in_features), dtype=torch.int8),
+                                            torch.ones(s.out_features), None)
+                return self._w
+
+        pack = ZeroHeadPack(pack)
     ring = RingParams.from_name(args.ring)
     prompt_len = int(args.prompt_len)
     per = prompt_len + args.tokens
-    slots = (per + args.window) * (args.repeat + 1) + 32 + 4 * (prompt_len + 1 + args.window)
+    slots = (per + args.window) * (args.repeat + 1) + 48 + 4 * (prompt_len + 1 + args.window)
     kp = FileKeyProvider(work / "kek", create=True)
     store_dir = work / f"store-{time.time_ns()}"
     store = MaskStore.open(store_dir, kp, fsync=False,
@@ -152,11 +168,19 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
     noise = None if args.no_noise else OutboundNoiseMonitor(ring, sample_rate=0.05, fail_closed=True)
     backend = MaskedBackend(pack, None, StubLane(), ring, pack.fingerprint, min_soundness_bits=20,
                             noise_monitor=noise)
+    if args.wnorm_frac > 0:
+        set_wnorm(backend, pack, args.wnorm_frac)
     if args.local != "off":
         backend.configure_local_linears(args.local)
     backend.warm_trip_engine()
     model = TransformerModel(pack, backend)
     model.sync_decode = True
+    if args.float_ops != "torch":
+        model.set_float_ops(args.float_ops)
+    if args.masked_head:
+        from pgw.engine.masked_head import enable_masked_head
+
+        enable_masked_head(model)
     if args.float_threads:
         model.enable_float_threads(args.float_threads)
     fp = pack.fingerprint
@@ -174,7 +198,10 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
     prompt = [(3 * i) % (pack.arch.vocab_size - 1) + 1 for i in range(prompt_len)]
 
     # LM head + sampling alone (no layers), for the extrapolation
-    head_ms = _time_head(model, args.logprobs)
+    if args.masked_head:  # one masked head trip (prepare, stub, finish, checks) + sampling
+        head_ms = _time_masked_head(model, store.reserve(fp, ring, 12), args.logprobs)
+    else:
+        head_ms = _time_head(model, args.logprobs)
 
     async def once() -> tuple[float, float, Any]:
         c, t = _cpu_s(), time.perf_counter()
@@ -245,6 +272,8 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
 
     result = {
         "preset": args.preset, "layers": lay, "full_layers": full, "ring": args.ring, "local": args.local,
+        "masked_head": args.masked_head, "float_ops": args.float_ops,
+        "wnorm_frac": args.wnorm_frac, "trip_fast": getattr(backend, "trip_fast", None),
         "noise_monitor": noise is not None, "trip_engine": backend.trip_engine,
         "deferred_check": backend.deferred_check, "float_threads": model.float_threads,
         "local_kinds": sorted(backend.local_policy.get("kinds", ())),
@@ -299,13 +328,28 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
     return result
 
 
+def set_wnorm(backend: Any, pack: Any, frac: float) -> None:
+    """Give every linear's meta a realistic weight-row norm ``frac * 127 * sqrt(n)``.
+
+    The synthetic pack's weights are zero (so the stub's zero answer is exact), and a zero norm makes the
+    constant-time width selection evaluate every width (window ``A - 1``), which real weights never do
+    (window 2 at ``frac`` 0.3; Qwen2.5 int8 rows measure <= 0.37). Only the width plan changes: a larger
+    norm than the true one is a stricter (still exact) bound.
+    """
+    import math
+
+    for sp in pack.linear_specs():
+        meta = backend._meta.get(sp.id)
+        object.__setattr__(meta, "wnorm", frac * 127.0 * math.sqrt(sp.in_features))  # frozen dataclass
+
+
 def _install_timers(backend: Any, model: Any) -> dict[str, list[float]]:
     """Wrap the gateway's per-token stages with wall + calling-thread CPU timers (``--breakdown``)."""
     from pgw.engine import sampling
 
     timers: dict[str, list[float]] = {}
 
-    def wrap(obj: Any, name: str, label: str) -> None:
+    def wrap(obj: Any, name: str, label: str, by_kind: bool = False) -> None:
         fn = getattr(obj, name)
 
         def timed(*a: Any, **k: Any) -> Any:
@@ -313,15 +357,19 @@ def _install_timers(backend: Any, model: Any) -> dict[str, list[float]]:
             try:
                 return fn(*a, **k)
             finally:
-                e = timers.setdefault(label, [0.0, 0.0, 0])
+                lab = label
+                if by_kind and a:  # per linear kind: _prepare(calls) / _finish(prep, ...)
+                    calls = getattr(a[0], "calls", a[0])
+                    lab = f"{label}.{calls[0].id.kind.value}" if calls else label
+                e = timers.setdefault(lab, [0.0, 0.0, 0])
                 e[0] += time.perf_counter() - t
                 e[1] += time.thread_time() - c
                 e[2] += 1
 
         setattr(obj, name, timed)
 
-    wrap(backend, "_prepare", "trip_prepare")
-    wrap(backend, "_finish", "trip_finish")
+    wrap(backend, "_prepare", "trip_prepare", True)
+    wrap(backend, "_finish", "trip_finish", True)
     wrap(backend, "forward_local", "local_linears")
     wrap(backend.client, "compute_sync", "stub_service")
     wrap(model, "_logits", "lm_head")
@@ -347,6 +395,27 @@ def _time_head(model: Any, logprobs: int, reps: int = 7) -> float:
     return 1e3 * sorted(ts)[len(ts) // 2]
 
 
+def _time_masked_head(model: Any, res: Any, logprobs: int, reps: int = 9) -> float:
+    """Median ms of one masked LM-head trip (one row, the stub service) + sampling."""
+    from pgw.engine.backends import LinearCall
+    from pgw.engine.sampling import Sampler, SamplingParams
+
+    lid = model.head_mode.lid
+    sampler = Sampler(SamplingParams(temperature=0.0, logprobs=logprobs, max_tokens=1))
+    ts = []
+    try:
+        for _ in range(reps):
+            h = torch.randn(1, model.arch.hidden_size)
+            t = time.perf_counter()
+            logits = model.backend.forward_many([LinearCall(lid, h, res)])[0]
+            model.backend.join_checks()
+            sampler.sample(logits[0], [])
+            ts.append(time.perf_counter() - t)
+    finally:
+        res.close()
+    return 1e3 * sorted(ts)[len(ts) // 2]
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--preset", default="0.5b", choices=sorted(PRESETS))
@@ -362,6 +431,11 @@ def main() -> None:
     ap.add_argument("--temperature", type=float, default=0.0)
     ap.add_argument("--logprobs", type=int, default=0)
     ap.add_argument("--no-noise", action="store_true")
+    ap.add_argument("--masked-head", action="store_true",
+                    help="LM head as a masked remote linear (pgw.engine.masked_head)")
+    ap.add_argument("--float-ops", default="torch", choices=["torch", "native"])
+    ap.add_argument("--wnorm-frac", type=float, default=0.0,
+                    help="realistic weight-row norm for the zero synthetic weights (0.3 ~ Qwen2.5; 0 = true norm)")
     ap.add_argument("--service-delay-ms", type=float, default=0.0, help="stub round-trip latency (sleep, GIL free)")
     ap.add_argument("--profile", action="store_true")
     ap.add_argument("--profile-prefill", action="store_true", help="with --profile: profile the prefill runs instead")

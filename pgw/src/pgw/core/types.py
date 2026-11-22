@@ -24,11 +24,14 @@ class LinearKind(StrEnum):
     O = "o"  #: o_proj  # noqa: E741
     GATE_UP = "gate_up"  #: gate_proj, up_proj concatenated along the output dim (in that order)
     DOWN = "down"  #: down_proj
+    #: The LM head as a masked linear (opt-in, :mod:`pgw.engine.masked_head`): id ``"<num_layers>.lm_head"``,
+    #: ``(vocab, hidden)``, after the last layer. Never part of :data:`LINEAR_ORDER` / :func:`linear_ids`.
+    LM_HEAD = "lm_head"
 
 
 LINEAR_ORDER: tuple[LinearKind, ...] = (LinearKind.QKV, LinearKind.O, LinearKind.GATE_UP, LinearKind.DOWN)
 
-_ID_RE = re.compile(r"^(\d+)\.(qkv|o|gate_up|down)$")
+_ID_RE = re.compile(r"^(\d+)\.(qkv|o|gate_up|down|lm_head)$")
 
 
 @dataclass(frozen=True, slots=True, order=True)
@@ -54,6 +57,8 @@ class LinearId:
     @property
     def ordinal(self) -> int:
         """Position in the model-wide execution order (``4 * layer + index(kind)``)."""
+        if self.kind == LinearKind.LM_HEAD:  # masked LM head "<num_layers>.lm_head": after the last down
+            return 4 * self.layer
         return 4 * self.layer + LINEAR_ORDER.index(self.kind)
 
     @classmethod
@@ -61,7 +66,7 @@ class LinearId:
         """Parse ``"3.qkv"``."""
         m = _ID_RE.match(s)
         if not m:
-            raise ConfigError(f"bad linear id {s!r}; expected '<layer>.<qkv|o|gate_up|down>'")
+            raise ConfigError(f"bad linear id {s!r}; expected '<layer>.<qkv|o|gate_up|down|lm_head>'")
         return cls(int(m.group(1)), LinearKind(m.group(2)))
 
     def __str__(self) -> str:

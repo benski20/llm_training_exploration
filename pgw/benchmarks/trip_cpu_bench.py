@@ -31,6 +31,7 @@ def main() -> None:
     ap.add_argument("--calls", type=int, default=300)
     ap.add_argument("--kinds", default="gate_up,down")
     ap.add_argument("--ring", default="K32A12C27")
+    ap.add_argument("--wnorm-frac", type=float, default=0.0, help="see decode_cpu_bench.set_wnorm (0 = true norm)")
     ap.add_argument("--profile", action="store_true", help="cProfile the measured calls (tottime table)")
     args = ap.parse_args()
     from pgw.core import RingParams
@@ -64,6 +65,13 @@ def main() -> None:
 
     be = MaskedBackend(pack, None, Stub(), ring, pack.fingerprint, min_soundness_bits=20,
                        noise_monitor=OutboundNoiseMonitor(ring, sample_rate=0.05))
+    if args.wnorm_frac > 0:
+        import sys
+
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        from decode_cpu_bench import set_wnorm
+
+        set_wnorm(be, pack, args.wnorm_frac)
     be.warm_trip_engine()
     res = store.reserve(pack.fingerprint, ring, slots)
     specs = {sp.id.kind.value: sp for sp in pack.linear_specs() if sp.id.layer == 0}

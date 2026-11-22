@@ -9,7 +9,7 @@ import pytest
 import torch
 
 from pgw.core import DEFAULT_RING, MaskExhaustedError
-from pgw.core.types import LinearId, LinearKind
+from pgw.core.types import LINEAR_ORDER, LinearId, LinearKind
 from pgw.engine import InMemoryPack, LocalMaskReservation
 from pgw.engine.model import SequenceInput, TransformerModel
 from tests.engine.conftest import plain_and_masked
@@ -30,7 +30,7 @@ def _plain_ref(plain: TransformerModel, steps: list[list[int]]) -> torch.Tensor:
 
 
 def _lids(pack: InMemoryPack) -> list[LinearId]:
-    return [LinearId(i, k) for i in range(pack.arch.num_layers) for k in LinearKind]
+    return [LinearId(i, k) for i in range(pack.arch.num_layers) for k in LINEAR_ORDER]
 
 
 @pytest.mark.parametrize("order", [(0, 1, 2), (1, 0, 2), (1, 2, 0)])

@@ -766,6 +766,12 @@ class TransformerModel:
         self.post_norms = [load(f"layers.{i}.post_attn_norm", dtype=dtype, device=self.device) for i in layers]
         if tuple(self.embed_tokens.shape) != (a.vocab_size, a.hidden_size):
             raise ShapeError(f"embed_tokens shape {tuple(self.embed_tokens.shape)} does not match the architecture")
+        # Opt-in (PGW_EMBED_COMPACT=1): keep a bfloat16-exact embedding table in bfloat16 (half the RAM:
+        # 1.09 instead of 2.18 GB for Qwen2.5-7B); each looked-up row is widened back, exactly, so every
+        # pass sees the same float32 rows bit for bit. Not when the float32 table is also the tied head.
+        if (os.environ.get("PGW_EMBED_COMPACT", "0").strip().lower() in ("1", "true", "yes", "on")
+                and self._head is not self.embed_tokens):
+            self.embed_tokens = compact_head(self.embed_tokens)
         self.rope = RotaryEmbedding(a.head_dim, a.rope_theta, a.rope_scaling, a.max_position_embeddings, self.device)
         self.scale = a.head_dim**-0.5
         # (thread count, verdict): one tuple, replaced whole, so a thread never reads a verdict that
@@ -1066,7 +1072,7 @@ class TransformerModel:
                 )
             c.reserve(c.length + t.numel())
         rope = [self.rope.cos_sin(st, t.numel(), self.dtype) for st, t in zip(starts, ids, strict=True)]
-        st = PassState(seqs, ids, caches, starts, rope, [self.embed_tokens[t] for t in ids],
+        st = PassState(seqs, ids, caches, starts, rope, [self._embed(t) for t in ids],
                        self.float_ops or _TORCH_OPS)
         # hidden states for drafters: {sequence index: (wanted layers, captured)}
         capture: dict[int, tuple[frozenset[int], dict[int, torch.Tensor]]] = {
@@ -1091,6 +1097,12 @@ class TransformerModel:
         if self.head_mode is None:
             return self._logits(seqs, st.hs)
         return (yield from self.head_mode.steps(self, seqs, st.hs))
+
+    def _embed(self, t: torch.Tensor) -> torch.Tensor:
+        """Embedding rows of token ids ``t`` in the compute dtype (a compacted bfloat16 table is widened
+        exactly: same values as the float32 table)."""
+        rows = self.embed_tokens[t]
+        return rows if rows.dtype == self.dtype else rows.to(self.dtype)
 
     def _pad_plan(self, seqs: Sequence[SequenceInput], ids: Sequence[torch.Tensor]) -> list[tuple[int, bool]] | None:
         """``[(pad rows, fixed item)]`` per sequence, or None when no sequence pads or asks for a fixed item."""
