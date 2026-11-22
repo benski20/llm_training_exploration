@@ -153,6 +153,7 @@ def test_long_admission_does_not_freeze_running_stream(long_ctx_pack: InMemoryPa
 class _FakeState:
     def __init__(self, n: int, t: float, session: object | None = None):
         self.prompt = [1] * n
+        self.pending = self.prompt  # prompt-pass rows (a reused conversation prefix would shorten them)
         self.t_lane = t
         self.session = session if session is not None else object()
         self.cancelled = False

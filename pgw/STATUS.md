@@ -15,6 +15,44 @@ SLA pilot. Three reasons:
 2. The HSM, KMS and TPM integrations have never run against real hardware or cloud services.
 3. There has been no external security audit.
 
+## Update 2026-11-22: exact KV-cache reuse across chat turns (`prefix_cache = "conversation"`, opt-in)
+
+SPEC 9.4b. A request whose prompt (after the chat template) starts with tokens of the previous turn of the same
+conversation key (API key + OpenAI `user`, optionally narrowed by `x-pgw-conversation-id`) runs only the rest
+through the prompt pass and reserves masks only for it (`(prompt - reused) + max_tokens`; strict speculation: the
+same decode term, unchanged pass schedule). Longest-common-token-prefix match; anything else recomputes.
+- **Exact by construction, refused elsewhere**: needs `float_ops = "native"` (row-invariant per-row kernels) and a
+  `rows_exact` backend (`PlainBackend`, `MaskedBackend`); torch float ops, `mode = "float"` and GPU targets are
+  refused by the config and by `Generator.prefix_reuse_supported()`. Tests (`tests/engine/test_prefix_cache.py`,
+  `tests/gateway/test_prefix_cache.py`): token ids and logprobs bit-identical to recomputing over 3-5 turns for
+  greedy, seeded sampling, variable-row draft and lookup speculation, strict speculation (masked filler and padded
+  `spec_mask_rows`), masked and plain, chat and streaming through the gateway; partial/wrong prefix, cross-key /
+  user / header isolation, LRU budget, TTL (sweeper thread), wipe, integrity failure (tampering service) and failed
+  deferred check discard, cancelled turns not stored, masks and provider row counts per turn.
+- **Security**: gateway RAM only (never spilled), one entry per key, taken exclusively, zeroed on eviction /
+  expiry / mismatch / refusal, stored only after a clean end with the session's deferred checks joined
+  (`release_session_checks` now returns whether they passed), all entries wiped on any integrity failure or noise
+  alarm (epoch: running requests cannot store afterwards). New provider-visible signal, stated in SPEC 9.4b: a
+  continued turn's prompt pass has the uncached rows only, and timing shows it continued a cached conversation
+  (hit/miss bit); kept opt-in and not a wizard preset. Not turned on in the co-located demo: its exact e2e needs
+  about 7.5 GB of disk for the 0.5B hint (4 GB free here); the gateway-level masked e2e tests above stand in.
+- **Measured** (`benchmarks/prefix_reuse_bench.py`, Qwen2.5-0.5B-Instruct, native float ops + exact integer
+  `PlainBackend` on this 4-vCPU box under a load average of about 45 from other jobs, greedy, 6 tokens per turn,
+  chat with a system prompt; every turn bit-identical between the two runs). The run was cut by the 30-minute job
+limit after turn 4 (each turn took 2-2.5 min on this box), so four turns are reported:
+
+  | turn | prompt | reused | prompt rows (provider) | mask slots reserved | TTFT recompute | TTFT reuse |
+  |---|---|---|---|---|---|---|
+  | 1 | 68 | 0 | 68 / 68 | 74 / 74 | 50.3 s | 50.9 s |
+  | 2 | 111 | 73 | 111 / 38 | 117 / 44 | 53.3 s | 41.8 s |
+  | 3 | 139 | 116 | 139 / 23 | 145 / 29 | 51.3 s | 27.3 s |
+  | 4 | 176 | 144 | 176 / 32 | 182 / 38 | 61.4 s | 26.6 s |
+
+  Turns 2-4: mask slots 444 -> 111 (-75%), prompt rows 426 -> 93 (-78%), mean TTFT 55.3 -> 31.9 s (-42%); turns 1-4:
+  slots 518 -> 185 (-64%). TTFT falls less than the rows because each pass here has a large fixed cost under this
+  load (about 17 s per decode pass: 24 layers of call overhead plus the 151936-row LM head); with the provider, the
+  saved rows also save masks taken, service GEMM rows and wire bytes of the prompt pass. Absolute times are not
+  representative of an idle host.
 ## Update 2026-11-22: scaling design for Qwen2.5-32B and 70B-class targets (model only, local)
 
 Write-up: [research/plans/scaling-32b-70b.md](research/plans/scaling-32b-70b.md); model
