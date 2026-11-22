@@ -36,7 +36,7 @@
 use crate::finish::{wipe, RoRing, Src, WrBuf};
 use crate::prepare::{PrepareError, PrepareParams};
 use crate::store::fill_ring;
-use crate::trip::{finish_into, prepare_into, CheckMode, FinishArgs, PrepOut, TripCheck};
+use crate::trip::{finish_into, prepare_into_field, CheckMode, FinishArgs, PrepOut, TripCheck};
 use numpy::{PyArray1, PyArray2, PyArrayDyn, PyArrayMethods, PyUntypedArrayMethods};
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
@@ -88,6 +88,51 @@ mod check_iface {
     /// The finish kernel's check mode for a synchronous check against the prepare-time `rhs`.
     pub(super) fn split<'a>(u: Src<'a>, rhs: &'a [u64], c: usize) -> CheckMode<'a> {
         CheckMode::Split { u, rhs, c }
+    }
+
+    /// The check field of a lease: `0` (the ring check over `Z_{2^K}`) or [`crate::prime::P31`] (the
+    /// `"p31"` segment format: one vector over `F_p` on the unmasked `xq` / `yq`, `u32` words, `K` in
+    /// {8, 16, 24, 32}). Validates the vectors' word type for the prime format.
+    pub(super) fn field(field: u64, u: &RoRing<'_>, uw: &RoRing<'_>, k: u32) -> PyResult<u64> {
+        match field {
+            0 => Ok(0),
+            f if f == crate::prime::P31 => {
+                if !matches!(k, 8 | 16 | 24 | 32) {
+                    return Err(verr(format!("the prime check needs K in {{8, 16, 24, 32}}, got {k}")));
+                }
+                if !matches!(u, RoRing::U32(_)) || !matches!(uw, RoRing::U32(_)) {
+                    return Err(verr("prime-field check vectors must be uint32 arrays"));
+                }
+                Ok(f)
+            }
+            f => Err(verr(format!("unknown check field {f} (0: ring, 2^31 - 1: p31)"))),
+        }
+    }
+
+    /// Whether the output half runs synchronously inside finish (the prime format never defers: the
+    /// result is used only after it was verified).
+    pub(super) fn sync_only(field: u64) -> bool {
+        field != 0
+    }
+
+    /// The prime output half (range check + `u . yq == rhs mod p`) on the trip's `W r` (read only, before
+    /// the finish kernel unmasks and wipes it). Returns the finish statuses.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn prime_output(
+        y_hat: &[u8],
+        wr: Src<'_>,
+        u: Src<'_>,
+        rhs: &[u64],
+        c: usize,
+        m: usize,
+        k: u32,
+        bound: u64,
+    ) -> (u8, usize) {
+        match u {
+            Src::U32(us) => crate::prime::output_half(y_hat, wr, us, rhs, c, m, k, bound),
+            // validated at lease creation (uint32 vectors): unreachable; fail closed
+            _ => (crate::finish::STATUS_FREIVALDS, rhs.len() / c.max(1)),
+        }
     }
 
     /// The output half on the native helper thread (`trip_freivalds_submit`); `rhs` is wiped here.
@@ -286,6 +331,8 @@ pub struct TripLease {
     direct: bool,
     /// Derive the next row's `r` on the helper thread after each 1-row trip.
     r_ahead: bool,
+    /// Check field ([`check_iface::field`]): 0 ring, `2^31 - 1` prime (`"p31"`).
+    field: u64,
 }
 
 #[pymethods]
@@ -299,7 +346,7 @@ impl TripLease {
     /// ``start_row``; ``u``/``uw``: the extent's Freivalds vectors (read-only arrays, shared per
     /// segment).
     #[new]
-    #[pyo3(signature = (key, n, m, k, a, cap, wnorm, slot0, chunks, start_row, u, uw, r_ahead = false))]
+    #[pyo3(signature = (key, n, m, k, a, cap, wnorm, slot0, chunks, start_row, u, uw, r_ahead = false, field = 0))]
     #[allow(clippy::too_many_arguments)]
     fn new(
         key: &Bound<'_, PyAny>,
@@ -315,6 +362,7 @@ impl TripLease {
         u: &Bound<'_, PyAny>,
         uw: &Bound<'_, PyAny>,
         r_ahead: bool,
+        field: u64,
     ) -> PyResult<Self> {
         let prm = PrepareParams { k, a, cap, wnorm };
         prm.validate().map_err(PrepareError::into_py)?;
@@ -354,13 +402,13 @@ impl TripLease {
             pieces.push(Piece { hold: Arc::new(hold), row_off, start: rows, rows: prows });
             rows += prows;
         }
-        let c = {
+        let (c, field) = {
             let ua = RoRing::extract(u, "u", k)?;
             let uwa = RoRing::extract(uw, "uw", k)?;
             if matches!(ua, RoRing::B(_)) || matches!(uwa, RoRing::B(_)) {
                 return Err(verr("u and uw must be 2-D numpy arrays"));
             }
-            check_iface::vectors(&ua, &uwa, m, n)?
+            (check_iface::vectors(&ua, &uwa, m, n)?, check_iface::field(field, &ua, &uwa, k)?)
         };
         Ok(TripLease {
             core: Arc::new(LeaseCore {
@@ -377,7 +425,14 @@ impl TripLease {
             c,
             direct,
             r_ahead,
+            field,
         })
+    }
+
+    /// The check field (0: ring check, ``2**31 - 1``: the prime-field ``"p31"`` format).
+    #[getter]
+    fn field(&self) -> u64 {
+        self.field
     }
 
     /// True if the next ``t`` rows can be handed out (attached, not closed, enough rows left).
@@ -449,7 +504,12 @@ impl TripLease {
     ///
     /// Raises ``ValueError("nonfinite: ...")`` before any row is taken for non-finite activations,
     /// and ``ValueError("ring_overflow: ...")`` (row consumed, outputs zeroed) when no width fits.
-    #[pyo3(signature = (x, check, sampled = false, threads = 1))]
+    ///
+    /// ``dup``: the outbound-noise monitor's duplicate-row fingerprint parameters ``(cols, shift, mult,
+    /// groups, per)`` (``noise_dup_keys``): the fingerprints of the payload are then computed in this call
+    /// and returned as a fifth element (uint64 ``(rows, groups)``, else ``None``); the caller records them
+    /// (the monitor's every-call check) before the payload is sent.
+    #[pyo3(signature = (x, check, sampled = false, threads = 1, dup = None))]
     #[allow(clippy::type_complexity)]
     fn prepare<'py>(
         &self,
@@ -458,8 +518,15 @@ impl TripLease {
         check: bool,
         sampled: bool,
         threads: usize,
+        dup: Option<(Bound<'py, PyArray1<i64>>, u32, Bound<'py, PyArray1<u64>>, usize, usize)>,
     ) -> PyResult<
-        Option<(Bound<'py, PyBytes>, TripTicket, Option<Bound<'py, PyArray2<i64>>>, Option<Bound<'py, PyArray2<i64>>>)>,
+        Option<(
+            Bound<'py, PyBytes>,
+            TripTicket,
+            Option<Bound<'py, PyArray2<i64>>>,
+            Option<Bound<'py, PyArray2<i64>>>,
+            Option<Bound<'py, PyArray2<u64>>>,
+        )>,
     > {
         let n = self.n;
         let xa = x
@@ -479,6 +546,28 @@ impl TripLease {
             return Err(verr("nonfinite: non-finite activation values cannot be quantized"));
         }
         let uwa = if check { Some(RoRing::extract(self.uw.bind(py), "uw", self.prm.k)?) } else { None };
+        // the fingerprint parameters are validated before any row is taken
+        let dup_ro = match &dup {
+            Some((cols, shift, mult, groups, per)) => {
+                let ca = cols.try_readonly().map_err(|e| verr(format!("cols: {e}")))?;
+                let ma = mult.try_readonly().map_err(|e| verr(format!("mult: {e}")))?;
+                let ok = {
+                    let cs = ca.as_slice().map_err(|_| verr("cols must be contiguous"))?;
+                    let ms = ma.as_slice().map_err(|_| verr("mult must be contiguous"))?;
+                    *groups > 0
+                        && *per > 0
+                        && cs.len() >= groups * per
+                        && ms.len() >= groups * per
+                        && *shift < 64
+                        && cs.iter().take(groups * per).all(|&c| c >= 0 && (c as usize) < n)
+                };
+                if !ok {
+                    return Err(verr("bad fingerprint parameters"));
+                }
+                Some((ca, *shift, ma, *groups, *per))
+            }
+            None => None,
+        };
         // ---- take the rows (consumed from here on, whatever happens below) ----
         let (row0, segs, mut key, pre) = {
             let mut g = self.core.lock();
@@ -524,6 +613,7 @@ impl TripLease {
             c: if check { c } else { 0 },
             u: if check { Some(self.u.clone_ref(py)) } else { None },
             done: false,
+            field: self.field,
         };
         let nb = (self.prm.k / 8) as usize;
         let plen = t * n * nb;
@@ -554,6 +644,7 @@ impl TripLease {
         };
         let prm = self.prm;
         let slot = self.slot0 + row0 as u64;
+        let field = if check { self.field } else { 0 };
         let sx: &mut [f64] = &mut ticket.sx;
         let rhs: &mut [u64] = &mut ticket.rhs;
         let mut pre = pre;
@@ -575,7 +666,7 @@ impl TripLease {
                         fill_ring(&*key, slot * n as u64, rs, prm.k).map_err(verr)?;
                     }
                     let po = PrepOut { payload: pl, sx, xhat: xh, rhs };
-                    prepare_into(xs, rs, n, prm, half, po, threads).map_err(PrepareError::into_py)?;
+                    prepare_into_field(xs, rs, n, prm, half, field, po, threads).map_err(PrepareError::into_py)?;
                     if !xq.is_empty() {
                         let mask: u64 = if prm.k == 64 { u64::MAX } else { (1u64 << prm.k) - 1 };
                         let half_mod: u64 = 1u64 << (prm.k - 1);
@@ -598,7 +689,28 @@ impl TripLease {
             ticket.wipe_all(); // the rows stay consumed; their W r is zeroed now
             return Err(e);
         }
-        Ok(Some((payload, ticket, xh_arr, xq_arr)))
+        let keys = match &dup_ro {
+            Some((ca, shift, ma, groups, per)) => {
+                let arr = PyArray2::<u64>::zeros(py, [t, *groups], false);
+                let done = {
+                    // SAFETY: fresh array, not shared with Python code yet.
+                    let out = unsafe { arr.as_slice_mut() }.map_err(|e| verr(e.to_string()))?;
+                    let cs = ca.as_slice().map_err(|e| verr(e.to_string()))?;
+                    let ms = ma.as_slice().map_err(|e| verr(e.to_string()))?;
+                    crate::noise::dup_keys(pl, t, n, nb, cs, *shift, ms, *groups, *per, out)
+                };
+                if let Err(e) = done {
+                    wipe(pl);
+                    wipe(xh);
+                    wipe(xq);
+                    ticket.wipe_all();
+                    return Err(verr(e));
+                }
+                Some(arr)
+            }
+            None => None,
+        };
+        Ok(Some((payload, ticket, xh_arr, xq_arr, keys)))
     }
 }
 
@@ -629,6 +741,8 @@ pub struct TripTicket {
     c: usize,
     u: Option<Py<PyAny>>,
     done: bool,
+    /// Check field of the lease (prime: the output half runs synchronously inside `finish`).
+    field: u64,
 }
 
 impl TripTicket {
@@ -757,6 +871,8 @@ impl TripTicket {
             Some(u) => Some(RoRing::extract(u.bind(py), "u", k)?),
             None => None,
         };
+        let prime = c > 0 && check_iface::sync_only(self.field);
+        let defer = defer && !prime;
         if c > 0 && defer {
             let u = self.u.as_ref().map(|u| u.bind(py).clone());
             if let Some(u) = u {
@@ -774,10 +890,16 @@ impl TripTicket {
             Some(a) => Some(a.src("u")?.0),
             None => None,
         };
-        let check = match (c > 0 && !defer, u_src) {
+        let check = match (c > 0 && !defer && !prime, u_src) {
             (true, Some(us)) => check_iface::split(us, &rhs, c),
             _ => CheckMode::Off,
         };
+        // prime format: the output half reads W r before the finish kernel unmasks (and wipes) it
+        let prime_u = if prime { u_src } else { None };
+        if prime && prime_u.is_none() {
+            self.wipe_all();
+            return Err(verr("trip ticket lost its check vectors"));
+        }
         let sx = std::mem::take(&mut self.sx);
         let direct = self.direct && segs.len() == 1;
         // SAFETY: a fresh array, not shared with Python until returned.
@@ -815,7 +937,28 @@ impl TripTicket {
                     unsafe { WrBuf::new(scratch.as_mut_ptr().cast::<u8>(), n_el, true, true) }
                 };
                 let args = FinishArgs { y_hat: ys, wr: wrb, sx: &sx, scale: sc, bias: bs, k, bound, check };
-                let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| finish_into(&args, os, threads)));
+                let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    if let Some(us) = prime_u {
+                        let wsrc = if direct {
+                            // SAFETY: the same n_el aligned u32 words WrBuf reads below; nothing writes
+                            // them until this read-only view is gone.
+                            Src::U32(unsafe {
+                                std::slice::from_raw_parts(segs[0].hold.ptr.add(segs[0].elem_off * 4).cast::<u32>(), n_el)
+                            })
+                        } else {
+                            // SAFETY: the scratch words filled above (n_el of them), read only here.
+                            Src::U64(unsafe { std::slice::from_raw_parts(scratch.as_ptr(), n_el) })
+                        };
+                        let (st, bad) = check_iface::prime_output(ys, wsrc, us, &rhs, c, m, k, bound);
+                        if st != crate::finish::STATUS_OK {
+                            // never unmasked: zero W r and the outputs (fail closed)
+                            wrb.wipe_all();
+                            wipe(os);
+                            return (st, bad);
+                        }
+                    }
+                    finish_into(&args, os, threads)
+                }));
                 if r.is_err() {
                     wipe(os);
                     wrb.wipe_all();

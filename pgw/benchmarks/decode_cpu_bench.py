@@ -142,7 +142,12 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
     store = MaskStore.open(store_dir, kp, fsync=False,
                            counter=FileMonotonicCounter(work / f"counter-{time.time_ns()}", fsync=False))
     t0 = time.perf_counter()
-    MaskGenerator(pack, ring).generate_into_store(store, slots, chunk_slots=16, factory_id="dec")
+    MaskGenerator(pack, ring, check_field="p31" if args.prime else None).generate_into_store(
+        store, slots, chunk_slots=16, factory_id="dec")
+    if args.decrypt_ahead:
+        from pgw.maskstore import store as store_mod
+
+        store_mod.TRIP_DECRYPT_AHEAD = True
     print(f"factory: {slots} slots in {time.perf_counter() - t0:.1f}s", file=sys.stderr)
 
     outm = {sp.id.key: sp.out_features for sp in pack.linear_specs()}
@@ -167,7 +172,7 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
 
     noise = None if args.no_noise else OutboundNoiseMonitor(ring, sample_rate=0.05, fail_closed=True)
     backend = MaskedBackend(pack, None, StubLane(), ring, pack.fingerprint, min_soundness_bits=20,
-                            noise_monitor=noise)
+                            noise_monitor=noise, **({"prime_check": True} if args.prime else {}))
     if args.wnorm_frac > 0:
         set_wnorm(backend, pack, args.wnorm_frac)
     if args.local != "off":
@@ -190,7 +195,8 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
         res = store.reserve(fp, ring, first)
         if first >= n:
             return res
-        return WindowedReservation(res, lambda s: store.reserve(fp, ring, s), cap=n, window=args.window)
+        return WindowedReservation(res, lambda s: store.reserve(fp, ring, s), cap=n, window=args.window,
+                                   ahead=args.window_ahead)
 
     gen = Generator(model, None, max_batch=8, session_factory=factory)
     params = SamplingParams(max_tokens=args.tokens, temperature=args.temperature, seed=7, ignore_eos=True,
@@ -422,6 +428,9 @@ def main() -> None:
     ap.add_argument("--layers", type=int, default=4)
     ap.add_argument("--tokens", type=int, default=32)
     ap.add_argument("--window", type=int, default=16)
+    ap.add_argument("--window-ahead", action="store_true", help="reserve the next window in the background")
+    ap.add_argument("--prime", action="store_true", help="prime-field check segments (p31) + prime_check")
+    ap.add_argument("--decrypt-ahead", action="store_true", help="PGW_TRIP_DECRYPT_AHEAD (W r chunks ahead)")
     ap.add_argument("--prompt-len", type=int, default=8, help="prompt tokens (prefill_ms: prompt pass + 1 token)")
     ap.add_argument("--repeat", type=int, default=3)
     ap.add_argument("--ring", default="K32A12C27")
