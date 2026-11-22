@@ -132,8 +132,11 @@ def combine(part: torch.Tensor, offset: torch.Tensor, first_byte: int) -> torch.
         if shift:
             term <<= shift
         acc += term
+        term.zero_()  # partial products of the secret (H S or A s planes)
         del term
-    acc += offset.view(1, cols) * _signed(weight)
+    bias = offset.view(1, cols) * _signed(weight)
+    acc += bias
+    bias.zero_()  # column sums of the secret
     return acc
 
 
@@ -504,20 +507,30 @@ class DeviceHE:
             smat_t.fill(0)
             ys.fill(0)
         assert st is not None
-        vidx = torch.from_numpy(valid).to(self.dev)
-        dev_hint = self.hint_on_device(key, hint)
-        half = 1 << (delta_bits - 1)
-        kmask = (1 << k) - 1
-        block = max(8, min(m, _BLOCK_BYTES // (npl * cols * 4)))
-        offset = st.sum(1, dtype=torch.int64) * 128
-        blocks: Iterator[tuple[int, int, torch.Tensor]]
-        if dev_hint is not None:
-            blocks = ((r0, min(block, m - r0), dev_hint[r0:r0 + block]) for r0 in range(0, m, block))
-        elif _prefetch_enabled():
-            blocks = self._streamed_blocks(hint, block)
-        else:  # PGW_HEMASK_HINT_PREFETCH=0: one staging buffer, host copy / upload / product in turn
-            blocks = ((r0, min(block, m - r0), self._upload_block(hint[r0:r0 + block])) for r0 in range(0, m, block))
+        # Every device temporary holding secret-derived values (S column sums, H S partials, y - H S, the
+        # selected mask rows) is zeroed in the finally below, also when the pass fails part-way (device
+        # out of memory, retried by decrypt_into): freed device memory is handed to the next allocation.
+        offset: torch.Tensor | None = None
+        part: torch.Tensor | None = None
+        corr: torch.Tensor | None = None
+        v: torch.Tensor | None = None
+        sel: torch.Tensor | None = None
+        host: np.ndarray | None = None
+        blocks: Iterator[tuple[int, int, torch.Tensor]] | None = None
         try:
+            vidx = torch.from_numpy(valid).to(self.dev)
+            dev_hint = self.hint_on_device(key, hint)
+            half = 1 << (delta_bits - 1)
+            kmask = (1 << k) - 1
+            block = max(8, min(m, _BLOCK_BYTES // (npl * cols * 4)))
+            offset = st.sum(1, dtype=torch.int64) * 128
+            if dev_hint is not None:
+                blocks = ((r0, min(block, m - r0), dev_hint[r0:r0 + block]) for r0 in range(0, m, block))
+            elif _prefetch_enabled():
+                blocks = self._streamed_blocks(hint, block)
+            else:  # PGW_HEMASK_HINT_PREFETCH=0: one staging buffer, host copy / upload / product in turn
+                blocks = ((r0, min(block, m - r0), self._upload_block(hint[r0:r0 + block]))
+                          for r0 in range(0, m, block))
             for r0, nb, h in blocks:
                 part = int_mm(h.reshape(nb * npl, dim), st).view(nb, npl, cols)
                 corr = combine(part, offset, 1)
@@ -536,10 +549,11 @@ class DeviceHE:
         finally:
             if isinstance(blocks, Generator):
                 blocks.close()  # an error part-way: the next block's host copy is waited for, not left running
-            offset.zero_()
-            st.zero_()
-            yd.zero_()
-
+            for t in (part, corr, v, sel, offset, st, yd):
+                if t is not None:
+                    t.zero_()
+            if host is not None:
+                host.fill(0)
 
 _NO_B = np.empty((0, DEGREE), dtype=np.uint64)
 

@@ -279,3 +279,52 @@ def test_pass_out_of_memory_drops_cached_hints_and_retries(monkeypatch: pytest.M
     fails["left"] = 1
     with pytest.raises(torch.cuda.OutOfMemoryError):  # nothing cached left to drop
         run("x")
+
+
+def test_pass_failing_part_way_zeroes_its_device_temporaries(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A pass that fails after some blocks (out of memory on the second block's correction) zeroes the secrets
+    (S, its column sums) and the per-block H S partials and y - H S it held; the retry gives the same bits."""
+    p = HEParams(k=32, rank=8)
+    rng = np.random.default_rng(13)
+    n, m, rows = 48, 20, DEGREE
+    a = public_matrix(bytes(32), n, p)
+    w = rng.integers(-127, 128, size=(m, n)).astype(np.int64)
+    hint = to_planes(matmul_mod64(w, a, fast=False))[:, 1:p.q // 8]
+    r = rng.integers(0, 1 << 32, size=(rows, n), dtype=np.int64)
+    want = np.array((r.astype(object) @ w.T.astype(object)) % (1 << 32), dtype=np.int64)
+    monkeypatch.setattr(devmm, "_BLOCK_BYTES", hint.shape[1] * DEGREE * 4 * 8)  # 3 blocks of 8 rows
+    eng = devmm.DeviceHE(to_planes(a)[:, :a_plane_count(p)], p, "cpu", hint_budget=4 * hint.nbytes)
+    seen: list[torch.Tensor] = []
+    real_mm, real_combine = devmm.int_mm, devmm.combine
+    state = {"calls": 0, "fail_at": 2}
+
+    def mm(lhs: torch.Tensor, rhs_t: torch.Tensor) -> torch.Tensor:
+        seen.append(rhs_t)
+        out = real_mm(lhs, rhs_t)
+        seen.append(out)
+        return out
+
+    def comb(part: torch.Tensor, offset: torch.Tensor, first_byte: int) -> torch.Tensor:
+        state["calls"] += 1
+        seen.append(offset)
+        if state["calls"] == state["fail_at"]:
+            raise torch.cuda.OutOfMemoryError("CUDA out of memory (simulated)")
+        acc = real_combine(part, offset, first_byte)
+        seen.append(acc)
+        return acc
+
+    cts, b = eng.encrypt(r, n)
+    y = matmul_mod64(w, b, fast=False) & p.q_mask
+    monkeypatch.setattr(devmm, "int_mm", mm)
+    monkeypatch.setattr(devmm, "combine", comb)
+    out = np.zeros((rows, m), dtype=np.int64)
+    eng.decrypt_into("x", hint, [(y, cts, 0)], out, p.delta_bits, 32)  # fails once, retried
+    assert np.array_equal(out, want)
+    assert eng.stats["pass_oom_shrinks"] == 1 and len(seen) > 4
+    assert all(not t.any() for t in seen)  # S, its column sums, H S partials, corrections: all zeroed
+    seen.clear()
+    eng.cache.shrink(1 << 40)
+    state["calls"], state["fail_at"] = 0, 1
+    with pytest.raises(torch.cuda.OutOfMemoryError):  # nothing cached: the error goes up, still wiped
+        eng.decrypt_into("x", hint, [(y, cts, 0)], np.zeros((rows, m), dtype=np.int64), p.delta_bits, 32)
+    assert seen and all(not t.any() for t in seen)
