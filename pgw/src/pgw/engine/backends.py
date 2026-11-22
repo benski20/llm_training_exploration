@@ -154,6 +154,13 @@ class BackendStats:
             self.remote_seconds += remote_s
             self.local_seconds += local_s
 
+    def add_local(self, calls: int, rows: int, seconds: float) -> None:
+        """``add(local_calls=, local_rows=, local_seconds=)`` without keyword dispatch."""
+        with self._lock:
+            self.local_calls += calls
+            self.local_rows += rows
+            self.local_seconds += seconds
+
     def snapshot(self) -> dict[str, float]:
         """Plain dict copy."""
         with self._lock:
@@ -1032,6 +1039,8 @@ class MaskedBackend(LinearBackend):
         self.noise_async_sampled = self.trip_fast and _env_flag("PGW_NOISE_ASYNC_SAMPLED", False)
         self._noise_pool: Any = None
         self._noise_pending: Any = None
+        #: :meth:`_local_lean_one` constants per linear key (:attr:`trip_fast`).
+        self._local_lean: dict[str, tuple[Any, ...]] = {}
         #: :meth:`_local_fast` on ``pgw_fast.local_linear_into`` (one fused native call; ``PGW_LOCAL_NATIVE=0``
         #: keeps the numpy + ``torch._int_mm`` form). Same self-check per shape against the reference.
         self._local_native = _env_flag("PGW_LOCAL_NATIVE", True) and native_available("local_linear_into")
@@ -3070,12 +3079,83 @@ class MaskedBackend(LinearBackend):
         y = dequantize_outputs(yq, sx, meta.scale, meta.bias, torch.float32)
         return y if x.device.type == "cpu" else y.to(x.device)
 
+    def _local_lean_one(self, call: LinearCall) -> torch.Tensor | None:
+        """:attr:`trip_fast`: one CPU local call on the native kernel with its per-linear constants cached
+        (built by the ordinary path after the per-shape self-check passed); ``None``: not eligible (the
+        ordinary path runs). Same kernel, arguments, checks and bits as :meth:`_local_fast`."""
+        key = call.id.key
+        ent = self._local_lean.get(key)
+        if ent is None:
+            return None
+        w, w8n, meta, scale, bias, bound, wn, thr = ent
+        lw = self._local_w
+        x = call.x
+        if (lw is None or lw._cache.get(key) is not w or x.ndim != 2 or x.device.type != "cpu"
+                or (self._local_gpu is not None and self._local_gpu.has(key))):
+            return None
+        rows, n = int(x.shape[0]), int(x.shape[1])
+        if n != meta.in_features or not 0 < rows <= int(self.local_native_block_rows):
+            return None
+        xn = x.detach()
+        if xn.dtype != torch.float32:
+            xn = xn.to(torch.float32)
+        xn = xn.numpy()
+        if not xn.flags.c_contiguous:
+            xn = np.ascontiguousarray(xn)
+        if not np.isfinite(xn).all():
+            raise RingOverflowError("non-finite activation values cannot be quantized")
+        ring = self.ring
+        res = np.empty((rows, meta.out_features), dtype=np.float32)
+        sx = np.empty(rows, dtype=np.float64)
+        try:
+            status = native.fast.local_linear_into(xn, w8n, scale, bias, ring.k, ring.a, int(ring.cap or 0), wn,
+                                                   bound, sx, res, thr)
+        except ValueError as exc:
+            if str(exc).startswith("ring_overflow"):
+                raise RingOverflowError(str(exc).split(":", 1)[-1].strip()) from exc
+            raise ShapeError(str(exc)) from exc
+        if status:
+            self._raise_status(int(status), 0, call.id, rows, bound)
+        return torch.from_numpy(res)
+
+    def _local_lean_learn(self, call: LinearCall) -> None:
+        """Cache :meth:`_local_lean_one`'s constants for ``call``'s linear once the ordinary path would take
+        the native kernel for it (self-check passed, CPU weights, no GPU product)."""
+        lw = self._local_w
+        if lw is None or not self._local_native or len(self._local_lean) > 4096:
+            return
+        key = call.id.key
+        w = lw._cache.get(key)
+        if w is None or w.w8t.device.type != "cpu" or not w.w8t.is_contiguous():
+            return
+        if self._local_gpu is not None and self._local_gpu.has(key):
+            return
+        meta: _MaskedMeta = self._meta.get(call.id)
+        if not self._local_fast_ok(meta, w, 1, call.id) or not self._local_native:
+            return
+        scale, bias, bound = self._consts(call.id, meta)
+        hit = self._local_w8n.get(key)
+        if hit is None or hit[0] is not w.w8t:
+            hit = self._local_w8n[key] = (w.w8t, w.w8t.numpy())
+        wn = float(meta.wnorm or 0.0) if self.ring.cap else 0.0
+        thr = 0 if meta.in_features * meta.out_features >= self.local_pool_min_macs else 1
+        self._local_lean[key] = (w, hit[1], meta, scale, bias, bound, wn, thr)
+
     def forward_local(self, calls: Sequence[LinearCall]) -> list[torch.Tensor]:
         """Engine hook: evaluate calls of local linears on the gateway (bit-identical to the masked path)."""
         t0 = time.perf_counter()
         for c in calls:
             if not self.local_linear(c.id):
                 raise ConfigError(f"{c.id} is not a local linear")
+        if self.trip_fast and len(calls) == 1:
+            y = self._local_lean_one(calls[0])
+            if y is not None:
+                self.stats.add_local(1, int(calls[0].x.shape[0]), time.perf_counter() - t0)
+                return [y]
+            out = _grouped_forward(_LocalView(self), calls)
+            self._local_lean_learn(calls[0])
+            self.stats.add_local(1, int(calls[0].x.shape[0]), time.perf_counter() - t0)
+            return out
         out = _grouped_forward(_LocalView(self), calls)
         self.stats.add(local_calls=len(calls), local_rows=sum(int(c.x.shape[0]) for c in calls),
                        local_seconds=time.perf_counter() - t0)

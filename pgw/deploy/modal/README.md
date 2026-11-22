@@ -351,6 +351,30 @@ and the per-step thread scoping more expensive than locally: on the dev box the 
 12-13 to 7-8 ms of float ops and engine glue per token in `benchmarks/decode_cpu_bench.py`). Back to back the gain
 is smaller because time to first token (0.6-1.2 s, prompt pass) is a third of a 52-token chat.
 
+### Lean per-trip path and the UDS lane (2026-11-22, package T3b)
+
+* `PGW_TRIP_FAST=1` and `PGW_NOISE_ASYNC_SAMPLED=1` (gateway; library defaults off, `colocated_gateway_env` turns
+  them on; `--gateway-env PGW_TRIP_FAST=0` for an A/B): see `MaskedBackend.trip_fast` / `noise_async_sampled`.
+  Same bytes on the wire, same checks on every row, same noise statistics.
+* `--lane uds` (co-located): the provider's service serves its native lane on `/srv/pgw-lane/lane.sock`
+  (`PGW_SERVICE_LANE=uds`, `PGW_SERVICE_LANE_PEER_UIDS` = the gateway user's uid only); the directory is the
+  provider's, 0710 with the gateway user's group, and root widens the socket from 0600 to 0660 for that group once
+  the service has bound it. The gateway's `lane = "auto"` takes the UDS ticket of its loopback service; prefill
+  calls above 8 rows go to the stream channel (`ineligible:rows`), as on the TLS lane's fallback.
+
+Measured (T4, `attention_down`, native float ops, factory capped `PGW_FACTORY_CPU_THREADS=3`, `PGW_FACTORY_NICE=10`,
+`PGW_FACTORY_TARGET_SLOTS=8000`; all logprobs bit-identical, text equal, repeat identical; ms per decoded token =
+(chat - TTFT) / 31 for the second and third chat; each run about 7 min, about $0.08):
+
+| run | 1-row trip | warm chat | loopback | ms/decoded token |
+|---|---|---|---|---|
+| TLS, new paths off | 0.54-0.56 ms | 12.4 tok/s | 13.0 | 54.8, 53.1 |
+| TLS, new paths on | 0.56-0.57 ms | 13.1 | 14.3 | 53.6, 51.9 |
+| UDS, new paths on | 0.44-0.47 ms | 11.9 | 13.6 | 52.8, 52.9 |
+
+The UDS lane saves about 0.1 ms per trip (2.6 ms per token at 26 trips) but the runs land on different hosts, and
+host-to-host variance (10-20%) hides it in tokens/s; `--lane tls` stays the default.
+
 ## Trip latency and the `--max-trip-ms` gate
 
 `--e2e` now also reports the gateway's **client-reported round-trip latency** (`trip_latency` in the

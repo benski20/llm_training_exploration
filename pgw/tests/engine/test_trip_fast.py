@@ -187,5 +187,29 @@ def test_fast_path_used(qwen_pack: InMemoryPack, monkeypatch: pytest.MonkeyPatch
     assert 1 in seen
 
 
+@pytest.mark.parametrize("mode", ["sync", "async"])
+def test_local_lean_equals_plain(qwen_pack: InMemoryPack, monkeypatch: pytest.MonkeyPatch, mode: str) -> None:
+    """Local linears on the lean one-call path (cached constants, same native kernel): same logits."""
+    ref = _plain_ref(qwen_pack)
+    _env(monkeypatch, True, False)
+    model = _masked(qwen_pack, trip_engine=True, sync_trips=True)
+    be = model.backend
+    be.configure_local_linears("attention_down")
+    hits: list[bool] = []
+    real = be._local_lean_one
+
+    def spy(call: Any) -> Any:
+        y = real(call)
+        hits.append(y is not None)
+        return y
+
+    be._local_lean_one = spy  # type: ignore[method-assign]
+    try:
+        _same(ref, scenario_run(model, qwen_pack, mode, True))
+    finally:
+        model.close()
+    assert any(hits) and be._local_lean
+
+
 def _unused(m: TransformerModel) -> None:  # pragma: no cover - keeps the import used for type checkers
     del m

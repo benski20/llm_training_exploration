@@ -109,6 +109,9 @@ RUNTIME_ENV = {"PGW_MODAL_MODEL": MODEL_NAME, "PGW_MODAL_DRAFT": "1" if DRAFT el
 SERVICE_PORT, GATEWAY_PORT = 8443, 8080
 #: The provider's TCP+TLS trip lane (``launch.py --lane tls``; 127.0.0.1 only, like the service port).
 LANE_PORT = 8444
+#: The provider's same-host UDS trip lane (``launch.py --lane uds``): its directory is the provider's, 0710 to the
+#: gateway user's group, the socket 0660 to it; the service accepts the gateway user's uid only.
+LANE_SOCKET = Path("/srv/pgw-lane/lane.sock")
 #: Both parties' logs, written by the (root) parent process: 0700 root, files 0600.
 LOGS = Path("/var/log/pgw")
 
@@ -206,6 +209,8 @@ def pair(run_id: str, ttl_s: int = 80 * 60, e2e: bool = False, local_linears: st
         prov = boot.start_provider_party(pwork, Path(PACK), SERVICE_PORT, device="auto", user=puser,
                                          log_dir=LOGS, note=f"modal co-located demo {run_id}",
                                          lane_port=LANE_PORT if lane == "tls" else None,
+                                         # launch.py --lane uds: the product's same-host lane, gateway uid only
+                                         lane_socket=LANE_SOCKET if lane == "uds" else None, lane_client_user=cuser,
                                          extra_env={**boot.checked_env(provider_env), **gsplit.get("provider", {})})
         svc = prov["proc"]
         procs.append(svc)

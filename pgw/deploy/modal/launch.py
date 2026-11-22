@@ -583,13 +583,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                          "(the tunnel: yes); 'attention' = always; 'attention_down' = also down "
                          "(one round trip per layer); "
                          "'auto_kinds' = each kind local iff cheaper than a trip; 'off' = every linear on the provider")
-    ap.add_argument("--lane", choices=["stream", "tls"], default=None,
+    ap.add_argument("--lane", choices=["stream", "tls", "uds"], default=None,
                     help="customer gateway's trip lane (default: 'tls' co-located, 'stream' otherwise): 'stream' = "
                          "the blocking stream lane (WebSocket, msgpack, Python TLS); 'tls' (--placement colocated "
                          "only) = the provider also serves its "
                          "native trip lane over TLS 1.3 on 127.0.0.1:8444 and the gateway uses it (rustls, binary "
                          "header, GIL released per trip; same masked bytes, request ids and schedule; misses fall "
-                         "back to the stream lane). Exact; the e2e comparison still applies")
+                         "back to the stream lane); 'uds' (--placement colocated only) = the product's same-host "
+                         "Unix-socket lane between the two party users (the service accepts the gateway user's uid "
+                         "only; socket 0660 and its directory 0710 to that user's group). Exact; the e2e "
+                         "comparison still applies")
     ap.add_argument("--gateway-env", action="append", default=[], metavar="KEY=VALUE",
                     help="--placement colocated: extra environment of the customer gateway party (and the mask "
                          "factory it starts), e.g. PGW_FACTORY_SKIP_LINEAR_KINDS=qkv,o,down; PGW_/OMP_/MKL_ keys only")
@@ -657,8 +660,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         args.local_linears = "attention_down" if args.placement == "colocated" else "auto"
     if args.lane is None:
         args.lane = "tls" if args.placement == "colocated" else "stream"
-    if args.lane == "tls" and args.placement != "colocated":
-        ap.error("--lane tls needs --placement colocated (the provider's lane port is on its loopback only)")
+    if args.lane in ("tls", "uds") and args.placement != "colocated":
+        ap.error(f"--lane {args.lane} needs --placement colocated (the provider's lane is on its host only)")
     if args.float_threads is None:
         args.float_threads = 1 if args.placement == "colocated" else 0
     if args.float_threads < 0 or (args.float_threads and args.placement != "colocated"):

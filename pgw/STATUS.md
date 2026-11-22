@@ -15,6 +15,29 @@ SLA pilot. Three reasons:
 2. The HSM, KMS and TPM integrations have never run against real hardware or cloud services.
 3. There has been no external security audit.
 
+## Update 2026-11-22: lean per-trip gateway path and the co-located UDS lane (package T3b)
+
+Not reached: 30 tokens/s. Three exact Modal runs the same hour (T4, attention_down, native float ops, factory
+capped; every run logprobs bit-identical, text equal, repeat identical): per decoded token 53-55 ms (TLS lane,
+new paths off), 52-54 ms (TLS, new paths on), 53 ms (UDS lane, new paths on); warm chat 12.4 / 13.1 / 11.9
+tokens/s. The gains are within Modal's host-to-host noise. Details: `deploy/modal/README.md`, "Lean per-trip path
+and the UDS lane".
+
+- `PGW_TRIP_FAST` (library default off; co-located demo on): a one-call pass (decode) skips the batch
+  bookkeeping; the extent's soundness check runs inside `take_checked` (new `verify` hook) before any row is
+  taken, so the separate pre-check lookup is gone; lean finish; cached constants for one-call local linears.
+  Same masks, draws, payload bytes, checks on every row, outputs and wiping (tests/engine/test_trip_fast.py).
+  Dev box, per trip: prepare 339 -> 279 us, finish 155 -> 153 us; local linear 330 -> 317 us per call.
+- `PGW_NOISE_ASYNC_SAMPLED` (default off; co-located on): a sampled call's every-call checks stay inline, its
+  statistics (about 400 us) run on a worker on wiped copies, in call order, joined before the next prepare (an
+  alarm blocks the next payload, fail closed). Statistics identical to inline (tested).
+- `launch.py --lane uds` (co-located, opt-in): the product's same-host UDS lane between the two party users;
+  the service accepts the gateway user's uid only, the socket's directory is 0710 and the socket 0660 to that
+  user's group. 1-row trip 0.44-0.47 ms (TLS: 0.54-0.57 ms); not made the default: no clear tokens/s gain in
+  the measured run.
+- What is left per trip on the dev box is mostly cache-cold native work (the finish kernel streams `u`, `W r`
+  and the scale: 22 us warm, about 100 us in place) and the store's amortized derivation, not Python.
+
 ## Update 2026-11-22: trip latency floor and gateway per-trip CPU (package T3)
 
 Not reached: the 1-row trip stays at 0.57 ms in three exact Modal runs (12.0-13.0 tokens/s back to back). The
