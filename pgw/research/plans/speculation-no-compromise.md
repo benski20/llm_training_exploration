@@ -22,14 +22,15 @@ Tests: `tests/engine/test_spec_no_compromise.py` (new), `test_padding_rows.py`, 
 | (a) dummy rows without factory masks | **accepted, implemented** (`spec_mask_rows`) | A padding row is the low K bits of a fresh ChaCha20 stream, exactly what a mask's `r` is, so `x_hat` has the same distribution as a real row's. But four other distinguishers had to be closed first (below): item splits at mask-extent boundaries, unverified dummy items, a gateway turnaround that depended on the real/padding split, and on-demand mask-window extension. |
 | (b) public mask consumption | **accepted, implemented**: a public per-pass charge `prompt + j + min(B, floor((C - 1) j))` | The store is asked for slots only on that schedule (pass index j, public constants C and B), never on use; parts are not retired before the request ends. Mask demand is then a function of the prompt length and the pass count, which strict mode makes equal to the generated length L. |
 | (b') constant-rate factory | rejected for now | Decouples demand from use completely, but stock exhaustion and "factory paused, store full" events still leak aggregate use, it must be provisioned for the peak, and it needs factory changes (another group's area). The per-pass charge gets most of the saving without touching the factory. |
-| (c) hiding the dummy passes | partly: the answer streams first (as before); dummies cannot be made faster or overlapped without a leak | Dummy passes must look like real passes on the wire and in time. They fit in the user's reading time whenever a pass takes less than about 0.2 s (section 4). Merging them into other sessions' passes already happens (continuous batching) and saves provider trips, not latency. |
+| (c) hiding the dummy passes | partly: the answer streams first (as before); dummies cannot be made faster or overlapped without a leak | Dummy passes must look like real passes on the wire and in time. They fit in the user's reading time whenever a pass takes less than about 0.3 s at 2.84 tokens per pass (section 4). Merging them into other sessions' passes already happens (continuous batching) and saves provider trips, not latency. |
 | (d) better drafting for small targets | no exact gain found for the 0.5B; the 1.5B with a 0.5B draft is the case that pays | Prompt lookup tops out at 1.13 tokens per pass for the 0.5B (n down to 2); a 2-candidate tree is no better (upper bound). A 0.5B draft gives the 1.5B 2.84 tokens per pass at R = 4. A confidence-gated draft length (spend credit only on likely drafts) is the next lever. |
 
 **Result (1.5B target, 0.5B draft, 24 chat prompts, greedy answers of up to 128 tokens; simulation of the
 generator's rules on exact target answers, `spec_charge_sim.py`):** R = 4 with C = 4, B = 160 gives **the same 2.84
 tokens per pass as today's R = 4 at 2.50 masks per generated token instead of 3.96 (-37%)**; R = 5, C = 5, B = 160
 gives 3.00 tokens per pass at 2.56 masks per token (today's R = 5: 3.21 at 4.95). For answers longer than these
-(L = 512), the same B costs about 1 + 160/L = 1.3 masks per token. On the 0.5B (prompt lookup only) C = 1.5 keeps
+(L = 512), the same B costs about 1 + 160/L = 1.3 masks per token, but the speed-up then covers only the first
+B / (C - 1), about 53, passes (about 150 tokens) and falls back toward 1 token per pass after that. On the 0.5B (prompt lookup only) C = 1.5 keeps
 all of today's small gain (1.08 tokens per pass at R = 4) at 1.48 masks per token instead of 3.96.
 
 ## 1. Background: what strict speculation did before this change
