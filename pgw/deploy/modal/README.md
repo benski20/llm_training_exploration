@@ -849,6 +849,45 @@ provider sees one pass per generated token). Slots per token include the 41-slot
 speculative phase's 1-row trip split is empty (every decode item has 2 rows); the plain phase's: 0.24 ms (service
 0.07, wire 0.18). Spend for the prep and both runs: about $0.2.
 
+### Masked LM head (`--masked-head`, opt-in; 2026-11-22, package W3)
+
+`--masked-head` (co-located only) takes the LM head off the gateway's CPU: the head becomes one more masked linear
+`"<L>.lm_head"` per pass (`pgw.engine.masked_head`), computed by the provider like every linear (range check and
+Freivalds on every row; the provider sees one more masked call of public shape per pass). What it sets:
+
+| where | setting | effect |
+|---|---|---|
+| provider | `PGW_SERVICE_MASKED_HEAD=also` | each pack is also served under `SHA-256("pgw/v1/masked-lm-head\0" \|\| fp)`, the layers' kernels shared, plus the int8 head the provider derives from its own hash-checked pack |
+| gateway factory | `PGW_FACTORY_MASKED_HEAD=true` | segments for the derived fingerprint, with the head's masks and check vectors (ring or `p31`); the encrypted factory's hint is the base hint (hard-linked) plus the head's `W8 A` with the same seed |
+| gateway model | `head_mode = "provider_int8"` (wizard preset) | derives the fingerprint from its verified pack (a service that does not serve it is refused at connect), never loads the float head, sends the head as one masked call per pass (R rows with strict speculation) |
+| e2e reference | `plaintext_reference(..., masked_head=True)` | the same int8 head on the plaintext backend: a new pinned reference, compared bit for bit |
+
+Memory: the provider holds `vocab x hidden` more int8 (0.55 GB at 7B, 0.14 GB at 0.5B); the gateway drops the float
+head (at 7B 1.09 GB bfloat16 in RAM and per pass; at 0.5B the head is the tied embedding table, which stays). Masks:
++`4 x vocab` bytes per slot (+0.61 MB: +11% at 7B, +50% at 0.5B); hint +3.7 GB at 7B. No sizing flag changes are
+needed (`--gateway-mem-gib` can drop by about 2 GB at 7B).
+
+Rings: the head's `in_features` is the hidden size, so its bounds are the qkv linear's: K32A12C27 ring check 21 bits
+with 7 vectors, `p31` 31 bits with one (`2B = 2^28 < p`); K32A8 ring check 28 bits (`p31` 31); K40A12 / K48A20 ring
+check only (`p31` needs K32). All exact in tests; the T4 runs used K32A12C27 + `p31`.
+
+**Validation (T4, Qwen2.5-0.5B, `PGW_MODAL_APP_SUFFIX=-mh`, same flags both runs: `--gpu T4 --gateway-cpus 8
+--local-linears off --trip-native --prime-check --spec-rows 2 --sustain-s 25 --ab-plain 25 --gateway-cache`).**
+Masked head: `ok`, logprobs bit-identical to the int8-head reference (max |delta| 0.0), text equal, stream identical,
+every speculative and plain sustain chat identical, every segment `p31`, no integrity failure, 285 s spawn to stop.
+Without it (A/B): 196 s.
+
+| plain phase, 25 s | decode tok/s | trips/token | gateway CPU per trip | gateway CPU per token | 1-row trip |
+|---|---|---|---|---|---|
+| float head on the gateway | 18.0 | 97.9 | 1.333 ms | 130 ms | 0.208 ms |
+| `--masked-head` | 15.2 | 98.9 | 0.826 ms | 82 ms | 0.256 ms |
+
+Gateway process CPU per token falls by 49 ms (38%): the native float head (up to 16 threads over a 0.54 GB float32
+tied table) is gone. Decode is slower at 0.5B on the T4: the head trip returns 608 KB per row and costs more on the
+provider than the 0.5B's whole float head costs the gateway, and the factory makes 50% more mask bytes. At 7B the
+balance is the other way (the head is 11% of the mask bytes and 1.09 GB of bfloat16 per pass on a CPU-only gateway,
+about 60 ms per token measured on the H100 run); the H100 rerun with `--masked-head` is the measurement that counts.
+
 ## Trip latency and the `--max-trip-ms` gate
 
 `--e2e` now also reports the gateway's **client-reported round-trip latency** (`trip_latency` in the
