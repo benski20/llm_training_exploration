@@ -39,7 +39,10 @@ PACK = "/opt/packs/" + MODEL_NAME
 #: back to the 0.5B there; the image's environment carries them instead.
 RUNTIME_ENV = {"PGW_MODAL_MODEL": MODEL_NAME}
 MAX_LIFETIME_S = 88 * 60  # hard cap (function timeout): nothing outlives 90 minutes
-DICT_NAME = "pgw-live"
+#: ``PGW_MODAL_APP_SUFFIX`` (deploy time, default empty): appended to every app name and to the Dict name, so
+#: parallel runs from different checkouts do not replace each other's apps or clear each other's run keys.
+APP_SUFFIX = os.environ.get("PGW_MODAL_APP_SUFFIX", "").strip()
+DICT_NAME = "pgw-live" + APP_SUFFIX
 # Both parties in one region: every token makes ~100 sequential round trips between them, so a
 # cross-region placement (about 85 ms RTT seen) makes decoding 10x slower. PGW_MODAL_REGION="" lifts it.
 REGION = os.environ.get("PGW_MODAL_REGION", "us-east") or None
@@ -87,11 +90,11 @@ image = (
     )
     .run_commands(f"python -m pgw.cli pack {MODEL_REPO} {PACK} --name {MODEL_NAME} --revision {MODEL_REVISION} -q"
                   " && rm -rf /root/.cache/huggingface")
-    .env({"PYTHONUNBUFFERED": "1", **RUNTIME_ENV})
+    .env({"PYTHONUNBUFFERED": "1", **RUNTIME_ENV, **({"PGW_MODAL_APP_SUFFIX": APP_SUFFIX} if APP_SUFFIX else {})})
     .add_local_file(HERE / "pgw_modal_boot.py", "/opt/pgw-modal/pgw_modal_boot.py")
 )
 
-app = modal.App("pgw-provider", image=image)
+app = modal.App("pgw-provider" + APP_SUFFIX, image=image)
 
 
 _FN: dict = dict(gpu=GPU, cpu=CPUS, memory=6144, timeout=MAX_LIFETIME_S, max_containers=1, min_containers=0,

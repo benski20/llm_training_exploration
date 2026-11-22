@@ -404,6 +404,7 @@ version = "0.1.0"
 dependencies = [
  "aes-gcm",
  "chacha20",
+ "libc",
  "numpy",
  "pgw-core-rs",
  "pgw-lane",

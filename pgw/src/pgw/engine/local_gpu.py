@@ -18,6 +18,12 @@ Every step is integer-exact or the same CPU kernel as the masked path, so the ou
 bits; the backend additionally compares this path with its CPU kernel on public test rows per linear shape
 before using it (``MaskedBackend._local_gpu_agrees``) and falls back to the CPU on any mismatch or error.
 
+With the native kernel ``pgw_fast.local_gpu_linear_into`` (default; ``PGW_LOCAL_GPU_NATIVE=0`` disables it), a
+graph-sized call is all three steps in one GIL-free call: prepare into the pinned buffer, ``cuGraphLaunch`` of the
+captured graph's exec through the CUDA driver, a spin on ``cuStreamQuery`` (``PGW_LOCAL_GPU_SPIN_US``, default
+2000 us, then a blocking wait), the range check and rescale (the finish kernel's expressions), and the pinned
+buffers zeroed. No Python runs between the launch and the result.
+
 Privacy: the GPU belongs to the gateway (the co-located demo gives each party its own device and hides the
 other one with ``CUDA_VISIBLE_DEVICES``). Nothing here talks to the provider; the masked traffic is unchanged.
 The pinned staging buffers are zeroed after every call (the device buffers are overwritten by the next one).
@@ -26,7 +32,9 @@ The pinned staging buffers are zeroed after every call (the device buffers are o
 from __future__ import annotations
 
 import logging
+import os
 import threading
+import time
 from dataclasses import dataclass
 from typing import Any
 
@@ -64,6 +72,27 @@ class _Linear:
     m: int
     w: torch.Tensor  # int8 (mp, np_) on the device: W8 zero padded to multiples of 32 (as the provider's weights)
     graphs: dict[int, Any]  # rows -> torch.cuda.CUDAGraph
+    execs: dict[int, int]  # rows -> cudaGraphExec_t address (native launch)
+
+
+def _as_ptr(handle: Any) -> int:
+    """A CUDA handle as an integer address (torch returns an int or a cuda-python object)."""
+    if isinstance(handle, int):
+        return handle
+    get = getattr(handle, "getPtr", None)
+    return int(get()) if callable(get) else int(handle)
+
+
+def _native_reason() -> str | None:
+    """``None`` if the native GPU local kernel can run here, else why not."""
+    if os.environ.get("PGW_LOCAL_GPU_NATIVE", "1").strip().lower() in ("0", "false", "no", "off"):
+        return "PGW_LOCAL_GPU_NATIVE=0"
+    if _fast is None or not hasattr(_fast, "local_gpu_linear_into"):
+        return "native kernel unavailable"
+    if not hasattr(torch.cuda.CUDAGraph, "raw_cuda_graph_exec"):
+        return f"torch {torch.__version__} has no CUDAGraph.raw_cuda_graph_exec"
+    why = _fast.local_gpu_driver_status()
+    return None if why is None else str(why)
 
 
 class LocalGpuProducts:
@@ -95,7 +124,17 @@ class LocalGpuProducts:
         self._pin_out = self._h_out.numpy().view(np.uint8)
         self._zr = np.zeros(r * max_n, dtype=np.int64)  # zero masks (flat: any (rows, n) view is contiguous)
         self._zwr = np.zeros(r * max_m, dtype=np.int64)
-        self.stats = {"graph_calls": 0, "eager_calls": 0}
+        self.stats: dict[str, Any] = {"graph_calls": 0, "native_calls": 0, "eager_calls": 0, "native_s": 0.0,
+                                      "eager_s": 0.0}
+        self.native_reason = _native_reason()
+        self.native = self.native_reason is None
+        self.spin_us = int(os.environ.get("PGW_LOCAL_GPU_SPIN_US", "2000") or 2000)
+        #: keep the GIL during a native call (``PGW_LOCAL_GPU_HOLD_GIL``, default on): a call is tens of
+        #: microseconds, and releasing the GIL lets another thread take it for up to the switch interval
+        self.hold_gil = os.environ.get("PGW_LOCAL_GPU_HOLD_GIL", "1").strip().lower() not in ("0", "false", "no", "off")
+        self._stream_ptr = int(self._stream.cuda_stream)
+        self._h_in_ptr, self._h_in_bytes = int(self._h_in.data_ptr()), int(self._h_in.numel()) * 4
+        self._h_out_ptr, self._h_out_bytes = int(self._h_out.data_ptr()), int(self._h_out.numel()) * 4
 
     def add(self, key: str, w8: torch.Tensor) -> None:
         """Upload ``w8`` (int8 ``(m, n)``, any device) and capture its graphs. Call at start-up."""
@@ -105,7 +144,7 @@ class LocalGpuProducts:
         if n * self.staging_rows > self._h_in.numel() or m * self.staging_rows > self._h_out.numel():
             raise ValueError(f"{key}: shape ({m}, {n}) exceeds the staging buffers")
         w = pad_weight_cuda(w8.detach().cpu(), self.device)
-        lin = _Linear(n, m, w, {})
+        lin = _Linear(n, m, w, {}, {})
         stream = self._stream
         with torch.cuda.device(self.device):
             for rows in self.graph_rows:
@@ -128,6 +167,11 @@ class LocalGpuProducts:
                 with torch.cuda.graph(g, pool=self._pool, stream=stream, capture_error_mode="thread_local"):
                     body()
                 lin.graphs[rows] = g
+                if self.native:
+                    try:
+                        lin.execs[rows] = _as_ptr(g.raw_cuda_graph_exec())
+                    except Exception as exc:  # the Python replay serves it
+                        self.native, self.native_reason = False, f"raw_cuda_graph_exec: {exc}"
         self._h_in.zero_()
         self._h_out.zero_()
         self._lin[key] = lin
@@ -145,6 +189,16 @@ class LocalGpuProducts:
         m = lin.m
         k, a, cap = self.k, self.a, self.cap
         with self._lock:
+            ex = lin.execs.get(rows) if self.native else None
+            if ex:
+                t0 = time.perf_counter()
+                status = _fast.local_gpu_linear_into(
+                    xf, scale, bias, k, a, cap, wnorm, bound, sx, out, self._index, ex, self._stream_ptr,
+                    self._h_in_ptr, self._h_in_bytes, self._h_out_ptr, self._h_out_bytes, self.spin_us,
+                    self.hold_gil)
+                self.stats["native_s"] += time.perf_counter() - t0
+                self.stats["native_calls"] += 1
+                return int(status)
             zr, zwr = self._zeros(rows, n, m)
             g = lin.graphs.get(rows)
             if g is not None:
@@ -173,6 +227,7 @@ class LocalGpuProducts:
                 self.stats["graph_calls"] += 1
                 return int(status)
             # more rows than a graph serves (prompt passes): the same three steps without a graph
+            t0 = time.perf_counter()
             payload = np.empty(rows * n * 4, dtype=np.uint8)
             try:
                 _fast.trip_prepare_into(xf, zr, k, a, cap, wnorm, payload, sx)
@@ -183,7 +238,46 @@ class LocalGpuProducts:
             finally:
                 payload.fill(0)
             self.stats["eager_calls"] += 1
+            self.stats["eager_s"] += time.perf_counter() - t0
             return int(status)
+
+    def one_row(self, key: str, wnorm: float, scale: np.ndarray, bias: np.ndarray | None, bound: int,
+                on_error: Any) -> Any:
+        """A lean callable ``f(x) -> y`` for 1-row decode calls of ``key`` through the native kernel (or ``None``
+        when the native path or a 1-row graph is unavailable): ``x`` float32 ``(1, n)`` C-contiguous CPU tensor
+        without grad, ``y`` a new float32 ``(1, m)`` tensor. The same call as :meth:`forward` with every per-call
+        lookup bound once; non-finite inputs are refused by the kernel's quantizer (``ring_overflow``).
+        ``on_error(status_or_exc)`` maps a non-zero status or a ``ValueError`` to the backend's exception."""
+        lin = self._lin.get(key)
+        ex = lin.execs.get(1) if (lin is not None and self.native) else None
+        if not ex:
+            return None
+        m = lin.m
+        k, a, cap = self.k, self.a, self.cap
+        fn = _fast.local_gpu_linear_into
+        args_tail = (self._index, ex, self._stream_ptr, self._h_in_ptr, self._h_in_bytes, self._h_out_ptr,
+                     self._h_out_bytes, self.spin_us, self.hold_gil)
+        lock, stats = self._lock, self.stats
+        from_numpy, empty, f32, f64 = torch.from_numpy, np.empty, np.float32, np.float64
+
+        def call(x: torch.Tensor) -> torch.Tensor:
+            out = empty((1, m), f32)
+            sx = empty(1, f64)
+            try:
+                with lock:
+                    status = fn(x.numpy(), scale, bias, k, a, cap, wnorm, bound, sx, out, *args_tail)
+                    stats["native_calls"] += 1
+            except ValueError as exc:
+                on_error(exc)
+                raise
+            finally:
+                sx[0] = 0.0
+            if status:
+                out.fill(0)
+                on_error(int(status))
+            return from_numpy(out)
+
+        return call
 
     def _zeros(self, rows: int, n: int, m: int) -> tuple[np.ndarray, np.ndarray]:
         """Zero mask ``r`` (``(rows, n)``) and zero ``W r`` (``(rows, m)``), int64, C-contiguous."""

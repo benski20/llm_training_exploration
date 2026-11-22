@@ -978,6 +978,13 @@ class ModelRuntime:
         c = self.config
         self.model = TransformerModel(pack, self.backend, device=c.device)
         self.model.inline_max_rows = c.inline_max_rows
+        head_dev = os.environ.get("PGW_LM_HEAD_DEVICE", "").strip().lower() or c.lm_head_device
+        if head_dev not in ("", "cpu"):
+            from pgw.engine.lm_head_gpu import enable_gpu_lm_head
+
+            self.lm_head_policy = enable_gpu_lm_head(self.model, head_dev)
+        else:
+            self.lm_head_policy = {"device": "cpu"}
         if c.batch_lm_head is not None:
             self.model.batch_lm_head = c.batch_lm_head
         if getattr(self.backend, "trip_engine", False):
@@ -1394,6 +1401,8 @@ class ModelRuntime:
         out: dict[str, Any] = {
             "lane": c.lane, "lane_state": self.lane_state,
             "local_linears": dict(getattr(be, "local_policy", {}) or {"mode": c.local_linears}),
+            "lm_head": dict(getattr(self, "lm_head_policy", None) or {"device": "cpu"}),
+            "local_gpu_stats": dict(getattr(getattr(be, "_local_gpu", None), "stats", None) or {}),
             "measured_rtt_ms": round(self.measured_rtt_s * 1e3, 3) if self.measured_rtt_s is not None else None,
             "rtt_path": network_path(c.service_url),
             "trip_engine": bool(getattr(be, "trip_engine", False)),

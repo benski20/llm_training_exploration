@@ -66,7 +66,10 @@ DRAFT = os.environ.get("PGW_MODAL_DRAFT", "0") == "1"
 DRAFT_REPO, DRAFT_REVISION = "Qwen/Qwen2.5-0.5B-Instruct", "7ae557604adf67be50417f59c2c2f167def9a775"
 DRAFT_PACK = "/opt/packs/draft"  # = pgw_modal_boot.DRAFT_PACK
 MAX_LIFETIME_S = 88 * 60  # hard cap (function timeout): nothing outlives 90 minutes
-DICT_NAME = "pgw-live"
+#: ``PGW_MODAL_APP_SUFFIX`` (deploy time, default empty): appended to every app name and to the Dict name, so
+#: parallel runs from different checkouts do not replace each other's apps or clear each other's run keys.
+APP_SUFFIX = os.environ.get("PGW_MODAL_APP_SUFFIX", "").strip()
+DICT_NAME = "pgw-live" + APP_SUFFIX
 REGION = os.environ.get("PGW_MODAL_REGION", "us-east") or None
 GPU_TIERS = ("T4", "A10G", "L40S", "H100")
 GPU = os.environ.get("PGW_MODAL_GPU") or None
@@ -101,7 +104,8 @@ RUNTIME_ENV = {"PGW_MODAL_MODEL": MODEL_NAME, "PGW_MODAL_DRAFT": "1" if DRAFT el
                "PGW_MODAL_SPEC_MASK": os.environ.get("PGW_MODAL_SPEC_MASK", ""),
                "PGW_MODAL_COLOCATED_USERS": "1" if SEPARATE_USERS else "0",
                "PGW_MODAL_GATEWAY_GPU": "1" if GATEWAY_GPU else "0",
-               "PGW_MODAL_GPU_NODE_OWNERS": os.environ.get("PGW_MODAL_GPU_NODE_OWNERS", "1")}
+               "PGW_MODAL_GPU_NODE_OWNERS": os.environ.get("PGW_MODAL_GPU_NODE_OWNERS", "1"),
+               **({"PGW_MODAL_APP_SUFFIX": APP_SUFFIX} if APP_SUFFIX else {})}
 SERVICE_PORT, GATEWAY_PORT = 8443, 8080
 #: The provider's TCP+TLS trip lane (``launch.py --lane tls``; 127.0.0.1 only, like the service port).
 LANE_PORT = 8444
@@ -145,7 +149,7 @@ image = (
     .add_local_file(HERE / "e2e_driver.py", "/opt/pgw-modal/e2e_driver.py")
 )
 
-app = modal.App("pgw-colocated", image=image)
+app = modal.App("pgw-colocated" + APP_SUFFIX, image=image)
 
 
 @app.function(gpu=GPU_SPEC, cpu=PROVIDER_CPUS + GATEWAY_CPUS, memory=MEMORY_MIB, timeout=MAX_LIFETIME_S,
@@ -216,7 +220,9 @@ def pair(run_id: str, ttl_s: int = 80 * 60, e2e: bool = False, local_linears: st
             # on the CPU: the gateway's process sees no GPU)
             spec = boot.spec_options(spec_rows, DRAFT_PACK if DRAFT else None, None)
             # with its own GPU (gsplit), the gateway's exact local linears run there (self-checked, else the CPU)
-            gdev = {"local_linears_device": "cuda"} if gsplit.get("gateway") else {}
+            # and its LM head too (the CPU kernel's fixed summation order as one GPU kernel: the same logits bit
+            # for bit, self-checked at start-up, else the CPU; PGW_LM_HEAD_DEVICE=cpu via --gateway-env turns it off)
+            gdev = {"local_linears_device": "cuda", "lm_head_device": "cuda"} if gsplit.get("gateway") else {}
             gw, token = boot.start_gateway_party(croot, GATEWAY_PORT, user=cuser, log_dir=LOGS,
                                                  model_options={**boot.GATEWAY_MODEL_OPTIONS,
                                                                 "local_linears": local_linears, **spec,

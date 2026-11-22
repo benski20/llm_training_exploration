@@ -1015,6 +1015,9 @@ class MaskedBackend(LinearBackend):
         #: Exact local products on a gateway GPU through captured CUDA graphs (``local_linears_device`` cuda/auto,
         #: K = 32; :mod:`pgw.engine.local_gpu`), or ``None`` (CPU kernels). Chosen at start-up after a self-check.
         self._local_gpu: Any = None
+        #: ``lid.key -> f(x) -> y``: lean 1-row decode calls of the GPU's native kernel
+        #: (:meth:`pgw.engine.local_gpu.LocalGpuProducts.one_row`), self-checked like the GPU path; empty = none.
+        self._local_one_row: dict[str, Any] = {}
         self._local_gpu_mismatch = ""  # the failing case of the last GPU self-check (diagnostics)
         #: ``n * m`` from which a native local linear spreads its columns over the native pool. A decode step
         #: reads every local weight once from DRAM (the model's int8 weights do not stay in cache between
@@ -2363,11 +2366,14 @@ class MaskedBackend(LinearBackend):
                 kinds = self._calibrate_local(rtt_s, max(1, int(reps)), policy)
         policy["device"] = "cpu"
         self._local_gpu = None
+        self._local_one_row = {}
         if kinds and device != "cpu":
             gp = self._local_gpu_choice(device, kinds, max(1, int(reps)), policy)
             if gp is not None:
                 self._local_gpu = gp
                 policy["device"] = f"{gp.device} (graphs)"
+                self._local_one_row = self._local_one_row_build(gp, kinds)
+                policy["one_row_fast_path"] = len(self._local_one_row)
             else:
                 dev = self._local_device_choice(device, max(1, int(reps)), policy)
                 if dev is not None:
@@ -2462,6 +2468,8 @@ class MaskedBackend(LinearBackend):
             return None
         policy["gpu_graphs_check"] = {"linears": len(specs), "cpu_layer0_s": t_cpu, "gpu_layer0_s": t_dev,
                                       "graph_rows": list(gp.graph_rows), "fused_rows": gp.fused_rows,
+                                      "native": bool(getattr(gp, "native", False)),
+                                      "native_reason": getattr(gp, "native_reason", None),
                                       "setup_s": round(time.perf_counter() - t0, 3), "identical": True}
         if need_faster and not t_dev < t_cpu:
             policy["gpu_graphs_reason"] = f"{dev} not faster ({t_dev:.3g} s vs {t_cpu:.3g} s for layer 0)"
@@ -2470,6 +2478,64 @@ class MaskedBackend(LinearBackend):
         log.info("local linears: exact products on %s through CUDA graphs (%d linears; layer 0: %.3g ms GPU, "
                  "%.3g ms CPU)", dev, len(specs), 1e3 * t_dev, 1e3 * t_cpu)
         return gp
+
+    def _local_one_row_build(self, gp: Any, kinds: frozenset[str]) -> dict[str, Any]:
+        """Lean 1-row callables per local linear (``PGW_LOCAL_GPU_ONE_ROW=0`` disables them), each compared with
+        the CPU reference bit for bit (and for the same refusals) on public test rows before use; a linear whose
+        callable differs keeps the regular path."""
+        if not _env_flag("PGW_LOCAL_GPU_ONE_ROW", True) or not hasattr(gp, "one_row"):
+            return {}
+        out: dict[str, Any] = {}
+        for spec in self.pack.linear_specs():  # type: ignore[attr-defined]
+            if spec.id.kind.value not in kinds or not gp.has(spec.id.key):
+                continue
+            lid = spec.id
+            meta: _MaskedMeta = self._meta.get(lid)
+            scale, bias, bound = self._consts(lid, meta)
+
+            def on_error(err: Any, lid: LinearId = lid, bound: int = bound) -> None:
+                if isinstance(err, ValueError):
+                    if str(err).startswith("ring_overflow"):
+                        raise RingOverflowError(str(err).split(":", 1)[-1].strip()) from err
+                    raise ShapeError(str(err)) from err
+                self._raise_status(int(err), 0, lid, 1, bound)
+
+            fn = gp.one_row(lid.key, float(meta.wnorm or 0.0) if self.ring.cap else 0.0, scale, bias, bound, on_error)
+            if fn is None:
+                continue
+            w = self._local_w.get(lid)  # type: ignore[union-attr]
+            rng = np.random.default_rng(0x0E1 ^ meta.in_features * 7919 + meta.out_features)
+            x = (rng.standard_normal((4, meta.in_features)) * 3).astype(np.float32)
+            x[1] *= np.float32(1e-3)
+            x[1, int(rng.integers(0, meta.in_features))] = 50.0
+            x[2] = 0.0
+            x[3] *= np.float32(1e-30)
+            nonfinite = x[:1].copy()
+            nonfinite[0, 0] = np.nan
+            ok = True
+            for xs in (x[0:1], x[1:2], x[2:3], x[3:4], nonfinite):
+                xt = torch.from_numpy(np.ascontiguousarray(xs))
+                ref: Any
+                got: Any
+                try:
+                    ref = self._local_reference(xt, meta, w, lid)
+                except PGWError as exc:
+                    ref = type(exc)
+                try:
+                    got = fn(xt)
+                except PGWError as exc:
+                    got = type(exc)
+                if isinstance(ref, type) or isinstance(got, type):
+                    ok = ref is got
+                else:
+                    ok = ref.dtype == got.dtype and ref.shape == got.shape and torch.equal(ref, got)
+                if not ok:
+                    log.error("local linears: 1-row GPU fast path differs from the CPU reference for %s; regular "
+                              "path kept", lid)
+                    break
+            if ok:
+                out[lid.key] = fn
+        return out
 
     def _local_gpu_agrees(self, gp: Any, meta: _MaskedMeta, w: _IntWeight, lid: LinearId) -> bool:
         """Self-check: the GPU path gives the CPU reference's outputs bit for bit, and the same refusals, on
@@ -2834,6 +2900,15 @@ class MaskedBackend(LinearBackend):
     def forward_local(self, calls: Sequence[LinearCall]) -> list[torch.Tensor]:
         """Engine hook: evaluate calls of local linears on the gateway (bit-identical to the masked path)."""
         t0 = time.perf_counter()
+        if len(calls) == 1 and self._local_one_row:  # decode on the gateway GPU: one lean native call
+            c = calls[0]
+            fn = self._local_one_row.get(c.id.key)  # only local linears have one
+            x = c.x
+            if (fn is not None and x.dtype == torch.float32 and x.ndim == 2 and x.shape[0] == 1
+                    and x.device.type == "cpu" and not x.requires_grad and x.is_contiguous()):
+                y = fn(x)
+                self.stats.add(local_calls=1, local_rows=1, local_seconds=time.perf_counter() - t0)
+                return [y]
         for c in calls:
             if not self.local_linear(c.id):
                 raise ConfigError(f"{c.id} is not a local linear")

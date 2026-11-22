@@ -17,6 +17,8 @@ pgw-core-rs = { path = "../pgw-core-rs" }
 pgw-lane = { path = "../pgw-lane" }
 pyo3 = { version = "0.23", features = ["abi3-py312", "extension-module"] }
 numpy = "0.23"
+# localgpu.rs: dlopen of the CUDA driver (the gateway's own GPU; builds and runs without CUDA).
+libc = "0.2"
 # store.rs: ChaCha20 keystream written straight into the numpy output (the key comes from
 # pgw_core_rs::prng); same versions as pgw-core-rs, already in Cargo.lock.
 chacha20 = "0.9"

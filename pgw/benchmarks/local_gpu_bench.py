@@ -30,6 +30,10 @@ def main() -> None:
     ap.add_argument("--layers", type=int, default=24)
     ap.add_argument("--reps", type=int, default=30)
     ap.add_argument("--device", default="cuda:0")
+    ap.add_argument("--breakdown", action="store_true", help="time graphs of copies only, the kernel only, "
+                    "and back-to-back kernels per shape")
+    ap.add_argument("--lm-head", default="", help="also time the GPU LM head of this VxD bfloat16 shape, "
+                    "e.g. 151936x896")
     args = ap.parse_args()
     torch.set_num_threads(1)
     from pgw.core import native
@@ -178,7 +182,120 @@ def main() -> None:
         if rep:
             ts.append(time.perf_counter() - t0)
     res["class_gpu_ms"] = round(1e3 * statistics.median(ts), 3)
+    res["class_native"] = gp.native
+    res["class_native_reason"] = gp.native_reason
+    res["class_stats"] = dict(gp.stats)
+    if gp.native:  # the same class with the Python replay (the path before the native kernel)
+        gp.native = False
+        bad = 0
+        for key, c in keyed:
+            gp.forward(key, xs[c["n"]], c["wnorm"], c["scale"], None, c["bound"], c["out"], sx)
+            cpu_call(c, 1)
+            bad += int(not np.array_equal(c["out"].view(np.uint32), c["ref"].view(np.uint32)))
+        res["class_python_mismatches"] = bad
+        ts = []
+        for rep in range(args.reps + 1):
+            t0 = time.perf_counter()
+            for key, c in keyed:
+                gp.forward(key, xs[c["n"]], c["wnorm"], c["scale"], None, c["bound"], c["out"], sx)
+            if rep:
+                ts.append(time.perf_counter() - t0)
+        res["class_python_ms"] = round(1e3 * statistics.median(ts), 3)
+        gp.native = True
+    if args.lm_head:
+        res["lm_head"] = lm_head_bench(dev, args.lm_head, args.reps)
+    if args.breakdown:
+        res["graph_breakdown_us"] = graph_breakdown(dev, shapes)
     print(json.dumps(res, indent=1))
+
+
+def graph_breakdown(dev: torch.device, shapes: list[tuple[int, ...]]) -> dict[str, Any]:
+    """Median replay + synchronize (us) of graphs with parts of a local call, per shape; and the kernel's own
+    time from 200 back-to-back launches (CUDA events)."""
+    from pgw.core.triton_gemv import ring_gemv
+
+    out: dict[str, Any] = {}
+    stream = torch.cuda.Stream(dev)  # type: ignore[no-untyped-call]
+    for n, m in shapes:
+        w = torch.randint(-128, 128, (m, n), dtype=torch.int8, device=dev)
+        h_in = torch.zeros((1, n), dtype=torch.int32, pin_memory=True)
+        h_out = torch.zeros((1, m), dtype=torch.int32, pin_memory=True)
+        d_in = torch.zeros((1, n), dtype=torch.int32, device=dev)
+        d_out = torch.zeros((1, m), dtype=torch.int32, device=dev)
+        parts = {
+            "h2d": lambda: d_in.copy_(h_in, non_blocking=True),
+            "d2h": lambda: h_out.copy_(d_out, non_blocking=True),
+            "kernel": lambda: ring_gemv(d_in, w, 32, n=n, m=m, out=d_out),
+            "h2d_d2h": lambda: (d_in.copy_(h_in, non_blocking=True), h_out.copy_(d_out, non_blocking=True)),
+            "full": lambda: (d_in.copy_(h_in, non_blocking=True), ring_gemv(d_in, w, 32, n=n, m=m, out=d_out),
+                             h_out.copy_(d_out, non_blocking=True)),
+        }
+        row: dict[str, float] = {}
+        for name, body in parts.items():
+            with torch.cuda.stream(stream):
+                body()
+            stream.synchronize()
+            g = torch.cuda.CUDAGraph()
+            with torch.cuda.graph(g, stream=stream):
+                body()
+            ts = []
+            for _ in range(400):
+                t0 = time.perf_counter()
+                with torch.cuda.stream(stream):
+                    g.replay()
+                stream.synchronize()
+                ts.append(time.perf_counter() - t0)
+            row[name] = round(1e6 * statistics.median(ts[50:]), 1)
+        e0, e1 = torch.cuda.Event(enable_timing=True), torch.cuda.Event(enable_timing=True)
+        with torch.cuda.stream(stream):
+            e0.record(stream)
+            for _ in range(200):
+                ring_gemv(d_in, w, 32, n=n, m=m, out=d_out)
+            e1.record(stream)
+        stream.synchronize()
+        row["kernel_b2b"] = round(1e3 * e0.elapsed_time(e1) / 200, 1)
+        out[f"{n}x{m}"] = row
+    return out
+
+
+def lm_head_bench(dev: torch.device, shape: str, reps: int) -> dict[str, Any]:
+    """The fixed-order LM head on the GPU (:mod:`pgw.engine.lm_head_gpu`) vs the native CPU kernel: self-check
+    (bit for bit) and median ms per 1-row call."""
+    from pgw.engine.lm_head import lm_head_logits
+    from pgw.engine.lm_head_gpu import GpuLmHead
+
+    v, d = (int(t) for t in shape.split("x"))
+    g = torch.Generator().manual_seed(3)
+    w = (torch.randn(v, d, generator=g) * 0.03).to(torch.bfloat16)
+    t0 = time.perf_counter()
+    head = GpuLmHead(w, dev)
+    why = head.self_check(w)
+    out: dict[str, Any] = {"shape": shape, "setup_s": round(time.perf_counter() - t0, 2), "self_check": why or "ok"}
+    h = torch.randn(1, d, generator=g)
+    bad = 0
+    for i in range(20):
+        hh = h * (i + 1) * 0.3
+        bad += int(not torch.equal(head.logits(hh).view(torch.int32), lm_head_logits(hh, w).view(torch.int32)))
+    out["mismatches_20_rows"] = bad
+    for name, fn in (("gpu_ms", lambda: head.logits(h)), ("cpu_ms", lambda: lm_head_logits(h, w))):
+        ts = []
+        for _ in range(reps + 1):
+            t1 = time.perf_counter()
+            fn()
+            ts.append(time.perf_counter() - t1)
+        out[name] = round(1e3 * statistics.median(ts[1:]), 3)
+    for bv in (32, 128):
+        alt = GpuLmHead(w, dev, block_v=bv)
+        alt.logits(h)
+        ts = []
+        for _ in range(reps):
+            t1 = time.perf_counter()
+            alt.logits(h)
+            ts.append(time.perf_counter() - t1)
+        out[f"gpu_block{bv}_ms"] = round(1e3 * statistics.median(ts), 3)
+        out[f"gpu_block{bv}_equal"] = bool(torch.equal(alt.logits(h), head.logits(h)))
+        del alt
+    return out
 
 
 if __name__ == "__main__":
