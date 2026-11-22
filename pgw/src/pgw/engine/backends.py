@@ -972,7 +972,8 @@ class MaskedBackend(LinearBackend):
         #: :meth:`_local_fast` on ``pgw_fast.local_linear_into`` (one fused native call; ``PGW_LOCAL_NATIVE=0``
         #: keeps the numpy + ``torch._int_mm`` form). Same self-check per shape against the reference.
         self._local_native = _env_flag("PGW_LOCAL_NATIVE", True) and native_available("local_linear_into")
-        self._local_w8n: dict[str, np.ndarray] = {}
+        #: ``lid.key -> (w8t tensor, its numpy view)``; the tensor is held so the identity check is sound.
+        self._local_w8n: dict[str, tuple[torch.Tensor, np.ndarray]] = {}
         #: ``n * m`` from which a native local linear spreads its columns over the native pool.
         self.local_pool_min_macs = 4 << 20
         #: The local-linear decision and its calibration inputs (public configuration; logged at start).
@@ -2206,9 +2207,10 @@ class MaskedBackend(LinearBackend):
             # pgw_fast.local_linear_into: the same quantizer (zero mask), the exact int8 product as one
             # int16 x int8 GEMV with int64 flushes, the same range check and rescale; no temporaries
             scale, bias, bound = self._consts(lid, meta)
-            w8n = self._local_w8n.get(lid.key)
-            if w8n is None:
-                w8n = self._local_w8n[lid.key] = w.w8t.numpy()
+            hit = self._local_w8n.get(lid.key)
+            if hit is None or hit[0] is not w.w8t:  # same linear key, other weights (reload, other pack)
+                hit = self._local_w8n[lid.key] = (w.w8t, w.w8t.numpy())
+            w8n = hit[1]
             res = np.empty((rows, meta.out_features), dtype=np.float32)
             sx = np.empty(rows, dtype=np.float64)
             try:

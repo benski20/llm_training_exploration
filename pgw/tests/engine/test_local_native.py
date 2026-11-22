@@ -107,3 +107,21 @@ def test_native_local_env_off(qwen_pack: InMemoryPack, monkeypatch: pytest.Monke
     assert not be._local_w8n
     assert torch.equal(got, be._local_reference(x, be._meta.get(lid), be._local_w.get(lid), lid))
     be.close()
+
+
+def test_native_local_view_follows_reloaded_weights(qwen_pack: InMemoryPack) -> None:
+    """The cached int8 view is tied to the weight tensor it came from: reloaded weights (same linear key)
+    are read from the new tensor, never from a stale view."""
+    be = _backend(qwen_pack)
+    lid = LinearId(0, LinearKind.QKV)
+    x = torch.randn(1, qwen_pack.arch.hidden_size)
+    be._forward_local_one(LinearCall(lid, x))
+    first = be._local_w8n[lid.key][0]
+    assert be._local_w is not None
+    be._local_w._cache.clear()  # the next get() converts a fresh tensor
+    w = be._local_w.get(lid)
+    assert w.w8t is not first
+    got = be._forward_local_one(LinearCall(lid, x))
+    assert be._local_w8n[lid.key][0] is w.w8t
+    assert torch.equal(got, be._local_reference(x, be._meta.get(lid), w, lid))
+    be.close()
