@@ -947,6 +947,7 @@ class MaskedBackend(LinearBackend):
         #: within the same layer (down's prepare joins it), so no cache entry depends on it.
         self.defer_min_out = 16384
         self._trip_checked: dict[tuple[int, int, float], bool] = {}
+        self._defer_memo: dict[tuple[Any, int], bool] = {}
         self._final_ordinal: int | None = None
         self._pending: list[_PendingCheck] = []
         #: Failed deferred checks harvested outside their own session's path: raised in that
@@ -962,6 +963,19 @@ class MaskedBackend(LinearBackend):
         self._local_fast_on: bool | None = None
         self._local_fast_checked: dict[tuple[int, int, float, int], bool] = {}
         self._local_zero_r: dict[int, np.ndarray] = {}
+        #: Single-session decode prefetch (:meth:`_maybe_prefetch`): on with synchronous trips (the gateway
+        #: thread then waits in a GIL-free ``recv`` during every trip, which is when the prefetch thread
+        #: derives); ``PGW_PREFETCH_DECODE`` overrides. Rows staged per (reservation, linear) at a time.
+        self.prefetch_decode = self.mask_prefetch and _env_flag("PGW_PREFETCH_DECODE", self.sync_trips)
+        self.decode_prefetch_rows = 8
+        self._decode_pf: dict[tuple[int, str], int] = {}
+        #: :meth:`_local_fast` on ``pgw_fast.local_linear_into`` (one fused native call; ``PGW_LOCAL_NATIVE=0``
+        #: keeps the numpy + ``torch._int_mm`` form). Same self-check per shape against the reference.
+        self._local_native = _env_flag("PGW_LOCAL_NATIVE", True) and native_available("local_linear_into")
+        #: ``lid.key -> (w8t tensor, its numpy view)``; the tensor is held so the identity check is sound.
+        self._local_w8n: dict[str, tuple[torch.Tensor, np.ndarray]] = {}
+        #: ``n * m`` from which a native local linear spreads its columns over the native pool.
+        self.local_pool_min_macs = 4 << 20
         #: The local-linear decision and its calibration inputs (public configuration; logged at start).
         self.local_policy: dict[str, Any] = {"mode": "off", "kinds": ()}
         if local_max_rows is not None and int(local_max_rows) < 1:
@@ -1269,9 +1283,15 @@ class MaskedBackend(LinearBackend):
         linears with at least :attr:`defer_min_out` outputs (a public per-linear choice)."""
         if not self.deferred_check or not isinstance(lid, LinearId):
             return False
-        if lid.ordinal >= self._final_linear_ordinal():
-            return False
-        return int(self._meta.get(lid).out_features) >= int(self.defer_min_out)
+        ck = (lid, int(self.defer_min_out))
+        hit = self._defer_memo.get(ck)
+        if hit is None:  # a public per-linear decision: computed once per (linear, threshold)
+            hit = (lid.ordinal < self._final_linear_ordinal()
+                   and int(self._meta.get(lid).out_features) >= int(self.defer_min_out))
+            if len(self._defer_memo) > 65536:
+                self._defer_memo.clear()
+            self._defer_memo[ck] = hit
+        return hit
 
     def _prepare_trip(self, calls: Sequence[LinearCall]) -> _Prepared:
         """:meth:`_prepare_native` on ``pgw_fast.trip_prepare_into`` (constant-time width selection).
@@ -1854,6 +1874,23 @@ class MaskedBackend(LinearBackend):
         cap = int(self.prefetch_max_rows)
         items = [(res, lid, rows * max(1, int(self.prefetch_depth))) for res, lid, rows in need.values()
                  if 0 < rows <= cap and (multi or rows >= 3)]
+        if not items and self.prefetch_decode:
+            # Single-session decode (L2): stage the next ``decode_prefetch_rows`` rows of this (reservation,
+            # linear) once every ``decode_prefetch_rows`` calls, so the derivation runs on the prefetch
+            # thread while trips are in flight (the gateway thread waits in recv, GIL free) and the next
+            # tokens take staged rows. Same rows, same order (a cache of the next takes); nothing sent changes.
+            depth = int(self.decode_prefetch_rows)
+            for key, (res, lid, rows) in need.items():
+                if rows > 2:
+                    continue
+                left = self._decode_pf.get(key, 0) - rows
+                if left > 0:
+                    self._decode_pf[key] = left
+                    continue
+                self._decode_pf[key] = max(1, depth)
+                items.append((res, lid, depth))
+            if len(self._decode_pf) > 4096:  # bounded (keys of ended sessions)
+                self._decode_pf.clear()
         if not items:
             return
         with self._prefetch_lock:
@@ -2123,8 +2160,12 @@ class MaskedBackend(LinearBackend):
         on = self._local_fast_on
         if on is None:
             ring = self.ring
+            native_ok = self._local_native and ring.k % 8 == 0 and 8 <= ring.k <= 56
+            if not native_ok:
+                self._local_native = False
             on = self._local_fast_on = (_env_flag("PGW_LOCAL_FAST", True) and native_available("trip_prepare_into")
-                                        and ring.k == 32 and ring.a <= 15 and cpu_int8_fast())
+                                        and ring.a <= 15
+                                        and (native_ok or (ring.k == 32 and cpu_int8_fast())))
         if not on:
             return False
         key = (meta.in_features, meta.out_features, float(meta.wnorm or 0.0), id(w))
@@ -2162,6 +2203,28 @@ class MaskedBackend(LinearBackend):
         so the same bits as :meth:`_local_reference` (self-checked per shape)."""
         ring = self.ring
         rows, n = xf.shape
+        if self._local_native and w.w8t.device.type == "cpu" and w.w8t.is_contiguous():
+            # pgw_fast.local_linear_into: the same quantizer (zero mask), the exact int8 product as one
+            # int16 x int8 GEMV with int64 flushes, the same range check and rescale; no temporaries
+            scale, bias, bound = self._consts(lid, meta)
+            hit = self._local_w8n.get(lid.key)
+            if hit is None or hit[0] is not w.w8t:  # same linear key, other weights (reload, other pack)
+                hit = self._local_w8n[lid.key] = (w.w8t, w.w8t.numpy())
+            w8n = hit[1]
+            res = np.empty((rows, meta.out_features), dtype=np.float32)
+            sx = np.empty(rows, dtype=np.float64)
+            try:
+                status = native.fast.local_linear_into(
+                    xf, w8n, scale, bias, ring.k, ring.a, int(ring.cap or 0),
+                    float(meta.wnorm or 0.0) if ring.cap else 0.0, bound,
+                    sx, res, 0 if n * meta.out_features >= self.local_pool_min_macs else 1)
+            except ValueError as exc:
+                if str(exc).startswith("ring_overflow"):
+                    raise RingOverflowError(str(exc).split(":", 1)[-1].strip()) from exc
+                raise ShapeError(str(exc)) from exc
+            if status:
+                self._raise_status(int(status), 0, lid, rows, bound)
+            return torch.from_numpy(res)
         zeros = self._local_zero_r.get(n)
         if zeros is None or zeros.shape[0] < rows:
             zeros = self._local_zero_r[n] = np.zeros((self.local_fast_max_rows, n), dtype=np.int64)
@@ -2359,7 +2422,7 @@ class MaskedBackend(LinearBackend):
         request = None
         if chunks:
             request = ComputeRequest(
-                request_id=uuid.uuid4().hex,
+                request_id=os.urandom(16).hex(),  # 32 random hex digits, as uuid4().hex (cheaper)
                 fingerprint=self.fingerprint,
                 ring=self.ring.name,
                 items=tuple(ComputeItem(ch.lid.key, ch.rows, ch.payload) for ch in chunks),  # type: ignore[arg-type]

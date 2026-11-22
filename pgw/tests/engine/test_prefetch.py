@@ -155,6 +155,40 @@ def test_single_stream_decode_does_not_prefetch(twin: Any, tiny_pack: Any) -> No
 
 
 @native_many
+@pytest.mark.parametrize("wait", [True, False], ids=["staged", "racing"])
+def test_single_session_decode_prefetch_is_byte_identical(twin: Any, tiny_pack: Any, wait: bool) -> None:
+    """L2: with ``prefetch_decode`` (default with synchronous trips) one session's 1-row decode stages its next
+    rows in the background: same payloads, outputs and consumption as no prefetch, across extent ends,
+    whether the stage is ready (``staged``) or still running when the next take comes (``racing``)."""
+    sa, sb = twin
+    tok = ChatTokenizer.from_pack(tiny_pack)
+    ca, cb = RecordingClient(tiny_pack), RecordingClient(tiny_pack)
+    ba = _backend(tiny_pack, ca, mask_prefetch=False)
+    bb = _backend(tiny_pack, cb)
+    assert not bb.prefetch_decode  # off without a synchronous-trip client
+    bb.prefetch_decode = True
+    if wait:
+        bb = _waiting(bb)
+    params = SamplingParams(max_tokens=24, temperature=0, ignore_eos=True)
+    prompt = [256, 72, 105, 33]
+    outs, sessions = [], []
+    for store, backend in ((sa, ba), (sb, bb)):
+        res = store.reserve(tiny_pack.fingerprint, RING, 40)
+        sessions.append(res)
+        outs.append(Generator(TransformerModel(tiny_pack, backend), tok).generate(prompt, params, session=res))
+    assert outs[0].token_ids == outs[1].token_ids
+    assert outs[0].logprobs == outs[1].logprobs
+    assert ca.items == cb.items  # the provider sees exactly the same bytes
+    assert bb.wait_prefetch(10.0) and bb.prefetched_rows > 0
+    for key in sessions[0].linear_keys:
+        assert sessions[0].taken(key) == sessions[1].taken(key)
+    for s in sessions:
+        s.close()
+    assert not sessions[1]._stage
+    bb.close()
+
+
+@native_many
 @pytest.mark.parametrize("noise", [False, True])
 def test_prepare_many_equals_per_item(qwen_pack: Any, noise: bool) -> None:
     """Several sessions, a prefill block, segment boundaries and item splits: the same request
