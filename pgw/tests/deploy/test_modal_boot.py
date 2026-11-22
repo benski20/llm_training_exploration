@@ -194,10 +194,24 @@ def test_customer_memory_matches_boot() -> None:
     assert boot.customer_memory_mib("qwen2.5-1.5b-instruct") == boot.CUSTOMER_MEMORY_MIB["large"]
     # the co-located container: the provider's 6 GiB plus the same gateway rule
     col = (MODAL_DIR / "colocated.py").read_text()
-    m = re.search(r"MEMORY_MIB = 6144 \+ \((\d+) if DRAFT or MODEL_NAME != \"([^\"]+)\" else (\d+)\)", col)
+    m = re.search(r"else 6144 \+ \((\d+) if DRAFT or MODEL_NAME != \"([^\"]+)\" else (\d+)\)", col)
     assert m is not None
     assert (int(m.group(1)), m.group(2), int(m.group(3))) == (
         boot.CUSTOMER_MEMORY_MIB["large"], boot.MODEL_NAME, boot.CUSTOMER_MEMORY_MIB["default"])
+    # the 7B (co-located only): 16 GiB provider + 48 GiB gateway, and its own ephemeral disk
+    assert 'MEMORY_MIB = (16384 + 49152 if MODEL_NAME == "qwen2.5-7b-instruct"' in col
+    assert "ephemeral_disk=EPHEMERAL_DISK_MIB" in col
+
+
+def test_factory_keep_up_scales_with_the_target() -> None:
+    boot = _boot()
+    base = boot.factory_keep_up("qwen2.5-0.5b-instruct")
+    assert base == boot.COLOCATED_FACTORY_KEEP_UP
+    big = boot.factory_keep_up("qwen2.5-7b-instruct")
+    assert big["PGW_FACTORY_SEGMENT_SLOTS"] == "512" and big["PGW_FACTORY_TARGET_SLOTS"] == "2048"
+    assert big["PGW_FACTORY_YIELD_HORIZON_S"] == base["PGW_FACTORY_YIELD_HORIZON_S"]  # seconds are not slots
+    env = boot.colocated_gateway_env("attention_down", "qwen2.5-1.5b-instruct")
+    assert env["PGW_FACTORY_SEGMENT_SLOTS"] == "1024" and env["PGW_FACTORY_SKIP_LINEAR_KINDS"] == "qkv,o,down"
 
 
 def test_lane_tls_options_validate_against_the_gateway_config(tmp_path: Path) -> None:

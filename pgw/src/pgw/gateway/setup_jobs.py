@@ -218,10 +218,16 @@ class HintBuildJob(_Job):
 
                     w = threading.Thread(target=watch, daemon=True)
                     w.start()
+                    gpu = self._gpu_planes(pack)
                     try:
-                        HintStore.build(self.hint_root, pack, rank, q_bits=q_bits)
+                        t0 = time.monotonic()
+                        HintStore.build(self.hint_root, pack, rank, q_bits=q_bits, planes_fn=gpu)
+                        log.info("encryption hint built on the %s in %.0f s", "GPU" if gpu is not None else "CPU",
+                                 time.monotonic() - t0)
                     finally:
                         stop.set()
+                        if gpu is not None:
+                            gpu.release()
                     self.update(done=total)
             self.update(phase="done", message="Encryption hint ready", finished_at=time.time())
         except BaseException as exc:
@@ -230,6 +236,28 @@ class HintBuildJob(_Job):
             if self.on_done is not None:
                 with contextlib.suppress(Exception):
                     self.on_done(self.status())
+
+
+    @staticmethod
+    def _gpu_planes(pack: Any) -> Any:
+        """``PGW_HINT_DEVICE=cuda`` (off by default): the hint's GEMMs on the gateway's own GPU
+        (:class:`pgw.hemask.hint_gpu.GpuHintPlanes`, the same bits), after a self-check against the CPU path on
+        the pack's linear shapes; ``None`` (the CPU path) when unset, unavailable or the check fails."""
+        dev = os.environ.get("PGW_HINT_DEVICE", "").strip().lower()
+        if dev in ("", "cpu", "0", "off"):
+            return None
+        try:
+            from pgw.hemask.hint_gpu import GpuHintPlanes
+
+            gpu = GpuHintPlanes(dev)
+        except Exception as exc:
+            log.warning("PGW_HINT_DEVICE=%s unavailable (%s); building the hint on the CPU", dev, exc)
+            return None
+        shapes = sorted({(int(sp.out_features), int(sp.in_features)) for sp in pack.linear_specs()})
+        if not gpu.self_check(shapes):
+            return None
+        log.info("encryption hint: GEMMs on %s (self-check passed on %d linear shapes)", dev, len(shapes))
+        return gpu
 
 
 class FactorySupervisor:

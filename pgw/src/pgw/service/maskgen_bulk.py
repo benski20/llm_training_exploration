@@ -9,7 +9,10 @@ msgpack copy of ``y``). TLS reads and writes run on the connection's thread with
 
 Limits: at most ``max_conns`` connections (others get one ``unavailable`` reply and are closed), a
 handshake and first-byte timeout, an idle timeout between requests, ``max_request_bytes`` per body
-(checked before the body is read) and :data:`pgw.hemask.bulk.MAX_META_BYTES` per meta map.
+(checked before the body is read), :data:`pgw.hemask.bulk.MAX_META_BYTES` per meta map, and the
+service's shared request-body budget (``body_budget``, the compute and HTTP maskgen routes' own
+:class:`pgw.wire.server.ByteBudget`): a body is reserved against it before it is read and released once
+its reply is written; a refused body gets ``unavailable`` (Retry-After) and the connection is closed.
 """
 
 from __future__ import annotations
@@ -65,8 +68,9 @@ class MaskgenBulkServer:
     def __init__(self, handler: Any, loop: asyncio.AbstractEventLoop, ssl_context: ssl.SSLContext | None, *,
                  host: str, port: int, verify_peer: bool = False, max_conns: int = 16,
                  max_request_bytes: int = DEFAULT_MAX_MASKGEN_BYTES, idle_timeout_s: float = 300.0,
-                 io_timeout_s: float = 120.0, request_timeout_s: float = 600.0):
+                 io_timeout_s: float = 120.0, request_timeout_s: float = 600.0, body_budget: Any = None):
         self.handler = handler
+        self.body_budget = body_budget
         self.loop = loop
         self.ssl_context = ssl_context
         self.verify_peer = verify_peer
@@ -88,6 +92,7 @@ class MaskgenBulkServer:
         self._thread: threading.Thread | None = None
         self.requests = 0
         self.refused = 0
+        self.refused_budget = 0
 
     def start(self) -> None:
         self._thread = threading.Thread(target=self._accept_loop, name="pgw-maskgen-bulk-accept", daemon=True)
@@ -211,21 +216,33 @@ class MaskgenBulkServer:
         except Exception as exc:
             self._reply_error(sock, exc, rid)
             return False  # the body was not read: the stream is out of sync
-        body = recv_exact(sock, body_len)
+        budget = self.body_budget
+        if budget is not None and not budget.try_acquire(body_len):
+            from pgw.wire.server import _budget_exhausted
+
+            self.refused_budget += 1
+            self._reply_error(sock, _budget_exhausted(budget, body_len), rid)
+            return False  # the body was not read: the stream is out of sync
         try:
-            versions = _served_versions(self.handler)
-            req = decode_maskgen_request(body, versions)
-            del body
-            rid = req.request_id
-            resp = self._run(self.handler.maskgen(req, identity), self.request_timeout_s)
-            parts = encode_maskgen_response_parts(dataclasses.replace(resp, version=req.version, versions=versions))
-        except Exception as exc:
-            if not (isinstance(exc, PGWError) and exc.code != ErrorCode.INTERNAL):
-                log.error("pgw maskgen (bulk) internal error", extra={"request_id": rid}, exc_info=exc)
-            self._reply_error(sock, exc, rid)
-            return True
-        total = sum(len(memoryview(p).cast("B")) for p in parts)
-        send_parts(sock, [REPLY_HEADER.pack(REPLY_MAGIC, BULK_VERSION, 200, 0, total), *parts])
+            body = recv_exact(sock, body_len)
+            try:
+                versions = _served_versions(self.handler)
+                req = decode_maskgen_request(body, versions)
+                del body
+                rid = req.request_id
+                resp = self._run(self.handler.maskgen(req, identity), self.request_timeout_s)
+                parts = encode_maskgen_response_parts(dataclasses.replace(resp, version=req.version,
+                                                                          versions=versions))
+            except Exception as exc:
+                if not (isinstance(exc, PGWError) and exc.code != ErrorCode.INTERNAL):
+                    log.error("pgw maskgen (bulk) internal error", extra={"request_id": rid}, exc_info=exc)
+                self._reply_error(sock, exc, rid)
+                return True
+            total = sum(len(memoryview(p).cast("B")) for p in parts)
+            send_parts(sock, [REPLY_HEADER.pack(REPLY_MAGIC, BULK_VERSION, 200, 0, total), *parts])
+        finally:
+            if budget is not None:
+                budget.release(body_len)
         self.requests += 1
         return True
 

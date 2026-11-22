@@ -7,6 +7,7 @@ import os
 import socket
 import ssl
 import threading
+import time
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
@@ -377,3 +378,54 @@ def test_settings_refuse_plain_bulk_off_loopback() -> None:
         ServiceSettings(host="0.0.0.0", port=8443, maskgen_bulk_port=8444)  # noqa: S104
     with pytest.raises(ValueError, match="differ"):
         ServiceSettings(host="127.0.0.1", port=8443, maskgen_bulk_port=8443)
+
+
+def test_bulk_body_counts_against_the_shared_budget() -> None:
+    """The bulk channel reserves each body against the service's shared ByteBudget (the compute and HTTP maskgen
+    routes' own) before reading it, refuses with a retryable 'unavailable' when it does not fit, and releases it."""
+    from pgw.service.maskgen_bulk import MaskgenBulkServer
+    from pgw.wire.server import ByteBudget
+
+    body, req = _req_body()
+    loop = asyncio.new_event_loop()
+    t = threading.Thread(target=loop.run_forever, daemon=True)
+    t.start()
+    h = _Handler()
+    budget = ByteBudget(len(body) + 16)
+    srv = MaskgenBulkServer(h, loop, None, host="127.0.0.1", port=0, max_conns=2, max_request_bytes=1 << 20,
+                            body_budget=budget)
+    srv.start()
+    cli = BulkMaskgenClient("127.0.0.1", srv.port, ssl_context=None, server_hostname=None,
+                            authorization=f"Bearer {TOKEN_A}")
+    try:
+        assert cli.call(body, req.request_id, bytes)
+
+        def released() -> bool:  # released once the reply was written (just after the client has it)
+            end = time.monotonic() + 5
+            while budget.used and time.monotonic() < end:
+                time.sleep(0.005)
+            return budget.used == 0
+
+        assert released() and h.calls == 1
+        assert budget.try_acquire(32)  # another listener holds part of the budget: this body no longer fits
+        with pytest.raises(PGWError) as ei:
+            cli.call(body, req.request_id, bytes)
+        assert ei.value.code == ErrorCode.UNAVAILABLE and ei.value.retryable
+        assert h.calls == 1 and srv.refused_budget == 1 and budget.used == 32
+        budget.release(32)
+        assert cli.call(body, req.request_id, bytes) and h.calls == 2 and released()
+    finally:
+        cli.close()
+        srv.close()
+        loop.call_soon_threadsafe(loop.stop)
+        t.join(5)
+
+
+def test_service_app_shares_one_body_budget() -> None:
+    """The compute routes, POST /pgw/v1/maskgen and the bulk channel use one ByteBudget (the app state's)."""
+    from pgw.service.app import create_app
+
+    app = create_app(ServiceSettings(host="127.0.0.1", port=8443, packs=[], max_inflight_bytes=1 << 30,
+                                     allow_unauthenticated=True))
+    budget = app.state.pgw.body_budget
+    assert budget is not None and budget.total == 1 << 30

@@ -62,6 +62,9 @@ class ServiceState:
     _device_checked_at: float = 0.0
     #: the native trip lane (``lane != "off"``), started with the batcher
     lane: Any = None
+    #: request-body bytes buffered at once, shared by the compute routes, ``/pgw/v1/maskgen`` and the bulk
+    #: maskgen channel (``max_inflight_bytes``, at least one request's ``max_request_bytes``)
+    body_budget: Any = None
 
     @property
     def draining(self) -> bool:
@@ -252,8 +255,11 @@ def create_app(
         max_request_bytes=s.max_request_bytes, max_items=s.max_items, max_rows_per_item=s.max_rows_per_item,
         stream=s.stream_channel,
     )
+    from pgw.wire.server import ByteBudget
+
+    state.body_budget = ByteBudget(max(s.max_inflight_bytes, s.max_request_bytes))
     wire_router = create_router(state.handler, limits=limits, max_deadline_s=s.max_deadline_s,
-                                max_inflight_bytes=max(s.max_inflight_bytes, s.max_request_bytes))
+                                body_budget=state.body_budget)
     app.include_router(wire_router)
     from pgw.service.lane import add_lane_routes
 
@@ -261,7 +267,9 @@ def create_app(
     from pgw.hemask.server import add_maskgen_route
 
     # Encrypted mask generation: W8 times MLWE ciphertexts (the provider never sees the masks).
-    add_maskgen_route(app, state.handler)
+    # The same body budget as the compute routes: a maskgen body (up to 512 MiB) counts against the service's
+    # max_inflight_bytes (a request larger than the budget alone is refused with 'unavailable').
+    add_maskgen_route(app, state.handler, body_budget=state.body_budget)
     from pgw.wire.server import ComputeFastPath
 
     # Innermost middleware: compute requests skip routing and framework middleware (hot path). Any

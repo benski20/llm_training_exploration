@@ -93,7 +93,13 @@ TUNNEL_FLOOR_MS = 3.0
 #: Default ``--schedule-timeout-min`` (minutes until both ``*_boot`` markers): without / with a GPU.
 I6PN_SCHEDULE_TIMEOUT_MIN = {False: 6.0, True: 10.0}
 #: Targets ``--model`` accepts (the same table as ``pgw_modal_boot.MODELS`` / ``provider.py``).
-MODELS = ("qwen2.5-0.5b-instruct", "qwen2.5-1.5b-instruct", "qwen2.5-3b-instruct")
+MODELS = ("qwen2.5-0.5b-instruct", "qwen2.5-1.5b-instruct", "qwen2.5-3b-instruct", "qwen2.5-7b-instruct")
+#: Targets served only by the co-located placement (``colocated.py`` sizes memory and disk for them; the
+#: two-container apps do not): ``--model`` refuses them elsewhere and ``--placement colocated`` deploys only
+#: ``colocated.py`` for them (no tunnel fallback).
+COLOCATED_ONLY_MODELS = ("qwen2.5-7b-instruct",)
+#: Port of the provider's bulk maskgen channel in the co-located container (``--he-bulk``; 127.0.0.1 only).
+HE_BULK_PORT = 8445
 DEFAULT_MODEL = MODELS[0]
 
 
@@ -126,7 +132,15 @@ def customer_gib() -> int:
     """Customer memory as ``customer.py`` sets it: 16 GiB with a target larger than the 0.5B or the draft
     (``PGW_MODAL_MODEL`` / ``PGW_MODAL_DRAFT``), else 8."""
     model = (os.environ.get("PGW_MODAL_MODEL") or DEFAULT_MODEL).strip().lower()
+    if model in COLOCATED_ONLY_MODELS:  # colocated.py: the 7B's gateway party (pack, hint pages, factory)
+        return 48
     return 16 if os.environ.get("PGW_MODAL_DRAFT", "0") == "1" or model != DEFAULT_MODEL else 8
+
+
+def provider_gib() -> int:
+    """Provider memory: 6 GiB, 16 GiB for a co-located-only target (the 7B pack is staged in host memory)."""
+    model = (os.environ.get("PGW_MODAL_MODEL") or DEFAULT_MODEL).strip().lower()
+    return 16 if model in COLOCATED_ONLY_MODELS else 6
 
 
 def cost_per_h(gpu: str | None, cpus: float | None = None) -> dict[str, float]:
@@ -137,7 +151,7 @@ def cost_per_h(gpu: str | None, cpus: float | None = None) -> dict[str, float]:
         prov += GPU_PRICE_H[gpu]
     cgpu = normalize_gpu(os.environ.get("PGW_MODAL_CUSTOMER_GPU"))
     cust = (GPU_PRICE_H[cgpu] if cgpu else 0.0) + 4 * CORE_H + customer_gib() * GIB_H
-    return {APPS[0]: prov + 6 * GIB_H, APPS[1]: cust}
+    return {APPS[0]: prov + provider_gib() * GIB_H, APPS[1]: cust}
 
 
 def normalize_gpu(value: str | None) -> str | None:
@@ -191,6 +205,11 @@ def deploy(gpu: str | None, customer_gpu: str | None = None, placement: str = "t
     if region is not None:
         env["PGW_MODAL_REGION"] = region
     files = ["provider.py", "customer.py"] + (["colocated.py"] if placement == "colocated" else [])
+    if placement == "colocated" and (model in COLOCATED_ONLY_MODELS
+                                     or os.environ.get("PGW_MODAL_DEPLOY_COLOCATED_ONLY", "0") == "1"):
+        # the two-container apps would pack the target too (minutes of image build) for a fallback that cannot
+        # serve it; PGW_MODAL_DEPLOY_COLOCATED_ONLY=1 does the same for any target (no tunnel fallback then)
+        files = ["colocated.py"]
     for f in files:
         subprocess.run(["modal", "deploy", str(HERE / f)], check=True, env=env)  # noqa: S603, S607
 
@@ -471,7 +490,17 @@ def _spawner(args: argparse.Namespace) -> Callable[..., Pair]:
     penv = parse_env_pairs(getattr(args, "provider_env", None) or [])
     sustain = float(getattr(args, "sustain_s", 0.0) or 0.0)
 
+    colocated_only = (getattr(args, "model", DEFAULT_MODEL) in COLOCATED_ONLY_MODELS
+                      or os.environ.get("PGW_MODAL_DEPLOY_COLOCATED_ONLY", "0") == "1")
+    if getattr(args, "he_bulk", False):  # --he-bulk: the provider's bulk maskgen channel, used by the factory
+        penv.setdefault("PGW_SERVICE_MASKGEN_BULK_PORT", str(HE_BULK_PORT))
+        genv.setdefault("PGW_FACTORY_HE_BULK_PORT", str(HE_BULK_PORT))
+        genv.setdefault("PGW_FACTORY_HE_BULK_SPLIT", str(int(getattr(args, "he_bulk_split", 2) or 1)))
+
     def spawn(live: Any, placement: str | bool, ttl_s: int, e2e: bool) -> Pair:
+        if colocated_only and normalize_placement(placement) != "colocated":
+            raise SystemExit("the co-located pair was not scheduled and only colocated.py is deployed (target "
+                             f"{getattr(args, 'model', '?')}): no tunnel fallback; try again later")
         # a tunnel fallback of a co-located --lane tls run uses the stream lane (no provider lane port there)
         if normalize_placement(placement) != "colocated":
             return spawn_pair(live, placement, ttl_s, e2e, local_linears=local, spec_rows=spec_rows, lane="stream")
@@ -641,6 +670,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                          "time; PGW_MODAL_GATEWAY_GPU=1). Each party's process sees only its own GPU; the gateway "
                          "computes its exact local linears there (self-checked bit-identical, else the CPU). "
                          "Default off")
+    ap.add_argument("--he-bulk", action=argparse.BooleanOptionalAction, default=None,
+                    help="--placement colocated: the encrypted mask factory sends its maskgen requests over the "
+                         f"provider's bulk channel (threaded TLS sockets on 127.0.0.1:{HE_BULK_PORT}; the same "
+                         "request and reply bodies, authentication and admission as POST /pgw/v1/maskgen; a "
+                         "transport failure resends over HTTP). Default: on co-located (measured exact), "
+                         "--no-he-bulk = HTTP only")
+    ap.add_argument("--he-bulk-split", type=int, default=2,
+                    help="with --he-bulk: a multi-group maskgen request goes out as up to N concurrent whole-group "
+                         "requests (PGW_FACTORY_HE_BULK_SPLIT; default 2)")
     args = ap.parse_args(argv)
     try:
         parse_env_pairs(args.gateway_env)
@@ -700,6 +738,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     args.model = args.model.strip().lower()
     if args.model not in MODELS:
         ap.error(f"--model / PGW_MODAL_MODEL: use one of {', '.join(MODELS)}")
+    if args.model in COLOCATED_ONLY_MODELS and args.placement != "colocated":
+        ap.error(f"--model {args.model} is served by --placement colocated only (memory and disk are sized there)")
+    if args.he_bulk is None:
+        args.he_bulk = args.placement == "colocated"
+    if args.he_bulk and args.placement != "colocated":
+        ap.error("--he-bulk needs --placement colocated (the provider's bulk port is on its host only)")
+    if not 1 <= args.he_bulk_split <= 8:
+        ap.error("--he-bulk-split must be in [1, 8]")
     if args.spec_rows != 0 and not 2 <= args.spec_rows <= 8:
         ap.error("--spec-rows must be 0 (off) or in [2, 8]")
     if args.spec_draft and not args.spec_rows:
