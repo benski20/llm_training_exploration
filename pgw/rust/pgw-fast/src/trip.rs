@@ -99,6 +99,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(trip_finish_into, m)?)?;
     m.add_function(wrap_pyfunction!(trip_freivalds_output, m)?)?;
     m.add_function(wrap_pyfunction!(trip_freivalds_submit, m)?)?;
+    m.add_function(wrap_pyfunction!(trip_prime_output, m)?)?;
     m.add_class::<TripCheck>()?;
     Ok(())
 }
@@ -416,6 +417,7 @@ fn prepare_block<W: Word, const NB: usize>(
     prm: PrepareParams,
     plan: &WidthPlan,
     half: Option<InputHalf<'_>>,
+    field: u64,
     out: PrepOut<'_>,
     row0: usize,
     sc: &mut Scratch,
@@ -439,6 +441,7 @@ fn prepare_block<W: Word, const NB: usize>(
                 prm,
                 plan,
                 half,
+                field,
                 sc,
                 &mut out.payload[t * n * NB..(t + 1) * n * NB],
                 xh,
@@ -464,7 +467,13 @@ fn prepare_block<W: Word, const NB: usize>(
         let xw_used = (n * std::mem::size_of::<W>()).div_ceil(8).min(sc.xw.len());
         wipe(&mut sc.xw[..xw_used]);
         if half.is_some() {
-            let ub_used = (BLOCK * std::mem::size_of::<W>()).div_ceil(8).min(sc.ubuf.len());
+            // the prime half keeps the row's xq (n u32 words) there
+            let ub_bytes = if field != 0 {
+                (n * 4).max(BLOCK * std::mem::size_of::<W>())
+            } else {
+                BLOCK * std::mem::size_of::<W>()
+            };
+            let ub_used = ub_bytes.div_ceil(8).min(sc.ubuf.len());
             wipe(&mut sc.ubuf[..ub_used]);
         }
         err
@@ -480,6 +489,7 @@ fn prepare_row<W: Word, const NB: usize>(
     prm: PrepareParams,
     plan: &WidthPlan,
     half: Option<InputHalf<'_>>,
+    field: u64,
     sc: &mut Scratch,
     payload: &mut [u8],
     xhat: Option<&mut [i64]>,
@@ -575,6 +585,41 @@ fn prepare_row<W: Word, const NB: usize>(
             *o = v.widen() as i64; // < 2^K
         }
     }
+    // prime-field input half (format "p31"): rhs_i = uw_i . xq (mod p), xq = centered(x_hat - r)
+    let rhs = match (field != 0, half, rhs) {
+        (true, Some(h), Some(rh)) => (h, rh),
+        (_, _, rhs) => {
+            return finish_ring_half::<W, NB>(xw, half, rhs, &mut sc.ubuf, n, kmask, s_sel);
+        }
+    };
+    {
+        let (h, rh) = rhs;
+        let shift = 32 - prm.k; // K <= 32 (validated): x_hat words fit in u32
+        let qv: &mut [u32] = words_mut::<u32>(&mut sc.ubuf, n);
+        for (o, (v, r)) in qv.iter_mut().zip(xw.iter().zip(rr)) {
+            // |xq| <= qmax < 2^31: the centered difference is exact
+            *o = ((((v.widen() as u32).wrapping_sub(*r as u32)) << shift) as i32 >> shift) as u32;
+        }
+        // SAFETY: u32 -> i32 reinterpretation of the same words (same size and alignment).
+        let xq = unsafe { std::slice::from_raw_parts(qv.as_ptr().cast::<i32>(), n) };
+        if let Src::U32(uw) = h.uw {
+            crate::prime::input_half_row(uw, xq, rh);
+        }
+    }
+    Ok(f64::from_bits(s_sel))
+}
+
+/// The ring input half of [`prepare_row`] (`rhs_i = uw_i . x_hat mod 2^K`), then the row's scale.
+#[inline(always)]
+fn finish_ring_half<W: Word, const NB: usize>(
+    xw: &[W],
+    half: Option<InputHalf<'_>>,
+    rhs: Option<&mut [u64]>,
+    ubuf: &mut Vec<u64>,
+    n: usize,
+    kmask: i64,
+    s_sel: u64,
+) -> Result<f64, RowErr> {
     // Freivalds input half: rhs_i = uw_i . x_hat (mod 2^K)
     if let (Some(h), Some(rh)) = (half, rhs) {
         let c = h.c;
@@ -584,7 +629,7 @@ fn prepare_row<W: Word, const NB: usize>(
                 *o = dot(xw, us).widen() & (kmask as u64);
             }
         } else {
-            let ub: &mut [W] = words_mut::<W>(&mut sc.ubuf, BLOCK);
+            let ub: &mut [W] = words_mut::<W>(ubuf, BLOCK);
             let mut acc = vec![W::default(); c];
             let mut b0 = 0;
             while b0 < n {
@@ -616,11 +661,12 @@ unsafe fn prepare_block_avx2<W: Word, const NB: usize>(
     prm: PrepareParams,
     plan: &WidthPlan,
     half: Option<InputHalf<'_>>,
+    field: u64,
     out: PrepOut<'_>,
     row0: usize,
     sc: &mut Scratch,
 ) -> Option<(usize, RowErr)> {
-    prepare_block::<W, NB>(x, r, n, prm, plan, half, out, row0, sc)
+    prepare_block::<W, NB>(x, r, n, prm, plan, half, field, out, row0, sc)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -631,6 +677,7 @@ fn prepare_block_dispatch<W: Word, const NB: usize>(
     prm: PrepareParams,
     plan: &WidthPlan,
     half: Option<InputHalf<'_>>,
+    field: u64,
     out: PrepOut<'_>,
     row0: usize,
 ) -> Option<(usize, RowErr)> {
@@ -640,9 +687,9 @@ fn prepare_block_dispatch<W: Word, const NB: usize>(
         #[cfg(target_arch = "x86_64")]
         if std::is_x86_feature_detected!("avx2") {
             // SAFETY: the CPU supports AVX2 (checked above).
-            return unsafe { prepare_block_avx2::<W, NB>(x, r, n, prm, plan, half, out, row0, sc) };
+            return unsafe { prepare_block_avx2::<W, NB>(x, r, n, prm, plan, half, field, out, row0, sc) };
         }
-        prepare_block::<W, NB>(x, r, n, prm, plan, half, out, row0, sc)
+        prepare_block::<W, NB>(x, r, n, prm, plan, half, field, out, row0, sc)
     })
 }
 
@@ -669,7 +716,35 @@ pub fn prepare_into(
     out: PrepOut<'_>,
     threads: usize,
 ) -> Result<(), PrepareError> {
+    prepare_into_field(x, r, n, prm, half, 0, out, threads)
+}
+
+/// [`prepare_into`] with the input half of a Freivalds check format: `field = 0` is the ring check
+/// (`rhs = uw . x_hat mod 2^K`), `field = `[`crate::prime::P31`] the prime-field check of the `"p31"`
+/// segment format (`rhs = uw . xq mod p` on the quantized input `xq`; `uw` must be `u32` words and
+/// `K <= 32`). Payload, `sx` and `x_hat` are the same bytes either way.
+#[allow(clippy::too_many_arguments)]
+pub fn prepare_into_field(
+    x: &[f32],
+    r: &[i64],
+    n: usize,
+    prm: PrepareParams,
+    half: Option<InputHalf<'_>>,
+    field: u64,
+    out: PrepOut<'_>,
+    threads: usize,
+) -> Result<(), PrepareError> {
     prm.validate()?;
+    if field != 0 {
+        if field != crate::prime::P31 || prm.k > 32 || n > crate::prime::MAX_LEN {
+            return Err(PrepareError::Invalid("the prime check needs field = 2^31 - 1 and K <= 32".into()));
+        }
+        if let Some(h) = half {
+            if !matches!(h.uw, Src::U32(_)) {
+                return Err(PrepareError::Invalid("the prime input half needs uw as uint32 words".into()));
+            }
+        }
+    }
     let nb = (prm.k / 8) as usize;
     let rows = out.sx.len();
     let c = half.map_or(0, |h| h.c);
@@ -694,13 +769,13 @@ pub fn prepare_into(
     }
     let plan = plan_for(n, prm);
     match prm.k {
-        8 => prepare_rows::<u32, 1>(x, r, n, prm, &plan, half, out, threads),
-        16 => prepare_rows::<u32, 2>(x, r, n, prm, &plan, half, out, threads),
-        24 => prepare_rows::<u32, 3>(x, r, n, prm, &plan, half, out, threads),
-        32 => prepare_rows::<u32, 4>(x, r, n, prm, &plan, half, out, threads),
-        40 => prepare_rows::<u64, 5>(x, r, n, prm, &plan, half, out, threads),
-        48 => prepare_rows::<u64, 6>(x, r, n, prm, &plan, half, out, threads),
-        _ => prepare_rows::<u64, 7>(x, r, n, prm, &plan, half, out, threads),
+        8 => prepare_rows::<u32, 1>(x, r, n, prm, &plan, half, field, out, threads),
+        16 => prepare_rows::<u32, 2>(x, r, n, prm, &plan, half, field, out, threads),
+        24 => prepare_rows::<u32, 3>(x, r, n, prm, &plan, half, field, out, threads),
+        32 => prepare_rows::<u32, 4>(x, r, n, prm, &plan, half, field, out, threads),
+        40 => prepare_rows::<u64, 5>(x, r, n, prm, &plan, half, field, out, threads),
+        48 => prepare_rows::<u64, 6>(x, r, n, prm, &plan, half, field, out, threads),
+        _ => prepare_rows::<u64, 7>(x, r, n, prm, &plan, half, field, out, threads),
     }
 }
 
@@ -712,6 +787,7 @@ fn prepare_rows<W: Word, const NB: usize>(
     prm: PrepareParams,
     plan: &WidthPlan,
     half: Option<InputHalf<'_>>,
+    field: u64,
     out: PrepOut<'_>,
     threads: usize,
 ) -> Result<(), PrepareError> {
@@ -728,7 +804,7 @@ fn prepare_rows<W: Word, const NB: usize>(
     let err = if !parallel {
         let mut o = PrepOut { payload, sx, xhat, rhs };
         let po = PrepOut { payload: &mut *o.payload, sx: &mut *o.sx, xhat: &mut *o.xhat, rhs: &mut *o.rhs };
-        let e = prepare_block_dispatch::<W, NB>(x, r, n, prm, plan, half, po, 0);
+        let e = prepare_block_dispatch::<W, NB>(x, r, n, prm, plan, half, field, po, 0);
         if e.is_some() {
             zero_prep(&mut o);
         }
@@ -765,6 +841,7 @@ fn prepare_rows<W: Word, const NB: usize>(
                 prm,
                 plan,
                 half,
+                field,
                 po,
                 row0,
             );
@@ -1197,12 +1274,15 @@ fn trip_width_window(n: usize, a: u32, cap: u32, wnorm: f64) -> PyResult<u32> {
 ///         and a writable uint64 ``rhs (rows, c)`` that receives ``uw . x_hat mod 2^K`` per row
 ///         (secret: zero it after the check).
 ///     threads: 1 = calling thread; 0 = the persistent pool for prefill-sized calls.
+///     field: Freivalds check format of ``uw``: 0 = the ring check (above); ``2**31 - 1`` = the
+///         prime-field check (segment format ``"p31"``): ``uw`` is uint32 ``u W mod p`` and ``rhs``
+///         receives ``uw . xq mod p`` on the quantized input ``xq`` (K <= 32).
 ///
 /// Bit-identical to ``quantize_mask_pack`` (same payload, ``sx`` and ``x_hat``; same
 /// ``ValueError("ring_overflow: ...")``), but every row evaluates the same public number of widths.
 /// On error every output buffer is zeroed. The GIL is released while computing.
 #[pyfunction]
-#[pyo3(signature = (x, r, k, a, cap, wnorm, payload, sx, xhat = None, uw = None, rhs = None, threads = 1))]
+#[pyo3(signature = (x, r, k, a, cap, wnorm, payload, sx, xhat = None, uw = None, rhs = None, threads = 1, field = 0))]
 #[allow(clippy::too_many_arguments)]
 fn trip_prepare_into<'py>(
     py: Python<'py>,
@@ -1218,6 +1298,7 @@ fn trip_prepare_into<'py>(
     uw: Option<&Bound<'py, PyAny>>,
     rhs: Option<&Bound<'py, PyAny>>,
     threads: usize,
+    field: u64,
 ) -> PyResult<()> {
     let prm = PrepareParams { k, a, cap, wnorm };
     prm.validate().map_err(PrepareError::into_py)?;
@@ -1290,7 +1371,7 @@ fn trip_prepare_into<'py>(
         None => &mut [],
     };
     let out = PrepOut { payload: pls, sx: sxs, xhat: xhs, rhs: rhs_s };
-    py.allow_threads(|| prepare_into(xs, rs, n, prm, half, out, threads)).map_err(PrepareError::into_py)
+    py.allow_threads(|| prepare_into_field(xs, rs, n, prm, half, field, out, threads)).map_err(PrepareError::into_py)
 }
 
 /// Fused finish of one chunk into a caller-owned output (the TripEngine's finish).
@@ -1553,6 +1634,63 @@ fn trip_freivalds_submit<'py>(
         (e.0)();
     }
     Ok(TripCheck { state, held: Mutex::new(Some(held)) })
+}
+
+/// ``trip_prime_output(y_hat, wr, u, rhs, k, bound) -> (status, bad_rows)``: the output half of the
+/// prime-field check (segment format ``"p31"``, ``p = 2**31 - 1``) on the unmasked outputs.
+///
+/// For every row ``yq = centered(y_hat - W r)`` (K bits), the range check ``|yq| <= bound`` and
+/// ``u . yq == rhs (mod p)`` for every check vector, with ``rhs (rows, c)`` from ``trip_prepare_into(...,
+/// field=2**31 - 1)``. ``y_hat``: bytes or uint8 array (``rows * m * K/8``); ``wr``: 2-D int64/uint64/uint32
+/// ``(rows, m)``, read only (call this *before* ``trip_finish_into`` wipes it); ``u``: uint32 ``(c, m)``;
+/// ``rhs``: uint64. ``K`` in {8, 16, 24, 32}. Statuses: 0 ok, 1 failed rows (``bad_rows``), 2 out of
+/// range, 3 ``u`` all zero. Exact modular arithmetic (AVX-512 / AVX2 / portable builds give the same
+/// integers); the GIL is released.
+#[pyfunction]
+fn trip_prime_output<'py>(
+    py: Python<'py>,
+    y_hat: &Bound<'py, PyAny>,
+    wr: &Bound<'py, PyAny>,
+    u: &Bound<'py, PyAny>,
+    rhs: &Bound<'py, PyAny>,
+    k: u32,
+    bound: u64,
+) -> PyResult<(u8, usize)> {
+    if !matches!(k, 8 | 16 | 24 | 32) {
+        return Err(verr(format!("the prime check needs K in {{8, 16, 24, 32}}, got {k}")));
+    }
+    let yb = ByteIn::extract(y_hat, "y_hat")?;
+    let ys = yb.slice("y_hat")?;
+    let wa = RoRing::extract(wr, "wr", k)?;
+    if matches!(wa, RoRing::B(_)) {
+        return Err(verr("wr must be a 2-D int64/uint64/uint32 numpy array"));
+    }
+    let ua = u
+        .downcast::<PyArray2<u32>>()
+        .map_err(|_| verr("u must be a 2-D uint32 numpy array"))?
+        .try_readonly()
+        .map_err(|e| verr(format!("u: {e}")))?;
+    let ra = rhs
+        .downcast::<PyArray2<u64>>()
+        .map_err(|_| verr("rhs must be a 2-D uint64 numpy array"))?
+        .try_readonly()
+        .map_err(|e| verr(format!("rhs: {e}")))?;
+    let (c, m) = (ua.shape()[0], ua.shape()[1]);
+    let rows = ra.shape()[0];
+    if c == 0 || ra.shape()[1] != c || m > crate::prime::MAX_LEN {
+        return Err(verr(format!("rhs shape {:?} does not match u ({c}, {m}) (c >= 1)", ra.shape())));
+    }
+    let (ws, wsh) = wa.src("wr")?;
+    if wsh != Some((rows, m)) {
+        return Err(verr(format!("wr shape {wsh:?} does not match ({rows}, {m})")));
+    }
+    let nb = (k / 8) as usize;
+    if ys.len() != rows * m * nb {
+        return Err(verr(format!("y_hat has {} bytes, expected {} for ({rows}, {m}) K={k}", ys.len(), rows * m * nb)));
+    }
+    let us = c_ro(&ua).ok_or_else(|| verr("u must be C-contiguous"))?;
+    let rs = c_ro(&ra).ok_or_else(|| verr("rhs must be C-contiguous"))?;
+    Ok(py.allow_threads(|| crate::prime::output_half(ys, ws, us, rs, c, m, k, bound)))
 }
 
 #[cfg(test)]

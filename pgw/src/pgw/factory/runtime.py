@@ -83,7 +83,8 @@ def build_generators(settings: FactorySettings, packs: list[Any], throttle: Thro
                               pipeline=settings.pipeline, memory_fraction=settings.gpu_memory_fraction,
                               self_check_rows=settings.self_check_rows, remote=remote,
                               gpu_prng=None if settings.gpu_prng == "auto" else bool(settings.gpu_prng),
-                              skip_kinds=settings.skip_kinds)
+                              skip_kinds=settings.skip_kinds,
+                              check_field=None if settings.check_field == "ring" else settings.check_field)
             if g.key in gens:
                 raise ConfigError(f"duplicate pack/ring {pack.name}/{ring}")
             gens[g.key] = g

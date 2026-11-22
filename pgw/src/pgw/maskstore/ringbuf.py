@@ -1180,6 +1180,7 @@ class MaskRing:
         chunk_slots: int = 256,
         factory_id: str = "local",
         destination: str | None = None,
+        check_field: str | None = None,
     ) -> RingSegmentWriter:
         """Grant a FREE slab to a new segment (``SegmentWriter`` contract). Never blocks.
 
@@ -1199,6 +1200,11 @@ class MaskRing:
             raise ConfigError(f"ring segments hold at most {self.max_checks} check vectors, got {checks}")
         if not isinstance(chunk_slots, int) or chunk_slots <= 0:
             raise ConfigError("chunk_slots must be a positive int")
+        if check_field is not None:
+            from pgw.core.freivalds import field_modulus
+
+            if field_modulus(check_field) is None or self.ring.k != 32 or int(checks) < 1:
+                raise ConfigError(f"check_field={check_field!r} needs a K32 ring and checks >= 1")
         if not isinstance(seed, bytes | bytearray) or len(seed) != SEED_BYTES:
             raise ConfigError(f"seed must be exactly {SEED_BYTES} bytes")
         if _all_zero(seed):
@@ -1221,7 +1227,8 @@ class MaskRing:
                 slab.slots = slots
                 slab.chunk_slots = min(int(chunk_slots), slots)
             w = RingSegmentWriter(self, slab, slab.gen, seed=seed, digest=digest, token=token, slots=slots,
-                                  checks=int(checks), chunk_slots=slab.chunk_slots, factory_id=factory_id)
+                                  checks=int(checks), chunk_slots=slab.chunk_slots, factory_id=factory_id,
+                                  check_field=check_field)
             self._writers[slab.index] = w
         return w
 
@@ -1709,16 +1716,16 @@ def _as_ring_array(t: torch.Tensor, shape: tuple[int, int], ring: RingParams, wh
     return a
 
 
-def _check_floor(ring: MaskRing, checks: int) -> None:
+def _check_floor(ring: MaskRing, checks: int, check_field: str | None = None) -> None:
     """``MaskStore._check_soundness`` for ring segments (the gateway's floor in ring-only mode)."""
     floor = ring.min_soundness_bits
     if floor <= 0:
         return
-    from pgw.core.freivalds import soundness_bits
+    from pgw.core.freivalds import check_soundness_bits
 
     rp = ring.ring
-    weakest = min(ring.linears, key=lambda lin: soundness_bits(rp, lin.in_features, checks))
-    bits = soundness_bits(rp, weakest.in_features, checks)
+    weakest = min(ring.linears, key=lambda lin: check_soundness_bits(rp, lin.in_features, checks, check_field))
+    bits = check_soundness_bits(rp, weakest.in_features, checks, check_field)
     if bits < floor:
         raise MaskStoreError(
             f"segment gives only {bits:.0f} bits of Freivalds soundness for {weakest.id} "
@@ -1732,7 +1739,7 @@ class RingSegmentWriter:
     :meth:`MaskRing.writer` (or :class:`pgw.factory.sinks.RingSink`)."""
 
     def __init__(self, ring: MaskRing, slab: _Slab, gen: int, *, seed: bytes, digest: str, token: str, slots: int,
-                 checks: int, chunk_slots: int, factory_id: str):
+                 checks: int, chunk_slots: int, factory_id: str, check_field: str | None = None):
         self._ring = ring
         self._slab = slab
         self.gen = gen
@@ -1741,6 +1748,7 @@ class RingSegmentWriter:
         self._token = token
         self.slots = slots
         self.checks = checks
+        self.check_field = check_field
         self.chunk_slots = chunk_slots
         self.factory_id = factory_id
         self.segment_id = uuid.uuid4().hex
@@ -1814,7 +1822,7 @@ class RingSegmentWriter:
                     segment_id=self.segment_id, fingerprint=ring.fingerprint, ring=ring.ring.name, slots=self.slots,
                     chunk_slots=self.chunk_slots, checks=self.checks, linears=ring.linears, kek_id="ram",
                     wrapped_dek="", nonce_prefix="00000000", factory_id=self.factory_id,
-                    created_at=datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                    created_at=datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"), check_field=self.check_field,
                 )
                 secrets = bytearray(self._seed)
                 for lin in ring.linears:
@@ -1835,7 +1843,7 @@ class RingSegmentWriter:
         return self.segment_id
 
     def _check_soundness(self) -> None:
-        _check_floor(self._ring, self.checks)
+        _check_floor(self._ring, self.checks, self.check_field)
 
     def abort(self) -> None:
         """Discard the partial segment: the slab is wiped and freed."""

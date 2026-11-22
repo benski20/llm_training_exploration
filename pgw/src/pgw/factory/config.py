@@ -75,6 +75,12 @@ class FactorySettings(PGWSettings):
         description="Freivalds vectors per linear per segment; unset = smallest number meeting 20 bits of "
         "soundness for the ring and model (gateways and stores refuse weaker segments by default)",
     )
+    check_field: Literal["ring", "p31"] = Field(
+        "ring",
+        description="Freivalds check format of new segments (SPEC 5.1): 'ring' = vectors over Z_2^K (default); "
+        "'p31' = one vector over F_p, p = 2^31 - 1, checked on the unmasked values (K32 rings; 31 bits per "
+        "call with checks=1; gateways need prime_check=true to accept such segments)",
+    )
     gpu_memory_fraction: float = Field(0.85, gt=0, le=1, description="Above this, stream weights from host RAM")
     factory_id: str = Field("local", description="Recorded in segment headers")
     output: Literal["store", "export"] = Field("store", description="Write into a local MaskStore or export files")

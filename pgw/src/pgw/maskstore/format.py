@@ -9,7 +9,8 @@ Layout::
 
 Chunks, in order:
   1. ``secrets`` chunk: segment seed (32 bytes) || for each linear in header order: ``uW`` packed
-     ``(checks, n)`` ring elements.
+     ``(checks, n)`` ring elements (with ``check_field = "p31"``: ``u W mod p`` for ``p = 2^31 - 1``,
+     packed the same way; only K32 rings, so every word is 4 bytes and below ``2^31``).
   2. for each linear (header order), for each group of ``chunk_slots`` slots: ``W r`` rows packed
      ``(rows, m)`` ring elements (K/8 bytes little-endian each).
 
@@ -22,6 +23,7 @@ Mask derivation (shared with the factory and gateway)::
 
     r[slot, :]  = SeedExpander(seed).ring_uniform_rows(n, K, slot, 1, "r", linear_id)
     u           = SeedExpander(seed).ring_uniform((checks, m), K, "u", linear_id)
+    u (p31)     = u64le(stream("u-p31", linear_id)) mod (2^31 - 1)      # check_field = "p31"
 """
 
 from __future__ import annotations
@@ -40,7 +42,7 @@ from typing import BinaryIO
 
 from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
 from pgw.core.errors import ConfigError, MaskStoreError
 from pgw.core.fingerprint import canonical_json, validate_fingerprint
@@ -143,6 +145,12 @@ class SegmentHeader(BaseModel):
         description="Store id of the only customer store allowed to import this segment (partner exports). "
         "Omitted from the JSON when unset, so older headers keep their exact bytes",
     )
+    check_field: str | None = Field(
+        None,
+        description="Freivalds check format: unset = the ring check over Z_2^K (format 1); 'p31' = one or more "
+        "vectors over F_p, p = 2^31 - 1, on the unmasked values (SPEC 5.1). Omitted from the JSON when unset, "
+        "so older headers keep their exact bytes; readers that do not know the field refuse the header",
+    )
 
     @field_validator("version")
     @classmethod
@@ -180,6 +188,19 @@ class SegmentHeader(BaseModel):
         if v is not None and not _SEG_ID_RE.match(v):
             raise ValueError("destination must be a store id (32 lowercase hex chars)")
         return v
+
+    @field_validator("check_field")
+    @classmethod
+    def _check_field(cls, v: str | None) -> str | None:
+        if v is not None and v != "p31":
+            raise ValueError(f"unknown check_field {v!r} (known: p31)")
+        return v
+
+    @model_validator(mode="after")
+    def _p31_ring(self) -> SegmentHeader:
+        if self.check_field is not None and RingParams.from_name(self.ring).k != 32:
+            raise ValueError("check_field 'p31' needs a K32 ring")
+        return self
 
     @field_validator("nonce_prefix")
     @classmethod
@@ -226,6 +247,8 @@ def encode_header(header: SegmentHeader) -> bytes:
     data = header.model_dump(mode="json")
     if data.get("destination") is None:
         data.pop("destination", None)
+    if data.get("check_field") is None:
+        data.pop("check_field", None)
     return canonical_json(data)
 
 

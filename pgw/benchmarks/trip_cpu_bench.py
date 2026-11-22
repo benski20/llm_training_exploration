@@ -8,7 +8,10 @@ finish + Python), which on a contended machine is far more stable than totals.
 
 Usage:
     PYTHONPATH=src python benchmarks/trip_cpu_bench.py --workdir /tmp/pgw-dec [--preset 0.5b --layers 4]
-        [--calls 300] [--kinds gate_up,down]
+        [--calls 300] [--kinds gate_up,down] [--prime]
+
+``--prime``: segments in the prime-field check format (``check_field = "p31"``, one vector over ``F_p``,
+SPEC 5.1) and a backend with ``prime_check`` on; default: the ring check (7 vectors at K32A12C27).
 """
 
 from __future__ import annotations
@@ -33,6 +36,7 @@ def main() -> None:
     ap.add_argument("--ring", default="K32A12C27")
     ap.add_argument("--wnorm-frac", type=float, default=0.0, help="see decode_cpu_bench.set_wnorm (0 = true norm)")
     ap.add_argument("--profile", action="store_true", help="cProfile the measured calls (tottime table)")
+    ap.add_argument("--prime", action="store_true", help="prime-field check format (SPEC 5.1)")
     args = ap.parse_args()
     from pgw.core import RingParams
     from pgw.core.types import LinearId
@@ -52,7 +56,8 @@ def main() -> None:
     store_dir = work / f"trip-store-{time.time_ns()}"
     store = MaskStore.open(store_dir, FileKeyProvider(work / "kek", create=True), fsync=False,
                            counter=FileMonotonicCounter(work / f"trip-counter-{time.time_ns()}", fsync=False))
-    MaskGenerator(pack, ring).generate_into_store(store, slots, chunk_slots=16, factory_id="trip")
+    MaskGenerator(pack, ring, check_field="p31" if args.prime else None).generate_into_store(
+        store, slots, chunk_slots=16, factory_id="trip")
     outm = {sp.id.key: sp.out_features for sp in pack.linear_specs()}
     nb = ring.k // 8
 
@@ -64,7 +69,8 @@ def main() -> None:
                 ComputeResult(i.linear, i.rows, bytes(i.rows * outm[i.linear] * nb)) for i in req.items))
 
     be = MaskedBackend(pack, None, Stub(), ring, pack.fingerprint, min_soundness_bits=20,
-                       noise_monitor=OutboundNoiseMonitor(ring, sample_rate=0.05))
+                       noise_monitor=OutboundNoiseMonitor(ring, sample_rate=0.05),
+                       **({"prime_check": True} if args.prime else {}))
     if args.wnorm_frac > 0:
         import sys
 
@@ -77,6 +83,7 @@ def main() -> None:
     specs = {sp.id.kind.value: sp for sp in pack.linear_specs() if sp.id.layer == 0}
     g = torch.Generator().manual_seed(0)
     out: dict[str, Any] = {"preset": args.preset, "trip_engine": be.trip_engine,
+                           "check_format": "p31" if args.prime else "ring",
                            "prefetch_decode": getattr(be, "prefetch_decode", None)}
     cpu: dict[str, list[float]] = {k: [] for k in kinds}
     wall: dict[str, list[float]] = {k: [] for k in kinds}

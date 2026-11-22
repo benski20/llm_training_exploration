@@ -893,7 +893,7 @@ class MaskReservation:
         segments, the engine must split calls at extent boundaries (``rows_until_boundary``)
         because ``u`` differs per segment.
         """
-        u, uw = self._checks_cached(lid)
+        u, uw = self._checks_cached(lid, ring_only=True)
         return u.clone(), uw.clone()
 
     def checks_u64(self, lid: LinearId | str) -> tuple[np.ndarray, np.ndarray]:
@@ -902,7 +902,7 @@ class MaskReservation:
         For the gateway's per-call hot path. The views are shared per segment and wiped (zeroed) when
         the last open reservation of that segment closes; callers must not keep them beyond the call.
         """
-        u, uw = self._checks_cached(lid)
+        u, uw = self._checks_cached(lid, ring_only=True)
         u64 = u.numpy().view(np.uint64)
         uw64 = uw.numpy().view(np.uint64)
         u64.flags.writeable = False
@@ -933,7 +933,7 @@ class MaskReservation:
         c = e.compact
         return c if c is not None else _SHARED_CHECKS.compact(e, self.ring.k)
 
-    def _checks_cached(self, lid: LinearId | str) -> tuple[torch.Tensor, torch.Tensor]:
+    def _checks_cached(self, lid: LinearId | str, *, ring_only: bool = False) -> tuple[torch.Tensor, torch.Tensor]:
         key = self._key(lid)
         with self._lock:
             self._alive()
@@ -941,26 +941,55 @@ class MaskReservation:
             # Before take(): the extent the next rows come from. Once every row of the linear was
             # taken: the last extent (so a caller may also verify after taking).
             ei = self._cursor_extent(key, cur) if cur < self._slots else len(self._extents) - 1
+            if ring_only and self._extents[ei].seg.header.check_field is not None:
+                # fail closed: a ring-check consumer must never receive prime-field vectors
+                raise ConfigError(
+                    f"{key}: this mask segment uses the prime-field check (check_field="
+                    f"{self._extents[ei].seg.header.check_field!r}); only checks_compact / take_checked serve it")
             return self._uw_locked(key, ei)
 
+    def check_field(self, lid: LinearId | str) -> str | None:
+        """Check format of the current extent of ``lid`` (``None``: the ring check; ``"p31"``: prime field)."""
+        key = self._key(lid)
+        with self._lock:
+            self._alive()
+            cur = self._cursor[key]
+            ei = self._cursor_extent(key, cur) if cur < self._slots else len(self._extents) - 1
+            return self._extents[ei].seg.header.check_field
+
     def _uw_locked(self, key: str, ei: int) -> tuple[torch.Tensor, torch.Tensor]:
-        if self._checks == 0:
-            raise ConfigError("segments of this reservation carry no Freivalds vectors (checks=0)")
         hit = self._uw_cache.get((ei, key))
         if hit is None:
             ex = self._extents[ei]
             lin = self._linears[key][1]
             li = ex.li[key]
-            seed, uw_views = ex.secrets()
             h = ex.seg.header
+            checks = h.checks
+            if checks == 0:
+                raise ConfigError("segments of this reservation carry no Freivalds vectors (checks=0)")
+            field = h.check_field
+            seed, uw_views = ex.secrets()
 
             def build() -> tuple[torch.Tensor, torch.Tensor]:
-                u = SeedExpander(seed).ring_uniform((self._checks, lin.out_features), self.ring.k, "u", key)
-                uw = unpack_ring(uw_views[li], (self._checks, lin.in_features), self.ring)
-                return u, uw
+                uw = unpack_ring(uw_views[li], (checks, lin.in_features), self.ring)
+                if field is None:
+                    u = SeedExpander(seed).ring_uniform((checks, lin.out_features), self.ring.k, "u", key)
+                    return u, uw
+                from pgw.core.freivalds import P31, prime_check_vectors
 
-            skey = (h.fingerprint, h.ring, ex.ext.segment_id, ex.seed_id(), key, str(self._checks))
-            hit = _SHARED_CHECKS.acquire(skey, build, (ex.ext.segment_id, key))
+                if field != "p31" or bool(((uw < 0) | (uw >= P31)).any()):
+                    uw.zero_()
+                    raise MaskStoreError(f"segment {h.segment_id}: {key} carries check words outside F_p",
+                                         details={"segment_id": h.segment_id, "linear": key})
+                return prime_check_vectors(seed, checks, lin.out_features, key), uw
+
+            skey = (h.fingerprint, h.ring, ex.ext.segment_id, ex.seed_id(), key, str(checks), field or "ring")
+            token: tuple[str, ...] = (ex.ext.segment_id, key)
+            if field is not None:
+                from pgw.core.freivalds import PRIME_TAG
+
+                token = (ex.ext.segment_id, key, PRIME_TAG)
+            hit = _SHARED_CHECKS.acquire(skey, build, token)  # type: ignore[arg-type]
             self._uw_cache[(ei, key)] = hit
             self._uw_keys[(ei, key)] = skey
         return hit.u, hit.uw
@@ -2206,6 +2235,7 @@ class MaskStore:
         chunk_slots: int | None = None,
         factory_id: str = "local",
         destination: str | None = None,
+        check_field: str | None = None,
     ) -> SegmentWriter:
         """Start writing a new segment.
 
@@ -2223,6 +2253,8 @@ class MaskStore:
             factory_id: Producer id recorded in the header.
             destination: Store id of the *one* customer store this segment is meant for (partner
                 exports, SPEC 7.7); recorded in the signed header and enforced by ``import_segment``.
+            check_field: Freivalds check format (SPEC 5.1): ``None`` = the ring check (default);
+                ``"p31"`` = the prime-field check (``uW`` holds ``u W mod (2^31 - 1)``; K32 rings only).
         """
         validate_fingerprint(fingerprint)
         rp = ring_from_setting(ring)
@@ -2246,6 +2278,11 @@ class MaskStore:
             )
         if not 0 <= checks <= 8:
             raise ConfigError("checks must be in [0, 8]")
+        if check_field is not None:
+            from pgw.core.freivalds import field_modulus
+
+            if field_modulus(check_field) is None or rp.k != 32 or checks < 1:
+                raise ConfigError(f"check_field={check_field!r} needs a K32 ring and checks >= 1")
         if seed is None:
             seed = os.urandom(SEED_BYTES)
         if not isinstance(seed, bytes | bytearray) or len(seed) != SEED_BYTES:
@@ -2274,6 +2311,7 @@ class MaskStore:
             factory_id=factory_id,
             created_at=_now_iso(),
             destination=destination,
+            check_field=check_field,
         )
         path = self._segment_dir(fingerprint, rp.name) / f"{segment_id}{SEGMENT_SUFFIX}"
         try:
@@ -2486,11 +2524,11 @@ class MaskStore:
         floor = self.settings.min_soundness_bits
         if floor <= 0:
             return
-        from pgw.core.freivalds import soundness_bits
+        from pgw.core.freivalds import check_soundness_bits
 
         rp = h.ring_params
-        weakest = min(h.linears, key=lambda lin: soundness_bits(rp, lin.in_features, h.checks))
-        bits = soundness_bits(rp, weakest.in_features, h.checks)
+        weakest = min(h.linears, key=lambda lin: check_soundness_bits(rp, lin.in_features, h.checks, h.check_field))
+        bits = check_soundness_bits(rp, weakest.in_features, h.checks, h.check_field)
         if bits < floor:
             raise MaskStoreError(
                 f"segment gives only {bits:.0f} bits of Freivalds soundness for {weakest.id} "
