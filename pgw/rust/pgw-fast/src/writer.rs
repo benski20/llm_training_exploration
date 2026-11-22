@@ -483,7 +483,88 @@ fn seal_ring_chunks(
 }
 
 /// Add this module's functions to `pgw_fast`.
+/// ``chunk_open_into(key, nonce, aad, fd, offset, cipher_len, out)``: read one encrypted segment chunk
+/// (``cipher_len`` bytes at ``offset`` of the open descriptor ``fd``: ciphertext then the 16-byte tag),
+/// authenticate and decrypt it with AES-256-GCM straight into the ``bytearray`` ``out`` (exactly
+/// ``cipher_len - 16`` bytes). The inverse of the writer's sealing (``SegmentFile.decrypt_into``'s
+/// bytes); the GIL is released for the read and the cipher, so a helper thread can decrypt ahead
+/// while the gateway's main thread runs.
+///
+/// ``out`` must not be touched by any other thread during the call (the caller's fresh buffer). On any
+/// failure (short read, authentication) ``out`` is zeroed and ``ValueError("auth: ...")`` /
+/// ``OSError`` is raised: no unauthenticated plaintext is ever left behind.
+#[pyfunction]
+#[allow(clippy::too_many_arguments)]
+fn chunk_open_into(
+    py: Python<'_>,
+    key: &Bound<'_, PyAny>,
+    nonce: &[u8],
+    aad: &[u8],
+    fd: i32,
+    offset: u64,
+    cipher_len: usize,
+    out: &Bound<'_, pyo3::types::PyByteArray>,
+) -> PyResult<()> {
+    use pyo3::exceptions::{PyOSError, PyValueError};
+    let mut kb = zeroize::Zeroizing::new([0u8; 32]);
+    {
+        let kbytes: zeroize::Zeroizing<Vec<u8>> = if let Ok(b) = key.downcast::<pyo3::types::PyBytes>() {
+            zeroize::Zeroizing::new(b.as_bytes().to_vec())
+        } else if let Ok(b) = key.downcast::<pyo3::types::PyByteArray>() {
+            zeroize::Zeroizing::new(b.to_vec())
+        } else {
+            return Err(PyValueError::new_err("key must be bytes or bytearray"));
+        };
+        if kbytes.len() != 32 {
+            return Err(PyValueError::new_err("key must be exactly 32 bytes"));
+        }
+        kb.copy_from_slice(&kbytes);
+    }
+    if nonce.len() != 12 || fd < 0 || cipher_len < TAG_BYTES || out.len() != cipher_len - TAG_BYTES {
+        return Err(PyValueError::new_err(format!(
+            "chunk_open_into: bad arguments (nonce {} bytes, fd {fd}, cipher_len {cipher_len}, out {} bytes)",
+            nonce.len(),
+            out.len()
+        )));
+    }
+    let nonce: [u8; 12] = nonce.try_into().expect("checked length");
+    let aad = aad.to_vec();
+    let n = cipher_len - TAG_BYTES;
+    let ptr = out.data() as usize;
+    let res: Result<(), Result<io::Error, ()>> = py.allow_threads(|| {
+        // SAFETY: `out` is a bytearray of exactly `n` bytes that nobody else touches during the call
+        // (documented contract); it is not resized while the GIL is released by us.
+        let buf = unsafe { std::slice::from_raw_parts_mut(ptr as *mut u8, n) };
+        // SAFETY: `fd` is a valid open descriptor owned by the caller for the whole call.
+        let f = ManuallyDrop::new(unsafe { File::from_raw_fd(fd) });
+        let mut tag = [0u8; TAG_BYTES];
+        let r = f.read_exact_at(buf, offset).and_then(|_| f.read_exact_at(&mut tag, offset + n as u64));
+        if let Err(e) = r {
+            buf.fill(0);
+            return Err(Ok(e));
+        }
+        let key: &Key<Aes256Gcm> = (&*kb).into();
+        let aead = Aes256Gcm::new(key);
+        let ok = aead.decrypt_inout_detached(&Nonce::from(nonce), &aad, buf.into(), (&tag).into()).is_ok();
+        if !ok {
+            // SAFETY-free: zero whatever is in the buffer (ciphertext or a partial decryption)
+            for b in buf.iter_mut() {
+                // SAFETY: in-bounds write through a valid &mut
+                unsafe { std::ptr::write_volatile(b, 0) };
+            }
+            return Err(Err(()));
+        }
+        Ok(())
+    });
+    match res {
+        Ok(()) => Ok(()),
+        Err(Ok(e)) => Err(PyOSError::new_err(format!("chunk read failed: {e}"))),
+        Err(Err(())) => Err(PyValueError::new_err("auth: chunk failed authentication (corrupt or tampered)")),
+    }
+}
+
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_function(wrap_pyfunction!(chunk_open_into, m)?)?;
     m.add_function(wrap_pyfunction!(seal_chunks, m)?)?;
     m.add_function(wrap_pyfunction!(seal_ring_chunks, m)?)?;
     Ok(())
