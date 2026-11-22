@@ -214,6 +214,18 @@ def _spin_us() -> int:
         raise ConfigError(f"PGW_SERVICE_LANE_SPIN_US must be an integer, got {raw!r}") from exc
 
 
+def _read_spin_us() -> int:
+    """Before blocking for a connection's next request, poll its socket this many microseconds
+    (``PGW_SERVICE_LANE_READ_SPIN_US``, default 0 = block at once). A decode client's next trip comes a
+    few milliseconds after the reply, and a blocking read then pays a scheduler wake-up (slow under gVisor);
+    spinning costs one core per busy lane connection. Nothing on the wire changes."""
+    raw = os.environ.get("PGW_SERVICE_LANE_READ_SPIN_US", "").strip()
+    try:
+        return min(100_000, max(0, int(raw))) if raw else 0
+    except ValueError as exc:
+        raise ConfigError(f"PGW_SERVICE_LANE_READ_SPIN_US must be an integer, got {raw!r}") from exc
+
+
 def _graphs_wanted() -> bool:
     """``PGW_SERVICE_LANE_GRAPHS=0`` turns CUDA-graph replay off (the lane then uses the kernel path)."""
     return os.environ.get("PGW_SERVICE_LANE_GRAPHS", "1").strip().lower() not in ("0", "false", "no", "off")
@@ -328,6 +340,7 @@ class LaneManager:
             tenant_burst_rows=float(s.tenant_burst_rows) if s.tenant_burst_rows else None,
             retry_after_ms=round(s.retry_after_s * 1000), executor=self._py_execute, use_graphs=use_graphs,
             spin_us=_spin_us(), **listen,
+            **({"read_spin_us": rs} if (rs := _read_spin_us()) else {}),
         )
         for m in self.state.registry.models():
             self._slot_for(m.fingerprint)

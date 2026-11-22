@@ -155,7 +155,7 @@ impl PyLaneService {
                         tenant_rows_per_s = None, tenant_burst_rows = None, retry_after_ms = 1000,
                         executor = None, use_graphs = false, spin_us = 50, poll_ms = 100,
                         open_timeout_s = 10.0, stall_timeout_s = 30.0, tls_addr = None, tls_cert_pem = None,
-                        tls_key_pem = None, tls_client_ca_pem = None, require_client_cert = false))]
+                        tls_key_pem = None, tls_client_ca_pem = None, require_client_cert = false, read_spin_us = 0))]
     #[allow(clippy::too_many_arguments)]
     fn new(
         py: Python<'_>,
@@ -180,6 +180,7 @@ impl PyLaneService {
         tls_key_pem: Option<Vec<u8>>,
         tls_client_ca_pem: Option<Vec<u8>>,
         require_client_cert: bool,
+        read_spin_us: u64,
     ) -> PyResult<Self> {
         // TCP lane: TLS 1.3 only (there is no plaintext TCP listener)
         let tls = match tls_addr {
@@ -224,6 +225,7 @@ impl PyLaneService {
             open_timeout: Duration::from_secs_f64(open_timeout_s.max(0.001)),
             stall_timeout: Duration::from_secs_f64(stall_timeout_s.max(0.001)),
             poll: Duration::from_millis(poll_ms.max(1)),
+            read_spin: Duration::from_micros(read_spin_us.min(100_000)),
         };
         let adm = admission.clone();
         let server = py

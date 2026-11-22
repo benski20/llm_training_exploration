@@ -304,6 +304,28 @@ The GPU halves the local linears in isolation (`benchmarks/local_gpu_bench.py`, 
 local linears take about 10 ms per token either way (the CUDA sync of 72 calls per token under load); the GPU
 mainly frees about 2.5 gateway cores. Time to first token is 0.5-1.1 s per chat (about 15% of a 64-token chat).
 
+### Where a 1-row trip's 0.57 ms goes, and lane spin knobs (2026-11-22, package T3)
+
+Co-located T4, `attention_down`, TLS lane, factory capped (`PGW_FACTORY_CPU_THREADS=3`, `PGW_FACTORY_NICE=10`,
+target 8000), CPU local linears; every run logprobs bit-identical, text equal, repeat identical:
+
+| run | 1-row trip mean | service (graph) | rest | warm chat | back to back |
+|---|---|---|---|---|---|
+| baseline | 0.565 ms | 0.198 | 0.367 | 10.8 tok/s | 12.4 |
+| all spins (gateway 3 ms, GPU 2 ms, server read 20 ms) | 0.567 | 0.137 | 0.430 | 11.8 | 13.0 |
+| GPU spin 2 ms only | 0.569 | 0.183 | 0.386 | 10.5 | 12.0 |
+
+The provider's 1-row path is already native (rust/pgw-lane: rustls, CUDA-graph replay, no Python per call), so
+nothing is left to move off the event loop there. The floor is Modal's gVisor network stack: the TLS lane transport
+alone (`benchmarks/lane_tls_bench.py`, stub executor, `gpu_bench.py --target c8`, 2 ms gap between trips like
+decode) costs **0.28 ms p50 per 1-row trip** (0.23 ms back to back; the same bench on a plain Linux VM: 0.03-0.05
+ms); the UDS transport 0.16 ms (0.13 ms with both spins). Busy-polling loopback TCP under gVisor made the TLS
+transport slower (0.32-0.36 ms), not faster. Opt-in knobs, all off by default, waiting only (same bytes, same
+replies): `PGW_LANE_SPIN_US` (gateway TripChannel reply poll, default 50), `PGW_SERVICE_LANE_SPIN_US` (graph stream
+poll, default 50), `PGW_SERVICE_LANE_READ_SPIN_US` (new: the lane server polls a connection for its next request
+before blocking; UDS by peek, TLS by non-blocking reads into the session, default 0). `PGW_MODAL_APP_SUFFIX`
+(deploy time) suffixes the app and Dict names so parallel experiments do not replace each other's apps.
+
 ## Trip latency and the `--max-trip-ms` gate
 
 `--e2e` now also reports the gateway's **client-reported round-trip latency** (`trip_latency` in the

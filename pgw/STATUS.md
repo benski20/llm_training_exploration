@@ -15,6 +15,16 @@ SLA pilot. Three reasons:
 2. The HSM, KMS and TPM integrations have never run against real hardware or cloud services.
 3. There has been no external security audit.
 
+## Update 2026-11-22: trip latency floor and gateway per-trip CPU (package T3)
+
+Not reached: the 1-row trip stays at 0.57 ms in three exact Modal runs (12.0-13.0 tokens/s back to back). The
+provider side is already native; under Modal's gVisor the TLS lane transport alone costs 0.28 ms per trip (0.03-0.05
+ms on a plain VM) and polling makes it worse. Spin knobs added, off by default; details in `deploy/modal/README.md`,
+"Where a 1-row trip's 0.57 ms goes". Gateway per-trip CPU measured in place (dev box, `decode_cpu_bench.py`
+wrappers): prepare about 340 us (mask take 85, of which the stage copy and amortized derivation; precheck 75;
+request 28; noise guard 18 every call, 400 per sampled call; native prepare 30-40) and finish about 120 us (native 20);
+one redundant `remaining()` per trip removed. Collapsing these into one native call per side is the remaining work.
+
 ## Update 2026-11-22: gateway GPU and pinned float threads (package T2)
 
 Goal 30-40 tokens/s for one Qwen2.5-0.5B chat co-located; reached **13.3-13.6 tokens/s** (warm and back to back,

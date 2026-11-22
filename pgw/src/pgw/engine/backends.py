@@ -1226,11 +1226,15 @@ class MaskedBackend(LinearBackend):
             else:
                 hit[3] += int(x.shape[0])
         # Growing reservations (gateway windows) extend here, before any row of the batch is taken.
-        for res, lid, _, rows in need.values():
+        ensured: set[tuple[int, str]] = set()
+        for key, (res, lid, _, rows) in need.items():
             ensure = getattr(res, "ensure", None)
             if ensure is not None:
-                ensure(lid, rows)
-        for res, lid, _, rows in need.values():
+                ensure(lid, rows)  # returns only with >= rows reserved (else raises): no remaining() needed
+                ensured.add(key)
+        for key, (res, lid, _, rows) in need.items():
+            if key in ensured:
+                continue
             left = int(res.remaining(lid))
             if left < rows:
                 raise MaskExhaustedError(

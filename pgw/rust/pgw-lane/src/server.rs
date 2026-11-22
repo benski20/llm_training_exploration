@@ -62,6 +62,11 @@ pub struct ServerConfig {
     pub stall_timeout: Duration,
     /// Poll interval of blocking reads and `accept` (shutdown latency).
     pub poll: Duration,
+    /// Before blocking for the next request of a connection, poll the socket without blocking for
+    /// this long (zero = block at once). A decode client sends its next trip a few milliseconds after
+    /// the reply; a blocking read then pays a scheduler wake-up (slow under gVisor). Costs one core
+    /// per busy connection while it spins; changes nothing on the wire.
+    pub read_spin: Duration,
 }
 
 impl Default for ServerConfig {
@@ -76,6 +81,7 @@ impl Default for ServerConfig {
             open_timeout: Duration::from_secs(10),
             stall_timeout: Duration::from_secs(30),
             poll: Duration::from_millis(100),
+            read_spin: Duration::ZERO,
         }
     }
 }
@@ -117,6 +123,41 @@ impl Io {
                 let _ = s.shutdown(std::net::Shutdown::Both);
             }
             Io::Tls(s) => s.close(),
+        }
+    }
+}
+
+impl Io {
+    /// Spin until request bytes are readable, `spin` passes or shutdown (then the regular blocking read
+    /// takes over). UDS: non-blocking peeks of the socket. TLS: non-blocking reads into the TLS
+    /// session's own buffer (never a peek: rustls may hold part of a record already).
+    fn spin_readable(&mut self, spin: Duration, sh: &Shared) {
+        let t0 = Instant::now();
+        match self {
+            Io::Uds(s) => {
+                let fd = s.as_raw_fd();
+                let mut b = [0u8; 1];
+                let mut i: u32 = 0;
+                loop {
+                    // SAFETY: a valid fd owned by `s`, a 1-byte local buffer; MSG_PEEK leaves the data queued.
+                    let n = unsafe {
+                        libc::recv(fd, b.as_mut_ptr() as *mut libc::c_void, 1, libc::MSG_PEEK | libc::MSG_DONTWAIT)
+                    };
+                    if n >= 0 {
+                        return; // data (or EOF): the regular read handles it
+                    }
+                    let e = std::io::Error::last_os_error().kind();
+                    if !matches!(e, ErrorKind::WouldBlock | ErrorKind::Interrupted) {
+                        return;
+                    }
+                    i = i.wrapping_add(1);
+                    if i % 32 == 0 && (t0.elapsed() >= spin || sh.shutdown.load(Ordering::Relaxed)) {
+                        return;
+                    }
+                    std::hint::spin_loop();
+                }
+            }
+            Io::Tls(s) => s.spin_for_data(spin, || sh.shutdown.load(Ordering::Relaxed)),
         }
     }
 }
@@ -474,6 +515,9 @@ fn serve_calls(s: &mut Io, sh: &Arc<Shared>, cfg: &ServerConfig, conn: Conn) {
     let mut out: Vec<u8> = Vec::new();
     let mut hb = [0u8; REQUEST_HEADER_LEN];
     loop {
+        if !cfg.read_spin.is_zero() {
+            s.spin_readable(cfg.read_spin, sh);
+        }
         if read_full(s, &mut hb, sh, true, cfg.stall_timeout).is_err() {
             return;
         }

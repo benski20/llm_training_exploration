@@ -67,8 +67,11 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import trip_gate  # noqa: E402  (no Modal imports; also shipped into the customer image)
 
-DICT_NAME = "pgw-live"
-APPS = ("pgw-provider", "pgw-customer")
+#: ``PGW_MODAL_APP_SUFFIX`` (deploy time, default empty): appended to every app name and to the Dict name, so
+#: parallel experiments in one workspace do not replace each other's apps (the containers get it in their image env).
+APP_SUFFIX = os.environ.get("PGW_MODAL_APP_SUFFIX", "").strip()
+DICT_NAME = "pgw-live" + APP_SUFFIX
+APPS = ("pgw-provider" + APP_SUFFIX, "pgw-customer" + APP_SUFFIX)
 #: Dict keys that belong to one run (cleared before a new pair starts and by --stop).
 RUN_KEYS = ("provider", "customer", "provider_boot", "customer_boot", "e2e", "stop")
 #: Where the two parties run and how the gateway reaches the provider (``--placement``).
@@ -76,7 +79,7 @@ PLACEMENTS = ("tunnel", "i6pn", "colocated")
 #: Function names per two-container network: (provider, customer). Kept keyed by "i6pn?" for the tests.
 FUNCTIONS = {False: ("serve", "gateway"), True: ("serve_i6pn", "gateway_i6pn")}
 #: The co-located placement's single function: (app, function).
-COLOCATED_FUNCTION = ("pgw-colocated", "pair")
+COLOCATED_FUNCTION = ("pgw-colocated" + APP_SUFFIX, "pair")
 #: Apps per placement (deployed and stopped by the launcher; the tunnel apps are always deployed, as the
 #: fallback of the other placements).
 PLACEMENT_APPS = {"tunnel": APPS, "i6pn": APPS, "colocated": (*APPS, COLOCATED_FUNCTION[0])}
@@ -134,7 +137,7 @@ def cost_per_h(gpu: str | None, cpus: float | None = None) -> dict[str, float]:
         prov += GPU_PRICE_H[gpu]
     cgpu = normalize_gpu(os.environ.get("PGW_MODAL_CUSTOMER_GPU"))
     cust = (GPU_PRICE_H[cgpu] if cgpu else 0.0) + 4 * CORE_H + customer_gib() * GIB_H
-    return {"pgw-provider": prov + 6 * GIB_H, "pgw-customer": cust}
+    return {APPS[0]: prov + 6 * GIB_H, APPS[1]: cust}
 
 
 def normalize_gpu(value: str | None) -> str | None:
@@ -284,7 +287,7 @@ def spawn_pair(live: Any, placement: str | bool, ttl_s: int, e2e: bool,
         print(f"run {run_id} (colocated): spawned both parties in one container ({call.object_id})", flush=True)
         return Pair(run_id, placement, call, call, time.time())
     pfn, cfn = FUNCTIONS[placement == "i6pn"]
-    prov, cust = lookup("pgw-provider", pfn), lookup("pgw-customer", cfn)
+    prov, cust = lookup(APPS[0], pfn), lookup(APPS[1], cfn)
     pcall = prov.spawn(run_id, ttl_s)
     ccall = cust.spawn(run_id, ttl_s, e2e, local_linears, spec_rows)
     print(f"run {run_id} ({placement}): spawned provider ({pcall.object_id}) and "
