@@ -39,9 +39,10 @@ HERE = Path(__file__).resolve().parent
 # Inside the container this file is /root/<name>.py and the source tree is not there (nor needed).
 PGW = HERE.parents[1] if modal.is_local() else Path("/opt/pgw-src")
 MAX_LIFETIME_S = 88 * 60  # hard cap (function timeout): nothing outlives 90 minutes
-#: Optional suffix of the app and Dict names (``PGW_MODAL_NS``): parallel runs from other checkouts do not collide.
-NS = os.environ.get("PGW_MODAL_NS", "").strip()
-DICT_NAME = "pgw-live" + NS
+#: ``PGW_MODAL_APP_SUFFIX`` (deploy time, default empty): appended to every app name and to the Dict name, so
+#: parallel experiments in one workspace do not replace each other's apps (the containers get it in their image env).
+APP_SUFFIX = os.environ.get("PGW_MODAL_APP_SUFFIX", "").strip()
+DICT_NAME = "pgw-live" + APP_SUFFIX
 # Both parties in one region: every token makes ~100 sequential round trips between them, so a
 # cross-region placement (about 85 ms RTT seen) makes decoding 10x slower. PGW_MODAL_REGION="" lifts it.
 REGION = os.environ.get("PGW_MODAL_REGION", "us-east") or None
@@ -66,7 +67,8 @@ RUNTIME_ENV = {"PGW_MODAL_DRAFT": "1" if DRAFT else "0", "PGW_MODAL_CUSTOMER_GPU
                "PGW_MODAL_MODEL": MODEL,
                # launch.py --spec-mask (L3 padded strict speculation; read by pgw_modal_boot.spec_options)
                "PGW_MODAL_SPEC_MASK": os.environ.get("PGW_MODAL_SPEC_MASK", ""),
-               **({"PGW_MODAL_NS": NS} if NS else {})}
+               **({"PGW_MODAL_APP_SUFFIX": os.environ["PGW_MODAL_APP_SUFFIX"].strip()}
+                  if os.environ.get("PGW_MODAL_APP_SUFFIX", "").strip() else {})}
 
 image = (
     modal.Image.debian_slim(python_version="3.13")
@@ -101,14 +103,14 @@ if DRAFT:
         " && rm -rf /root/.cache/huggingface")
 image = (
     image
-    .env(RUNTIME_ENV)
+    .env({**RUNTIME_ENV, **({"PGW_MODAL_APP_SUFFIX": APP_SUFFIX} if APP_SUFFIX else {})})
     .add_local_file(HERE / "pgw_modal_boot.py", "/opt/pgw-modal/pgw_modal_boot.py")
     .add_local_file(HERE / "wizard_client.py", "/opt/pgw-modal/wizard_client.py")
     .add_local_file(HERE / "trip_gate.py", "/opt/pgw-modal/trip_gate.py")
     .add_local_file(HERE / "e2e_driver.py", "/opt/pgw-modal/e2e_driver.py")
 )
 
-app = modal.App("pgw-customer" + NS, image=image)
+app = modal.App("pgw-customer" + APP_SUFFIX, image=image)
 
 _FN: dict = dict(gpu=CUSTOMER_GPU, cpu=4.0, memory=MEMORY_MIB, timeout=MAX_LIFETIME_S, max_containers=1,
                  min_containers=0, retries=0, region=REGION)

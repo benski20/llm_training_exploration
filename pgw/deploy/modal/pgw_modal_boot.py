@@ -329,17 +329,21 @@ _TOKEN_RE = re.compile(r"\b(pgw-setup-[A-Za-z0-9_-]{8,})\b")
 #: way, while every pass would carry and mask ``spec_rows`` rows (``spec_rows`` times the mask supply).
 GATEWAY_MODEL_OPTIONS: dict[str, Any] = {"local_linears": "auto", "float_threads": 1, "lane": "stream"}
 
-#: Gateway trip-lane choices of ``launch.py --lane`` (``tls``: co-located placement only).
-LANES = ("stream", "tls")
+#: Gateway trip-lane choices of ``launch.py --lane`` (``tls``, ``uds``: co-located placement only).
+LANES = ("stream", "tls", "uds")
 
 
 def lane_options(lane: str) -> dict[str, Any]:
     """Gateway model options for ``launch.py --lane``: ``stream`` (default, as :data:`GATEWAY_MODEL_OPTIONS`) or
     ``tls``, the native TCP+TLS trip lane of a provider started with ``lane_port`` (:func:`start_provider_party`):
     binary header and rustls instead of WebSocket/msgpack and Python ssl, the GIL released per trip, the same
-    masked bytes, request ids and schedule; any call it cannot take goes to the blocking stream lane."""
+    masked bytes, request ids and schedule; any call it cannot take goes to the blocking stream lane. ``uds``: the
+    product's same-host lane (a provider started with ``lane_socket``): the gateway's ``lane = "auto"`` takes the
+    UDS ticket of its loopback service (peer uid checked by the service), else the stream channel."""
     if lane not in LANES:
         raise ValueError(f"lane must be one of {LANES}, got {lane!r}")
+    if lane == "uds":
+        return {"lane": "auto"}
     return {"lane": lane}
 
 
@@ -483,8 +487,12 @@ def colocated_gateway_env(local_linears: str) -> dict[str, str]:
       overlapping row blocks (a fixed, public split of the public row count; the provider sees one larger
       item per prompt trip): half the gateway hops of a prompt pass (prompt pass 550 ms median vs 700-800).
     """
-    env = {"PGW_POOL_SPIN_US": "2000", "PGW_POOL_WORKERS": "4", "PGW_PROMPT_PREFETCH": "1",
-           "PGW_PIPELINE_BLOCKS": "1"}
+    env = {"PGW_POOL_SPIN_US": "2000", "PGW_POOL_WORKERS": "4",
+           # T3: the one-call trip path and the sampled noise statistics off the critical path (same bytes,
+           # checks and statistics; library defaults off, see MaskedBackend.trip_fast / noise_async_sampled)
+           "PGW_TRIP_FAST": "1",
+           # prompt pass: mask prefetch and one item per prompt trip (see below)
+           "PGW_PROMPT_PREFETCH": "1", "PGW_PIPELINE_BLOCKS": "1"}
     if local_linears in SKIP_KINDS_BY_LOCAL:
         env["PGW_FACTORY_SKIP_LINEAR_KINDS"] = SKIP_KINDS_BY_LOCAL[local_linears]
     return env
@@ -639,16 +647,62 @@ def ensure_user(name: str) -> None:
                         "--no-create-home", name], check=True)
 
 
+def lane_peer_uid(client_user: str | None) -> int:
+    """The uid the provider's UDS lane accepts: the gateway party's user (this process's own without users)."""
+    if client_user is None:
+        return os.getuid()
+    import pwd
+
+    return pwd.getpwnam(client_user).pw_uid
+
+
+def uds_dir(path: Path, owner: str | None, client_user: str | None) -> Path:
+    """The lane socket's directory: the provider's (``owner``), mode 0710 with the gateway user's group (search
+    only: it can reach the socket by name, not list the directory); 0700 and root's without users."""
+    path.mkdir(parents=True, exist_ok=True)
+    if owner is None or client_user is None:
+        os.chmod(path, 0o700)
+        return path
+    import pwd
+
+    os.chown(path, pwd.getpwnam(owner).pw_uid, pwd.getpwnam(client_user).pw_gid)
+    os.chmod(path, 0o710)
+    return path
+
+
+def share_socket(sock: Path, owner: str | None, client_user: str | None, timeout_s: float = 120.0) -> bool:
+    """Give the gateway user's group connect permission on the lane socket (0660, still owned by the provider),
+    once the service has bound it. Without users both parties are root: nothing to do. False if it never appeared."""
+    if owner is None or client_user is None:
+        return True
+    import pwd
+
+    t_end = time.time() + timeout_s
+    while not sock.exists():
+        if time.time() > t_end:
+            log(f"lane socket {sock} did not appear")
+            return False
+        time.sleep(0.2)
+    os.chown(sock, pwd.getpwnam(owner).pw_uid, pwd.getpwnam(client_user).pw_gid)
+    os.chmod(sock, 0o660)
+    return True
+
+
 def start_provider_party(work: Path, pack: Path, port: int, *, device: str, user: str | None, log_dir: Path,
                          tenant: str = "customer-demo", code_ttl: str = "90m", note: str = "co-located demo",
                          public_url: str | None = None, lane_port: int | None = None,
+                         lane_socket: Path | None = None, lane_client_user: str | None = None,
                          extra_env: dict[str, str] | None = None) -> dict[str, Any]:
     """The provider's compute service on ``127.0.0.1:port`` only (TLS, a fresh PKI for 127.0.0.1), run as
     ``user`` in ``work`` (0700, owned by that user once its PKI and state files exist), plus a fresh
     single-use enrollment code. ``public_url`` (default ``https://127.0.0.1:port``) is the URL the code
     points the gateway at (e.g. a delay proxy on loopback). ``lane_port``: also serve the native trip lane
     over TLS 1.3 on ``127.0.0.1:lane_port`` (``lane = "tcp"``: the service's certificate, client certificates
-    verified against the client-issuing CA and bound to the lane ticket). Returns ``proc``, ``url``, ``code``,
+    verified against the client-issuing CA and bound to the lane ticket). ``lane_socket``: instead serve the
+    same-host UDS lane there (``lane = "uds"``; ``launch.py --lane uds``): only ``lane_client_user``'s uid passes the
+    service's peer-credential check (``PGW_SERVICE_LANE_PEER_UIDS``), the socket's directory is the provider's
+    with group search for that user's group only (0710) and the socket itself 0660 to the same group (the service
+    binds it 0600; root widens it to that one group once it exists). Returns ``proc``, ``url``, ``code``,
     ``pki``, ``env`` and ``ca_sha256``."""
     party_dir(work / "home", None)
     pki = make_pki(work / "pki", ["127.0.0.1", "localhost"])
@@ -658,6 +712,11 @@ def start_provider_party(work: Path, pack: Path, port: int, *, device: str, user
     if lane_port is not None:
         env["PGW_SERVICE_LANE"] = "tcp"
         env["PGW_SERVICE_LANE_PORT"] = str(int(lane_port))
+    if lane_socket is not None:
+        env["PGW_SERVICE_LANE"] = "uds"
+        env["PGW_SERVICE_LANE_SOCKET"] = str(lane_socket)
+        env["PGW_SERVICE_LANE_PEER_UIDS"] = str(lane_peer_uid(lane_client_user))
+        uds_dir(lane_socket.parent, user, lane_client_user)
     env.update(extra_env or {})
     party_dir(work, user)  # everything below is the provider's from here on
     kw = as_user(env, user, work / "home")
@@ -665,6 +724,8 @@ def start_provider_party(work: Path, pack: Path, port: int, *, device: str, user
     proc = start_service(env, log_dir / "service.log", user_kw=kw, cwd=work)
     t0 = time.time()
     wait_ready(f"https://127.0.0.1:{port}/readyz", proc, verify=str(pki["service_ca"]), timeout_s=900)
+    if lane_socket is not None:
+        share_socket(lane_socket, user, lane_client_user)
     log(f"service ready in {time.time() - t0:.0f}s (127.0.0.1:{port}, user {user or 'same'})")
     code = create_enrollment_code(env, tenant, code_ttl, note, user_kw=kw, cwd=work)
     from pgw.enroll.service import ca_fingerprint, load_ca_pem

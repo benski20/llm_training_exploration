@@ -109,6 +109,8 @@ def _serve(args: argparse.Namespace) -> None:
 
     td = Path(args.serve_dir)
     kw: dict[str, Any] = {"max_rows": 8, "executor": execute}
+    if args.read_spin_us:
+        kw["read_spin_us"] = int(args.read_spin_us)
     if args.serve == "tcp":
         kw.update(tls_addr="127.0.0.1:0", tls_cert_pem=(td / "server.pem").read_bytes(),
                   tls_key_pem=(td / "server.key").read_bytes())
@@ -167,7 +169,7 @@ def _one_run(args: argparse.Namespace, mode: str, rows: int) -> dict[str, Any]:
             _client_cert(td, td)
         serve = "tcp" if mode.endswith("tls") else "uds"
         proc = subprocess.Popen([sys.executable, __file__, "--serve", serve, "--serve-dir", tds,  # noqa: S603
-                                 "--preset", args.preset], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+                                 "--preset", args.preset, "--read-spin-us", str(args.read_spin_us)], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
         try:
             assert proc.stdout is not None
             info = json.loads(proc.stdout.readline())
@@ -190,8 +192,14 @@ def _one_run(args: argparse.Namespace, mode: str, rows: int) -> dict[str, Any]:
             for t in loaders:
                 t.start()
 
+            gap = args.gap_us * 1e-6
+
             def run(n: int, lat: list[float] | None) -> None:
                 for i in range(n):
+                    if gap:  # the gateway's work between two trips (busy, holding the GIL)
+                        end = time.perf_counter() + gap
+                        while time.perf_counter() < end:
+                            pass
                     li = i % len(lins)
                     rid = secrets.token_bytes(16)
                     t0 = time.perf_counter()
@@ -225,7 +233,8 @@ def _one_run(args: argparse.Namespace, mode: str, rows: int) -> dict[str, Any]:
         return round(lat[min(len(lat) - 1, int(p * len(lat)))], 1)
 
     return {"mode": mode, "preset": args.preset, "rows": rows, "calls": len(lat), "mtls": bool(args.mtls),
-            "spin_us": args.spin_us, "gil_load": args.gil_load, "p50_us": pct(0.5), "p90_us": pct(0.9),
+            "spin_us": args.spin_us, "read_spin_us": args.read_spin_us, "gap_us": args.gap_us,
+            "gil_load": args.gil_load, "p50_us": pct(0.5), "p90_us": pct(0.9),
             "p99_us": pct(0.99), "mean_us": round(statistics.fmean(lat), 1),
             "wall_us_per_call": round(wall / len(lat) * 1e6, 1),
             "client_cpu_us_per_call": round((c1 - c0 + cf1 - cf0) / len(lat) * 1e6, 1),
@@ -241,6 +250,8 @@ def main() -> None:
     ap.add_argument("--repeat", type=int, default=3)
     ap.add_argument("--spin-us", type=int, default=50)
     ap.add_argument("--gil-load", type=int, default=0)
+    ap.add_argument("--gap-us", type=float, default=0.0, help="client busy-waits this long between trips")
+    ap.add_argument("--read-spin-us", type=int, default=0, help="server: poll the socket this long before blocking")
     ap.add_argument("--mtls", action="store_true", help="native-tls: present a client certificate bound to the ticket")
     ap.add_argument("--serve", choices=["tcp", "uds"], help=argparse.SUPPRESS)
     ap.add_argument("--serve-dir", help=argparse.SUPPRESS)

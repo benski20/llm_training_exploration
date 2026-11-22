@@ -455,6 +455,23 @@ mod tests {
     }
 
     #[test]
+    fn read_spin_serves_the_same_replies() {
+        let fake = Arc::new(Fake { calls: AtomicUsize::new(0), sleep: Duration::ZERO });
+        let (s, _d) = start_with(|c| c.read_spin = Duration::from_millis(5), fake.clone());
+        let (mut c, r) = open(&s, "t1");
+        assert_eq!(r.status, Status::Ok);
+        for (id, gap_ms) in [(1u8, 0u64), (2, 2), (3, 12), (4, 0)] {
+            std::thread::sleep(Duration::from_millis(gap_ms)); // inside and beyond the spin window
+            let (h, body) = call(&mut c, 0, 2, 4, id);
+            assert_eq!((h.status, h.request_id, body.len()), (Status::Ok, [id; 16], 24));
+        }
+        assert_eq!(fake.calls.load(Ordering::SeqCst), 4);
+        let t0 = std::time::Instant::now();
+        s.stop(Duration::from_secs(2)); // a spinning connection still sees the shutdown
+        assert!(t0.elapsed() < Duration::from_secs(2));
+    }
+
+    #[test]
     fn tickets_are_matched_among_many() {
         let fake = Arc::new(Fake { calls: AtomicUsize::new(0), sleep: Duration::ZERO });
         let (s, _d) = start_with(|_| {}, fake);

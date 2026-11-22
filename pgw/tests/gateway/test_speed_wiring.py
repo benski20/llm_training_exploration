@@ -595,11 +595,12 @@ def _cfg(**kw: Any) -> GatewayModelConfig:
 
 
 def test_phase_a_settings_are_no_longer_pending() -> None:
-    assert set(gw_config.PENDING_SPEED_SETTINGS) == {"float_ops", "head_mode", "schedule", "prefix_cache"}
+    assert set(gw_config.PENDING_SPEED_SETTINGS) == {"head_mode", "schedule", "prefix_cache"}
     c = _cfg(lane="auto", lane_uds_dir=Path("/run/pgw"), lane_pool_wait_s=0.02, local_linears="auto",
              local_rtt_ms=12.5, spec_lookup=3, spec_rows=2, spec_strict_passes=True, float_threads=1)
     assert c.lane == "auto" and c.spec_rows == 2 and c.float_threads == 1
-    for name, value in (("float_ops", "native"), ("head_mode", "provider_int8"), ("schedule", "fused2"),
+    assert _cfg(float_ops="native").float_ops == "native"
+    for name, value in (("head_mode", "provider_int8"), ("schedule", "fused2"),
                         ("prefix_cache", "conversation")):
         with pytest.raises(ValidationError, match="not available in this build"):
             _cfg(**{name: value})

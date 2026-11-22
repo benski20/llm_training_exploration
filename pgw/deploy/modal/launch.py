@@ -67,10 +67,11 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import trip_gate  # noqa: E402  (no Modal imports; also shipped into the customer image)
 
-#: Optional suffix of the app and Dict names (``PGW_MODAL_NS``): parallel runs from other checkouts do not collide.
-NS = os.environ.get("PGW_MODAL_NS", "").strip()
-DICT_NAME = "pgw-live" + NS
-APPS = ("pgw-provider" + NS, "pgw-customer" + NS)
+#: ``PGW_MODAL_APP_SUFFIX`` (deploy time, default empty): appended to every app name and to the Dict name, so
+#: parallel experiments in one workspace do not replace each other's apps (the containers get it in their image env).
+APP_SUFFIX = os.environ.get("PGW_MODAL_APP_SUFFIX", "").strip()
+DICT_NAME = "pgw-live" + APP_SUFFIX
+APPS = ("pgw-provider" + APP_SUFFIX, "pgw-customer" + APP_SUFFIX)
 #: Dict keys that belong to one run (cleared before a new pair starts and by --stop).
 RUN_KEYS = ("provider", "customer", "provider_boot", "customer_boot", "e2e", "stop")
 #: Where the two parties run and how the gateway reaches the provider (``--placement``).
@@ -78,7 +79,7 @@ PLACEMENTS = ("tunnel", "i6pn", "colocated")
 #: Function names per two-container network: (provider, customer). Kept keyed by "i6pn?" for the tests.
 FUNCTIONS = {False: ("serve", "gateway"), True: ("serve_i6pn", "gateway_i6pn")}
 #: The co-located placement's single function: (app, function).
-COLOCATED_FUNCTION = ("pgw-colocated" + NS, "pair")
+COLOCATED_FUNCTION = ("pgw-colocated" + APP_SUFFIX, "pair")
 #: Apps per placement (deployed and stopped by the launcher; the tunnel apps are always deployed, as the
 #: fallback of the other placements).
 PLACEMENT_APPS = {"tunnel": APPS, "i6pn": APPS, "colocated": (*APPS, COLOCATED_FUNCTION[0])}
@@ -454,6 +455,8 @@ def _spawner(args: argparse.Namespace) -> Callable[..., Pair]:
     pin = int(getattr(args, "float_threads", 0) or 0)
     if pin > 0:  # --float-threads: the gateway's torch thread count (the reference follows it, colocated.py)
         genv.setdefault("OMP_NUM_THREADS", str(pin))
+    if getattr(args, "float_ops", "torch") == "native":  # the reference follows it too (colocated.py)
+        genv.setdefault("PGW_FLOAT_OPS", "native")
     penv = parse_env_pairs(getattr(args, "provider_env", None) or [])
     sustain = float(getattr(args, "sustain_s", 0.0) or 0.0)
 
@@ -580,13 +583,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                          "(the tunnel: yes); 'attention' = always; 'attention_down' = also down "
                          "(one round trip per layer); "
                          "'auto_kinds' = each kind local iff cheaper than a trip; 'off' = every linear on the provider")
-    ap.add_argument("--lane", choices=["stream", "tls"], default=None,
+    ap.add_argument("--lane", choices=["stream", "tls", "uds"], default=None,
                     help="customer gateway's trip lane (default: 'tls' co-located, 'stream' otherwise): 'stream' = "
                          "the blocking stream lane (WebSocket, msgpack, Python TLS); 'tls' (--placement colocated "
                          "only) = the provider also serves its "
                          "native trip lane over TLS 1.3 on 127.0.0.1:8444 and the gateway uses it (rustls, binary "
                          "header, GIL released per trip; same masked bytes, request ids and schedule; misses fall "
-                         "back to the stream lane). Exact; the e2e comparison still applies")
+                         "back to the stream lane); 'uds' (--placement colocated only) = the product's same-host "
+                         "Unix-socket lane between the two party users (the service accepts the gateway user's uid "
+                         "only; socket 0660 and its directory 0710 to that user's group). Exact; the e2e "
+                         "comparison still applies")
     ap.add_argument("--gateway-env", action="append", default=[], metavar="KEY=VALUE",
                     help="--placement colocated: extra environment of the customer gateway party (and the mask "
                          "factory it starts), e.g. PGW_FACTORY_SKIP_LINEAR_KINDS=qkv,o,down; PGW_/OMP_/MKL_ keys only")
@@ -596,6 +602,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                     help="--e2e --placement colocated: after the exactness check, chat back to back for this many "
                          "seconds and report tokens/s and the mask factory's segments finished meanwhile (slots/s "
                          "while a chat decodes)")
+    ap.add_argument("--float-ops", choices=("torch", "native"), default=None,
+                    help="--placement colocated: the gateway's float path. 'native' = the pinned native formulation "
+                         "(pgw_fast: RMSNorm, RoPE, attention, SiLU in a fixed order; PGW_FLOAT_OPS=native), which "
+                         "the e2e's plaintext reference then uses too (a new reference). Default: native co-located, "
+                         "torch otherwise")
     ap.add_argument("--float-threads", type=int, default=None,
                     help="--placement colocated: the pinned float formulation. The gateway's process runs torch on "
                          "exactly N threads (OMP_NUM_THREADS=N) and the e2e's plaintext reference on the same N, so "
@@ -649,12 +660,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         args.local_linears = "attention_down" if args.placement == "colocated" else "auto"
     if args.lane is None:
         args.lane = "tls" if args.placement == "colocated" else "stream"
-    if args.lane == "tls" and args.placement != "colocated":
-        ap.error("--lane tls needs --placement colocated (the provider's lane port is on its loopback only)")
+    if args.lane in ("tls", "uds") and args.placement != "colocated":
+        ap.error(f"--lane {args.lane} needs --placement colocated (the provider's lane is on its host only)")
     if args.float_threads is None:
         args.float_threads = 1 if args.placement == "colocated" else 0
     if args.float_threads < 0 or (args.float_threads and args.placement != "colocated"):
         ap.error("--float-threads needs --placement colocated and N >= 0")
+    if args.float_ops is None:
+        args.float_ops = "native" if args.placement == "colocated" else "torch"
+    if args.float_ops != "torch" and args.placement != "colocated":
+        ap.error("--float-ops needs --placement colocated")
     if args.gateway_gpu and (args.placement != "colocated" or not args.gpu):
         ap.error("--gateway-gpu needs --placement colocated and a provider --gpu (two GPUs of that tier)")
     if args.max_trip_ms is not None and args.max_trip_ms <= 0:

@@ -40,7 +40,7 @@ log = logging.getLogger(__name__)
 #: check (exactness is kept bit for bit; privacy is unchanged), so a deployment may preset them for the wizard.
 SETUP_MODEL_OPTION_KEYS: frozenset[str] = frozenset({
     "lane", "lane_uds_dir", "lane_pool_wait_s", "local_linears", "local_linears_device", "local_rtt_ms",
-    "local_max_rows", "float_threads",
+    "local_max_rows", "lm_head_device", "float_threads",
     "spec_rows", "spec_strict_passes", "spec_mask_rows", "spec_mask_credit", "spec_lookup", "spec_lookup_min_n",
     "spec_tokens", "inline_max_rows",
     "batch_lm_head", "engine_pingpong", "max_concurrent_sessions", "draft_pack_path", "draft_device",
@@ -61,7 +61,6 @@ _MIN_ADMIN_TOKEN_LEN = 16
 #: while the field is listed, so a configuration can never ask for a mode (e.g. strict-pass
 #: speculation) that silently does not happen. The implementing package removes its entry.
 PENDING_SPEED_SETTINGS: dict[str, str] = {
-    "float_ops": "WP-B1 (native deterministic float path)",
     "head_mode": "WP-B2 (provider int8 LM head)",
     "schedule": "WP-B4 (fused2 schedule)",
     "prefix_cache": "WP-B3 (prefix cache)",
@@ -263,6 +262,12 @@ class GatewayModelConfig(BaseModel):
         "integer outputs identical to the CPU's; quantization, the range check and dequantization stay on the CPU, "
         "so the outputs are the same bits either way",
     )
+    lm_head_device: Literal["cpu", "cuda"] = Field(
+        "cpu", description="Where the float32 LM head runs: 'cpu' (default, the native kernel) or 'cuda' (a "
+        "gateway GPU: the same fixed summation order as one GPU kernel, pgw.engine.lm_head_gpu). The GPU is used "
+        "only after a start-up check found its logits identical to the CPU kernel's bit for bit; otherwise the "
+        "CPU is kept. PGW_LM_HEAD_DEVICE overrides it",
+    )
     local_rtt_ms: float | None = Field(
         None, gt=0, description="Round trip (ms) local_linears = 'auto' compares with. None = measured at start-up "
         "with a few mask-free dummy round trips (uniform random payloads; no mask is used)",
@@ -306,8 +311,9 @@ class GatewayModelConfig(BaseModel):
     )
     float_ops: Literal["torch", "native"] = Field(
         "torch", description="Gateway plaintext float path (norms, RoPE, attention): 'torch' (default, today's "
-        "reference); 'native' = the deterministic native path with row-deterministic attention (a new reference: "
-        "logits differ from 'torch' in the last bits)",
+        "reference); 'native' = the pinned native formulation (pgw_fast: fixed-order RMSNorm, SiLU and "
+        "row-deterministic attention; a new reference: logits differ from 'torch' in the last bits, so the plaintext "
+        "reference compared against must use it too, e.g. PGW_FLOAT_OPS=native). Unset: PGW_FLOAT_OPS or 'torch'",
     )
     head_mode: Literal["gateway", "provider_int8"] = Field(
         "gateway", description="LM head: 'gateway' (default) = the exact float32 head on the gateway CPU; "

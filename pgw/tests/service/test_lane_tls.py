@@ -137,8 +137,12 @@ def _connect(info: dict[str, Any], ca_pem: bytes, ticket: bytes | None = None,
         int(info["max_rows"]), 50, cert, key)
 
 
+@pytest.mark.parametrize("read_spin_us", ["", "3000"])
 async def test_tls_lane_is_bit_identical_to_the_stream_path(tiny_pack_dir: Path, pki: dict[str, Any], pack_fp: str,
-                                                           pack_weights: dict[str, torch.Tensor]) -> None:
+                                                           pack_weights: dict[str, torch.Tensor], read_spin_us: str,
+                                                           monkeypatch: pytest.MonkeyPatch) -> None:
+    # PGW_SERVICE_LANE_READ_SPIN_US: the server polls for the next request before blocking (same replies)
+    monkeypatch.setenv("PGW_SERVICE_LANE_READ_SPIN_US", read_spin_us)
     async with running_app(_settings(tiny_pack_dir, pki, lane_max_rows=4)) as app:
         info = await _open(app, pack_fp)
         assert info["transport"] == "tcp" and "socket" not in info and info["alpn"] == "pgw-lane/1"

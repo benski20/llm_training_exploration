@@ -577,14 +577,20 @@ class MaskReservation:
                 )
             return self._take_locked(key, ei, ex, start, rows)
 
+    #: :meth:`take_checked` accepts ``verify`` (the gateway's one-call trip path checks for it).
+    take_checked_verify = True
+
     def take_checked(
-        self, lid: LinearId | str, max_rows: int, checks: bool
+        self, lid: LinearId | str, max_rows: int, checks: bool,
+        verify: Callable[[Any], None] | None = None,
     ) -> tuple[int, torch.Tensor, torch.Tensor, tuple[tuple[str, str], np.ndarray, np.ndarray] | None]:
         """Gateway hot path: :meth:`rows_until_boundary`, :meth:`checks_compact` and :meth:`take` in one step.
 
         Takes ``min(max_rows, rows left in the current extent)`` rows of ``lid`` and returns
         ``(rows, r, W r, checks)``, where ``checks`` is :meth:`checks_compact` of the extent the rows
-        came from (``None`` unless ``checks``). Same errors as :meth:`take`.
+        came from (``None`` unless ``checks``). Same errors as :meth:`take`. ``verify`` (with
+        ``checks``) is called with those checks before any row is taken; whatever it raises leaves
+        the cursor where it was (no row consumed).
         """
         key = self._key(lid)
         if not isinstance(max_rows, int) or isinstance(max_rows, bool) or max_rows <= 0:
@@ -600,6 +606,8 @@ class MaskReservation:
             ex = self._extents[ei]
             rows = min(max_rows, ex.end_row - start)
             chk = self._compact_locked(key, ei) if checks else None
+            if verify is not None and chk is not None:
+                verify(chk)
             r, wr = self._take_locked(key, ei, ex, start, rows, compact=True)
         return rows, r, wr, chk
 

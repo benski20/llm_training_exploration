@@ -39,6 +39,7 @@ UDS tickets only, ``tls`` TCP tickets only).
 
 from __future__ import annotations
 
+import os
 import hashlib
 import json
 import socket
@@ -359,7 +360,7 @@ def _connect_tls(native: Any, config: Any, ticket: LaneTicket, secret: bytes | b
 
 
 def build_lane_client(client: Any, *, uds_dir: str | None = None, pool_wait_s: float = 0.01,
-                      max_channels: int = 4, transports: tuple[str, ...] = ("uds",), spin_us: int = 50,
+                      max_channels: int = 4, transports: tuple[str, ...] = ("uds",), spin_us: int | None = None,
                       native: bool | None = False, tcp_ports: Any = None) -> LaneComputeClient:
     """Wrap ``client`` (a connected-or-connecting :class:`~pgw.wire.client.ComputeClient`, or a wrapper of one
     such as :class:`~pgw.wire.sync_stream.SyncStreamClient`) so eligible calls use the service's trip lane,
@@ -369,6 +370,12 @@ def build_lane_client(client: Any, *, uds_dir: str | None = None, pool_wait_s: f
     channel on UDS. The TCP lane always uses the native channel (there is no Python TLS channel for A1 frames).
     ``tcp_ports``: the only TCP lane ports accepted from a ticket (the gateway passes the ports its egress
     allowlist allows on the service host); ``None`` = any port (tests and tools without an allowlist)."""
+    if spin_us is None:  # PGW_LANE_SPIN_US (default 50): the native channel's busy-poll before blocking
+        raw = os.environ.get("PGW_LANE_SPIN_US", "").strip()
+        try:
+            spin_us = min(100_000, max(0, int(raw))) if raw else 50
+        except ValueError as exc:
+            raise ValueError(f"PGW_LANE_SPIN_US must be an integer, got {raw!r}") from exc
     bad = set(transports) - {"uds", "tcp"}
     if bad or not transports:
         raise ValueError(f"unknown lane transports {sorted(bad)}")

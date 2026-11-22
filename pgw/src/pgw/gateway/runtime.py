@@ -983,6 +983,13 @@ class ModelRuntime:
         self.model.inline_max_rows = c.inline_max_rows
         if os.environ.get("PGW_PREFILL_PROFILE", "").strip() == "1":  # prompt-pass timings (gateway-local)
             self.model.prefill_profile = {}
+        head_dev = os.environ.get("PGW_LM_HEAD_DEVICE", "").strip().lower() or c.lm_head_device
+        if head_dev not in ("", "cpu"):
+            from pgw.engine.lm_head_gpu import enable_gpu_lm_head
+
+            self.lm_head_policy = enable_gpu_lm_head(self.model, head_dev)
+        else:
+            self.lm_head_policy = {"device": "cpu"}
         if c.batch_lm_head is not None:
             self.model.batch_lm_head = c.batch_lm_head
         if getattr(self.backend, "trip_engine", False):
@@ -999,6 +1006,8 @@ class ModelRuntime:
             # decode passes on the plaintext thread when the backend says a trip is fast (lane + TripEngine)
             self.model.sync_decode = True
         # default 1 (an explicit model setting wins; without one, PGW_FLOAT_THREADS as the model applied it)
+        if "float_ops" in c.model_fields_set:  # an explicit setting wins over PGW_FLOAT_OPS (read by the model)
+            self.model.set_float_ops(c.float_ops)
         env_set = os.environ.get("PGW_FLOAT_THREADS", "").strip() != "" and "float_threads" not in c.model_fields_set
         if (c.float_threads is not None and not env_set
                 and getattr(getattr(self.model, "device", None), "type", "cpu") == "cpu"):
@@ -1409,6 +1418,9 @@ class ModelRuntime:
         out: dict[str, Any] = {
             "lane": c.lane, "lane_state": self.lane_state,
             "local_linears": dict(getattr(be, "local_policy", {}) or {"mode": c.local_linears}),
+            "lm_head": dict(getattr(self, "lm_head_policy", None) or {"device": "cpu"}),
+            "local_gpu_stats": dict(getattr(getattr(be, "_local_gpu", None), "stats", None) or {}),
+            "local_linear_timing": dict(getattr(be, "local_linear_timing", None) or {}),
             "measured_rtt_ms": round(self.measured_rtt_s * 1e3, 3) if self.measured_rtt_s is not None else None,
             "rtt_path": network_path(c.service_url),
             "trip_engine": bool(getattr(be, "trip_engine", False)),
@@ -1416,6 +1428,7 @@ class ModelRuntime:
             "sync_decode": bool(getattr(self.model, "sync_decode", False)),
             "pipeline_blocks": getattr(self.model, "pipeline_blocks", None),
             "float_threads": getattr(self.model, "float_threads", None),
+            "float_ops": getattr(getattr(self.model, "float_ops", None), "name", "torch"),
             "spec_rows": c.spec_rows, "spec_strict_passes": c.spec_strict_passes, "spec_mask_rows": c.spec_mask_rows,
             "spec_mask_credit": c.spec_mask_credit,
         }

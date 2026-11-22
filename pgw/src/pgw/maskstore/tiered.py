@@ -130,8 +130,13 @@ class ChainedReservation:
     def take(self, lid: LinearId | str, rows: int) -> tuple[torch.Tensor, torch.Tensor]:
         return self._current(lid).take(lid, rows)  # type: ignore[no-any-return]
 
-    def take_checked(self, lid: LinearId | str, max_rows: int, checks: bool) -> Any:
-        return self._current(lid).take_checked(lid, max_rows, checks)
+    take_checked_verify = True
+
+    def take_checked(self, lid: LinearId | str, max_rows: int, checks: bool, verify: Any = None) -> Any:
+        part = self._current(lid)
+        if verify is None:
+            return part.take_checked(lid, max_rows, checks)
+        return _take_verified(part, lid, max_rows, checks, verify)
 
     def prefetch(self, lid: LinearId | str, rows: int) -> int:
         with self._lock:
@@ -538,3 +543,14 @@ def build_tiered_source(store: Any, ring_settings: Any, *, min_soundness_bits: f
         store = None
     return TieredMaskSource(store, ring_settings, min_soundness_bits=min_soundness_bits,
                             masked_models=masked_models)
+
+
+def _take_verified(part: Any, lid: LinearId | str, max_rows: int, checks: bool, verify: Any) -> Any:
+    """``part.take_checked`` with ``verify(checks)`` before any row is taken (parts without the hook:
+    their current checks first, then the take; one thread per session, so the same extent)."""
+    if getattr(part, "take_checked_verify", False) is True:
+        return part.take_checked(lid, max_rows, checks, verify)
+    if checks:
+        fn = getattr(part, "checks_compact", None)
+        verify(fn(lid) if fn is not None else (None, *part.checks_u64(lid)))
+    return part.take_checked(lid, max_rows, checks)

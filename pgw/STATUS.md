@@ -15,6 +15,81 @@ SLA pilot. Three reasons:
 2. The HSM, KMS and TPM integrations have never run against real hardware or cloud services.
 3. There has been no external security audit.
 
+## Update 2026-11-22: lean per-trip gateway path and the co-located UDS lane (package T3b)
+
+Not reached: 30 tokens/s. Three exact Modal runs the same hour (T4, attention_down, native float ops, factory
+capped; every run logprobs bit-identical, text equal, repeat identical): per decoded token 53-55 ms (TLS lane,
+new paths off), 52-54 ms (TLS, new paths on), 53 ms (UDS lane, new paths on); warm chat 12.4 / 13.1 / 11.9
+tokens/s. The gains are within Modal's host-to-host noise. Details: `deploy/modal/README.md`, "Lean per-trip path
+and the UDS lane".
+
+- `PGW_TRIP_FAST` (library default off; co-located demo on): a one-call pass (decode) skips the batch
+  bookkeeping; the extent's soundness check runs inside `take_checked` (new `verify` hook) before any row is
+  taken, so the separate pre-check lookup is gone; lean finish; cached constants for one-call local linears.
+  Same masks, draws, payload bytes, checks on every row, outputs and wiping (tests/engine/test_trip_fast.py).
+  Dev box, per trip: prepare 339 -> 279 us, finish 155 -> 153 us; local linear 330 -> 317 us per call.
+- `PGW_NOISE_ASYNC_SAMPLED` (default off, also off in the co-located demo: the sampled payload leaves before its statistics finish): a sampled call's every-call checks stay inline, its
+  statistics (about 400 us) run on a worker on wiped copies, in call order, joined before the next prepare (an
+  alarm blocks the next payload, fail closed). Statistics identical to inline (tested).
+- `launch.py --lane uds` (co-located, opt-in): the product's same-host UDS lane between the two party users;
+  the service accepts the gateway user's uid only, the socket's directory is 0710 and the socket 0660 to that
+  user's group. 1-row trip 0.44-0.47 ms (TLS: 0.54-0.57 ms); not made the default: no clear tokens/s gain in
+  the measured run.
+- What is left per trip on the dev box is mostly cache-cold native work (the finish kernel streams `u`, `W r`
+  and the scale: 22 us warm, about 100 us in place) and the store's amortized derivation, not Python.
+
+## Update 2026-11-22: trip latency floor and gateway per-trip CPU (package T3)
+
+Not reached: the 1-row trip stays at 0.57 ms in three exact Modal runs (12.0-13.0 tokens/s back to back). The
+provider side is already native; under Modal's gVisor the TLS lane transport alone costs 0.28 ms per trip (0.03-0.05
+ms on a plain VM) and polling makes it worse. Spin knobs added, off by default; details in `deploy/modal/README.md`,
+"Where a 1-row trip's 0.57 ms goes". Gateway per-trip CPU measured in place (dev box, `decode_cpu_bench.py`
+wrappers): prepare about 340 us (mask take 85, of which the stage copy and amortized derivation; precheck 75;
+request 28; noise guard 18 every call, 400 per sampled call; native prepare 30-40) and finish about 120 us (native 20);
+one redundant `remaining()` per trip removed. Collapsing these into one native call per side is the remaining work.
+## Update 2026-11-22: native pinned float path (package T3)
+
+Per decoded token of one Qwen2.5-0.5B chat co-located: **46-53 ms (from 62-64 in a same-day torch A/B); back to
+back 13.4-16.6 tokens/s (12.7), warm chat 13.7-14.9 (11.6)**, every run logprobs bit-identical, text equal, repeat
+identical. Details: `deploy/modal/README.md`,
+"Native pinned float path".
+
+- **New pinned float reference (decision delegated by the user, 2026-11-22), opt-in.** Model setting
+  `float_ops = "native"` (or `PGW_FLOAT_OPS=native`, `TransformerModel.set_float_ops`): RMSNorm, residual adds,
+  RoPE, attention over the KV cache and the SiLU gate run in `pgw_fast` (`layer.rs`, `attn.rs`) in a fixed order
+  of IEEE operations (no FMA, no libm `exp`; AVX2 and baseline builds give the same bits), one native call
+  between consecutive linears. Every output row depends only on its own inputs and the cache prefix: the bits do
+  not depend on the ISA, torch's thread count or the rows in a pass (speculative verify rows equal decode rows by
+  construction). RMSNorm, attention and SiLU differ from torch in the last bits (RoPE and residual adds are
+  torch's bits), so the gateway and its plaintext reference must both select it; the HF closeness tests pass with
+  it (`tests/engine/test_native_float.py`, plus the existing suites run under `PGW_FLOAT_OPS=native`). The final
+  norm and the LM head are unchanged. Library default stays `torch` (no golden changed); the co-located Modal demo
+  now defaults to it (`launch.py --float-ops native`, reference via `plaintext_reference(float_ops=)`) after an
+  exact e2e. Privacy unchanged: local gateway math only.
+- Per decoded token now (about 50 ms): trips 13 ms, local linears about 10 ms, mask prepare/finish about 8-10 ms,
+  LM head 4 ms, float ops and engine Python about 8-10 ms (from about 20). Not reached: 30 tokens/s.
+## Update 2026-11-22: native local linears and the LM head on the gateway GPU (package T3)
+
+Goal 30-40 tokens/s for one Qwen2.5-0.5B chat co-located with `--gateway-gpu`; reached **14.5-16.1 tokens/s back
+to back** (12.1-13.5 warm chat; the same code with the new paths switched off: 10.9 on that run's host), every run
+logprobs bit-identical, text equal and repeat identical. Details: `deploy/modal/README.md`, "Gateway GPU: native
+local-linear call, fixed-order LM head".
+
+- Local linears: one GIL-holding native call per linear (`pgw_fast.local_gpu_linear_into`: prepare into pinned
+  memory, `cuGraphLaunch` through the driver, spin, range check and rescale, buffers wiped), a lean self-checked
+  1-row path in the backend, and measured T4 launch configurations (down 66 -> 46 us). In the running gateway
+  220 -> 99 us per call, 15.9 -> 7.1 ms per token (the device floor is about 22 us per call; the rest is the busy
+  container). Integer results unchanged: start-up self-check per linear against the CPU reference.
+- LM head (`lm_head_device = "cuda"`, opt-in, library default `cpu`; on in the co-located demo with
+  `--gateway-gpu`): the existing fixed summation order as one Triton kernel with `mul.rn`/`add.rn` (no FMA, no
+  flush to zero), so the logits are the CPU kernel's bit for bit; the plaintext reference needs no change and
+  stays on the CPU. Start-up self-check, else the CPU. About 4 -> 1.4 ms per token. The final norm and sampling
+  stay on the CPU. HF closeness tests and goldens unchanged (library default).
+- Privacy unchanged: the GPU is the gateway's alone (per-UUID visibility, 0600 device nodes); nothing new
+  reaches the provider.
+- Per decoded token now (about 48 ms): trips 12 ms, the masked trips' gateway work 10 ms, local linears 7 ms,
+  LM head 1.4 ms, float ops and Python about 17 ms. Not reached: 30 tokens/s.
+
 ## Update 2026-11-22: gateway GPU and pinned float threads (package T2)
 
 Goal 30-40 tokens/s for one Qwen2.5-0.5B chat co-located; reached **13.3-13.6 tokens/s** (warm and back to back,

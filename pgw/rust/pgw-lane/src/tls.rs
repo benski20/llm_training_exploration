@@ -140,6 +140,39 @@ impl TlsIo {
         Ok(())
     }
 
+    /// Pull TLS records with non-blocking socket reads until decrypted bytes are waiting, `spin`
+    /// passes or `stop()`; the socket is blocking again on return. Any error is left for the regular
+    /// read to surface (the TLS state keeps it).
+    pub fn spin_for_data(&mut self, spin: Duration, stop: impl Fn() -> bool) {
+        let t0 = Instant::now();
+        let ready = |s: &mut rustls::StreamOwned<rustls::ServerConnection, TcpStream>| match s.conn.process_new_packets() {
+            Ok(st) => st.plaintext_bytes_to_read() > 0 || st.peer_has_closed(),
+            Err(_) => true,
+        };
+        if ready(&mut self.s) || self.s.sock.set_nonblocking(true).is_err() {
+            return;
+        }
+        let mut i: u32 = 0;
+        loop {
+            match self.s.conn.read_tls(&mut self.s.sock) {
+                Ok(0) => break, // EOF: the regular read reports it
+                Ok(_) => {
+                    if ready(&mut self.s) {
+                        break;
+                    }
+                }
+                Err(e) if matches!(e.kind(), ErrorKind::WouldBlock | ErrorKind::Interrupted) => {}
+                Err(_) => break,
+            }
+            i = i.wrapping_add(1);
+            if i % 32 == 0 && (t0.elapsed() >= spin || stop()) {
+                break;
+            }
+            std::hint::spin_loop();
+        }
+        let _ = self.s.sock.set_nonblocking(false);
+    }
+
     pub fn set_read_timeout(&self, d: Option<Duration>) -> io::Result<()> {
         self.s.sock.set_read_timeout(d)
     }

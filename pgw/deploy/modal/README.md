@@ -342,6 +342,134 @@ the native trip lane (`ineligible:rows` otherwise): the lane took them, but each
 the provider (720-820 ms per pass), and sending them concurrently broke the lane (one `RuntimeError`, then the
 lane was off for the rest of the run).
 
+### Where a 1-row trip's 0.57 ms goes, and lane spin knobs (2026-11-22, package T3)
+
+Co-located T4, `attention_down`, TLS lane, factory capped (`PGW_FACTORY_CPU_THREADS=3`, `PGW_FACTORY_NICE=10`,
+target 8000), CPU local linears; every run logprobs bit-identical, text equal, repeat identical:
+
+| run | 1-row trip mean | service (graph) | rest | warm chat | back to back |
+|---|---|---|---|---|---|
+| baseline | 0.565 ms | 0.198 | 0.367 | 10.8 tok/s | 12.4 |
+| all spins (gateway 3 ms, GPU 2 ms, server read 20 ms) | 0.567 | 0.137 | 0.430 | 11.8 | 13.0 |
+| GPU spin 2 ms only | 0.569 | 0.183 | 0.386 | 10.5 | 12.0 |
+
+The provider's 1-row path is already native (rust/pgw-lane: rustls, CUDA-graph replay, no Python per call), so
+nothing is left to move off the event loop there. The floor is Modal's gVisor network stack: the TLS lane transport
+alone (`benchmarks/lane_tls_bench.py`, stub executor, `gpu_bench.py --target c8`, 2 ms gap between trips like
+decode) costs **0.28 ms p50 per 1-row trip** (0.23 ms back to back; the same bench on a plain Linux VM: 0.03-0.05
+ms); the UDS transport 0.16 ms (0.13 ms with both spins). Busy-polling loopback TCP under gVisor made the TLS
+transport slower (0.32-0.36 ms), not faster. Opt-in knobs, all off by default, waiting only (same bytes, same
+replies): `PGW_LANE_SPIN_US` (gateway TripChannel reply poll, default 50), `PGW_SERVICE_LANE_SPIN_US` (graph stream
+poll, default 50), `PGW_SERVICE_LANE_READ_SPIN_US` (new: the lane server polls a connection for its next request
+before blocking; UDS by peek, TLS by non-blocking reads into the session, default 0). `PGW_MODAL_APP_SUFFIX`
+(deploy time) suffixes the app and Dict names so parallel experiments do not replace each other's apps.
+### Native pinned float path (2026-11-22, package T3)
+
+`--float-ops native` (co-located; now the co-located default, `--float-ops torch` = as before): the gateway runs
+the layer float ops (RMSNorm, residual adds, RoPE, attention over the KV cache, SiLU gate) in `pgw_fast`
+(`rust/pgw-fast/src/layer.rs`, `attn.rs`) through `PGW_FLOAT_OPS=native`, one native call between consecutive
+linears, and the e2e's plaintext reference uses the same path (`wizard_client.plaintext_reference(float_ops=)`).
+It is a **new pinned reference**: a fixed order of IEEE operations without FMA or libm, so its bits depend on
+neither the ISA (AVX2 and baseline builds agree) nor torch's thread count nor how many rows share a pass; RMSNorm,
+attention and SiLU differ from torch's in the last bits (RoPE and the residual adds are torch's bits). The final
+norm and the LM head are unchanged. Privacy unchanged (local gateway math only; the provider receives the same).
+
+Measured (T4, `attention_down`, TLS lane, factory capped: `PGW_FACTORY_CPU_THREADS=3`, `PGW_FACTORY_NICE=10`,
+target 8000; float threads pinned to 1; both runs logprobs bit-identical, text equal, repeat identical; per
+decoded token = (chat time - time to first token) / (tokens - 1), from the gateway's audit log):
+
+| float ops | warm chat | back to back | ms per decoded token (7 chats) |
+|---|---|---|---|
+| torch (A/B baseline, same day) | 11.6 tok/s | 12.7 | 62-64 (one 68) |
+| native (`--float-ops native`) | 14.9 tok/s | 13.4 | 49-53 (one 83: host hiccup) |
+| native (the new co-located default) | 13.7 tok/s (16.2 on loopback) | 16.6 | 46-49 |
+
+About 11-16 ms per decoded token saved (Modal's CPU and gVisor make each of the 40-odd torch calls per layer
+and the per-step thread scoping more expensive than locally: on the dev box the same change saves 5-6 ms, from
+12-13 to 7-8 ms of float ops and engine glue per token in `benchmarks/decode_cpu_bench.py`). Back to back the gain
+is smaller because time to first token (0.6-1.2 s, prompt pass) is a third of a 52-token chat.
+### Gateway GPU: native local-linear call, fixed-order LM head (2026-11-22, package T3)
+
+* **Why the local linears cost 10-16 ms per token in the running gateway** (4.8 ms in isolation): Python around
+  each of the 72 calls per token, which the running container inflates, not the device. With the Python replay
+  path a decode call took 220 us in the gateway (`local_linear_timing` below) against 67 us in isolation: about
+  15 Python steps in `LocalGpuProducts.forward` (event record, a polling loop, two native calls with their
+  argument parsing, buffer slicing and wiping) inside the backend's generic local path (validation, grouping,
+  cache lookups, `np.isfinite`, which releases the GIL above 500 elements). `benchmarks/local_gpu_bench.py
+  --breakdown` on a T4 (replay + synchronize, median): a one-copy graph 22 us, kernel-only 32 / 58 us (896x1152 /
+  4864x896), the full graph 43 / 75 us: about 22 us of every call is launch and completion, the device floor.
+* `pgw_fast.local_gpu_linear_into` (default with `--gateway-gpu`; `PGW_LOCAL_GPU_NATIVE=0` = the Python
+  replay): one native call does prepare (zero mask) straight into the pinned buffer, `cuGraphLaunch` of the
+  captured graph's exec through a `dlopen`ed driver (as the provider's lane), a spin on `cuStreamQuery`
+  (`PGW_LOCAL_GPU_SPIN_US`, default 2000, then blocking), the range check and rescale (the finish kernel's
+  expressions), and wipes both pinned buffers. It keeps the GIL for the call (`PGW_LOCAL_GPU_HOLD_GIL=0`
+  releases it): a call is tens of microseconds and a hand-off costs more. Decode calls (1 row) take a lean
+  per-linear callable bound at start-up (`PGW_LOCAL_GPU_ONE_ROW=0` disables it), compared bit for bit with the
+  CPU reference on public rows (Gaussian, spike, zero, tiny, non-finite refusal) before use; the regular path
+  stays self-checked as before. Prompt passes keep the eager GPU path (about 0.12 s per 41-row prompt).
+* Launch configurations of the local graphs' ring GEMV for 1 row are measured per GPU model
+  (`pgw.engine.local_gpu.ONE_ROW_CONFIGS`, `benchmarks/local_gemv_sweep.py`; `PGW_LOCAL_GPU_GEMV` overrides,
+  `PGW_LOCAL_GPU_TABLE=0` = the provider's heuristic). T4, replay + synchronize: qkv 43 -> 36 us, o 35 us,
+  down 66 -> 46 us (no split-K, so no memset node). Any configuration gives the same integers; the start-up
+  self-check against the CPU reference still runs per linear.
+* **LM head on the gateway GPU, same bits** (`lm_head_device = "cuda"`, on with `--gateway-gpu`;
+  `--gateway-env PGW_LM_HEAD_DEVICE=cpu` turns it off; library default `cpu`): the CPU head already has a
+  fixed summation order (16 partial sums over 16-column chunks, product rounded then added, no FMA, a fixed
+  tree), and each step is a correctly rounded float32 operation, so `pgw.engine.lm_head_gpu` runs the same
+  order as one Triton kernel (PTX `mul.rn.f32` / `add.rn.f32`: no contraction, no flush of subnormals; the
+  bfloat16 head in a chunked `(D/16, V, 16)` layout; 1-row calls replay a CUDA graph). The logits are the CPU
+  kernel's bit for bit, so the plaintext reference needs no change (it stays on the CPU, as do the final
+  norm and sampling). Start-up self-check against the CPU kernel (Gaussian, large, subnormal products, zeros,
+  signed zeros, infinity), else the CPU; `TRITON_INTERPRET=1` tests the order on any host
+  (`tests/engine/test_lm_head_gpu.py`). T4: 1.33 ms vs 2.93 ms on the CPU kernel in isolation, 0 of 20 rows
+  differ. The GPU belongs to the gateway (as for the local linears); the provider sees nothing new.
+* `/admin/status` speed: `local_linear_timing` (wall time of the local linears, decode vs prompt passes; the
+  backend's `local_seconds` also counts the masked trips' gateway work), `local_gpu_stats`, `lm_head` (with
+  live `stats`). `PGW_MODAL_APP_SUFFIX` (deploy time) suffixes the app and Dict names for parallel runs.
+
+Measured (T4:2, 14 cores, `attention_down`, TLS lane, factory capped and kept busy, 45 s of back-to-back
+52-token chats; every run logprobs bit-identical, text equal, repeat identical; hosts vary 10-20% and more):
+
+| run | back to back (tok/s) | warm chat | ms per decoded token | trips | trips' gateway work | local linears | LM head |
+|---|---|---|---|---|---|---|---|
+| before (this code with `PGW_LOCAL_GPU_NATIVE=0 PGW_LOCAL_GPU_ONE_ROW=0 PGW_LM_HEAD_DEVICE=cpu PGW_LOCAL_GPU_TABLE=0`) | 10.9 | 9.6 | about 75 | 14.5 | 12.6 | 15.9 (220 us/call) | about 4 (CPU) |
+| native call + GPU LM head | 15.3 | 13.5 | about 45 | 12.1 | 10.2 | about 7 (native part 5.5) | about 1.5 |
+| + 1-row fast path | 14.5 | 12.1 | about 52 | 12.7 | 11.3 | not measured | about 1.5 |
+| + T4 GEMV table, LM-head graph | 16.1 | 13.0 | about 48 | 11.9 | 10.1 | 7.1 (99 us/call) | 1.4 |
+
+The same native call takes 61 us mean (48 us median) in isolation and 99 us in the running gateway; idle gaps
+of 100-600 us between calls add only 1-6 us in isolation, so the rest is the busy container (the factory,
+spinning pool and lane threads of both parties on the same cores, gVisor), not the device. What remains per
+decoded token (about 48 ms): trips 12 ms, the masked trips' gateway work 10 ms, local linears 7 ms, LM head
+1.4 ms, float ops and Python about 17 ms; time to first token 0.5-0.55 s. Not reached: 30 tokens/s.
+
+### Lean per-trip path and the UDS lane (2026-11-22, package T3b)
+
+* `PGW_TRIP_FAST=1` (gateway; library default off, `colocated_gateway_env` turns it on; `--gateway-env
+  PGW_TRIP_FAST=0` for an A/B): see `MaskedBackend.trip_fast`. Same bytes on the wire, same checks on every row,
+  same noise statistics.
+* `PGW_NOISE_ASYNC_SAMPLED=1` stays **off** in the demo too: it lets a sampled call's own payload leave before its
+  noise statistics finish, so an alarm would block only the next payload. That is weaker than the inline check and
+  saves only ~30 µs per trip on average.
+* `--lane uds` (co-located): the provider's service serves its native lane on `/srv/pgw-lane/lane.sock`
+  (`PGW_SERVICE_LANE=uds`, `PGW_SERVICE_LANE_PEER_UIDS` = the gateway user's uid only); the directory is the
+  provider's, 0710 with the gateway user's group, and root widens the socket from 0600 to 0660 for that group once
+  the service has bound it. The gateway's `lane = "auto"` takes the UDS ticket of its loopback service; prefill
+  calls above 8 rows go to the stream channel (`ineligible:rows`), as on the TLS lane's fallback.
+
+Measured (T4, `attention_down`, native float ops, factory capped `PGW_FACTORY_CPU_THREADS=3`, `PGW_FACTORY_NICE=10`,
+`PGW_FACTORY_TARGET_SLOTS=8000`; all logprobs bit-identical, text equal, repeat identical; ms per decoded token =
+(chat - TTFT) / 31 for the second and third chat; each run about 7 min, about $0.08):
+
+| run | 1-row trip | warm chat | loopback | ms/decoded token |
+|---|---|---|---|---|
+| TLS, new paths off | 0.54-0.56 ms | 12.4 tok/s | 13.0 | 54.8, 53.1 |
+| TLS, new paths on | 0.56-0.57 ms | 13.1 | 14.3 | 53.6, 51.9 |
+| UDS, new paths on | 0.44-0.47 ms | 11.9 | 13.6 | 52.8, 52.9 |
+
+The UDS lane saves about 0.1 ms per trip (2.6 ms per token at 26 trips) but the runs land on different hosts, and
+host-to-host variance (10-20%) hides it in tokens/s; `--lane tls` stays the default.
+
 ## Trip latency and the `--max-trip-ms` gate
 
 `--e2e` now also reports the gateway's **client-reported round-trip latency** (`trip_latency` in the

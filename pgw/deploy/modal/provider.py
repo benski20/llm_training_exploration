@@ -37,11 +37,14 @@ PACK = "/opt/packs/" + MODEL_NAME
 #: Deploy-time choices the container needs at run time. Modal re-imports this file inside the container without
 #: the deploy shell's environment, so MODEL_NAME (hence PACK and the "model" published to the customer) would fall
 #: back to the 0.5B there; the image's environment carries them instead.
-#: Optional suffix of the app and Dict names (``PGW_MODAL_NS``): parallel runs from other checkouts do not collide.
-NS = os.environ.get("PGW_MODAL_NS", "").strip()
-RUNTIME_ENV = {"PGW_MODAL_MODEL": MODEL_NAME, **({"PGW_MODAL_NS": NS} if NS else {})}
+RUNTIME_ENV = {"PGW_MODAL_MODEL": MODEL_NAME,
+               **({"PGW_MODAL_APP_SUFFIX": os.environ["PGW_MODAL_APP_SUFFIX"].strip()}
+                  if os.environ.get("PGW_MODAL_APP_SUFFIX", "").strip() else {})}
 MAX_LIFETIME_S = 88 * 60  # hard cap (function timeout): nothing outlives 90 minutes
-DICT_NAME = "pgw-live" + NS
+#: ``PGW_MODAL_APP_SUFFIX`` (deploy time, default empty): appended to every app name and to the Dict name, so
+#: parallel experiments in one workspace do not replace each other's apps (the containers get it in their image env).
+APP_SUFFIX = os.environ.get("PGW_MODAL_APP_SUFFIX", "").strip()
+DICT_NAME = "pgw-live" + APP_SUFFIX
 # Both parties in one region: every token makes ~100 sequential round trips between them, so a
 # cross-region placement (about 85 ms RTT seen) makes decoding 10x slower. PGW_MODAL_REGION="" lifts it.
 REGION = os.environ.get("PGW_MODAL_REGION", "us-east") or None
@@ -89,11 +92,11 @@ image = (
     )
     .run_commands(f"python -m pgw.cli pack {MODEL_REPO} {PACK} --name {MODEL_NAME} --revision {MODEL_REVISION} -q"
                   " && rm -rf /root/.cache/huggingface")
-    .env({"PYTHONUNBUFFERED": "1", **RUNTIME_ENV})
+    .env({"PYTHONUNBUFFERED": "1", **RUNTIME_ENV, **({"PGW_MODAL_APP_SUFFIX": APP_SUFFIX} if APP_SUFFIX else {})})
     .add_local_file(HERE / "pgw_modal_boot.py", "/opt/pgw-modal/pgw_modal_boot.py")
 )
 
-app = modal.App("pgw-provider" + NS, image=image)
+app = modal.App("pgw-provider" + APP_SUFFIX, image=image)
 
 
 _FN: dict = dict(gpu=GPU, cpu=CPUS, memory=6144, timeout=MAX_LIFETIME_S, max_containers=1, min_containers=0,

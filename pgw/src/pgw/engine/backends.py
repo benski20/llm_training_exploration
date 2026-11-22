@@ -154,6 +154,13 @@ class BackendStats:
             self.remote_seconds += remote_s
             self.local_seconds += local_s
 
+    def add_local(self, calls: int, rows: int, seconds: float) -> None:
+        """``add(local_calls=, local_rows=, local_seconds=)`` without keyword dispatch."""
+        with self._lock:
+            self.local_calls += calls
+            self.local_rows += rows
+            self.local_seconds += seconds
+
     def snapshot(self) -> dict[str, float]:
         """Plain dict copy."""
         with self._lock:
@@ -676,6 +683,15 @@ def _vacuous(u: Any, status: int) -> bool:
     return False
 
 
+def _uuid4_hex() -> str:
+    """``uuid.uuid4().hex`` (16 OS-random bytes with the version-4 and RFC 4122 variant bits): the same
+    format and distribution, without building a ``UUID`` object."""
+    b = bytearray(os.urandom(16))
+    b[6] = (b[6] & 0x0F) | 0x40
+    b[8] = (b[8] & 0x3F) | 0x80
+    return b.hex()
+
+
 def _wipe(t: torch.Tensor) -> None:
     """Zero a buffer in place. CPU tensors go through numpy: torch's multithreaded fill is up to
     ~10x slower for these sizes when the CPU is busy (OpenMP threads contend), same result."""
@@ -780,6 +796,8 @@ class _Prepared:
     groups: list[list[int]] = field(default_factory=list)
     #: ``("x", index)`` items: calls on the fixed-structure padding path (L3).
     fixed: list[_FixedItem] = field(default_factory=list)
+    #: Prepared by the one-call trip path (:attr:`MaskedBackend.trip_fast`): finished by ``_finish_one``.
+    one: bool = False
 
     def wipe(self) -> None:
         """Zero the ``W r`` buffers (secret-derived) of every chunk; idempotent."""
@@ -1010,6 +1028,22 @@ class MaskedBackend(LinearBackend):
         self.prefetch_decode = self.mask_prefetch and _env_flag("PGW_PREFETCH_DECODE", self.sync_trips)
         self.decode_prefetch_rows = 8
         self._decode_pf: dict[tuple[int, str], int] = {}
+        #: One-call trips on a lean path (T3, ``PGW_TRIP_FAST``, default off): a pass of one call with at
+        #: most :attr:`max_rows_per_item` rows (decode) skips the batch bookkeeping. Same masks in the same
+        #: order, same check and sampling draws, same payload bytes, the same checks on every row (the
+        #: soundness check of the extent's vectors runs inside the take, before any row is taken), same
+        #: outputs and wiping; uuid4-format request ids as on every path.
+        self.trip_fast = self.trip_engine and _env_flag("PGW_TRIP_FAST", False)
+        #: With :attr:`trip_fast` (``PGW_NOISE_ASYNC_SAMPLED``, default off): a call the noise monitor samples
+        #: runs its every-call checks (duplicate rows) inline, as every call does, and its statistics
+        #: (``inspect_planned``) on a worker thread, on copies, in call order; the next prepare waits for
+        #: them before anything else is taken or sent, so an alarm blocks the next payload (fail closed).
+        #: The copies are wiped after the inspection.
+        self.noise_async_sampled = self.trip_fast and _env_flag("PGW_NOISE_ASYNC_SAMPLED", False)
+        self._noise_pool: Any = None
+        self._noise_pending: Any = None
+        #: :meth:`_local_lean_one` constants per linear key (:attr:`trip_fast`).
+        self._local_lean: dict[str, tuple[Any, ...]] = {}
         #: :meth:`_local_fast` on ``pgw_fast.local_linear_into`` (one fused native call; ``PGW_LOCAL_NATIVE=0``
         #: keeps the numpy + ``torch._int_mm`` form). Same self-check per shape against the reference.
         self._local_native = _env_flag("PGW_LOCAL_NATIVE", True) and native_available("local_linear_into")
@@ -1018,6 +1052,13 @@ class MaskedBackend(LinearBackend):
         #: Exact local products on a gateway GPU through captured CUDA graphs (``local_linears_device`` cuda/auto,
         #: K = 32; :mod:`pgw.engine.local_gpu`), or ``None`` (CPU kernels). Chosen at start-up after a self-check.
         self._local_gpu: Any = None
+        #: ``lid.key -> f(x) -> y``: lean 1-row decode calls of the GPU's native kernel
+        #: (:meth:`pgw.engine.local_gpu.LocalGpuProducts.one_row`), self-checked like the GPU path; empty = none.
+        self._local_one_row: dict[str, Any] = {}
+        #: Wall time of :meth:`forward_local` (local linears only, unlike ``stats.local_seconds``, which also
+        #: counts the masked trips' gateway work): 1-row steps (decode) and the rest (prompt passes).
+        self.local_linear_timing: dict[str, float] = {"decode_calls": 0, "decode_s": 0.0, "other_calls": 0,
+                                                       "other_s": 0.0}
         self._local_gpu_mismatch = ""  # the failing case of the last GPU self-check (diagnostics)
         #: ``n * m`` from which a native local linear spreads its columns over the native pool. A decode step
         #: reads every local weight once from DRAM (the model's int8 weights do not stay in cache between
@@ -1229,11 +1270,15 @@ class MaskedBackend(LinearBackend):
             else:
                 hit[3] += int(x.shape[0])
         # Growing reservations (gateway windows) extend here, before any row of the batch is taken.
-        for res, lid, _, rows in need.values():
+        ensured: set[tuple[int, str]] = set()
+        for key, (res, lid, _, rows) in need.items():
             ensure = getattr(res, "ensure", None)
             if ensure is not None:
-                ensure(lid, rows)
-        for res, lid, _, rows in need.values():
+                ensure(lid, rows)  # returns only with >= rows reserved (else raises): no remaining() needed
+                ensured.add(key)
+        for key, (res, lid, _, rows) in need.items():
+            if key in ensured:
+                continue
             left = int(res.remaining(lid))
             if left < rows:
                 raise MaskExhaustedError(
@@ -1256,8 +1301,18 @@ class MaskedBackend(LinearBackend):
     def _prepare(self, calls: Sequence[LinearCall]) -> _Prepared:
         # Deferred checks of these sessions are joined first: no mask row is taken and no payload
         # is built (so nothing is sent) before the previous trip's results proved correct.
+        if self._noise_pending is not None:
+            self._join_noise()
         if self._pending or self._failed:
             self._join_pending(calls)
+        if self.trip_fast and len(calls) == 1:
+            c = calls[0]
+            if (not c.meta and c.x.ndim == 2 and 0 < int(c.x.shape[0]) <= self.max_rows_per_item
+                    and self._use_trip(calls)):
+                prep = self._prepare_trip_one(c)
+                if self.mask_prefetch:
+                    self._maybe_prefetch(calls)
+                return prep
         if any(c.meta and (PAD_ROWS in c.meta or DUMMY in c.meta) for c in calls):
             if self.fixed_pad:
                 prep = self._prepare_fixed(calls)
@@ -1459,6 +1514,202 @@ class MaskedBackend(LinearBackend):
         prep = self._native_request(calls, chunks, sx_parts, metas, t0)
         prep.trip = True
         prep.reservations = tuple(reservations)
+        return prep
+
+    def _join_noise(self) -> None:
+        """Wait for the previous sampled call's statistics (:attr:`noise_async_sampled`); an alarm then
+        raises in the next ``plan_call`` (fail closed)."""
+        fut, self._noise_pending = self._noise_pending, None
+        if fut is not None:
+            try:
+                fut.result()
+            except Exception:  # the monitor's own failure: fail closed like the inline path would
+                log.exception("outbound-noise inspection failed")
+                raise
+
+    def _noise_submit(self, noise: Any, xh: np.ndarray, r64: np.ndarray) -> None:
+        """Run ``noise.inspect_planned`` on copies of ``x_hat`` and ``r`` on the noise worker (wiped after)."""
+        xh_c = xh.copy()
+        r_c = r64.copy()
+        ring = self.ring
+
+        def run() -> None:
+            xq = None
+            try:
+                x_hat = torch.from_numpy(xh_c)
+                xq = center(x_hat - torch.from_numpy(r_c), ring)
+                noise.inspect_planned(x_hat, xq)
+            finally:
+                if xq is not None:
+                    _wipe(xq)
+                xh_c.fill(0)
+                r_c.fill(0)
+
+        pool = self._noise_pool
+        if pool is None:
+            from concurrent.futures import ThreadPoolExecutor
+
+            pool = self._noise_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="pgw-noise")
+        self._noise_pending = pool.submit(run)
+
+    def _sound_verifier(self, lid: Any, n: int) -> Any:
+        """``verify(checks)`` for ``take_checked``: :meth:`_check_soundness` of the extent's vectors."""
+        def verify(chk: Any) -> None:
+            token, u, _uw = chk
+            self._check_soundness(lid, n, u, token)
+        return verify
+
+    def _prepare_trip_one(self, call: LinearCall) -> _Prepared:
+        """:meth:`_prepare_trip` for one call of at most :attr:`max_rows_per_item` rows (:attr:`trip_fast`).
+
+        Same order as the batch path: shapes and finite activations are checked and the reservation is
+        extended before any row is taken; the Freivalds draw, then the noise-sampling draw, then the take
+        (whose extent's check vectors pass the soundness check before a row is consumed); then the fused
+        native prepare. Rows crossing an extent boundary are taken chunk by chunk, as there.
+        """
+        t0 = time.perf_counter()
+        res = self._reservation(call)
+        lid = call.id
+        meta: _MaskedMeta = self._meta.get(lid)
+        x = call.x
+        n = meta.in_features
+        if x.shape[1] != n:
+            raise ShapeError(f"{lid}: x must be (T, {n}), got {tuple(x.shape)}")
+        t = int(x.shape[0])
+        if x.dtype != torch.float32 or x.device.type != "cpu":
+            x = x.to("cpu", torch.float32)
+        xn = x.detach().numpy()
+        if not xn.flags.c_contiguous:
+            xn = np.ascontiguousarray(xn)
+        if not np.isfinite(xn).all():
+            raise RingOverflowError("non-finite activation values cannot be quantized")
+        want_soundness = self.min_soundness_bits > 0
+        verify_ok = getattr(res, "take_checked_verify", False) is True
+        ensure = getattr(res, "ensure", None)
+        if ensure is not None:
+            ensure(lid, t)
+        else:
+            left = int(res.remaining(lid))
+            if left < t:
+                raise MaskExhaustedError("session mask reservation exhausted",
+                                         details={"linear": lid.key, "needed": t, "remaining": left})
+        if want_soundness and not verify_ok:  # reservations without the hook: the batch path's pre-check
+            token, u, _uw = self._current_checks(res, lid)
+            self._check_soundness(lid, n, u, token)
+        verify = self._sound_verifier(lid, n) if want_soundness and verify_ok else None
+        ring = self.ring
+        kbits, abits, cap = ring.k, ring.a, int(ring.cap or 0)
+        nb = kbits // 8
+        m = meta.out_features
+        noise = self.noise_monitor
+        plan_call = guard_packed = None
+        if noise is not None:
+            plan_call = getattr(noise, "plan_call", None)
+            guard_packed = getattr(noise, "guard_packed", None)
+            if plan_call is None or guard_packed is None:
+                plan_call = guard_packed = None
+        # off the critical path only where the inspection makes no random draw of its own (all rows
+        # inspected), so the monitor's draws stay in the inline order
+        noise_async = (self.noise_async_sampled and plan_call is not None
+                       and hasattr(noise, "inspect_planned")
+                       and t * n <= int(getattr(noise, "_max_values", 0) or 0))
+        prep_into = native.fast.trip_prepare_into
+        wn = float(meta.wnorm or 0.0)
+        defer_lid = self._defer_ok(lid)
+        threads = 0 if t * n >= int(self.trip_pool_min_elems) else 1
+        max_item = self.max_rows_per_item
+        chunks: list[_Chunk] = []
+        sx_list: list[np.ndarray] = []
+        row = 0
+        try:
+            while row < t:
+                check = self._should_check()
+                sampled = bool(plan_call()) if plan_call is not None else noise is not None
+                want = check or want_soundness
+                if verify is not None:
+                    rows, r, wr, chk = res.take_checked(lid, min(t - row, max_item), want, verify)
+                else:
+                    rows, r, wr, chk = self._take(res, lid, min(t - row, max_item), want)
+                token = u = uw = None
+                rhs = None
+                r64 = None
+                r_np = None
+                try:
+                    if chk is not None:
+                        token, u, uw = chk
+                        if verify is None:
+                            self._check_soundness(lid, n, u, token)
+                        if not check:
+                            token = u = uw = None
+                    if tuple(r.shape) != (rows, n) or tuple(wr.shape) != (rows, m):
+                        raise ShapeError(
+                            f"{lid}: mask shapes {tuple(r.shape)}/{tuple(wr.shape)} do not match the linear"
+                        )
+                    r_np = r.numpy()
+                    r64 = r_np if r_np.dtype == np.int64 and r_np.flags.c_contiguous else \
+                        np.ascontiguousarray(r_np, dtype=np.int64)
+                    buf = np.empty(rows * n * nb, dtype=np.uint8)
+                    sx = np.empty(rows, dtype=np.float64)
+                    xh = np.empty((rows, n), dtype=np.int64) if sampled else None
+                    uw_in = None
+                    if defer_lid and u is not None and uw is not None and int(u.shape[0]) > 0:
+                        uw_in = uw
+                        rhs = np.empty((rows, int(u.shape[0])), dtype=np.uint64)
+                    try:
+                        prep_into(xn if rows == t else xn[row : row + rows], r64, kbits, abits, cap, wn, buf, sx,
+                                  xh, uw_in, rhs, threads)
+                    except ValueError as exc:
+                        if str(exc).startswith("ring_overflow"):
+                            raise RingOverflowError(str(exc).split(":", 1)[-1].strip()) from exc
+                        raise ShapeError(str(exc)) from exc
+                    payload = buf.tobytes()
+                    if noise is not None:
+                        if guard_packed is not None and (not sampled or noise_async):
+                            guard_packed(payload, rows, n)  # every-call checks (duplicate rows)
+                            if sampled and xh is not None:
+                                self._noise_submit(noise, xh, r64)
+                        elif xh is not None:
+                            x_hat = torch.from_numpy(xh)
+                            xq = center(x_hat - r.to(torch.int64), ring)
+                            try:
+                                if plan_call is not None:
+                                    noise.guard(x_hat, xq, planned=True)  # type: ignore[attr-defined]
+                                else:
+                                    noise.guard(x_hat, xq)  # type: ignore[attr-defined]
+                            finally:
+                                _wipe(xq)
+                except BaseException:
+                    _wipe(wr)
+                    if rhs is not None:
+                        rhs.fill(0)
+                    raise
+                finally:
+                    _wipe(r)  # one-time pad: never keep it around
+                    if r64 is not None and r64 is not r_np:
+                        r64.fill(0)
+                chunks.append(_Chunk(0, row, rows, lid, None, wr, u, uw, payload, token, rhs=rhs))
+                sx_list.append(sx)
+                row += rows
+        except BaseException:
+            for ch in chunks:
+                _wipe(ch.wr)
+                if ch.rhs is not None:
+                    ch.rhs.fill(0)
+            raise
+        from pgw.wire.messages import ComputeItem, ComputeRequest
+
+        request = ComputeRequest(
+            request_id=_uuid4_hex(),  # uuid4 format, as on every path
+            fingerprint=self.fingerprint,
+            ring=self.ring.name,
+            items=tuple(ComputeItem(ch.lid.key, ch.rows, ch.payload) for ch in chunks),  # type: ignore[arg-type]
+            deadline_ms=self.deadline_ms,
+        )
+        sxs = [sx_list[0] if len(sx_list) == 1 else np.concatenate(sx_list)]
+        prep = _Prepared((call,), chunks, sxs, [meta], request, time.perf_counter() - t0)
+        prep.trip = True
+        prep.one = True
+        prep.reservations = (res,)
         return prep
 
     def _finish_trip(self, prep: _Prepared, results: Sequence[Any], outs: list[list[torch.Tensor]]) -> None:
@@ -2345,6 +2596,10 @@ class MaskedBackend(LinearBackend):
             pool, self._prefetch_pool = self._prefetch_pool, None
         if pool is not None:
             pool.shutdown(wait=False, cancel_futures=True)
+        npool, self._noise_pool = self._noise_pool, None
+        if npool is not None:  # the pending inspection wipes its copies when it ends
+            npool.shutdown(wait=True)
+        self._noise_pending = None
         with self._pending_lock:  # deferred checks read buffers they keep alive: let them finish
             pending, self._pending = self._pending, []
             self._failed = []
@@ -2396,11 +2651,14 @@ class MaskedBackend(LinearBackend):
                 kinds = self._calibrate_local(rtt_s, max(1, int(reps)), policy)
         policy["device"] = "cpu"
         self._local_gpu = None
+        self._local_one_row = {}
         if kinds and device != "cpu":
             gp = self._local_gpu_choice(device, kinds, max(1, int(reps)), policy)
             if gp is not None:
                 self._local_gpu = gp
                 policy["device"] = f"{gp.device} (graphs)"
+                self._local_one_row = self._local_one_row_build(gp, kinds)
+                policy["one_row_fast_path"] = len(self._local_one_row)
             else:
                 dev = self._local_device_choice(device, max(1, int(reps)), policy)
                 if dev is not None:
@@ -2495,6 +2753,8 @@ class MaskedBackend(LinearBackend):
             return None
         policy["gpu_graphs_check"] = {"linears": len(specs), "cpu_layer0_s": t_cpu, "gpu_layer0_s": t_dev,
                                       "graph_rows": list(gp.graph_rows), "fused_rows": gp.fused_rows,
+                                      "native": bool(getattr(gp, "native", False)),
+                                      "native_reason": getattr(gp, "native_reason", None),
                                       "setup_s": round(time.perf_counter() - t0, 3), "identical": True}
         if need_faster and not t_dev < t_cpu:
             policy["gpu_graphs_reason"] = f"{dev} not faster ({t_dev:.3g} s vs {t_cpu:.3g} s for layer 0)"
@@ -2503,6 +2763,64 @@ class MaskedBackend(LinearBackend):
         log.info("local linears: exact products on %s through CUDA graphs (%d linears; layer 0: %.3g ms GPU, "
                  "%.3g ms CPU)", dev, len(specs), 1e3 * t_dev, 1e3 * t_cpu)
         return gp
+
+    def _local_one_row_build(self, gp: Any, kinds: frozenset[str]) -> dict[str, Any]:
+        """Lean 1-row callables per local linear (``PGW_LOCAL_GPU_ONE_ROW=0`` disables them), each compared with
+        the CPU reference bit for bit (and for the same refusals) on public test rows before use; a linear whose
+        callable differs keeps the regular path."""
+        if not _env_flag("PGW_LOCAL_GPU_ONE_ROW", True) or not hasattr(gp, "one_row"):
+            return {}
+        out: dict[str, Any] = {}
+        for spec in self.pack.linear_specs():  # type: ignore[attr-defined]
+            if spec.id.kind.value not in kinds or not gp.has(spec.id.key):
+                continue
+            lid = spec.id
+            meta: _MaskedMeta = self._meta.get(lid)
+            scale, bias, bound = self._consts(lid, meta)
+
+            def on_error(err: Any, lid: LinearId = lid, bound: int = bound) -> None:
+                if isinstance(err, ValueError):
+                    if str(err).startswith("ring_overflow"):
+                        raise RingOverflowError(str(err).split(":", 1)[-1].strip()) from err
+                    raise ShapeError(str(err)) from err
+                self._raise_status(int(err), 0, lid, 1, bound)
+
+            fn = gp.one_row(lid.key, float(meta.wnorm or 0.0) if self.ring.cap else 0.0, scale, bias, bound, on_error)
+            if fn is None:
+                continue
+            w = self._local_w.get(lid)  # type: ignore[union-attr]
+            rng = np.random.default_rng(0x0E1 ^ meta.in_features * 7919 + meta.out_features)
+            x = (rng.standard_normal((4, meta.in_features)) * 3).astype(np.float32)
+            x[1] *= np.float32(1e-3)
+            x[1, int(rng.integers(0, meta.in_features))] = 50.0
+            x[2] = 0.0
+            x[3] *= np.float32(1e-30)
+            nonfinite = x[:1].copy()
+            nonfinite[0, 0] = np.nan
+            ok = True
+            for xs in (x[0:1], x[1:2], x[2:3], x[3:4], nonfinite):
+                xt = torch.from_numpy(np.ascontiguousarray(xs))
+                ref: Any
+                got: Any
+                try:
+                    ref = self._local_reference(xt, meta, w, lid)
+                except PGWError as exc:
+                    ref = type(exc)
+                try:
+                    got = fn(xt)
+                except PGWError as exc:
+                    got = type(exc)
+                if isinstance(ref, type) or isinstance(got, type):
+                    ok = ref is got
+                else:
+                    ok = ref.dtype == got.dtype and ref.shape == got.shape and torch.equal(ref, got)
+                if not ok:
+                    log.error("local linears: 1-row GPU fast path differs from the CPU reference for %s; regular "
+                              "path kept", lid)
+                    break
+            if ok:
+                out[lid.key] = fn
+        return out
 
     def _local_gpu_agrees(self, gp: Any, meta: _MaskedMeta, w: _IntWeight, lid: LinearId) -> bool:
         """Self-check: the GPU path gives the CPU reference's outputs bit for bit, and the same refusals, on
@@ -2879,15 +3197,104 @@ class MaskedBackend(LinearBackend):
         y = dequantize_outputs(yq, sx, meta.scale, meta.bias, torch.float32)
         return y if x.device.type == "cpu" else y.to(x.device)
 
+    def _local_lean_one(self, call: LinearCall) -> torch.Tensor | None:
+        """:attr:`trip_fast`: one CPU local call on the native kernel with its per-linear constants cached
+        (built by the ordinary path after the per-shape self-check passed); ``None``: not eligible (the
+        ordinary path runs). Same kernel, arguments, checks and bits as :meth:`_local_fast`."""
+        key = call.id.key
+        ent = self._local_lean.get(key)
+        if ent is None:
+            return None
+        w, w8n, meta, scale, bias, bound, wn, thr = ent
+        lw = self._local_w
+        x = call.x
+        if (lw is None or lw._cache.get(key) is not w or x.ndim != 2 or x.device.type != "cpu"
+                or (self._local_gpu is not None and self._local_gpu.has(key))):
+            return None
+        rows, n = int(x.shape[0]), int(x.shape[1])
+        if n != meta.in_features or not 0 < rows <= int(self.local_native_block_rows):
+            return None
+        xn = x.detach()
+        if xn.dtype != torch.float32:
+            xn = xn.to(torch.float32)
+        xn = xn.numpy()
+        if not xn.flags.c_contiguous:
+            xn = np.ascontiguousarray(xn)
+        if not np.isfinite(xn).all():
+            raise RingOverflowError("non-finite activation values cannot be quantized")
+        ring = self.ring
+        res = np.empty((rows, meta.out_features), dtype=np.float32)
+        sx = np.empty(rows, dtype=np.float64)
+        try:
+            status = native.fast.local_linear_into(xn, w8n, scale, bias, ring.k, ring.a, int(ring.cap or 0), wn,
+                                                   bound, sx, res, thr)
+        except ValueError as exc:
+            if str(exc).startswith("ring_overflow"):
+                raise RingOverflowError(str(exc).split(":", 1)[-1].strip()) from exc
+            raise ShapeError(str(exc)) from exc
+        if status:
+            self._raise_status(int(status), 0, call.id, rows, bound)
+        return torch.from_numpy(res)
+
+    def _local_lean_learn(self, call: LinearCall) -> None:
+        """Cache :meth:`_local_lean_one`'s constants for ``call``'s linear once the ordinary path would take
+        the native kernel for it (self-check passed, CPU weights, no GPU product)."""
+        lw = self._local_w
+        if lw is None or not self._local_native or len(self._local_lean) > 4096:
+            return
+        key = call.id.key
+        w = lw._cache.get(key)
+        if w is None or w.w8t.device.type != "cpu" or not w.w8t.is_contiguous():
+            return
+        if self._local_gpu is not None and self._local_gpu.has(key):
+            return
+        meta: _MaskedMeta = self._meta.get(call.id)
+        if not self._local_fast_ok(meta, w, 1, call.id) or not self._local_native:
+            return
+        scale, bias, bound = self._consts(call.id, meta)
+        hit = self._local_w8n.get(key)
+        if hit is None or hit[0] is not w.w8t:
+            hit = self._local_w8n[key] = (w.w8t, w.w8t.numpy())
+        wn = float(meta.wnorm or 0.0) if self.ring.cap else 0.0
+        thr = 0 if meta.in_features * meta.out_features >= self.local_pool_min_macs else 1
+        self._local_lean[key] = (w, hit[1], meta, scale, bias, bound, wn, thr)
+
     def forward_local(self, calls: Sequence[LinearCall]) -> list[torch.Tensor]:
         """Engine hook: evaluate calls of local linears on the gateway (bit-identical to the masked path)."""
         t0 = time.perf_counter()
+        if len(calls) == 1 and self._local_one_row:  # decode on the gateway GPU: one lean native call
+            c = calls[0]
+            fn = self._local_one_row.get(c.id.key)  # only local linears have one
+            x = c.x
+            if (fn is not None and x.dtype == torch.float32 and x.ndim == 2 and x.shape[0] == 1
+                    and x.device.type == "cpu" and not x.requires_grad and x.is_contiguous()):
+                y = fn(x)
+                dt = time.perf_counter() - t0
+                self.stats.add(local_calls=1, local_rows=1, local_seconds=dt)
+                lt = self.local_linear_timing
+                lt["decode_calls"] += 1
+                lt["decode_s"] += dt
+                return [y]
         for c in calls:
             if not self.local_linear(c.id):
                 raise ConfigError(f"{c.id} is not a local linear")
+        if self.trip_fast and len(calls) == 1:
+            y = self._local_lean_one(calls[0])
+            if y is not None:
+                self.stats.add_local(1, int(calls[0].x.shape[0]), time.perf_counter() - t0)
+                return [y]
+            out = _grouped_forward(_LocalView(self), calls)
+            self._local_lean_learn(calls[0])
+            self.stats.add_local(1, int(calls[0].x.shape[0]), time.perf_counter() - t0)
+            return out
         out = _grouped_forward(_LocalView(self), calls)
-        self.stats.add(local_calls=len(calls), local_rows=sum(int(c.x.shape[0]) for c in calls),
-                       local_seconds=time.perf_counter() - t0)
+        dt = time.perf_counter() - t0
+        rows = sum(int(c.x.shape[0]) for c in calls)
+        self.stats.add(local_calls=len(calls), local_rows=rows, local_seconds=dt)
+        lt = self.local_linear_timing
+        kind = "decode" if rows == len(calls) == 1 else "other"
+        lt[kind + "_calls"] += len(calls)
+        lt[kind + "_s"] += dt
         return out
 
     def _take(self, res: Any, lid: LinearId, max_rows: int, want_checks: bool) -> tuple[int, Any, Any, Any]:
@@ -3175,7 +3582,55 @@ class MaskedBackend(LinearBackend):
             )
         return _Prepared(calls, chunks, sxs, metas, request, time.perf_counter() - t0)
 
+    def _finish_one(self, prep: _Prepared, response: Any, remote_s: float) -> list[torch.Tensor]:
+        """:meth:`_finish` for a request of the one-call trip path: the same response checks (id, item
+        count, linear and rows per item), the same per-chunk finish (:meth:`_finish_trip`: Freivalds when
+        drawn, unmask, range check, rescale, W r wiped), the same statistics and integrity reporting."""
+        t0 = time.perf_counter()
+        req = prep.request
+        chunks = prep.chunks
+        outs: list[list[torch.Tensor]] = [[]]
+        bytes_down = checked = skipped = 0
+        try:
+            if getattr(response, "request_id", None) != req.request_id:
+                raise ProtocolError("compute response id does not match the request")
+            results = tuple(response.items)
+            if len(results) != len(chunks):
+                raise ProtocolError(f"compute response has {len(results)} items, expected {len(chunks)}")
+            for ch, res in zip(chunks, results, strict=True):
+                if res.linear != ch.lid.key or int(res.rows) != ch.rows:
+                    raise ProtocolError(
+                        "compute response item does not match the request",
+                        details={"expected": ch.lid.key, "got": str(res.linear)},
+                    )
+                bytes_down += len(res.y_hat)
+                if ch.u is None:
+                    skipped += 1
+                elif ch.rhs is None:  # a deferred check counts once it passed
+                    checked += 1
+            self._finish_trip(prep, results, outs)
+        except IntegrityError as exc:
+            self.stats.add(integrity_failures=1)
+            log.error("integrity check failed: request=%s code=%s details=%s", req.request_id, exc.code, exc.details)
+            if self.on_integrity_failure is not None:
+                try:
+                    self.on_integrity_failure(exc)
+                except Exception:  # pragma: no cover - callback must not mask the error
+                    log.exception("on_integrity_failure callback raised")
+            raise
+        finally:
+            prep.wipe()
+        parts = outs[0]
+        y = parts[0] if len(parts) == 1 else torch.cat(parts, dim=0)
+        dev = prep.calls[0].x.device
+        rows = sum(ch.rows for ch in chunks)
+        self.stats.add_many(1, rows, 1, sum(len(it.x_hat) for it in req.items), bytes_down, checked, skipped,
+                            remote_s, prep.t_prepare + time.perf_counter() - t0, 0 < rows <= self.decode_max_rows)
+        return [y if dev.type == "cpu" else y.to(dev)]
+
     def _finish(self, prep: _Prepared, response: Any, remote_s: float) -> list[torch.Tensor]:
+        if prep.one:
+            return self._finish_one(prep, response, remote_s)
         t0 = time.perf_counter()
         req = prep.request
         outs: list[list[torch.Tensor]] = [[] for _ in prep.calls]

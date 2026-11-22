@@ -301,19 +301,28 @@ class WindowedReservation:
             part = self._current(lid)
         return part.take(lid, rows)  # type: ignore[no-any-return]
 
-    def take_checked(self, lid: LinearId | str, max_rows: int, checks: bool) -> Any:
-        """``MaskReservation.take_checked`` of the current part (never crosses a part)."""
+    take_checked_verify = True
+
+    def take_checked(self, lid: LinearId | str, max_rows: int, checks: bool, verify: Any = None) -> Any:
+        """``MaskReservation.take_checked`` of the current part (never crosses a part); ``verify``
+        (with ``checks``) sees the part's checks before any row is taken."""
         with self._lock:
             if self._closed:
                 raise MaskReuseError("mask reservation is closed; its unused rows were burned")
             part = self._current(lid)
         fn = getattr(part, "take_checked", None)
         if fn is not None:
+            if verify is not None:
+                from pgw.maskstore.tiered import _take_verified
+
+                return _take_verified(part, lid, max_rows, checks, verify)
             return fn(lid, max_rows, checks)
         rows = min(int(max_rows), int(part.rows_until_boundary(lid)))
         if rows <= 0:
             raise MaskExhaustedError("mask reservation has no rows left", details={"linear": str(lid)})
         chk = (None, *self._part_checks_u64(part, lid)) if checks else None
+        if verify is not None and chk is not None:
+            verify(chk)
         r, wr = part.take(lid, rows)
         return rows, r, wr, chk
 
