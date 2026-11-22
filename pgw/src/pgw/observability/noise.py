@@ -440,6 +440,32 @@ class OutboundNoiseMonitor:
         if self.fail_closed and self._alarm:
             self._raise_blocked()
 
+    def inspect_planned(self, x_hat: torch.Tensor, xq: torch.Tensor | None) -> None:
+        """The statistics half of :meth:`guard` (``planned=True``) for a sampled call whose every-call
+        checks already ran in :meth:`guard_packed` on the same values (the gateway's one-call trip path
+        runs this on a worker, on copies, joined before the session's next payload is built).
+
+        Same statistics, in call order, as ``guard(x_hat, xq, planned=True)``: values outside the ring
+        are not inspected (guard_packed reported them), the call counts as sampled, the windows and
+        features update and may alarm. Never raises for an alarm: the next :meth:`plan_call` (or any
+        guard) does, when ``fail_closed``.
+        """
+        x = self._as_2d(x_hat, "x_hat")
+        new_reasons: list[str] = []
+        with self._lock:
+            in_ring = True
+            if x.numel():
+                lo, hi = torch.aminmax(x)
+                in_ring = not (int(lo) < 0 or int(hi) > self.ring.mask)
+            if x.numel() and in_ring:
+                self._sampled_calls += 1
+                xq2 = self._as_2d(xq, "xq") if xq is not None else None
+                self._inspect(x, xq2, new_reasons)
+            if new_reasons:
+                self._set_alarm(new_reasons)
+        if new_reasons:
+            self._notify()
+
     def _packed_out_of_ring(self, payload: bytes | bytearray | memoryview, rows: int, n: int, nb: int) -> bool:
         raw = np.frombuffer(payload, dtype=np.uint8).reshape(rows * n, nb)
         top = raw[:, nb - 1] >> np.uint8(self.ring.k - 8 * (nb - 1))

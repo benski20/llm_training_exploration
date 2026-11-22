@@ -206,7 +206,12 @@ def test_lane_tls_options_validate_against_the_gateway_config(tmp_path: Path) ->
     boot = _boot()
     assert boot.lane_options("stream") == {"lane": "stream"} and boot.lane_options("tls") == {"lane": "tls"}
     with pytest.raises(ValueError):
-        boot.lane_options("uds")
+        boot.lane_options("quic")
+    # --lane uds: the product's same-host lane, taken by the gateway's "auto" (no egress entry: no TCP port)
+    assert boot.lane_options("uds") == {"lane": "auto"} and boot.lane_egress("uds", None) == []
+    assert GatewayModelConfig(name="m", pack_path=tmp_path, fingerprint="ab" * 32, service_url="https://127.0.0.1:8443",
+                              **{**boot.GATEWAY_MODEL_OPTIONS, **boot.lane_options("uds")}).lane == "auto"
+    assert 'lane_socket=LANE_SOCKET if lane == "uds" else None' in (MODAL_DIR / "colocated.py").read_text()
     c = GatewayModelConfig(name="m", pack_path=tmp_path, fingerprint="ab" * 32,
                            service_url="https://127.0.0.1:8443",
                            **{**boot.GATEWAY_MODEL_OPTIONS, **boot.lane_options("tls")})
