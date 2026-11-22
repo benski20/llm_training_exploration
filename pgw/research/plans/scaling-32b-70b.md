@@ -246,6 +246,10 @@ Factory schemes at the with-prompts rate (estimates scaled from the 7B measureme
   preferable.
 * The plain cloud-GPU factory should batch >= 1024 slots per weight pass (compute-bound) and stream outputs per
   linear so its host RAM stays below ~2 segments.
+* Built (opt-in, 2026-11-22): `pgw factory mask-service` (SPEC 7.10; bit-exact start-up check against a CPU
+  reference, device scrubbing, delivery into a same-host store or over the signed HPKE export channel with
+  `pgw maskstore pull`) and the AWS template `deploy/customer-cloud` (CPU-only gateway VM + GPU mask service VM).
+  The gateway RAM ring feed is not wired to it yet: segments go through the encrypted store.
 
 ## 7. Storage
 
