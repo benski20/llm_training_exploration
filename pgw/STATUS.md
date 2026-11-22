@@ -15,6 +15,28 @@ SLA pilot. Three reasons:
 2. The HSM, KMS and TPM integrations have never run against real hardware or cloud services.
 3. There has been no external security audit.
 
+## Update 2026-11-22: native local linears and the LM head on the gateway GPU (package T3)
+
+Goal 30-40 tokens/s for one Qwen2.5-0.5B chat co-located with `--gateway-gpu`; reached **14.5-16.1 tokens/s back
+to back** (12.1-13.5 warm chat; the same code with the new paths switched off: 10.9 on that run's host), every run
+logprobs bit-identical, text equal and repeat identical. Details: `deploy/modal/README.md`, "Gateway GPU: native
+local-linear call, fixed-order LM head".
+
+- Local linears: one GIL-holding native call per linear (`pgw_fast.local_gpu_linear_into`: prepare into pinned
+  memory, `cuGraphLaunch` through the driver, spin, range check and rescale, buffers wiped), a lean self-checked
+  1-row path in the backend, and measured T4 launch configurations (down 66 -> 46 us). In the running gateway
+  220 -> 99 us per call, 15.9 -> 7.1 ms per token (the device floor is about 22 us per call; the rest is the busy
+  container). Integer results unchanged: start-up self-check per linear against the CPU reference.
+- LM head (`lm_head_device = "cuda"`, opt-in, library default `cpu`; on in the co-located demo with
+  `--gateway-gpu`): the existing fixed summation order as one Triton kernel with `mul.rn`/`add.rn` (no FMA, no
+  flush to zero), so the logits are the CPU kernel's bit for bit; the plaintext reference needs no change and
+  stays on the CPU. Start-up self-check, else the CPU. About 4 -> 1.4 ms per token. The final norm and sampling
+  stay on the CPU. HF closeness tests and goldens unchanged (library default).
+- Privacy unchanged: the GPU is the gateway's alone (per-UUID visibility, 0600 device nodes); nothing new
+  reaches the provider.
+- Per decoded token now (about 48 ms): trips 12 ms, the masked trips' gateway work 10 ms, local linears 7 ms,
+  LM head 1.4 ms, float ops and Python about 17 ms. Not reached: 30 tokens/s.
+
 ## Update 2026-11-22: gateway GPU and pinned float threads (package T2)
 
 Goal 30-40 tokens/s for one Qwen2.5-0.5B chat co-located; reached **13.3-13.6 tokens/s** (warm and back to back,

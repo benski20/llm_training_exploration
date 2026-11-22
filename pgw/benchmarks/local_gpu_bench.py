@@ -183,6 +183,21 @@ def main() -> None:
             ts.append(time.perf_counter() - t0)
     res["class_gpu_ms"] = round(1e3 * statistics.median(ts), 3)
     res["class_native"] = gp.native
+    # per-call time with idle gaps between calls (the running gateway does trips and float work in between)
+    gaps: dict[str, float] = {}
+    for gap_us in (0, 100, 300, 600):
+        ts = []
+        for rep in range(max(3, args.reps // 4)):
+            for key, c in keyed:
+                t_end = time.perf_counter() + gap_us * 1e-6
+                while time.perf_counter() < t_end:
+                    pass
+                t0 = time.perf_counter()
+                gp.forward(key, xs[c["n"]], c["wnorm"], c["scale"], None, c["bound"], c["out"], sx)
+                ts.append(time.perf_counter() - t0)
+        gaps[f"gap{gap_us}us_call_us"] = round(1e6 * statistics.median(ts), 1)
+        gaps[f"gap{gap_us}us_mean_us"] = round(1e6 * statistics.fmean(ts), 1)
+    res["class_gaps"] = gaps
     res["class_native_reason"] = gp.native_reason
     res["class_stats"] = dict(gp.stats)
     if gp.native:  # the same class with the Python replay (the path before the native kernel)

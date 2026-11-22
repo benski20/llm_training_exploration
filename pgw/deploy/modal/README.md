@@ -304,6 +304,61 @@ The GPU halves the local linears in isolation (`benchmarks/local_gpu_bench.py`, 
 local linears take about 10 ms per token either way (the CUDA sync of 72 calls per token under load); the GPU
 mainly frees about 2.5 gateway cores. Time to first token is 0.5-1.1 s per chat (about 15% of a 64-token chat).
 
+### Gateway GPU: native local-linear call, fixed-order LM head (2026-11-22, package T3)
+
+* **Why the local linears cost 10-16 ms per token in the running gateway** (4.8 ms in isolation): Python around
+  each of the 72 calls per token, which the running container inflates, not the device. With the Python replay
+  path a decode call took 220 us in the gateway (`local_linear_timing` below) against 67 us in isolation: about
+  15 Python steps in `LocalGpuProducts.forward` (event record, a polling loop, two native calls with their
+  argument parsing, buffer slicing and wiping) inside the backend's generic local path (validation, grouping,
+  cache lookups, `np.isfinite`, which releases the GIL above 500 elements). `benchmarks/local_gpu_bench.py
+  --breakdown` on a T4 (replay + synchronize, median): a one-copy graph 22 us, kernel-only 32 / 58 us (896x1152 /
+  4864x896), the full graph 43 / 75 us: about 22 us of every call is launch and completion, the device floor.
+* `pgw_fast.local_gpu_linear_into` (default with `--gateway-gpu`; `PGW_LOCAL_GPU_NATIVE=0` = the Python
+  replay): one native call does prepare (zero mask) straight into the pinned buffer, `cuGraphLaunch` of the
+  captured graph's exec through a `dlopen`ed driver (as the provider's lane), a spin on `cuStreamQuery`
+  (`PGW_LOCAL_GPU_SPIN_US`, default 2000, then blocking), the range check and rescale (the finish kernel's
+  expressions), and wipes both pinned buffers. It keeps the GIL for the call (`PGW_LOCAL_GPU_HOLD_GIL=0`
+  releases it): a call is tens of microseconds and a hand-off costs more. Decode calls (1 row) take a lean
+  per-linear callable bound at start-up (`PGW_LOCAL_GPU_ONE_ROW=0` disables it), compared bit for bit with the
+  CPU reference on public rows (Gaussian, spike, zero, tiny, non-finite refusal) before use; the regular path
+  stays self-checked as before. Prompt passes keep the eager GPU path (about 0.12 s per 41-row prompt).
+* Launch configurations of the local graphs' ring GEMV for 1 row are measured per GPU model
+  (`pgw.engine.local_gpu.ONE_ROW_CONFIGS`, `benchmarks/local_gemv_sweep.py`; `PGW_LOCAL_GPU_GEMV` overrides,
+  `PGW_LOCAL_GPU_TABLE=0` = the provider's heuristic). T4, replay + synchronize: qkv 43 -> 36 us, o 35 us,
+  down 66 -> 46 us (no split-K, so no memset node). Any configuration gives the same integers; the start-up
+  self-check against the CPU reference still runs per linear.
+* **LM head on the gateway GPU, same bits** (`lm_head_device = "cuda"`, on with `--gateway-gpu`;
+  `--gateway-env PGW_LM_HEAD_DEVICE=cpu` turns it off; library default `cpu`): the CPU head already has a
+  fixed summation order (16 partial sums over 16-column chunks, product rounded then added, no FMA, a fixed
+  tree), and each step is a correctly rounded float32 operation, so `pgw.engine.lm_head_gpu` runs the same
+  order as one Triton kernel (PTX `mul.rn.f32` / `add.rn.f32`: no contraction, no flush of subnormals; the
+  bfloat16 head in a chunked `(D/16, V, 16)` layout; 1-row calls replay a CUDA graph). The logits are the CPU
+  kernel's bit for bit, so the plaintext reference needs no change (it stays on the CPU, as do the final
+  norm and sampling). Start-up self-check against the CPU kernel (Gaussian, large, subnormal products, zeros,
+  signed zeros, infinity), else the CPU; `TRITON_INTERPRET=1` tests the order on any host
+  (`tests/engine/test_lm_head_gpu.py`). T4: 1.33 ms vs 2.93 ms on the CPU kernel in isolation, 0 of 20 rows
+  differ. The GPU belongs to the gateway (as for the local linears); the provider sees nothing new.
+* `/admin/status` speed: `local_linear_timing` (wall time of the local linears, decode vs prompt passes; the
+  backend's `local_seconds` also counts the masked trips' gateway work), `local_gpu_stats`, `lm_head` (with
+  live `stats`). `PGW_MODAL_APP_SUFFIX` (deploy time) suffixes the app and Dict names for parallel runs.
+
+Measured (T4:2, 14 cores, `attention_down`, TLS lane, factory capped and kept busy, 45 s of back-to-back
+52-token chats; every run logprobs bit-identical, text equal, repeat identical; hosts vary 10-20% and more):
+
+| run | back to back (tok/s) | warm chat | ms per decoded token | trips | trips' gateway work | local linears | LM head |
+|---|---|---|---|---|---|---|---|
+| before (this code with `PGW_LOCAL_GPU_NATIVE=0 PGW_LOCAL_GPU_ONE_ROW=0 PGW_LM_HEAD_DEVICE=cpu PGW_LOCAL_GPU_TABLE=0`) | 10.9 | 9.6 | about 75 | 14.5 | 12.6 | 15.9 (220 us/call) | about 4 (CPU) |
+| native call + GPU LM head | 15.3 | 13.5 | about 45 | 12.1 | 10.2 | about 7 (native part 5.5) | about 1.5 |
+| + 1-row fast path | 14.5 | 12.1 | about 52 | 12.7 | 11.3 | not measured | about 1.5 |
+| + T4 GEMV table, LM-head graph | 16.1 | 13.0 | about 48 | 11.9 | 10.1 | 7.1 (99 us/call) | 1.4 |
+
+The same native call takes 61 us mean (48 us median) in isolation and 99 us in the running gateway; idle gaps
+of 100-600 us between calls add only 1-6 us in isolation, so the rest is the busy container (the factory,
+spinning pool and lane threads of both parties on the same cores, gVisor), not the device. What remains per
+decoded token (about 48 ms): trips 12 ms, the masked trips' gateway work 10 ms, local linears 7 ms, LM head
+1.4 ms, float ops and Python about 17 ms; time to first token 0.5-0.55 s. Not reached: 30 tokens/s.
+
 ## Trip latency and the `--max-trip-ms` gate
 
 `--e2e` now also reports the gateway's **client-reported round-trip latency** (`trip_latency` in the
