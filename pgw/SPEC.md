@@ -153,7 +153,53 @@ generation) depends on `core` and `wire`. `service` depends on `core`, `modelpac
     for K≤48 when n≤4096. Every partial sum is an exact integer.
   - `cpu_f32`: base-256 digits with float32 GEMMs over inner chunks of 1024 (partial sums ≤ 2^24).
   - Planned: fbgemm/oneDNN int8 path for CPU (0.3 TOPS measured), and a fused Triton kernel for GPU.
-- **Integrity:** `check_output_range` (|yq| ≤ qmax·127·n) plus Freivalds over `Z_{2^K}` (`pgw.core.freivalds`).
+- **Integrity:** `check_output_range` (|yq| ≤ qmax·127·n) plus Freivalds over `Z_{2^K}` (`pgw.core.freivalds`),
+  or, for segments in the opt-in prime-field format, Freivalds over `F_p` (5.1).
+
+### 5.1 Prime-field Freivalds check (opt-in segment format `check_field = "p31"`; normative)
+Off by default: factories write it only with `PGW_FACTORY_CHECK_FIELD=p31` (`check_field`), gateways accept
+it only with `prime_check = true` (`PGW_GATEWAY_PRIME_CHECK`; otherwise such segments are refused before any
+mask row is used). Old segments (no `check_field` in the header) keep the ring check; both formats can be
+served side by side. Research note: `research/notes/prime-field-freivalds.md`.
+
+- **Field.** `p = 2^31 − 1`. Only K32 rings (the `uW` words are stored like ring elements, 4 bytes each,
+  every word `< p`; a reader refuses words `≥ p`).
+- **Vectors.** `c ≥ 1` per linear (factory default 1). `u_i ∈ F_p^m` uniform and secret (derived from the
+  segment seed, 7.3); the segment stores `uWp_i = u_i^T W8 mod p` (an exact integer product; the factory
+  splits `u` into 16-bit limbs so float64 GEMMs are exact).
+- **Check (every row `t`, every `i`).** With `xq` the gateway's quantized input and `yq =
+  centered(y_hat − W r)` its decoded output: accept iff `|yq| ≤ B` (the range check, `B =
+  output_bound(n)`: the cap or `qmax·127·n`) **and** `u_i · yq_t ≡ uWp_i · xq_t (mod p)`. The input half is
+  computed at prepare (`trip_prepare_into(..., field=p)`), the output half after the reply and before the
+  output is used (`trip_prime_output`, synchronous: never deferred).
+- **Completeness.** The genuine `yq = W8 xq` exactly over `Z` (decoding is unambiguous: `|W8 xq| ≤ B <
+  2^(K−1)`), so `u · W8 xq = Σ_l (u W8)_l xq_l ≡ uWp · xq (mod p)`: honest results always pass.
+- **Soundness.** Suppose an accepted row has `yq ≠ W8 xq`. Let `e = yq − W8 xq ∈ Z^m \ {0}`. Both terms are
+  bounded by `B` (range check; genuine bound), so `|e_j| ≤ 2B`, and the format requires `2B < p` per linear
+  (else 0 bits: refused), so `e ≢ 0 (mod p)`. Acceptance needs `u_i · e ≡ 0 (mod p)` for every `i`. The
+  provider's view (`x_hat`, uniform and independent of `u`) and the data (`xq`, `W8`) are independent of `u`,
+  so `e` is independent of `u`; for a coordinate `j` with `e_j ≢ 0` and any fixed other coordinates exactly
+  one value of `u_ij` satisfies the equation. Each `u_ij` is `u64 mod p` of a ChaCha20 word, whose point
+  probability is at most `⌈2^64/p⌉/2^64 ≤ (1 + 2^−33)/p`. Hence per row and per call (the call is accepted
+  only if every wrong row is):
+
+  `Pr[accept a wrong result] ≤ ((1 + 2^−33)/p)^c`, i.e. at least `c·(log2 p − log2(1 + 2^−33)) ≈ 30.99999999·c` bits
+  (`pgw.core.freivalds.prime_soundness_bits`).
+
+  Today's ring check gives `c·h` bits with `h = K − ⌈log2(4B)⌉`: at K32A12C27 `h = 3`, so 7 vectors give 21
+  bits. One prime vector gives 30.99 bits, more than seven ring vectors, at 1/7 of the check-vector storage
+  and reads (7B: 66.6 → 9.5 MB per token, 23.4 → 3.3 MB of `uW` per segment). An adaptive provider that
+  probes is caught with probability `≥ 1 − 1/p` per wrong call and then cut off (any failure aborts the
+  request and trips the breaker), as with the ring check. `min_soundness_bits` applies unchanged.
+- **Also covers `W r`.** The check runs on the unmasked `yq`, so a wrong `W r` row from the factory that
+  moves `yq` is caught too (the ring check covers the service product only).
+- **Privacy.** Unchanged: the provider sees the same `x_hat` bytes; `u`, `uWp` stay in the encrypted
+  segment / gateway memory and are wiped like the ring vectors; the kernels are constant time (loops over
+  public sizes, every vector compared, masked final reduction).
+- **Scope (v1).** The TripEngine paths (`trip_prepare_into` / `trip_finish_into`, one-call trips). Padded or
+  fixed-structure calls (speculation), the non-trip fallbacks, the MoE oblivious path and the shared-memory
+  mask ring (`ringshm`) do not run it and refuse prime extents (fail closed). The disk store and the
+  in-process RAM ring carry the format.
 
 ## 6. Wire protocol (normative)
 
@@ -279,12 +325,14 @@ magic "PGWMASK1" | u32le hlen | header JSON (SegmentHeader, canonical) | chunks.
 chunk = AES-256-GCM(DEK, nonce = nonce_prefix(4) || u64be(chunk_index),
                     aad = SHA-256(header JSON) || u32be(chunk_index)) -> ciphertext || tag(16)
 chunk 0          : seed(32) || for each linear in header order: uW packed (checks × n)
+                   (check_field "p31": u W8 mod (2^31 - 1), same packing, K32 only)
 chunks 1..       : for each linear (header order), for each run of chunk_slots slots:
                    W8·r rows packed (rows × m)
 ```
 The header (`pgw.maskstore.format.SegmentHeader`) holds segment_id, fingerprint, ring, slots,
 chunk_slots, checks, linears [{id, m, n}], kek_id, wrapped_dek, nonce_prefix, factory_id and
-created_at. All chunk offsets are computable from the header, so a reader decrypts only the
+created_at, plus the optional `destination` (7.7) and `check_field` (5.1; omitted when unset, so older
+headers keep their exact bytes; readers that do not know the field refuse the header). All chunk offsets are computable from the header, so a reader decrypts only the
 chunks it needs. Size per slot is `Σ m · K/8` bytes, for example 1.5 MB for Qwen2.5-0.5B at K40 and
 6.9 MB for Llama-3-8B at K40 (8.3 MB at K48). `r` is **not stored**; it is regenerated from the seed.
 
@@ -294,6 +342,7 @@ key(labels) = HKDF-Expand(SHA-256, prk=seed, info="pgw/v1/prng" || Σ u32be(len)
 stream      = ChaCha20(key, counter=0, nonce=0)   ; ring elem = u64le(8 bytes) mod 2^K
 r[slot, :]  = SeedExpander(seed).ring_uniform_rows(n, K, slot, 1, "r", linear_id)
 u           = SeedExpander(seed).ring_uniform((checks, m), K, "u", linear_id)
+u (p31)     = SeedExpander(seed).ring_uniform((checks, m), 64, "u-p31", linear_id) mod (2^31 - 1)
 ```
 Known-answer vectors are in `tests/core/test_prng.py`. Every implementation (for example a Rust or
 CUDA factory) must reproduce them. The segment seed comes from `os.urandom(32)` and is unique per segment.

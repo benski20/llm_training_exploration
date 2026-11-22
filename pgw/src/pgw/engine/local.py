@@ -24,6 +24,7 @@ import time
 from collections.abc import Callable, Sequence
 from typing import Any
 
+import numpy as np
 import torch
 
 from pgw.core.errors import (
@@ -168,6 +169,8 @@ class LocalMaskReservation:
         slot_offset: First slot index within the seed's stream (to mimic a segment extent).
         weights: Optional shared ``{linear_key: PreparedWeight}`` cache (factory side).
         backend: ``ringmm`` backend for ``W8 r`` (``cpu_f32`` halves resident memory vs ``cpu_f64``).
+        check_field: Freivalds check format, as a segment header's (``None``: the ring check; ``"p31"``:
+            the prime-field check, served by :meth:`checks_compact` only).
     """
 
     def __init__(
@@ -181,7 +184,14 @@ class LocalMaskReservation:
         slot_offset: int = 0,
         weights: dict[str, PreparedWeight] | None = None,
         backend: str = "auto",
+        check_field: str | None = None,
     ):
+        from pgw.core.freivalds import field_modulus
+
+        if field_modulus(check_field) is not None and (ring.k != 32 or checks < 1):
+            raise ConfigError("check_field='p31' needs a K32 ring and checks >= 1")
+        self._check_field = check_field if field_modulus(check_field) is not None else None
+        self._tid = os.urandom(8).hex()
         if slots <= 0:
             raise ConfigError("slots must be positive")
         if checks < 0:
@@ -258,7 +268,12 @@ class LocalMaskReservation:
         return r, wr
 
     def checks(self, lid: LinearId) -> tuple[torch.Tensor, torch.Tensor]:
-        """Freivalds vectors ``(u (c, m), u^T W8 (c, n))``."""
+        """Freivalds vectors ``(u (c, m), u^T W8 (c, n))`` (ring check format only)."""
+        if self._check_field is not None:
+            raise ConfigError(f"{lid}: prime-field check vectors are served by checks_compact only")
+        return tuple(t.clone() for t in self._vectors(lid))  # type: ignore[return-value]
+
+    def _vectors(self, lid: LinearId | str) -> tuple[torch.Tensor, torch.Tensor]:
         spec = self._spec(lid)
         key = spec.id.key
         exp = self._alive()
@@ -266,11 +281,33 @@ class LocalMaskReservation:
             raise ConfigError("reservation has no Freivalds vectors (checks=0)")
         hit = self._uw.get(key)
         if hit is None:
-            u = exp.ring_uniform((self._checks, spec.out_features), self.ring.k, "u", key)
-            uw = freivalds_precompute(u, self.pack.load_linear(spec.id).w8, self.ring)
+            if self._check_field is not None:
+                from pgw.core.freivalds import prime_check_vectors, prime_precompute
+
+                seed = exp.derive_seed("local-prime-check")
+                u = prime_check_vectors(seed, self._checks, spec.out_features, key)
+                uw = prime_precompute(u, self.pack.load_linear(spec.id).w8)
+            else:
+                u = exp.ring_uniform((self._checks, spec.out_features), self.ring.k, "u", key)
+                uw = freivalds_precompute(u, self.pack.load_linear(spec.id).w8, self.ring)
             hit = (u, uw)
             self._uw[key] = hit
-        return hit[0].clone(), hit[1].clone()
+        return hit
+
+    def check_field(self, lid: LinearId | str) -> str | None:
+        """Check format of the reservation (one extent): ``None`` (ring) or ``"p31"``."""
+        return self._check_field
+
+    def checks_compact(self, lid: LinearId | str) -> tuple[tuple[str, ...], Any, Any]:
+        """``(token, u, uw)`` as uint32 (``K <= 32``) or uint64 copies; prime-field tokens end in ``"p31"``."""
+        from pgw.core.freivalds import PRIME_TAG
+
+        u, uw = self._vectors(lid)
+        dt = np.uint32 if self.ring.k <= 32 else np.uint64
+        key = self._spec(lid).id.key
+        tid = f"local-{id(self):x}-{self._tid}"  # names this reservation's vectors only
+        token = (tid, key, PRIME_TAG) if self._check_field is not None else (tid, key)
+        return token, (u.numpy() & self.ring.mask).astype(dt), (uw.numpy() & self.ring.mask).astype(dt)
 
     def close(self) -> None:
         """Burn unused rows and drop secrets."""

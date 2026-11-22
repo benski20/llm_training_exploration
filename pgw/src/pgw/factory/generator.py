@@ -317,6 +317,7 @@ class MaskGenerator:
         gpu_prng_impl: str = "auto",
         native_rng: bool | None = None,
         skip_kinds: frozenset[str] | set[str] | tuple[str, ...] = (),
+        check_field: str | None = None,
     ):
         self.pack = pack
         # Encrypted mask generation (pgw.hemask.HEMaskBackend): W8 r comes from the provider on
@@ -326,6 +327,14 @@ class MaskGenerator:
         if remote is not None:
             self_check_rows = -1
         self.ring = ring_from_setting(ring)
+        from pgw.core.freivalds import field_modulus
+
+        #: Freivalds check format of the segments this generator writes (SPEC 5.1): ``None`` = the ring
+        #: check over ``Z_{2^K}`` (default), ``"p31"`` = one vector over ``F_p``, ``p = 2^31 - 1``
+        #: (opt-in; K32 rings; ``uW`` holds ``u W8 mod p``, an exact integer product).
+        self.check_field: str | None = None if field_modulus(check_field) is None else str(check_field)
+        if self.check_field is not None and self.ring.k != 32:
+            raise ConfigError(f"check_field={check_field!r} needs a K32 ring, got {self.ring.name}")
         if hasattr(pack, "check_ring"):
             pack.check_ring(self.ring)
         all_specs: list[LinearSpec] = list(pack.linear_specs())
@@ -517,12 +526,16 @@ class MaskGenerator:
     MIN_SOUNDNESS_BITS = 20
 
     def checks_for(self, min_bits: float | None = None) -> int:
-        """Smallest ``checks`` in ``[2, 8]`` giving ``min_bits`` of soundness for every linear (else 8)."""
-        from pgw.core.freivalds import soundness_bits
+        """Smallest ``checks`` in ``[2, 8]`` giving ``min_bits`` of soundness for every linear (else 8).
+
+        With the prime-field format (:attr:`check_field`) the range starts at 1 (one vector: 31 bits)."""
+        from pgw.core.freivalds import check_soundness_bits
 
         target = self.MIN_SOUNDNESS_BITS if min_bits is None else min_bits
-        for c in range(2, 9):
-            if all(soundness_bits(self.ring, sp.in_features, c) >= target for sp in self.specs):
+        field = getattr(self, "check_field", None)
+        for c in range(1 if field else 2, 9):
+            if all(check_soundness_bits(self.ring, sp.in_features, c, field) >= target
+                   for sp in self.specs):
                 return c
         return 8
 
@@ -531,7 +544,10 @@ class MaskGenerator:
         if checks == 0 or checks in self._weak_warned:
             return
         self._weak_warned.add(checks)
-        from pgw.core.freivalds import soundness_bits
+        from pgw.core.freivalds import check_soundness_bits
+
+        def soundness_bits(ring: RingParams, n: int, c: int) -> float:
+            return check_soundness_bits(ring, n, c, getattr(self, "check_field", None))
 
         worst = min(self.specs, key=lambda sp: soundness_bits(self.ring, sp.in_features, checks))
         bits = soundness_bits(self.ring, worst.in_features, checks)
@@ -712,9 +728,16 @@ class MaskGenerator:
                 t0 = time.perf_counter()
                 cu: np.ndarray | None = None
                 cw: np.ndarray | None = None
-                if checks:
+                if checks and self.check_field is not None:
+                    # prime-field format: u uniform in F_p (stream "u-p31"), uW = u W8 mod p (exact)
+                    from pgw.core.freivalds import prime_check_vectors, prime_precompute
+
+                    u = prime_check_vectors(bytes(seed), checks, spec.out_features, lid.key)
+                    uw = prime_precompute(u, w)
+                    u.zero_()  # the W r self-check below uses private ring vectors
+                elif checks:
                     u = exp.ring_uniform((checks, spec.out_features), k, "u", lid.key)
-                    uw: torch.Tensor = ring_vecmat(u, w, self.ring)
+                    uw = ring_vecmat(u, w, self.ring)
                     if self.self_check_rows and self.remote is None:
                         cu, cw = _u64(u.t()), _u64(uw.t())
                     u.zero_()
@@ -865,11 +888,12 @@ class MaskGenerator:
         self._warn_weak_integrity(checks)
         with self._lock:
             t0 = time.perf_counter()
+            extra: dict[str, Any] = {} if self.check_field is None else {"check_field": self.check_field}
             writer = store.writer(
                 self.fingerprint, self.ring, self.specs, slots=slots, seed=seg_seed, checks=checks,
                 chunk_slots=self.store_chunk_slots(store_chunk_bytes) if store_chunk_slots is None
                 else store_chunk_slots,
-                factory_id=factory_id,
+                factory_id=factory_id, **extra,
             )
             write_time = [0.0]
             try:

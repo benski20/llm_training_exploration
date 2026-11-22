@@ -36,6 +36,7 @@ pub mod local;
 pub mod localgpu;
 pub mod noise;
 pub mod prepare;
+pub mod prime;
 pub mod store;
 pub mod trip;
 #[cfg(unix)]
