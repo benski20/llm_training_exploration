@@ -292,9 +292,13 @@ def start_service(env: dict[str, str], logfile: Path, user_kw: dict[str, Any] | 
 
 
 def create_enrollment_code(env: dict[str, str], tenant: str, ttl: str, note: str,
-                           user_kw: dict[str, Any] | None = None, cwd: Path | None = None) -> dict[str, Any]:
+                           user_kw: dict[str, Any] | None = None, cwd: Path | None = None,
+                           model: str | None = None) -> dict[str, Any]:
+    """A single-use enrollment code for ``model`` (default: the deployed target, ``PGW_MODAL_MODEL`` in the
+    image's environment, else the 0.5B; the code lists the model the service serves)."""
+    model = (model or os.environ.get("PGW_MODAL_MODEL") or MODEL_NAME).strip().lower()
     r = subprocess.run([sys.executable, "-m", "pgw.cli", "service", "enroll", "create", "--tenant", tenant,  # noqa: S603
-                        "--ttl", ttl, "--models", MODEL_NAME, "--note", note, "--json"],
+                        "--ttl", ttl, "--models", model, "--note", note, "--json"],
                        env=env, capture_output=True, text=True, check=False, cwd=cwd, **(user_kw or {}))
     if r.returncode != 0:
         raise RuntimeError(f"enroll create failed: {r.stderr[-2000:]}")

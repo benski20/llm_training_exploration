@@ -88,9 +88,8 @@ GATEWAY_CPUS = float(os.environ.get("PGW_MODAL_GATEWAY_CPUS") or 12.0)
 #: encryption hint through the page cache (48 GiB). A request, not a limit.
 MEMORY_MIB = (16384 + 49152 if MODEL_NAME == "qwen2.5-7b-instruct"
               else 6144 + (16384 if DRAFT or MODEL_NAME != "qwen2.5-0.5b-instruct" else 8192))
-#: Ephemeral disk (MiB): Modal's default for the smaller targets; the 7B needs its checkpoint (15 GB), two packs
-#: (7.6 GB each), the encryption hint (34 GB) and the mask store (4.2 MB per slot of gate_up masks).
-EPHEMERAL_DISK_MIB = 160 * 1024 if MODEL_NAME == "qwen2.5-7b-instruct" else None
+#: Disk: Modal's default ephemeral disk (at least 512 GiB, the smallest request it accepts) holds the 7B's
+#: checkpoint (15 GB), two packs (7.6 GB each), the encryption hint (34 GB) and the mask store (4.2 MB per slot).
 #: One Unix user per party (``pgw_modal_boot.PROVIDER_USER`` / ``CUSTOMER_USER``; created in the image).
 PROVIDER_USER, CUSTOMER_USER = "pgwprov", "pgwcust"
 #: Escape hatch, fixed at deploy time (``PGW_MODAL_COLOCATED_USERS=0``): run both parties as root (still
@@ -164,7 +163,7 @@ app = modal.App("pgw-colocated" + APP_SUFFIX, image=image)
 
 
 @app.function(gpu=GPU_SPEC, cpu=PROVIDER_CPUS + GATEWAY_CPUS, memory=MEMORY_MIB, timeout=MAX_LIFETIME_S,
-              max_containers=1, min_containers=0, retries=0, region=REGION, ephemeral_disk=EPHEMERAL_DISK_MIB)
+              max_containers=1, min_containers=0, retries=0, region=REGION)
 def pair(run_id: str, ttl_s: int = 80 * 60, e2e: bool = False, local_linears: str = "auto",
          spec_rows: int = 0, lane: str = "stream", gateway_env: dict | None = None,
          provider_env: dict | None = None, sustain_s: float = 0.0) -> dict:

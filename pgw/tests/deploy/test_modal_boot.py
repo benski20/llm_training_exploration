@@ -198,9 +198,8 @@ def test_customer_memory_matches_boot() -> None:
     assert m is not None
     assert (int(m.group(1)), m.group(2), int(m.group(3))) == (
         boot.CUSTOMER_MEMORY_MIB["large"], boot.MODEL_NAME, boot.CUSTOMER_MEMORY_MIB["default"])
-    # the 7B (co-located only): 16 GiB provider + 48 GiB gateway, and its own ephemeral disk
+    # the 7B (co-located only): 16 GiB provider + 48 GiB gateway
     assert 'MEMORY_MIB = (16384 + 49152 if MODEL_NAME == "qwen2.5-7b-instruct"' in col
-    assert "ephemeral_disk=EPHEMERAL_DISK_MIB" in col
 
 
 def test_factory_keep_up_scales_with_the_target() -> None:
