@@ -15,6 +15,18 @@ SLA pilot. Three reasons:
 2. The HSM, KMS and TPM integrations have never run against real hardware or cloud services.
 3. There has been no external security audit.
 
+## Update 2026-11-22: strict tree speculation and a few-MB target-feature draft head (engine, opt-in)
+
+`research/plans/tree-speculation.md`. `Generator(spec_tree=[(parent, rank), ...])` verifies a public fixed token
+tree of R rows in one pass with tree attention (torch and native float paths, no kernel change), bit-identical
+to plain decoding (greedy and seeded), with R rows per pass and the strict L-pass schedule unchanged and fixed
+gateway work per pass. `FeatureHeadDrafter` drafts from the target's final hidden state, which the gateway holds
+in plaintext (5.5 / 9.7 / 13 MB per draft step at 1.5B / 32B / 72B vs 490 MB for the 0.5B draft). Findings:
+for the 0.5B draft (alpha 0.81 on the 1.5B, 0.78 on the 3B) the best tree of <= 8 rows is the chain; a head
+trained on local data overfits (held-out top-1 0.13), so a real head needs offline EAGLE-scale training; the
+32B/72B model says a 0.5B draft is slower than plain, and 25-30 tok/s at 32B needs 0.3-0.5 ms trips, a 2L+1
+schedule, per-row trip work spread over spare cores, and a head at alpha ~0.8 with R = 8.
+
 ## Update 2026-11-22: the 7B CPU-only-gateway speculation run is ready to launch (Modal launcher, opt-in)
 
 One co-located run measures Qwen2.5-7B on an H100 provider with a CPU-only, weight-free gateway (every linear remote,

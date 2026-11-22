@@ -1,0 +1,14 @@
+{
+ "plain": {"rows": 1, "tau": 1.0, "draft_steps": 0, "draft_mb_per_step": 0,
+           "note": "no speculation"},
+ "lookup R=3": {"rows": 3, "tau": 1.08, "draft_steps": 0, "draft_mb_per_step": 0,
+                "note": "prompt lookup only, measured on the 1.5B answers"},
+ "0.5B chain R=4": {"rows": 4, "tau": 2.4, "draft_steps": 3, "draft_mb_per_step": 490,
+                    "note": "0.5B draft; tau 2.84 (1.5B) / 2.73 (3B) measured, alpha extrapolated to ~0.70 at 32-72B"},
+ "head chain R=4 a=.7": {"rows": 4, "tau": 2.4, "draft_steps": 3, "draft_mb_per_step": 10,
+                         "note": "feature head at alpha 0.70 (assumed), independence model x 0.95"},
+ "head chain R=8 a=.8": {"rows": 8, "tau": 3.95, "draft_steps": 7, "draft_mb_per_step": 10,
+                         "note": "feature head at alpha 0.80 (EAGLE-class, assumed), independence model x 0.95"},
+ "head tree R=12 a=.7": {"rows": 12, "tau": 3.43, "draft_steps": 8, "draft_mb_per_step": 10,
+                         "note": "feature head at alpha 0.70, best static tree of 12 (needs spec_rows > 8)"}
+}
