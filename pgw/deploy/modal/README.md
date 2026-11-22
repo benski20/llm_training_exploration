@@ -269,6 +269,41 @@ LM head + sampling 3.5-4 ms, float ops and Python 12-15 ms. Time to first token 
 of the 41 prompt rows about 210 ms, mask reads about 80 ms, float ops and Python about 150 ms). Modal's
 HTTPS edge adds 0.5-0.7 s to the warm chat. Not reached: 30 tokens/s (see STATUS.md).
 
+### Gateway GPU, pinned float threads, factory cap (2026-11-22, package T2)
+
+* `--gateway-gpu` (co-located, needs `--gpu`; default off): the container gets two GPUs of the provider's tier
+  (`T4:2`). The provider's process sees only the first and the gateway's only the second (`CUDA_VISIBLE_DEVICES`
+  by UUID; the device nodes `/dev/nvidia<minor>` are also chowned 0600 to each party's user, which worked under
+  Modal's runtime). The gateway computes its exact local linears there (`local_linears_device = "cuda"`,
+  `pgw.engine.local_gpu`): the native prepare kernel with a zero mask writes the K=32 payload into pinned memory,
+  a captured CUDA graph `[H2D, ring_gemv, D2H]` computes `x_hat @ W8^T mod 2^32` (the provider's fused ring GEMV),
+  the native finish with `W r = 0` range-checks and rescales: the masked trip with `r = 0`, so the same bits;
+  every local linear is also self-checked against the CPU reference at start-up (else the CPU is kept). The
+  mask factory stays on the CPU (`PGW_HEMASK_ENGINE=cpu_int8`, `PGW_FACTORY_DEVICE=cpu`).
+* `--float-threads N` (co-located, default 1; 0 = as before): the pinned float formulation. The gateway's process
+  runs torch on N threads (`OMP_NUM_THREADS`) and the e2e's plaintext reference on the same N
+  (`wizard_client.plaintext_reference(float_threads=)`), so thread-count-dependent kernels (CPU SDPA:
+  `benchmarks/sdpa_threads_bench.py` shows different bits at every thread count on Modal hosts) compute the same
+  way in both.
+* `--gateway-env OMP_WAIT_POLICY=unset` drops the gateway's PASSIVE default; `GOMP_` keys are accepted.
+* `PGW_STACK_SAMPLER=<path>` (gateway, off by default): wall-clock stack sampler (code locations only); the
+  co-located e2e returns it as `stack_sample` for the sustain window. Note it over-weights GIL-free code.
+
+Measured (T4, 14 cores, `attention_down`, TLS lane, factory target 8000; every run logprobs bit-identical and
+repeat identical; Modal hosts vary by 10-20% between runs, so differences below that are noise):
+
+| config | warm chat | back to back | decode local ms/token | decode trips ms/token | factory cores |
+|---|---|---|---|---|---|
+| CPU local, factory capped (3 threads, nice 10) | 12.2 | 12.3 | 10.5 | 13.3 | 3.9 (120 slots/s) |
+| gateway GPU, factory uncapped | 12.0-12.3 | 12.4-13.2 | 10.6 | 13.2 | 6.9-7.5 |
+| gateway GPU, factory capped | 11.0 | 13.8 | 10.2 | 12.6 | 3.7 |
+| gateway GPU, capped, float threads pinned to 1 | 13.3-13.4 | 12.1-13.6 | 10.1-10.5 | 13.3-13.4 | 3.3-5.0 |
+
+The GPU halves the local linears in isolation (`benchmarks/local_gpu_bench.py`, 72 decode calls of the 0.5B:
+4.8-7.4 ms on a T4 vs 8.4-16.3 ms on the CPU pool, host-dependent, 0 mismatches) but in the running gateway the
+local linears take about 10 ms per token either way (the CUDA sync of 72 calls per token under load); the GPU
+mainly frees about 2.5 gateway cores. Time to first token is 0.5-1.1 s per chat (about 15% of a 64-token chat).
+
 ## Trip latency and the `--max-trip-ms` gate
 
 `--e2e` now also reports the gateway's **client-reported round-trip latency** (`trip_latency` in the

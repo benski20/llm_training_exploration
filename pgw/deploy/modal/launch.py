@@ -449,6 +449,9 @@ def _spawner(args: argparse.Namespace) -> Callable[..., Pair]:
     spec_rows = int(getattr(args, "spec_rows", 0) or 0)
     lane = getattr(args, "lane", "stream") or "stream"
     genv = parse_env_pairs(getattr(args, "gateway_env", None) or [])
+    pin = int(getattr(args, "float_threads", 0) or 0)
+    if pin > 0:  # --float-threads: the gateway's torch thread count (the reference follows it, colocated.py)
+        genv.setdefault("OMP_NUM_THREADS", str(pin))
     penv = parse_env_pairs(getattr(args, "provider_env", None) or [])
     sustain = float(getattr(args, "sustain_s", 0.0) or 0.0)
 
@@ -591,6 +594,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                     help="--e2e --placement colocated: after the exactness check, chat back to back for this many "
                          "seconds and report tokens/s and the mask factory's segments finished meanwhile (slots/s "
                          "while a chat decodes)")
+    ap.add_argument("--float-threads", type=int, default=None,
+                    help="--placement colocated: the pinned float formulation. The gateway's process runs torch on "
+                         "exactly N threads (OMP_NUM_THREADS=N) and the e2e's plaintext reference on the same N, so "
+                         "thread-count-dependent float kernels (CPU SDPA) give the same bits in both (default: 1 "
+                         "co-located; 0 = each process's torch default, as before)")
     ap.add_argument("--gateway-gpu", action="store_true",
                     default=os.environ.get("PGW_MODAL_GATEWAY_GPU", "0") == "1",
                     help="--placement colocated with --gpu: a second GPU of the same tier for the gateway (deploy "
@@ -641,6 +649,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         args.lane = "tls" if args.placement == "colocated" else "stream"
     if args.lane == "tls" and args.placement != "colocated":
         ap.error("--lane tls needs --placement colocated (the provider's lane port is on its loopback only)")
+    if args.float_threads is None:
+        args.float_threads = 1 if args.placement == "colocated" else 0
+    if args.float_threads < 0 or (args.float_threads and args.placement != "colocated"):
+        ap.error("--float-threads needs --placement colocated and N >= 0")
     if args.gateway_gpu and (args.placement != "colocated" or not args.gpu):
         ap.error("--gateway-gpu needs --placement colocated and a provider --gpu (two GPUs of that tier)")
     if args.max_trip_ms is not None and args.max_trip_ms <= 0:

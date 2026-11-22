@@ -25,7 +25,7 @@ PROMPT = [{"role": "user", "content": "Explain in two sentences why one-time pad
 
 def run(live: Any, run_id: str, url: str, token: str, deadline: float, local_url: str,
         config_dir: Path = Path("/srv/pgw/config"), spec_rows: int = 0, sustain_s: float = 0.0,
-        sampler_path: str | None = None) -> dict[str, Any]:
+        sampler_path: str | None = None, float_threads: int | None = None) -> dict[str, Any]:
     """Wizard + two chats + exactness check; see the module docstring.
 
     ``spec_rows`` (launch.py --spec-rows): the gateway runs strict speculation with that many rows per pass, so
@@ -80,7 +80,8 @@ def run(live: Any, run_id: str, url: str, token: str, deadline: float, local_url
     out3 = wiz.chat(local_url, key, model_name, PROMPT, 32) if not spec_rows else None
     st = json.loads((config_dir / "setup" / "state.json").read_text())
     t = time.time()
-    ref = wiz.plaintext_reference(st["model"]["pack_path"], st["model"].get("ring") or boot.RING, PROMPT, 32)
+    ref = wiz.plaintext_reference(st["model"]["pack_path"], st["model"].get("ring") or boot.RING, PROMPT, 32,
+                                  float_threads=float_threads)
     ref_s = time.time() - t
     cmp = wiz.compare(out, ref)
     sustain: dict[str, Any] | None = None

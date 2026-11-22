@@ -184,9 +184,25 @@ def wait_idle(base_url: str, admin_token: str, model: str, *, quiet_s: float = 3
     return time.time() - t0
 
 
-def plaintext_reference(pack_path: str, ring: str, messages: list[dict[str, str]], max_tokens: int) -> dict[str, Any]:
-    """Greedy generation on the same pack with the plaintext reference backend (in this process)."""
+def plaintext_reference(pack_path: str, ring: str, messages: list[dict[str, str]], max_tokens: int,
+                        float_threads: int | None = None) -> dict[str, Any]:
+    """Greedy generation on the same pack with the plaintext reference backend (in this process).
+
+    ``float_threads``: the pinned float formulation (``launch.py --float-threads``): the reference's torch float
+    ops run on exactly this many threads, the count the gateway's process is pinned to, so both compute the same
+    thread-count-dependent kernels (CPU SDPA) the same way. ``None``: this process's default count.
+    """
     import asyncio
+
+    import torch
+
+    if float_threads:
+        prev = torch.get_num_threads()
+        torch.set_num_threads(int(float_threads))
+        try:
+            return plaintext_reference(pack_path, ring, messages, max_tokens)
+        finally:
+            torch.set_num_threads(prev)
 
     from pgw.core.ring import RingParams
     from pgw.engine import ChatTokenizer, Generator, PlainBackend, SamplingParams, TransformerModel

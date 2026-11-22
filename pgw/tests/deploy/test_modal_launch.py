@@ -625,7 +625,14 @@ def test_lane_tls_is_colocated_only_and_reaches_the_pair(monkeypatch: pytest.Mon
     monkeypatch.setattr(launch.modal.Function, "from_name", lambda app, name: FakeFunction(app, name, log))
     spawn = launch._spawner(args)
     p = spawn(FakeDict(), "colocated", 600, True)
-    assert log[-1][:2] == launch.COLOCATED_FUNCTION and log[-1][2] == (p.run_id, 600, True, "auto", 0, "tls")
+    # co-located default --float-threads 1: the gateway's torch threads pinned (the reference follows, colocated.py)
+    assert log[-1][:2] == launch.COLOCATED_FUNCTION and log[-1][2] == (
+        p.run_id, 600, True, "auto", 0, "tls", {"OMP_NUM_THREADS": "1"}, {}, 0.0)
+    args0 = launch.parse_args(["--placement", "colocated", "--float-threads", "0"])
+    launch._spawner(args0)(FakeDict(), "colocated", 600, True)
+    assert log[-1][2][1:] == (600, True, "attention_down", 0, "tls")  # 0 = each process's default count
+    with pytest.raises(SystemExit):
+        launch.parse_args(["--float-threads", "1"])  # co-located only
     spawn(FakeDict(), "tunnel", 600, True)  # the tunnel fallback keeps the stream lane
     assert log[-1][2][-2:] == ("auto", 0)
     p = launch.spawn_pair(FakeDict(), "colocated", 600, False, lookup=lambda app, name: FakeFunction(app, name, log))

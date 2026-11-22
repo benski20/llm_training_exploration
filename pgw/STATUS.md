@@ -15,6 +15,30 @@ SLA pilot. Three reasons:
 2. The HSM, KMS and TPM integrations have never run against real hardware or cloud services.
 3. There has been no external security audit.
 
+## Update 2026-11-22: gateway GPU and pinned float threads (package T2)
+
+Goal 30-40 tokens/s for one Qwen2.5-0.5B chat co-located; reached **13.3-13.6 tokens/s** (warm and back to back,
+from 10-13.5), every run logprobs bit-identical and repeat identical. Details: `deploy/modal/README.md`, "Gateway
+GPU, pinned float threads, factory cap".
+
+- Exact local linears on a gateway-owned GPU (`local_linears_device = "cuda"`, `pgw.engine.local_gpu`; co-located
+  `launch.py --gateway-gpu`, off by default, two T4s, one per party, each process sees only its own). Masked trip
+  with `r = 0` on the gateway's device, self-checked per linear against the CPU. Halves the local GEMVs in
+  isolation; in the running gateway about 10 ms/token either way, so little net gain for twice the GPU cost.
+- **Pinned float formulation (decision delegated by the user, 2026-11-22).** Torch's CPU SDPA gives different bits
+  at different thread counts on Modal's AVX-512 hosts, so the reference's bits depended on the host's default
+  thread count. The co-located demo now pins both the gateway's process and the e2e's plaintext reference to the
+  same torch thread count (`launch.py --float-threads`, default 1; 0 = the old behaviour): the reference's bits
+  come from that pinned formulation, and the gateway's `float_threads = 1` compares 1 with 1. Privacy unchanged;
+  the e2e compares against the pinned reference (bit-identical in the measured run). Library defaults (and the
+  test suite's goldens and HF closeness tests) are unchanged: the pin is a deployment setting.
+- Also: q and k rotated in one call (same bits), leaner GPU replay, factory cap knobs measured
+  (`PGW_FACTORY_CPU_THREADS=3`, `PGW_FACTORY_NICE=10`: 120 slots/s on 3.9 cores while decoding, 9x the token rate),
+  an opt-in stack sampler (`PGW_STACK_SAMPLER`), `benchmarks/local_gpu_bench.py`, `benchmarks/sdpa_threads_bench.py`.
+- Per decoded token now (about 60-65 ms): trips 13 ms (24 x 0.52 ms), local linears 10 ms, mask prepare/take/finish
+  about 8-10 ms (Python around the native kernels: reservation checks, noise monitor, staging copies), attention,
+  norms, RoPE and Python about 20 ms, LM head 4 ms; time to first token 0.5-1.1 s. Not reached: 30 tokens/s.
+
 ## Update 2026-11-22: co-located chat throughput on Modal (package T1)
 
 Goal was 30-40 tokens/s for one Qwen2.5-0.5B chat on the co-located Modal placement; reached **10-11 tokens/s

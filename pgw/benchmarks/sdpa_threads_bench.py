@@ -50,14 +50,14 @@ def main() -> None:
             torch.set_num_threads(n)
             same = all(torch.equal(_attend(q, k, v, length - 1, scale, groups, gqa), r)
                        for (length, q, k, v), r in zip(cases, ref, strict=True))
-            length, q, k, v = cases[4]
+            length, q, k, v = cases[min(4, len(cases) - 1)]
             ts = []
             for _ in range(args.reps):
                 t0 = time.perf_counter()
                 _attend(q, k, v, length - 1, scale, groups, gqa)
                 ts.append(time.perf_counter() - t0)
             res["per_count"][f"gqa{int(gqa)}_t{n}"] = {"identical_to_default": same,
-                                                        "us_len100": round(1e6 * statistics.median(ts), 1)}
+                                                        "us_per_call": round(1e6 * statistics.median(ts), 1)}
     torch.set_num_threads(default)
     print(json.dumps(res, indent=1))
 

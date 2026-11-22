@@ -170,7 +170,8 @@ def pair(run_id: str, ttl_s: int = 80 * 60, e2e: bool = False, local_linears: st
     boot.log(f"co-located pair: torch {torch.__version__}, GPU {gpu}")
     result: dict = {"run_id": run_id, "placement": "colocated", "separate_users": SEPARATE_USERS, "lane": lane,
                     "gateway_env": dict(gateway_env or {}), "provider_env": dict(provider_env or {}),
-                    "cpus": os.cpu_count()}
+                    "cpus": os.cpu_count(), "affinity_cpus": len(os.sched_getaffinity(0)),
+                    "torch_threads": torch.get_num_threads()}  # the reference's float thread count
     puser, cuser = (PROVIDER_USER, CUSTOMER_USER) if SEPARATE_USERS else (None, None)
     if not SEPARATE_USERS:
         boot.log("PGW_MODAL_COLOCATED_USERS=0: both parties run as root (separate processes and directories)")
@@ -181,6 +182,11 @@ def pair(run_id: str, ttl_s: int = 80 * 60, e2e: bool = False, local_linears: st
     pwork = Path("/srv/pgw-provider")
     croot = Path("/srv/pgw")
     token = ""
+    # launch.py --float-threads N: the pinned float formulation. The gateway's process runs torch on N threads
+    # (OMP_NUM_THREADS) and the e2e's plaintext reference on the same N, so thread-count-dependent float kernels
+    # (CPU SDPA) compute the same way in both; the gateway's float_threads self-check then compares N with N.
+    pin = int((gateway_env or {}).get("OMP_NUM_THREADS") or 0) or None
+    result["float_threads_pin"] = pin
     # launch.py --gateway-gpu: one GPU per party (provider: the first, gateway: the second), else the gateway has none
     gsplit: dict = {}
     if os.environ.get("PGW_MODAL_GATEWAY_GPU", "0") == "1":
@@ -234,7 +240,8 @@ def pair(run_id: str, ttl_s: int = 80 * 60, e2e: bool = False, local_linears: st
                 result["e2e"] = e2e_driver.run(live, run_id, gurl, token, deadline,
                                                f"http://127.0.0.1:{GATEWAY_PORT}", croot / "config",
                                                spec_rows=spec_rows, sustain_s=sustain_s,
-                                               sampler_path=(gateway_env or {}).get("PGW_STACK_SAMPLER"))
+                                               sampler_path=(gateway_env or {}).get("PGW_STACK_SAMPLER"),
+                                               float_threads=pin)
                 if sustain_s and result["e2e"].get("sustain"):
                     sus = result["e2e"]["sustain"]
                     sus["factory"] = boot.factory_segments(LOGS / "gateway.log", sus["t0"], sus["t1"])
