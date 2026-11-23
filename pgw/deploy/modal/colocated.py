@@ -255,6 +255,11 @@ def pair(run_id: str, ttl_s: int = 80 * 60, e2e: bool = False, local_linears: st
     # launch.py --masked-head: the LM head as a masked linear (head_mode = "provider_int8"); the reference follows it
     masked_head = (gateway_env or {}).get("PGW_MODAL_MASKED_HEAD", "0") == "1"
     result["masked_head"] = masked_head
+    # launch.py --schedule fused2: two provider trips per layer (pair items on the lane, fused2 pair masks from the
+    # store); the reference follows it (the fused2 plaintext reference on the same public weights)
+    f2 = (gateway_env or {}).get("PGW_MODAL_FUSED2", "").strip()
+    fused2_bits = int(f2) if f2 else None
+    result["schedule"] = "fused2" if fused2_bits is not None else "standard"
     # launch.py --gateway-gpu: one GPU per party (provider: the first, gateway: the second), else the gateway has none
     gsplit: dict = {}
     if os.environ.get("PGW_MODAL_GATEWAY_GPU", "0") == "1":
@@ -332,6 +337,8 @@ def pair(run_id: str, ttl_s: int = 80 * 60, e2e: bool = False, local_linears: st
             if masked_head:  # no float head on the gateway at all: the head is one more masked linear
                 gdev = {k: v for k, v in gdev.items() if k != "lm_head_device"}
                 gdev["head_mode"] = "provider_int8"
+            if fused2_bits is not None:  # schedule = "fused2" (pgw_modal_boot.fused2_model_options)
+                gdev.update(boot.fused2_model_options(fused2_bits, lane))
             gw, token = boot.start_gateway_party(croot, GATEWAY_PORT, user=cuser, log_dir=LOGS,
                                                  model_options={**boot.GATEWAY_MODEL_OPTIONS,
                                                                 "local_linears": local_linears, **spec,
@@ -374,7 +381,7 @@ def pair(run_id: str, ttl_s: int = 80 * 60, e2e: bool = False, local_linears: st
                                                # --gateway-env PGW_MODAL_REF_INT_THREADS=N: the plaintext
                                                # reference's exact integer products on N threads (same bits)
                                                ref_int_threads=int(genv.get("PGW_MODAL_REF_INT_THREADS") or 0)
-                                               or None)
+                                               or None, fused2_bits=fused2_bits)
                 if sustain_s and result["e2e"].get("sustain"):
                     sus = result["e2e"]["sustain"]
                     sus["factory"] = boot.factory_segments(LOGS / "gateway.log", sus["t0"], sus["t1"])

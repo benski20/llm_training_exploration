@@ -370,6 +370,16 @@ class SetupController:
         }
         if self._masked_head():  # head_mode = "provider_int8" preset: masks for the derived masked-head pack
             env["PGW_FACTORY_MASKED_HEAD"] = "true"
+        if self._fused2():  # schedule = "fused2" preset: fused2 pair-mask segments (pgw.factory.fused2_gen)
+            opts = self.settings.setup_model_options or {}
+            env["PGW_FACTORY_SCHEDULE"] = "fused2"
+            env["PGW_FACTORY_RING"] = str(opts.get("ring") or "K56A12C53")
+            env["PGW_FACTORY_FUSED2_MIGRATE_BITS"] = str(int(opts.get("fused2_migrate_bits", 8)))
+            if os.environ.get("PGW_SETUP_FUSED2_FACTORY", "he").strip().lower() == "plain":
+                # the customer-side plain fused2 factory (public weights, W r on this host's CPU): no HE at all
+                for k in [k for k in env if k.startswith("PGW_FACTORY_HE_")]:
+                    del env[k]
+                env["PGW_FACTORY_DEVICE"] = "cpu"
         if files.get("ca"):
             env["PGW_FACTORY_HE_CA_FILE"] = files["ca"]
         if files.get("client_cert") and files.get("client_key"):
@@ -387,6 +397,11 @@ class SetupController:
         opts = self.settings.setup_model_options or {}
         return str(opts.get("head_mode", "gateway")) == "provider_int8"
 
+    def _fused2(self) -> bool:
+        """The deployment presets ``schedule = "fused2"`` (setup_model_options)."""
+        opts = self.settings.setup_model_options or {}
+        return str(opts.get("schedule", "standard")) == "fused2"
+
     def _mask_fingerprint(self, model: dict[str, Any]) -> str:
         """The fingerprint masks are made for: the pack's, or the derived masked-head one."""
         fp = str(model["fingerprint"])
@@ -399,6 +414,9 @@ class SetupController:
     def _start_masks(self) -> None:
         """Hint build, then the supervised factory (idempotent)."""
         model = self.state["model"]
+        if self._fused2():  # the fused2 factory builds its own (fused2-linear) hint when it starts, if encrypted
+            self._start_factory()
+            return
         if self.hint_job is None or (self.hint_job.finished and self.hint_job.status()["phase"] == "failed"):
             def after_hint(status: dict[str, Any]) -> None:
                 if status["phase"] == "done":
@@ -431,8 +449,14 @@ class SetupController:
         except PGWError:
             return None
         n = 0
+        f2_ring = str((self.settings.setup_model_options or {}).get("ring") or "K56A12C53") if self._fused2() else None
         for e in st.get("inventory") or []:
-            if isinstance(e, dict) and str(e.get("fingerprint", "")).startswith(self._mask_fingerprint(model)[:12]):
+            if not isinstance(e, dict):
+                continue
+            # fused2: segments under the fused2 lane fingerprint (derived from the pack by the gateway and the
+            # factory at start-up), the only ones on the fused2 ring in this store
+            if (str(e.get("ring", "")) == f2_ring if f2_ring is not None
+                    else str(e.get("fingerprint", "")).startswith(self._mask_fingerprint(model)[:12])):
                 n += int(e.get("slots_available", 0) or 0)
         return n
 

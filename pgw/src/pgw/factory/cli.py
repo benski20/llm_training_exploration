@@ -118,6 +118,9 @@ _common = [
                  help="Encrypted mode: service bearer token file"),
     click.option("--he-hint-dir", "he_hint_dir", type=click.Path(path_type=Path), default=None,
                  help="Encrypted mode: directory of the one-time hint W8.A"),
+    click.option("--schedule", "schedule", type=click.Choice(["standard", "fused2"]), default=None,
+                 help="Masks for the gateway's schedule: standard (default) or fused2 (pair-mask segments under the "
+                      "fused2 lane fingerprint; ring e.g. K56A12C53)"),
 ]
 
 
@@ -131,8 +134,9 @@ def _common_overrides(rings: tuple[str, ...], device: str | None, backend: str |
                       checks: int | None, export_dir: Path | None, recipient_key: Path | None,
                       partner_key: Path | None = None, destination_store: str | None = None,
                       he_service: str | None = None, he_token_file: Path | None = None,
-                      he_hint_dir: Path | None = None) -> dict[str, Any]:
-    o: dict[str, Any] = {"device": device, "backend": backend, "chunk_slots": chunk_slots, "checks": checks}
+                      he_hint_dir: Path | None = None, schedule: str | None = None) -> dict[str, Any]:
+    o: dict[str, Any] = {"device": device, "backend": backend, "chunk_slots": chunk_slots, "checks": checks,
+                         "schedule": schedule}
     if he_service is not None:
         o["he_service_url"] = he_service
         o["he_token_file"] = he_token_file
@@ -163,7 +167,8 @@ def generate_cmd(packs: tuple[Path, ...], slots: int | None, segments: int, ring
                  backend: str | None, chunk_slots: int | None, checks: int | None, store_root: Path | None,
                  key_file: Path | None, export_dir: Path | None, recipient_key: Path | None,
                  partner_key: Path | None, destination_store: str | None, he_service: str | None = None,
-                 he_token_file: Path | None = None, he_hint_dir: Path | None = None) -> None:
+                 he_token_file: Path | None = None, he_hint_dir: Path | None = None,
+                 schedule: str | None = None) -> None:
     """Generate SEGMENTS fresh segments per pack and ring, then exit."""
     from pgw.factory.runtime import build_generators, build_sink, open_packs, open_store
 
@@ -172,7 +177,7 @@ def generate_cmd(packs: tuple[Path, ...], slots: int | None, segments: int, ring
     s = _factory_settings(
         pack_path=packs[0] if packs else None, extra_pack_paths=tuple(packs[1:]) or None, segment_slots=slots,
         **_common_overrides(rings, device, backend, chunk_slots, checks, export_dir, recipient_key, partner_key,
-                                destination_store, he_service, he_token_file, he_hint_dir),
+                                destination_store, he_service, he_token_file, he_hint_dir, schedule),
     )
     store = None if s.output == "export" else open_store(**_store_overrides(store_root, key_file))
     sink = build_sink(s, store)
@@ -210,7 +215,8 @@ def run_cmd(packs: tuple[Path, ...], once: bool, segment_slots: int | None, low_
             chunk_slots: int | None, checks: int | None, store_root: Path | None, key_file: Path | None,
             export_dir: Path | None, recipient_key: Path | None,
                  partner_key: Path | None, destination_store: str | None, he_service: str | None = None,
-                 he_token_file: Path | None = None, he_hint_dir: Path | None = None) -> None:
+                 he_token_file: Path | None = None, he_hint_dir: Path | None = None,
+                 schedule: str | None = None) -> None:
     """Keep inventories between low water and target (settings from PGW_FACTORY_* / PGW_MASKSTORE_*)."""
     s = _factory_settings(
         pack_path=packs[0] if packs else None, extra_pack_paths=tuple(packs[1:]) or None,
@@ -218,7 +224,7 @@ def run_cmd(packs: tuple[Path, ...], once: bool, segment_slots: int | None, low_
         max_slots_per_hour=max_slots_per_hour, duty_cycle=duty_cycle, nice=nice, cpu_threads=cpu_threads,
         poll_interval_s=poll_interval_s, workers=workers,
         **_common_overrides(rings, device, backend, chunk_slots, checks, export_dir, recipient_key, partner_key,
-                                destination_store, he_service, he_token_file, he_hint_dir),
+                                destination_store, he_service, he_token_file, he_hint_dir, schedule),
     )
     _run_factory(s, once, store_root, key_file)
 
@@ -276,7 +282,7 @@ def mask_service_cmd(packs: tuple[Path, ...], once: bool, check_only: bool, allo
                      chunk_slots: int | None, checks: int | None, store_root: Path | None, key_file: Path | None,
                      export_dir: Path | None, recipient_key: Path | None, partner_key: Path | None,
                      destination_store: str | None, he_service: str | None = None, he_token_file: Path | None = None,
-                     he_hint_dir: Path | None = None) -> None:
+                     he_hint_dir: Path | None = None, schedule: str | None = None) -> None:
     """Customer-cloud GPU mask service: plain W8 r on this machine's GPU from the public pack (opt-in mode).
 
     Refuses to start unless a throw-away segment generated on the device is bit-identical to an independent
@@ -289,7 +295,7 @@ def mask_service_cmd(packs: tuple[Path, ...], once: bool, check_only: bool, allo
         segment_slots=segment_slots, low_water_slots=low_water, target_slots=target, check_field=check_field,
         mask_service=True, mask_service_allow_cpu=allow_cpu,
         **_common_overrides(rings, device, backend, chunk_slots, checks, export_dir, recipient_key, partner_key,
-                            destination_store),
+                            destination_store, schedule=schedule),
     )
     if check_only:
         from pgw.factory.runtime import build_generators, open_packs
@@ -347,7 +353,8 @@ def status_cmd(packs: tuple[Path, ...], as_json: bool, low_water: int | None, ta
                chunk_slots: int | None, checks: int | None, store_root: Path | None, key_file: Path | None,
                export_dir: Path | None, recipient_key: Path | None,
                  partner_key: Path | None, destination_store: str | None, he_service: str | None = None,
-                 he_token_file: Path | None = None, he_hint_dir: Path | None = None) -> None:
+                 he_token_file: Path | None = None, he_hint_dir: Path | None = None,
+                 schedule: str | None = None) -> None:
     """Inventory, refill plan and lifetime totals (does not generate anything)."""
     from pgw.core.ring import RingParams
     from pgw.factory.config import FactorySettings

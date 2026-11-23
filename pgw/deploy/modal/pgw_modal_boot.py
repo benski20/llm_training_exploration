@@ -335,6 +335,29 @@ _TOKEN_RE = re.compile(r"(?<![A-Za-z0-9_-])(pgw-setup-[A-Za-z0-9_-]{8,})(?![A-Za
 #: way, while every pass would carry and mask ``spec_rows`` rows (``spec_rows`` times the mask supply).
 GATEWAY_MODEL_OPTIONS: dict[str, Any] = {"local_linears": "auto", "float_threads": 1, "lane": "stream"}
 
+#: The fused2 ring (``launch.py --schedule fused2``; research/plans/fused2-two-trips-per-layer.md section 7).
+FUSED2_RING = "K56A12C53"
+
+
+def fused2_model_options(migrate_bits: int, lane: str) -> dict[str, Any]:
+    """Gateway model options of ``launch.py --schedule fused2``: the fused2 schedule on its K56 ring (the native float
+    ops are implied), every trip remote (``local_linears = "off"``), the lane (``uds`` -> ``auto``, ``tls``)."""
+    if lane not in ("uds", "tls"):
+        raise ValueError("schedule fused2 needs --lane uds or tls (pair items ride the trip lane only)")
+    return {"schedule": "fused2", "ring": FUSED2_RING, "fused2_migrate_bits": int(migrate_bits),
+            "local_linears": "off", "lane": "auto" if lane == "uds" else "tls"}
+
+
+def fused2_provider_env(migrate_bits: int, maskgen: bool = True) -> dict[str, str]:
+    """Provider environment of ``launch.py --schedule fused2``: the fused2 lane entry derived from its own pack
+    (the same public weights the gateway and the factory derive) and, for the encrypted fused2 factory, maskgen for
+    its fused2 linears (``PGW_SERVICE_FUSED2_MASKGEN``: ordinary maskgen items under the fused2 lane fingerprint)."""
+    env = {"PGW_SERVICE_FUSED2_FROM_PACK": str(int(migrate_bits)), "PGW_SERVICE_FUSED2_RING": FUSED2_RING}
+    if maskgen:
+        env["PGW_SERVICE_FUSED2_MASKGEN"] = "1"
+    return env
+
+
 #: Gateway trip-lane choices of ``launch.py --lane`` (``tls``, ``uds``: co-located placement only).
 LANES = ("stream", "tls", "uds")
 

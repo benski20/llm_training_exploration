@@ -1,0 +1,36 @@
+{
+ "model": "qwen2.5-7b",
+ "slots": 256,
+ "rows_kept": 4096,
+ "torch_threads": 4,
+ "cpus": 4,
+ "schemes": {
+  "plain": {
+   "per_linear": {
+    "0.qkv/f2": {
+     "gemm_s_per_slot_full_m": 0.0004331286035430537,
+     "backend": "cpu_f64"
+    },
+    "0.o": {
+     "gemm_s_per_slot_full_m": 0.0002769869921621648,
+     "backend": "cpu_f64"
+    },
+    "0.gate_up/f2": {
+     "gemm_s_per_slot_full_m": 0.002452112995960931,
+     "backend": "cpu_f64"
+    },
+    "0.down": {
+     "gemm_s_per_slot_full_m": 0.001528868562502339,
+     "backend": "cpu_f64"
+    }
+   },
+   "customer_s_per_slot_layer": 0.004691097154168489,
+   "customer_s_per_slot_full_model": 0.13135072031671768,
+   "slots_per_s_per_core_full_model": 1.9033013248590553,
+   "slots_per_s_full_model_this_box": 7.613205299436221
+  }
+ },
+ "x_plain": {
+  "plain": 1.0
+ }
+}

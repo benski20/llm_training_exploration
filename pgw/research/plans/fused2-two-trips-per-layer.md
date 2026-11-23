@@ -530,3 +530,65 @@ private per-row self-check runs on the recombined `W r mod 2^56`; the p61 check 
 HE (public `W`, customer `u`: 0.58 s per 7B layer and segment on this 4-vCPU box). Option (b) is the practical path (reviewed
 schemes, 4-7x the HE cost: pks-v3 measured ~1.8 customer cores for ~35 slots/s at K32, so ~13 cores at K56), unless
 the GPU mask service is available, which needs no HE at all.
+
+## 12. Update 2026-11-23: fused2 in the gateway service, the factory scheduler, HE by digits, the launcher (opt-in)
+
+**Gateway service.** `schedule = "fused2"` is accepted (removed from `PENDING_SPEED_SETTINGS`). Start-up: the pack is
+verified as today; the public fused2 weights are derived from it (`Fused2Weights(pack, multipliers=
+migration_multipliers(pack, fused2_migrate_bits))`, the same derivation as the service's
+`PGW_SERVICE_FUSED2_FROM_PACK` and the factory's) or loaded (`fused2_weights_path`, base fingerprint checked); the
+gateway computes the fused2 lane fingerprint itself and keeps only the weight-free tables. Connect: the base pack
+must be served (`/models`), then `POST /pgw/v1/lane/open` for the lane fingerprint; the ticket must name the same
+fingerprint, the gateway's item table in pass order, the K56 ring and a socket in `lane_uds_dir` / of a loopback
+service (UDS) or a port on the egress allowlist (TLS, verified against `service_ca_file`). A service without that
+entry keeps the model `connecting` (retried); pair items have no fallback channel. Requests: the reservation is a
+fused2 reservation of the lane fingerprint (`schedule="fused2"`: a standard segment is refused, fail closed),
+window or incremental exactly as today; `Fused2MaskedBackend.masks_for(session)` takes pair rows from it;
+single-sequence passes of <= 8 rows run in the native driver on the plaintext thread (`sync_trip_ok`), others in
+Python; every payload passes the noise monitor; a failed range / Freivalds check trips the circuit breaker; the
+check-vector copies are wiped at session release and stop. The masked head is not combined with fused2 (it would
+need a standard K32 head reservation next to the fused2 one per request; the head stays the gateway's float head).
+
+**Factory.** `FactorySettings.schedule = "fused2"` (`--schedule fused2`): `build_generators` returns one
+`Fused2MaskGenerator` per (pack, ring) keyed by (lane fingerprint, ring); the scheduler drives it unchanged (its
+`generate_into_store` takes `chunk_slots`, `throttle` (stop and rate / duty cycle accounted per chunk in
+slot-equivalents), `store_chunk_bytes`); a start-up reference check before the first segment (the mask service's
+`--check-only` reports it). The setup wizard presets (`schedule`, `ring`, `fused2_migrate_bits`, ...) produce the
+fused2 factory environment (`PGW_SETUP_FUSED2_FACTORY=plain` drops HE for the plain customer-side CPU factory).
+
+**HE by digit decomposition (section 11 option (b), implemented: `pgw.factory.fused2_he`).** For a uniform row
+`r < 2^56` and `b`-bit digits `d_i = (r >> b i) & (2^b - 1)`: `W r = sum_i 2^(b i) W d_i` over Z; `|W d_i| < 128 *
+2^b * n <= 2^(K_he - 1)` (checked per linear before any request) so the centered `W d_i mod 2^K_he` returned by the
+encrypted factory is the integer `W d_i`; the recombination runs in wrapping uint64 arithmetic, exact mod 2^64 hence
+mod 2^56. Profiles: mlwe v2 K40 / b = 14 / 4 products (n <= 2^18), pks-v3 K32 / b = 8 / 7 products (n <= 2^16).
+Provider's view: each digit plane is encrypted like any K40 / K32 mask row (a valid ring element under a fresh
+secret and noise; the scheme hides any message), as an ordinary maskgen item (`<layer>.qkv-f2` etc. under the
+fused2 lane fingerprint, `PGW_SERVICE_FUSED2_MASKGEN=1` on the provider: `Fused2MaskgenModel` = the lane entry's
+public int8 matrices as ordinary `ComputeKernel`s); the request count is `digits x` that of a K40 / K32 segment,
+public. Decryption correctness is the scheme's own (same Delta, noise check per linear at start-up); the fused2
+factory's per-chunk private self-check and start-up check run on the recombined products. Tests: the arithmetic
+against numpy uint64 references (extreme rows and digits), and the real `HEMaskBackend` (rank 16, q = 2^64) and
+`PKSMaskBackend` (the service's v3 item code in-process) over the tiny model's fused2 linears: segments equal to the
+plain factory's bit for bit (rows, products, p61 words), each request of public shape.
+
+Customer CPU per slot, Qwen2.5-7B shapes, this 4-vCPU box, provider time excluded
+(`benchmarks/fused2_he_split_bench.py`; random public int8 weights; each linear keeps its full `n` and 2048 output
+rows (plain: 4096), scaled linearly to the full `m`: an upper bound, small `m` amortizes fixed costs worse;
+`benchmarks/results/fused2/he_split_7b_cpu_2026-11-23.json`, `plain_factory_7b_cpu_2026-11-23.json`):
+
+| factory | ms per slot and layer | s per full 7B slot (28 layers) | x plain |
+|---|---|---|---|
+| plain CPU fused2 (cpu_f64 products) | 4.7 | 0.13 | 1.0 |
+| mlwe v2 K40, 4 x 14-bit digits (ntt_pre encryption) | 10.2 | 0.29 | 2.2 |
+| pks-v3 K32, 7 x 8-bit digits | 5.9 | 0.17 | 1.3 |
+
+(Encryption depends on `n` only and dominates `down`; decryption scales with `m`.) So at the 28 tok/s decode rate
+with incremental reservations (~35 slots/s) the encrypted fused2 factory needs on the order of 6-10 such 4-vCPU
+boxes' worth of CPU (pks-v3 / mlwe), against ~5 for the plain CPU factory: the GPU mask service (no HE) remains the
+7B+ path.
+
+**Launcher.** `launch.py --placement colocated --schedule fused2 [--fused2-factory he|plain] [--fused2-migrate-bits
+8]`: the provider serves the fused2 lane entry from its pack (+ maskgen for the encrypted factory), the wizard gets
+the fused2 presets, the factory makes fused2 segments (its own fused2 hint on first start, cached by
+`--gateway-cache`), the e2e's reference is the fused2 plaintext reference; dry-run tested. 7B command: see
+`deploy/modal/README.md`, "fused2 in the co-located demo". Not run here.

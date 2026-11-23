@@ -873,3 +873,51 @@ def test_masked_head_flag(monkeypatch: pytest.MonkeyPatch) -> None:
     assert "PGW_MODAL_MASKED_HEAD" not in calls[-1]["gateway_env"]
     with pytest.raises(SystemExit):
         launch.parse_args(["--placement", "tunnel", "--masked-head"])
+
+
+_7B_F2 = ["--placement", "colocated", "--gpu", "H100", "--model", "qwen2.5-7b-instruct", "--gateway-cache",
+          "--gateway-cpus", "32", "--provider-cpus", "12", "--schedule", "fused2"]
+
+
+def test_schedule_fused2_flag_and_dry_run(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    """``--schedule fused2``: provider fused2 lane entry (+ maskgen for the encrypted factory), gateway model options
+    (fused2 on K56, every trip remote, the lane), the factory and the reference follow; dry run calls nothing."""
+    _clear_modal_env(monkeypatch)
+    boot = _load("pgw_modal_boot")
+    a = launch.parse_args([*_7B_F2, "--e2e"])
+    assert a.schedule == "fused2" and a.local_linears == "off" and a.lane == "uds" and a.float_ops == "native"
+    calls: list = []
+    monkeypatch.setattr(launch, "spawn_pair", lambda *x, **kw: calls.append(kw))
+    launch._spawner(a)({}, "colocated", 600, True)
+    genv, penv = calls[-1]["gateway_env"], calls[-1]["provider_env"]
+    assert penv["PGW_SERVICE_FUSED2_FROM_PACK"] == "8" and penv["PGW_SERVICE_FUSED2_RING"] == "K56A12C53"
+    assert penv["PGW_SERVICE_FUSED2_MASKGEN"] == "1"
+    assert genv["PGW_MODAL_FUSED2"] == "8" and genv["PGW_SETUP_FUSED2_FACTORY"] == "he"
+    assert calls[-1]["local_linears"] == "off" and calls[-1]["lane"] == "uds"
+    opts = boot.fused2_model_options(8, "uds")
+    assert opts == {"schedule": "fused2", "ring": "K56A12C53", "fused2_migrate_bits": 8, "local_linears": "off",
+                    "lane": "auto"}
+    from pgw.gateway.config import SETUP_MODEL_OPTION_KEYS, GatewayModelConfig
+
+    assert set(opts) <= SETUP_MODEL_OPTION_KEYS  # the wizard accepts them as presets
+    m = GatewayModelConfig(name="m", pack_path=Path("/x"), service_url="http://127.0.0.1:1", fingerprint="ab" * 32,
+                           **{**boot.GATEWAY_MODEL_OPTIONS, **boot.lane_options("uds", native=True), **opts})
+    assert m.schedule == "fused2" and m.ring == "K56A12C53"
+    plain = launch.parse_args([*_7B_F2, "--fused2-factory", "plain", "--lane", "tls"])
+    launch._spawner(plain)({}, "colocated", 600, True)
+    assert "PGW_SERVICE_FUSED2_MASKGEN" not in calls[-1]["provider_env"]
+    assert calls[-1]["gateway_env"]["PGW_SETUP_FUSED2_FACTORY"] == "plain"
+    for bad in (["--lane", "stream"], ["--local-linears", "attention"], ["--spec-rows", "4"], ["--masked-head"],
+                ["--prime-check"], ["--float-ops", "torch"], ["--fused2-migrate-bits", "9"]):
+        with pytest.raises(SystemExit):
+            launch.parse_args([*_7B_F2, *bad])
+    with pytest.raises(SystemExit):
+        launch.parse_args(["--placement", "colocated", "--fused2-factory", "plain"])
+    assert launch.parse_args(["--placement", "colocated"]).schedule == "standard"  # off by default
+    for name in ("deploy", "stop", "prepare_cache", "cache_preflight"):
+        monkeypatch.setattr(launch, name, lambda *x, n=name, **k: (_ for _ in ()).throw(AssertionError(n)))
+    launch.main([*_7B_F2, "--e2e", "--ttl-min", "30", "--dry-run"])
+    out = capsys.readouterr().out
+    assert "dry run: nothing deployed or started" in out
+    plan = json.loads(out[out.index("{"):out.rindex("}") + 1])
+    assert plan["schedule"] == "fused2" and plan["run"]["provider_env"]["PGW_SERVICE_FUSED2_FROM_PACK"] == "8"

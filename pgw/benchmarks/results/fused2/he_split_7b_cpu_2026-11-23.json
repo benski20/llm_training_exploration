@@ -1,0 +1,115 @@
+{
+ "model": "qwen2.5-7b",
+ "slots": 256,
+ "rows_kept": 2048,
+ "torch_threads": 4,
+ "cpus": 4,
+ "schemes": {
+  "mlwe": {
+   "per_linear": {
+    "0.qkv/f2": {
+     "digits": 4,
+     "wall_s": 0.35411220799869625,
+     "provider_s": 0.18140631599817425,
+     "encrypt_s": 0.06400743699487066,
+     "decrypt_s": 0.0796245579913375,
+     "split_s": 0.008817310001177248,
+     "recombine_s": 0.015974876994732767,
+     "customer_s_per_slot_full_m": 0.0011247010770105703,
+     "provider_s_per_slot_full_m": 0.0015943914492027034
+    },
+    "0.o": {
+     "digits": 4,
+     "wall_s": 0.3291110479985946,
+     "provider_s": 0.18089471199346008,
+     "encrypt_s": 0.05821629500860581,
+     "decrypt_s": 0.07158892699226271,
+     "split_s": 0.003064106000238098,
+     "recombine_s": 0.011934207999729551,
+     "customer_s_per_slot_full_m": 0.0008103354970501186,
+     "provider_s_per_slot_full_m": 0.0012365849452677935
+    },
+    "0.gate_up/f2": {
+     "digits": 4,
+     "wall_s": 0.3350753810009337,
+     "provider_s": 0.18641615499655018,
+     "encrypt_s": 0.0582688210051856,
+     "decrypt_s": 0.07241824699303834,
+     "split_s": 0.0033772200040402822,
+     "recombine_s": 0.011168070006533526,
+     "customer_s_per_slot_full_m": 0.006281222287114474,
+     "provider_s_per_slot_full_m": 0.013471479950922571
+    },
+    "0.down": {
+     "digits": 4,
+     "wall_s": 1.393581788004667,
+     "provider_s": 0.9310350899977493,
+     "encrypt_s": 0.303940457997669,
+     "decrypt_s": 0.07688901999790687,
+     "split_s": 0.04336391700053355,
+     "recombine_s": 0.02014131800387986,
+     "customer_s_per_slot_full_m": 0.0020199510410208177,
+     "provider_s_per_slot_full_m": 0.006364497685531489
+    },
+    "hint_build_s": 6.859707527997671
+   },
+   "customer_s_per_slot_layer": 0.01023620990219598,
+   "customer_s_per_slot_full_model": 0.28661387726148746,
+   "slots_per_s_per_core_full_model": 0.8722536479694478,
+   "slots_per_s_full_model_this_box": 3.4890145918777913
+  },
+  "pks-v3": {
+   "per_linear": {
+    "0.qkv/f2": {
+     "digits": 7,
+     "wall_s": 1.21998897499725,
+     "provider_s": 1.0059583749898593,
+     "encrypt_s": 0.12173393800185295,
+     "decrypt_s": 0.01390262500353856,
+     "split_s": 0.003579737000109162,
+     "recombine_s": 0.01792685799591709,
+     "customer_s_per_slot_full_m": 0.0007692578584013177,
+     "provider_s_per_slot_full_m": 0.00884143103018431
+    },
+    "0.o": {
+     "digits": 7,
+     "wall_s": 1.2724745800005621,
+     "provider_s": 1.0553522709888057,
+     "encrypt_s": 0.12420516099518863,
+     "decrypt_s": 0.013855732984666247,
+     "split_s": 0.003803302002779674,
+     "recombine_s": 0.01618831400264753,
+     "customer_s_per_slot_full_m": 0.000705412286038154,
+     "provider_s_per_slot_full_m": 0.007214322164962539
+    },
+    "0.gate_up/f2": {
+     "digits": 7,
+     "wall_s": 1.1761285629982012,
+     "provider_s": 0.967418195999926,
+     "encrypt_s": 0.11639294301130576,
+     "decrypt_s": 0.012931021992699243,
+     "split_s": 0.004565365001326427,
+     "recombine_s": 0.01759931400010828,
+     "customer_s_per_slot_full_m": 0.0026787872026545756,
+     "provider_s_per_slot_full_m": 0.06991108057030715
+    },
+    "0.down": {
+     "digits": 7,
+     "wall_s": 2.6200002589976066,
+     "provider_s": 1.6176492479862645,
+     "encrypt_s": 0.28123408799729077,
+     "decrypt_s": 0.02463575299771037,
+     "split_s": 0.08192580900504254,
+     "recombine_s": 0.028861382998002227,
+     "customer_s_per_slot_full_m": 0.001784296425761056,
+     "provider_s_per_slot_full_m": 0.011058149156156105
+    },
+    "hint_build_s": 10.452372390995151
+   },
+   "customer_s_per_slot_layer": 0.005937753772855103,
+   "customer_s_per_slot_full_model": 0.1662571056399429,
+   "slots_per_s_per_core_full_model": 1.503695129526771,
+   "slots_per_s_full_model_this_box": 6.014780518107084
+  }
+ }
+}

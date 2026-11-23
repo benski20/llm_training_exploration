@@ -15,6 +15,40 @@ SLA pilot. Three reasons:
 2. The HSM, KMS and TPM integrations have never run against real hardware or cloud services.
 3. There has been no external security audit.
 
+## Update 2026-11-23: fused2 in the gateway service, the factory scheduler and the HE factory (opt-in)
+
+- **Gateway service** (`schedule = "fused2"`, no longer pending; `pgw.gateway.fused2`, `ModelRuntime`): public fused2
+  weights derived from the verified pack at start-up (`fused2_migrate_bits`, or `fused2_weights_path`), the fused2
+  lane fingerprint pinned (store inventory key, lane model; a service serving other weights is never used), a lane
+  ticket for it over the authenticated compute client (UDS, `PGW_LANE_SHM` shm, or `lane = "tls"`), the
+  `Fused2MaskedBackend` on weight-free tables with masks from per-request fused2 reservations (window or
+  incremental, `reserve(..., schedule="fused2")`), the native fused2 driver for single-sequence passes
+  (`fused2_decode_native = auto`), the noise monitor on every payload and the circuit breaker on any failed check
+  (Python path and native driver). `/admin/status`: `schedule`, `fused2` (lane / base fingerprint, transport, native
+  driver, trips, checks, bytes). The plain dev mode with the setting is the fused2 reference. Validation: capped K56
+  ring, native float ops (implied), lane auto/required/tls, `freivalds_rate = 1`, p61 soundness vs
+  `min_soundness_bits`; refused: masked head (not combined yet: the head stays on the gateway), speculation, local
+  linears, prefix cache, chunked prefill, the in-memory mask ring.
+- **Factory**: `PGW_FACTORY_SCHEDULE=fused2` / `--schedule fused2` (`run`, `generate`, `mask-service`, `status`):
+  `Fused2MaskGenerator` per pack and ring under `FactoryScheduler` (low water / target / ramp, throttle and stop per
+  chunk, chunk settings, disk budget) and the mask-service start-up check (`--check-only` report, p61).
+- **HE without new cryptography** (`pgw.factory.fused2_he`, plan section 12): K56 products as independent uniform
+  digits on the existing encrypted factories, recombined exactly mod 2^56 (mlwe v2 at K40, 4 x 14-bit; pks-v3 at
+  K32, 7 x 8-bit); each digit is an ordinary v2 / v3 maskgen request of public shape; the provider serves its fused2
+  linears for maskgen with `PGW_SERVICE_FUSED2_MASKGEN=1`. Bit for bit equal to the plain factory's segments (real
+  HEMaskBackend and PKSMaskBackend with the service's kernels in-process). Customer CPU per full 7B slot, this 4-vCPU
+  box (wall, provider excluded; `benchmarks/fused2_he_split_bench.py`, 2048 of each linear's output rows kept and
+  scaled, an upper bound): plain CPU fused2 factory **0.13 s**, mlwe digits **0.29 s** (2.2x), pks-v3 digits
+  **0.17 s** (1.3x).
+- **Launcher**: `launch.py --schedule fused2` (provider fused2 lane entry + maskgen, wizard presets, factory, fused2
+  reference in the e2e), dry-run tested; the 7B command is in `deploy/modal/README.md` ("fused2 in the co-located
+  demo"). Not run (no Modal in this session).
+- Tests: `tests/gateway/test_fused2_gateway.py` (masked == plain logprobs bit for bit through the store, native on/off,
+  window/incremental, tamper -> breaker, other weights refused, config), `tests/factory/test_fused2_factory.py`
+  (scheduler refill, throttle/stop, mask service + CLI, digit split exact, v2 and pks-v3 == plain bit for bit,
+  service resolution), `tests/deploy/test_modal_launch.py::test_schedule_fused2_flag_and_dry_run`; gateway, fused2
+  engine, factory, deploy and lane suites: 919 passed.
+
 ## Update 2026-11-23: fused2 pair masks from the encrypted mask store (opt-in; format, factory, gateway)
 
 - **Format** (`pgw.maskstore.format`, SPEC 7.2): fused2 pair-mask segments are today's `*.pgwm` files with

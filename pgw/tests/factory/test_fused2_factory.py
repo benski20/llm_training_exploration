@@ -286,3 +286,19 @@ def test_service_resolves_fused2_maskgen(f2w: Any, monkeypatch: pytest.MonkeyPat
     b = np.frombuffer(os.urandom(8 * lin.n * 256), dtype=np.uint64).reshape(lin.n, 256)
     got = np.asarray(m.kernel(he_key(lin.key)).mulmod64(b), dtype=np.uint64)
     assert np.array_equal(got, matmul_mod64(lin.w8.numpy(), b))
+
+
+def test_mask_service_cli_check_only_fused2(tiny_pack_dir: Path, f2w: Any) -> None:
+    import json
+
+    from click.testing import CliRunner
+
+    from pgw.factory.cli import factory_group
+    from pgw.service.fused2_lane import fused2_fingerprint
+
+    r = CliRunner().invoke(factory_group, ["mask-service", "--pack", str(tiny_pack_dir), "--ring", RING.name,
+                                           "--device", "cpu", "--schedule", "fused2", "--check-only", "--allow-cpu",
+                                           "--json"])
+    assert r.exit_code == 0, r.output
+    (rep,) = json.loads(r.output)
+    assert rep["ok"] and rep["fingerprint"] == fused2_fingerprint(f2w, RING) and rep["check_field"] == "p61"

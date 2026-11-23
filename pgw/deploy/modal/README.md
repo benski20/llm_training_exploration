@@ -1114,6 +1114,32 @@ read `trips_per_token` and `trip_ms_sum_per_token` against today's 113 trips, no
 28 tok/s of the native path: on this harness the gateway's Python per-trip work (about 2 ms per trip at 0.5B on a
 loaded CPU core, more at 7B) dominates.
 
+### fused2 in the co-located demo (`launch.py --schedule fused2`, opt-in; 2026-11-23, dry-run tested, not run)
+
+The production stack with the fused2 schedule (`research/plans/fused2-two-trips-per-layer.md` section 12): the
+provider serves the fused2 lane entry derived from its own pack (`PGW_SERVICE_FUSED2_FROM_PACK=8`,
+`PGW_SERVICE_FUSED2_RING=K56A12C53`; the Triton pair op, graphed on CUDA) and, for the encrypted factory, maskgen
+for its fused2 linears (`PGW_SERVICE_FUSED2_MASKGEN=1`); the wizard presets `schedule = "fused2"`, `ring =
+K56A12C53`, `local_linears = "off"` and the lane (`uds` -> `auto`, or `tls`); the gateway's factory makes fused2
+pair-mask segments (`PGW_FACTORY_SCHEDULE=fused2`: by default the encrypted MLWE factory as 4 x 14-bit digits at
+K40, its own fused2 hint built on first start and kept by `--gateway-cache`; `--fused2-factory plain`: the
+customer-side plain CPU factory, no provider work); the gateway runs the native fused2 driver; the e2e's
+plaintext reference is the fused2 reference on the same public weights. Exact 7B command (H100 provider, 32-core
+CPU-only gateway, shared-memory lane; about the 28 tok/s run's cost, $5-6/h, plus the one-time fused2 hint build
+in the first run):
+
+```bash
+python pgw/deploy/modal/launch.py --placement colocated --gpu H100 --model qwen2.5-7b-instruct --gateway-cache \
+    --gateway-cpus 32 --provider-cpus 12 --schedule fused2 --e2e --sustain-s 120 \
+    --gateway-env PGW_LANE_SHM=1 --gateway-env PGW_LANE_SPIN_AUTO_US=400 \
+    --provider-env PGW_SERVICE_LANE_SHM=1 --provider-env PGW_SERVICE_LANE_ZERO_COPY=1 \
+    --provider-env PGW_SERVICE_LANE_OWN_LOCK=1 --provider-env PGW_SERVICE_FUSED2_VARIANT=planes
+```
+
+Add `--dry-run` to print the plan without any Modal call. Refused with `--schedule fused2`: `--lane stream`,
+local linears, `--spec-rows` / drafts, `--masked-head` (the head stays on the gateway), `--prime-check` (fused2
+checks over p61), `--float-ops torch`.
+
 ## Trip latency and the `--max-trip-ms` gate
 
 `--e2e` now also reports the gateway's **client-reported round-trip latency** (`trip_latency` in the

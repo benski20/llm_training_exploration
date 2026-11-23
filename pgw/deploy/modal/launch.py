@@ -555,6 +555,15 @@ def _spawner(args: argparse.Namespace) -> Callable[..., Pair]:
         penv.setdefault("PGW_SERVICE_MASKED_HEAD", "also")
         genv["PGW_MODAL_MASKED_HEAD"] = "1"
         genv.setdefault("PGW_FACTORY_MASKED_HEAD", "true")
+    if getattr(args, "schedule", "standard") == "fused2":  # 2 provider trips per layer (opt-in; README "fused2")
+        import pgw_modal_boot as boot
+
+        bits = int(getattr(args, "fused2_migrate_bits", 8))
+        factory = getattr(args, "fused2_factory", "he") or "he"
+        genv["PGW_MODAL_FUSED2"] = str(bits)
+        genv["PGW_SETUP_FUSED2_FACTORY"] = factory
+        for k, v in boot.fused2_provider_env(bits, maskgen=factory == "he").items():
+            penv.setdefault(k, v)
     if getattr(args, "ab_plain", None) is not None:  # in-run A/B: the same run again without speculation
         genv["PGW_MODAL_AB_PLAIN"] = f"{float(args.ab_plain):g}"
     if getattr(args, "he_bulk", False):  # --he-bulk: the provider's bulk maskgen channel, used by the factory
@@ -683,6 +692,7 @@ def dry_run(args: argparse.Namespace) -> dict[str, Any]:
     deploy_env = {k: os.environ[k] for k in sorted(os.environ) if k.startswith("PGW_MODAL_")}
     sizes = boot.model_sizes(args.model)
     plan = {"model": args.model, "gpu": args.gpu, "placement": args.placement, "deploy_env": deploy_env,
+            "schedule": getattr(args, "schedule", "standard"),
             "run": calls[-1] if calls else None,
             "prepare_cache": args.prepare_cache, "volume_pack": args.model in VOLUME_PACK_MODELS,
             "sizes_gb": {k: round(v / 1e9, 2) for k, v in sizes.items() if k.endswith("bytes")},
@@ -914,6 +924,22 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                          "gateway sends the head as one more masked linear per pass and never loads the float head, "
                          "and the e2e's plaintext reference uses the same int8 head (a new pinned reference). "
                          "Memory: provider +vocab x hidden int8 (0.55 GB at 7B), gateway -1.09 GB (bf16 head) at 7B")
+    ap.add_argument("--schedule", choices=("standard", "fused2"), default="standard",
+                    help="--placement colocated: the gateway's linear schedule. 'fused2' (opt-in): two provider trips "
+                         "per layer (pair items on the trip lane, K56A12C53 ring, fused2 pair masks from the encrypted "
+                         "store, the native fused2 driver): the provider serves the fused2 lane entry derived from its "
+                         "own pack (PGW_SERVICE_FUSED2_FROM_PACK), the gateway factory makes fused2 segments "
+                         "(PGW_FACTORY_SCHEDULE=fused2), the e2e's reference is the fused2 plaintext reference. Needs "
+                         "--lane uds or tls; every linear remote (--local-linears off); not with --spec-rows, "
+                         "--masked-head or --prime-check")
+    ap.add_argument("--fused2-migrate-bits", type=int, default=8,
+                    help="--schedule fused2: residual-grid migration bits of the public fused2 weights (0-8)")
+    ap.add_argument("--fused2-factory", choices=("he", "plain"), default="he",
+                    help="--schedule fused2: the gateway's fused2 mask factory: 'he' (default: the encrypted MLWE "
+                         "factory computing K56 products as 4 x 14-bit digits at K40, recombined exactly; the "
+                         "provider serves maskgen for its fused2 linears, PGW_SERVICE_FUSED2_MASKGEN=1; its own "
+                         "fused2 hint is built on first start) or 'plain' (the customer-side plain CPU fused2 factory: "
+                         "public weights, no provider work; ~0.5 s of CPU per 7B slot)")
     ap.add_argument("--ab-plain", type=float, default=None, metavar="SUSTAIN_S",
                     help="--e2e --placement colocated --spec-rows: after the speculative phase, restart the gateway "
                          "without speculation (same pack, mask store, keys) and measure plain decoding in the same "
@@ -984,7 +1010,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     if args.max_trip_ms is not None and not args.e2e:
         ap.error("--max-trip-ms needs --e2e (the latency is measured on the scripted chat)")
     if args.local_linears is None:
-        args.local_linears = "attention_down" if args.placement == "colocated" else "auto"
+        args.local_linears = ("off" if args.schedule == "fused2" else
+                              "attention_down" if args.placement == "colocated" else "auto")
     if args.lane is None:
         args.lane = "uds" if args.placement == "colocated" else "stream"  # S4: exact, 0.29 vs 0.44 ms per trip
     if args.lane in ("tls", "uds") and args.placement != "colocated":
@@ -1049,6 +1076,24 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     for flag, on in colo_only.items():
         if on and args.placement != "colocated":
             ap.error(f"{flag} needs --placement colocated")
+    if args.schedule == "fused2":
+        if args.placement != "colocated":
+            ap.error("--schedule fused2 needs --placement colocated (the provider's fused2 lane is on its host only)")
+        if args.lane not in ("uds", "tls"):
+            ap.error("--schedule fused2 needs --lane uds or tls (pair items ride the trip lane only)")
+        if args.local_linears != "off":
+            ap.error("--schedule fused2 sends every trip to the provider (--local-linears off)")
+        if args.float_ops != "native":
+            ap.error("--schedule fused2 runs on the native float ops (--float-ops native)")
+        if args.spec_rows or args.masked_head or args.prime_check or args.spec_draft or args.draft_head:
+            ap.error("--schedule fused2 does not combine with --spec-rows / --spec-draft / --draft-head / "
+                     "--masked-head / --prime-check yet")
+        if not 0 <= args.fused2_migrate_bits <= 8:
+            ap.error("--fused2-migrate-bits must be in [0, 8]")
+        if args.mask_source != "factory":
+            ap.error("--schedule fused2 takes its masks from the gateway's fused2 factory (--mask-source factory)")
+    elif args.fused2_migrate_bits != 8 or args.fused2_factory != "he":
+        ap.error("--fused2-migrate-bits / --fused2-factory need --schedule fused2")
     if args.prime_check and args.spec_mask:
         ap.error("--prime-check with --spec-mask: padding rows refuse prime-field extents (fail closed); use the "
                  "ring check with padded speculation")

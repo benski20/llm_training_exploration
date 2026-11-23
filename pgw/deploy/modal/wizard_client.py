@@ -225,7 +225,7 @@ def wait_idle(base_url: str, admin_token: str, model: str, *, quiet_s: float = 3
 def plaintext_reference(pack_path: str, ring: str, messages: list[dict[str, str]], max_tokens: int,
                         float_threads: int | None = None, float_ops: str | None = None,
                         int_threads: int | None = None,
-                        masked_head: bool = False) -> dict[str, Any]:
+                        masked_head: bool = False, fused2_bits: int | None = None) -> dict[str, Any]:
     """Greedy generation on the same pack with the plaintext reference backend (in this process).
 
     ``float_threads``: the pinned float formulation (``launch.py --float-threads``): the reference's torch float
@@ -239,6 +239,9 @@ def plaintext_reference(pack_path: str, ring: str, messages: list[dict[str, str]
     10-15 min of the run). Same bits by construction; ``None``: off.
     ``masked_head`` (``launch.py --masked-head``): the gateway's head_mode = "provider_int8", so the reference uses
     the same int8 head (:mod:`pgw.engine.masked_head` on the plaintext backend), a new pinned reference.
+    ``fused2_bits`` (``launch.py --schedule fused2``): the gateway's schedule = "fused2" with that many migration bits,
+    so the reference is the fused2 plaintext reference (:class:`pgw.engine.fused2.Fused2PlainBackend` on the public
+    fused2 weights derived from the same pack, the native float ops, ``ring`` = the fused2 ring).
     """
     import asyncio
 
@@ -260,7 +263,7 @@ def plaintext_reference(pack_path: str, ring: str, messages: list[dict[str, str]
         backends.exact_int_matmul = threaded
         try:
             return plaintext_reference(pack_path, ring, messages, max_tokens, float_threads=float_threads,
-                                       float_ops=float_ops)
+                                       float_ops=float_ops, masked_head=masked_head, fused2_bits=fused2_bits)
         finally:
             backends.exact_int_matmul = orig
 
@@ -269,7 +272,7 @@ def plaintext_reference(pack_path: str, ring: str, messages: list[dict[str, str]
         torch.set_num_threads(int(float_threads))
         try:
             return plaintext_reference(pack_path, ring, messages, max_tokens, float_ops=float_ops,
-                                       masked_head=masked_head)
+                                       masked_head=masked_head, fused2_bits=fused2_bits)
         finally:
             torch.set_num_threads(prev)
 
@@ -286,12 +289,22 @@ def plaintext_reference(pack_path: str, ring: str, messages: list[dict[str, str]
                 pack = MaskedHeadPack(base, float_head=False)
             tok = ChatTokenizer.from_pack(pack)
             ids = tok.apply_chat_template(messages, add_generation_prompt=True)
-            model = TransformerModel(pack, PlainBackend(pack, RingParams.from_name(ring)))
+            if fused2_bits is not None:  # the fused2 plaintext reference (exact integers, the same public weights)
+                from pgw.engine.fused2 import Fused2PlainBackend, Fused2Weights, enable_fused2, migration_multipliers
+
+                rp = RingParams.from_name(ring)
+                w = Fused2Weights(pack, None, multipliers=migration_multipliers(pack, int(fused2_bits))
+                                  if fused2_bits else None)
+                model = TransformerModel(pack, Fused2PlainBackend(rp))
+                model.set_float_ops("native")
+                enable_fused2(model, w, rp)
+            else:
+                model = TransformerModel(pack, PlainBackend(pack, RingParams.from_name(ring)))
             if masked_head:
                 from pgw.engine.masked_head import enable_masked_head
 
                 enable_masked_head(model)
-            if float_ops:
+            if float_ops and fused2_bits is None:
                 model.set_float_ops(float_ops)
             gen = Generator(model, tok, max_batch=1)
             params = SamplingParams(max_tokens=max_tokens, temperature=0.0, logprobs=0)

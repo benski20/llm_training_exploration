@@ -42,7 +42,7 @@ SETUP_MODEL_OPTION_KEYS: frozenset[str] = frozenset({
     "lane", "lane_uds_dir", "lane_pool_wait_s", "lane_native", "local_linears", "local_linears_device", "local_rtt_ms",
     "local_max_rows", "lm_head_device", "float_threads",
     "spec_rows", "spec_strict_passes", "spec_mask_rows", "spec_mask_credit", "spec_lookup", "spec_lookup_min_n",
-    "spec_tokens", "inline_max_rows",
+    "spec_tokens", "inline_max_rows", "schedule", "ring", "fused2_migrate_bits", "fused2_decode_native",
     "batch_lm_head", "engine_pingpong", "max_concurrent_sessions", "draft_pack_path", "draft_device",
     "draft_backend", "spec_pipeline_steps", "head_mode", "draft_head_path",
 })
@@ -532,9 +532,9 @@ class GatewayModelConfig(BaseModel):
         if rp.k != 56 or not rp.cap or rp.cap + 1 >= 61:
             raise ValueError(f"{where} needs a capped K56 ring with 2^(C+1) < 2^61 - 1 (p61 checks), e.g. K56A12C53; "
                              f"got {rp.name}")
-        if self.float_ops != "native":
+        if "float_ops" in self.model_fields_set and self.float_ops != "native":
             raise ValueError(f"{where} needs float_ops = 'native' (the pinned float path its native driver "
-                             "reproduces)")
+                             "reproduces; unset, fused2 uses it)")
         if self.mode == "masked" and self.lane not in ("auto", "required", "tls"):
             raise ValueError(f"{where} needs lane = 'auto', 'required' or 'tls' (pair items ride the trip lane only)")
         if self.freivalds_rate != 1.0:
