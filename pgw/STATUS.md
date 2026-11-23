@@ -15,6 +15,29 @@ SLA pilot. Three reasons:
 2. The HSM, KMS and TPM integrations have never run against real hardware or cloud services.
 3. There has been no external security audit.
 
+## 2026-11-23 — 7B at 28 tok/s with a CPU-only, weight-free gateway (Modal, H100 provider)
+
+Measured (Modal co-located, Qwen2.5-7B-Instruct, H100 provider with 12 cores, 32-core CPU-only gateway holding no
+linear weights, all linears remote, masked LM head on the provider, native float ops, native decode driver, p31
+checks, sampled noise checks inline before the next payload):
+- **Streamed decode 27.97 tok/s median (18 back-to-back chats, 23.6-29.6), warm single chat 25.6 tok/s, TTFT ~1.9 s.**
+- Exact: logprobs bit-identical (max diff 0.0), text equal, stream identical, every sustain chat identical.
+- What changed vs the 19.0-19.3 tok/s runs: the gateway<->provider lane runs over the **shared-memory transport**
+  (`PGW_LANE_SHM=1` / `PGW_SERVICE_LANE_SHM=1`: an anonymous sealed segment passed over the authenticated UDS
+  socket; same frames and bytes), with adaptive reply spin (`PGW_LANE_SPIN_AUTO_US=400`), zero-copy replies and the
+  lane's own device lock, the provider's read spin OFF and 12 provider cores. Inside Modal's gVisor sandbox the
+  socket path was the cost; shared memory avoids its network stack. Per decoded token: ~15.7 ms waiting on the
+  provider + ~10.8 ms gateway work (880 steps: 13.85 s remote, 9.51 s local).
+- Masks: consumption 31.4 slots/s (2.71 slots per generated token, prompts included; incremental reservations +
+  prefix reuse would cut it to ~1.2-1.3). The encrypted factory produced nothing inside the 60 s window (stock
+  6547 -> 4657, refill not yet triggered), so keep-up at this rate is NOT shown; at ~35 slots/s it needs the factory
+  sized accordingly (pks-v3: ~1.8 customer cores measured kernels; or more v2 workers).
+- Flags: `launch.py --placement colocated --gpu H100 --model qwen2.5-7b-instruct --gateway-cache --gateway-cpus 32
+  --provider-cpus 12 --local-linears off --float-ops native --trip-native --decode-native --masked-head --prime-check
+  --gateway-env PGW_LANE_SPIN_AUTO_US=400 --gateway-env PGW_LANE_SHM=1 --gateway-env PGW_TRIP_DECRYPT_AHEAD=1
+  --provider-env PGW_SERVICE_LANE_SHM=1 --provider-env PGW_SERVICE_LANE_ZERO_COPY=1 --provider-env
+  PGW_SERVICE_LANE_OWN_LOCK=1` (plus the factory sizing env of the README's CPU-only 7B command).
+
 ## Update 2026-11-23: decode driver keeps "alarm before the next payload"; few-row GEMV tuning (opt-in)
 
 - **Native decode driver, noise statistics** (`PGW_DECODE_NATIVE`, still opt-in): sampled noise statistics came back
