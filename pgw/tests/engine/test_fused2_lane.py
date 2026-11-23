@@ -322,3 +322,11 @@ def test_weight_free_gateway_over_lane_one_slot_per_token(qwen_pack: InMemoryPac
         prov.close()
     finally:
         lane.close()
+
+
+def test_entry_derived_from_the_providers_pack(qwen_pack: InMemoryPack, entry: Fused2LaneEntry) -> None:
+    """The service derives the same public weight set (and lane fingerprint) from its own pack as the pack-time
+    file the gateway pins."""
+    derived = Fused2LaneEntry.from_pack(qwen_pack, 8, RING, device="cpu", max_rows=2)
+    assert derived.fingerprint == entry.fingerprint
+    assert derived.names() == entry.names()

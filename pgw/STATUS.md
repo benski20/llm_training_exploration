@@ -37,6 +37,24 @@ checks, sampled noise checks inline before the next payload):
   --gateway-env PGW_LANE_SPIN_AUTO_US=400 --gateway-env PGW_LANE_SHM=1 --gateway-env PGW_TRIP_DECRYPT_AHEAD=1
   --provider-env PGW_SERVICE_LANE_SHM=1 --provider-env PGW_SERVICE_LANE_ZERO_COPY=1 --provider-env
   PGW_SERVICE_LANE_OWN_LOCK=1` (plus the factory sizing env of the README's CPU-only 7B command).
+## Update 2026-11-23: fused2 production pieces (opt-in): graphed pair op, pair items on the lane, segments, native p61
+
+- Provider: `pgw.core.ring64` Triton pair op over Z/2^K (K <= 64): `H = R + hmul * W1 x`, `Z = W2' H`, split-K uint64
+  (CUDA cores) or int8 digit-plane tensor-core GEMV, fused epilogue, one CUDA graph per (item, rows) replayed by the
+  native lane with no Python. Exact (wrapping 64-bit arithmetic only), self-checked at start-up against the
+  Python-int reference and each graph through the serving path. GPU speed not measured yet:
+  `modal run deploy/modal/gpu_bench.py --target h100_c4 --timeout-min 4 --cmd "python benchmarks/fused2_pair_bench.py
+  --rows 1,4 --reps 30 --json /tmp/f2pair.json"`.
+- Lane: fused2 weight sets as their own lane model (`pgw.service.fused2_lane`, one item per trip, pair items with
+  concatenated widths: the same framing, tickets, UDS / shm / TLS; no `pgw-lane` change). Gateway client
+  `pgw.engine.fused2_lane`. Masks from a separate plain-factory process as pair-mask segments
+  (`pgw.engine.fused2_masks`; gateway holds no int8 matrices). Native p61 check `pgw_fast.p61_check`
+  (0.17 ms per 7B layer vs 2.8 ms numpy).
+- Tests (CPU, Triton interpreter, real native lane): masked == plain over UDS and shm, identical provider-visible
+  bodies across transports, tamper (H, consistent H, Z, Z without residual, skipped multipliers) caught, 1 slot per
+  token with segment masks, segments == in-process masks. Not done: fused2 in the native decode driver (the gateway
+  is still the Python model), maskstore / HE factory for pair segments. Plan section 9.
+
 ## Update 2026-11-23: fused2 (2 trips per layer) quality gap closed; exact e2e harness ready for one 7B run (opt-in)
 
 Diagnosis: the whole top-1 gap of fused2 (93.9% vs 96.9-97.1% for the int8 reference, 4k wikitext tokens) is the
