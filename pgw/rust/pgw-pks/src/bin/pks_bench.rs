@@ -44,7 +44,7 @@ fn main() {
     let groups: usize = a.get(3).and_then(|s| s.parse().ok()).unwrap_or(4);
     let threads: usize = a.get(4).and_then(|s| s.parse().ok()).unwrap_or(1);
     let isa = Isa::parse(a.get(5).map(String::as_str).unwrap_or("auto")).expect("isa");
-    let reps = 3;
+    let reps: usize = std::env::var("PKS_REPS").ok().and_then(|v| v.parse().ok()).unwrap_or(3);
     let cx = kernel::ctx();
     let mut g = Lcg(42);
     let key = |g: &mut Lcg| -> [u8; 32] { std::array::from_fn(|_| g.next() as u8) };

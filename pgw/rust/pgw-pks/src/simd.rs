@@ -53,19 +53,29 @@ pub unsafe fn mont(a: __m512i, b: __m512i, m: M) -> __m512i {
     _mm512_mask_blend_epi32(0xAAAA, _mm512_srli_epi64(s0, 32), s1)
 }
 
+/// [`mont`] with `b` a 32-bit value broadcast to every lane (`b >> 32` per 64-bit lane is `b` itself).
+#[inline(always)]
+pub unsafe fn mont_bc(a: __m512i, b: __m512i, m: M) -> __m512i {
+    let t0 = _mm512_mul_epu32(a, b);
+    let t1 = _mm512_mul_epu32(_mm512_srli_epi64(a, 32), b);
+    let s0 = _mm512_add_epi64(t0, _mm512_mul_epu32(_mm512_mul_epu32(t0, m.pn), m.p));
+    let s1 = _mm512_add_epi64(t1, _mm512_mul_epu32(_mm512_mul_epu32(t1, m.pn), m.p));
+    _mm512_mask_blend_epi32(0xAAAA, _mm512_srli_epi64(s0, 32), s1)
+}
+
 /// Gentleman-Sande butterfly on the vectors at `x`, `y` (twiddle `z` broadcast).
 #[inline(always)]
 unsafe fn gs(x: *mut u32, y: *mut u32, z: __m512i, m: M) {
     let (u, w) = (ld(x), ld(y));
     st(x, red(_mm512_add_epi32(u, w), m.p2));
-    st(y, mont(_mm512_sub_epi32(_mm512_add_epi32(u, m.p2), w), z, m));
+    st(y, mont_bc(_mm512_sub_epi32(_mm512_add_epi32(u, m.p2), w), z, m));
 }
 
 /// Cooley-Tukey butterfly.
 #[inline(always)]
 unsafe fn ct(x: *mut u32, y: *mut u32, z: __m512i, m: M) {
     let (u, w) = (ld(x), ld(y));
-    let t = mont(w, z, m);
+    let t = mont_bc(w, z, m);
     st(x, red(_mm512_add_epi32(u, t), m.p2));
     st(y, red(_mm512_sub_epi32(_mm512_add_epi32(u, m.p2), t), m.p2));
 }
@@ -86,7 +96,7 @@ pub unsafe fn inv_l_mul(pr: &Prime, a: &mut [u32], h: &[u32], t: &[u32]) {
     for sb in 0..n / sub {
         let base = sb * sub;
         for c in base..base + sub {
-            st(ap.add(c * L), mont(ld(hp.add(c * L)), _mm512_set1_epi32(t[c] as i32), m));
+            st(ap.add(c * L), mont_bc(ld(hp.add(c * L)), _mm512_set1_epi32(t[c] as i32), m));
         }
         let mut len = 1usize;
         while len < sub {
@@ -384,10 +394,10 @@ pub unsafe fn enc_out(k: &EncConsts, s: *const u32, nu: usize, lanes: usize, c0:
                 let r0 = red(red(ld(s.add(c)), e2x[0]), ev[0]);
                 let r1 = red(red(ld(s.add(nu * L + c)), e2x[1]), ev[1]);
                 let r2 = red(ld(s.add(2 * nu * L + c)), ev[2]);
-                let k1 = red(mont(_mm512_sub_epi32(_mm512_add_epi32(r1, ev[1]), red(r0, ev[1])), inv01, m1), ev[1]);
-                let a = red(mont(k1, e0m2, m2), ev[2]);
+                let k1 = red(mont_bc(_mm512_sub_epi32(_mm512_add_epi32(r1, ev[1]), red(r0, ev[1])), inv01, m1), ev[1]);
+                let a = red(mont_bc(k1, e0m2, m2), ev[2]);
                 let z = _mm512_sub_epi32(_mm512_sub_epi32(_mm512_add_epi32(r2, e2x[2]), red(r0, ev[2])), a);
-                let k2 = red(mont(z, inv012, m2), ev[2]);
+                let k2 = red(mont_bc(z, inv012, m2), ev[2]);
                 for h in 0..2 {
                     let x01 = _mm512_add_epi64(ext(r0, h), _mm512_mul_epu32(ext(k1, h), e0q));
                     let kw = ext(k2, h);
@@ -416,6 +426,51 @@ pub unsafe fn enc_out(k: &EncConsts, s: *const u32, nu: usize, lanes: usize, c0:
     }
     xs = [[_mm512_setzero_si512(); 8]; 2];
     std::hint::black_box(&xs);
+}
+
+/// Interleave 16 polynomials of `n` 24-bit little-endian residues (`src[l]`, `3 n` bytes each; lanes
+/// `>= lanes` are zero) into `h[c L + l]` (the compact hint's load step of the decryption).
+#[target_feature(enable = "avx512f,avx512dq,avx512bw,avx512vl")]
+pub unsafe fn load_hint(src: &[*const u8; L], lanes: usize, n: usize, h: *mut u32) {
+    let perm = _mm512_set_epi32(12, 11, 10, 9, 9, 8, 7, 6, 6, 5, 4, 3, 3, 2, 1, 0);
+    let shuf = _mm512_broadcast_i32x4(_mm_set_epi8(-1, 11, 10, 9, -1, 8, 7, 6, -1, 5, 4, 3, -1, 2, 1, 0));
+    let mut v = [_mm512_setzero_si512(); 16];
+    for c in (0..n).step_by(16) {
+        for (l, vl) in v.iter_mut().enumerate() {
+            *vl = if l < lanes {
+                let raw = _mm512_maskz_loadu_epi8(0x0000_FFFF_FFFF_FFFF, src[l].add(3 * c) as *const i8);
+                _mm512_shuffle_epi8(_mm512_permutexvar_epi32(perm, raw), shuf)
+            } else {
+                _mm512_setzero_si512()
+            };
+        }
+        transpose16(&mut v);
+        for (i, vi) in v.iter().enumerate() {
+            _mm512_storeu_si512(h.add((c + i) * L) as *mut _, *vi);
+        }
+    }
+}
+
+/// Reply-key output for one prime: `beta[l][c] = red(red(mont(k[l][c], th[c]) + m16[c L + l], 2p), p)`
+/// (`k` in Montgomery form, `th` the NTT of `t'`, `m16` the interleaved NTT of `e + P iota(t)`). Same
+/// values as the portable loop of `kernel::ksk_inner`.
+#[target_feature(enable = "avx512f,avx512dq,avx512bw,avx512vl")]
+pub unsafe fn ksk_out(p: u32, pn: u32, n: usize, km: *const u32, th: *const u32, m16: *const u32, beta: *mut u32) {
+    let m = consts(p, pn);
+    let mut v = [_mm512_setzero_si512(); 16];
+    for c in (0..n).step_by(16) {
+        for (i, vi) in v.iter_mut().enumerate() {
+            *vi = ld(m16.add((c + i) * L));
+        }
+        transpose16(&mut v); // v[l] = m16[c .. c + 16][l]
+        let t = ld(th.add(c));
+        for (l, vl) in v.iter().enumerate() {
+            let kt = mont(ld(km.add(l * n + c)), t, m);
+            st(beta.add(l * n + c), red(red(_mm512_add_epi32(kt, *vl), m.p2), m.p));
+        }
+    }
+    v = [_mm512_setzero_si512(); 16];
+    std::hint::black_box(&v);
 }
 
 /// Constants of the decryption's final combine.
@@ -455,7 +510,7 @@ pub unsafe fn dec_combine(k: &DecConsts, s0: *const u32, s1: *const u32, lanes: 
         let a = red(red(x0, p02), p0v);
         let b = red(red(x1, p12), p1v);
         let am = red(a, p1v);
-        let kv = red(mont(_mm512_sub_epi32(_mm512_add_epi32(b, p1v), am), inv, m1), p1v);
+        let kv = red(mont_bc(_mm512_sub_epi32(_mm512_add_epi32(b, p1v), am), inv, m1), p1v);
         r0[j / 16][j % 16] = a;
         kk[j / 16][j % 16] = kv;
     }
