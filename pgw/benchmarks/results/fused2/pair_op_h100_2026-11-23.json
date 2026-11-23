@@ -1,0 +1,176 @@
+{
+ "device": "NVIDIA H100 80GB HBM3",
+ "k": 56,
+ "shapes": {
+  "o": [
+   3584,
+   3584
+  ],
+  "gate_up": [
+   37888,
+   3584
+  ],
+  "down": [
+   3584,
+   18944
+  ],
+  "qkv": [
+   4608,
+   3584
+  ]
+ },
+ "torch": "2.15.0+cu132",
+ "self_check": {
+  "failures": [],
+  "s": 15.7
+ },
+ "pair": {
+  "o+gate_up": {
+   "1": {
+    "exact": true,
+    "prototype_eager_ms": 1.2167,
+    "graph_ms_best": 0.2167,
+    "graph_ms_heuristic": 0.2167,
+    "best_cfg": [
+     "PairConfig(block_m=16, block_n=256, split=3, num_warps=4, variant='sum')",
+     "PairConfig(block_m=16, block_n=256, split=1, num_warps=4, variant='sum')"
+    ],
+    "configs": [
+     {
+      "cfg": [
+       "PairConfig(block_m=16, block_n=256, split=3, num_warps=4, variant='sum')",
+       "PairConfig(block_m=16, block_n=256, split=1, num_warps=4, variant='sum')"
+      ],
+      "ms": 0.2167,
+      "exact": true
+     }
+    ]
+   },
+   "4": {
+    "exact": true,
+    "prototype_eager_ms": 2.0636,
+    "graph_ms_best": 1.5747,
+    "graph_ms_heuristic": 1.5747,
+    "best_cfg": [
+     "PairConfig(block_m=32, block_n=128, split=5, num_warps=4, variant='dot')",
+     "PairConfig(block_m=32, block_n=128, split=1, num_warps=4, variant='dot')"
+    ],
+    "configs": [
+     {
+      "cfg": [
+       "PairConfig(block_m=32, block_n=128, split=5, num_warps=4, variant='dot')",
+       "PairConfig(block_m=32, block_n=128, split=1, num_warps=4, variant='dot')"
+      ],
+      "ms": 1.5747,
+      "exact": true
+     }
+    ]
+   }
+  },
+  "down+qkv": {
+   "1": {
+    "exact": true,
+    "prototype_eager_ms": 0.705,
+    "graph_ms_best": 0.1541,
+    "graph_ms_heuristic": 0.1541,
+    "best_cfg": [
+     "PairConfig(block_m=16, block_n=256, split=3, num_warps=4, variant='sum')",
+     "PairConfig(block_m=16, block_n=256, split=2, num_warps=4, variant='sum')"
+    ],
+    "configs": [
+     {
+      "cfg": [
+       "PairConfig(block_m=16, block_n=256, split=3, num_warps=4, variant='sum')",
+       "PairConfig(block_m=16, block_n=256, split=2, num_warps=4, variant='sum')"
+      ],
+      "ms": 0.1541,
+      "exact": true
+     }
+    ]
+   },
+   "4": {
+    "exact": true,
+    "prototype_eager_ms": 1.101,
+    "graph_ms_best": 0.9792,
+    "graph_ms_heuristic": 0.9792,
+    "best_cfg": [
+     "PairConfig(block_m=32, block_n=128, split=5, num_warps=4, variant='dot')",
+     "PairConfig(block_m=32, block_n=128, split=4, num_warps=4, variant='dot')"
+    ],
+    "configs": [
+     {
+      "cfg": [
+       "PairConfig(block_m=32, block_n=128, split=5, num_warps=4, variant='dot')",
+       "PairConfig(block_m=32, block_n=128, split=4, num_warps=4, variant='dot')"
+      ],
+      "ms": 0.9792,
+      "exact": true
+     }
+    ]
+   }
+  },
+  "qkv(single)": {
+   "1": {
+    "exact": true,
+    "prototype_eager_ms": 0.357,
+    "graph_ms_best": 0.0552,
+    "graph_ms_heuristic": 0.0552,
+    "best_cfg": [
+     "PairConfig(block_m=16, block_n=256, split=2, num_warps=4, variant='sum')",
+     "None"
+    ],
+    "configs": [
+     {
+      "cfg": [
+       "PairConfig(block_m=16, block_n=256, split=2, num_warps=4, variant='sum')",
+       "None"
+      ],
+      "ms": 0.0552,
+      "exact": true
+     }
+    ]
+   },
+   "4": {
+    "exact": true,
+    "prototype_eager_ms": 0.5059,
+    "graph_ms_best": 0.2168,
+    "graph_ms_heuristic": 0.2168,
+    "best_cfg": [
+     "PairConfig(block_m=32, block_n=128, split=4, num_warps=4, variant='dot')",
+     "None"
+    ],
+    "configs": [
+     {
+      "cfg": [
+       "PairConfig(block_m=32, block_n=128, split=4, num_warps=4, variant='dot')",
+       "None"
+      ],
+      "ms": 0.2168,
+      "exact": true
+     }
+    ]
+   }
+  }
+ },
+ "k32_single_graph_ms": {
+  "o": {
+   "1": 0.0233
+  },
+  "gate_up": {
+   "1": 0.0819
+  },
+  "down": {
+   "1": 0.0536
+  },
+  "qkv": {
+   "1": 0.0262
+  }
+ },
+ "summary_1row": {
+  "o+gate_up pair / (o + gate_up singles)": 2.0598859315589353,
+  "down+qkv pair / (down + qkv singles)": 1.9310776942355885,
+  "per-token provider compute fused2 (28 layers, ms)": 10.3824,
+  "per-token provider compute standard K32 (28 layers, ms)": 5.18
+ },
+ "wall_s": 25.3
+}
