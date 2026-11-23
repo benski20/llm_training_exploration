@@ -267,13 +267,138 @@ independent of the kept values), CBD by popcount. Every kernel equals the numpy 
 | encrypt (pad + CBD + message, `a` regenerated once per call of 4 groups), per input-slot | 33-38 ns |
 | reply key, per (linear, group) | 5.4-5.8 ms |
 
-The 4-5 ns decrypt target is **not reached** on this host: the remaining cost is the 32x16 transpose in the combine
-and L2-bound inverse-NTT passes (5 of 13 stages). Next steps: radix-4 global stages and an in-register transpose; for
-encryption a 42-bit CBD sampler (21 + 21 bits instead of 64) and `a` cached in NTT form (3 KB per input).
+The 4-5 ns decrypt target was **not reached** by these (auto-vectorised) kernels: the remaining cost was the 32x16
+transpose in the combine and L2-bound inverse-NTT passes (5 of 13 stages). **Superseded by the tuned kernels of 7.7.**
 
 ### 7.6 Not done
 
 External estimator run and the review; GPU timing of the provider path (the torch path is exact on CPU tensors and is
 self-tested before use on CUDA; no GPU run was made); one compute service per factory (no sharding); the reply key is
-sent per (linear, group) (sharing `t` across the linears of a group, with the per-linear `a` seeds already in place,
-would send it once per group; that needs a provider-side key cache).
+sent per (linear, group): sharing it across the linears of a group is analysed in 7.8 and **not** implemented (not
+covered by the present security argument).
+
+### 7.7 Tuned customer kernels (2026-11-23, second pass)
+
+Same scheme, parameters, streams and outputs (n = 4096 upload, n = 8192 reply ring, q = 2^56, q1, P, CBD(21),
+ChaCha20 streams); only the customer kernels of `rust/pgw-pks` changed. ISA levels (run-time dispatch, `PGW_PKS_ISA`
+caps them; `auto` picks the best the CPU has): `avx512ifma` (new, Ice Lake / Sapphire Rapids / Zen 4 and later),
+`avx512`, `avx2`, `scalar`.
+
+* **NTTs** (`vntt.rs`, written once over a 16-lane u32 vector type, instantiated for one `zmm` and for two `ymm`):
+  pointwise product fused into the first pass, stages `len < 256` per 256-coefficient sub-block in L1, the remaining
+  4-5 stages column by column through an L1 buffer (one pass over the array instead of one per stage; the columns are
+  16 KiB apart, i.e. the same L1 set, hence the buffer), broadcast-twiddle Montgomery products (no shift of the
+  twiddle), Harvey-style lazy butterflies (`[0, 2p)`, one `vpminud` per output). Measured 1.8-2.0 ns per
+  (coefficient, lane) for an 8192-point 16-lane inverse NTT (13 stages) against 2.2-2.8 before; this is the ALU bound
+  of ~17 vector ops per 16-lane butterfly on two 512-bit ports (AVX2 reaches the same per-lane rate on three ports).
+* **IFMA decryption** (`ifma.rs`): both reply primes are `1 mod 16384`, so `psi = CRT(psi_0, psi_1)` is a primitive
+  16384-th root of unity modulo the composite `q1 = p0 p1 < 2^48` and an NTT modulo `q1` with the CRT of the
+  per-prime twiddles reduces, index by index, to the two per-prime NTTs. One 52-bit Shoup NTT (`vpmadd52{lo,hi}uq`,
+  8 lanes, ~10 ops per 8-lane butterfly) replaces two 24-bit NTTs, and the CRT of the combine disappears; `c1 t' mod q1`
+  is the same canonical integer, so the output is bit-identical. The hint is converted from its stored per-prime
+  residues on load (two Shoup products per value, amortised over the groups of a call); the reply secret's NTT is
+  combined into `q1` per call by a branch-free Garner step, and its Shoup companions `floor(T 2^52 / q1)` by an f64
+  estimate with four masked corrections (no data-dependent division).
+* **IFMA upload pad** (`ifma_pad.rs`): the exact product `a_C t` (range `2^69`) with two ~2^50 NTT primes on 52-bit
+  lanes instead of three ~2^30 primes; the pad is an exact integer, so `b` is bit-identical whatever primes are used.
+  The NTT of the ternary `t` is a scalar Shoup NTT (branch-free), its Shoup companions as above.
+* **Combine / final rounding** (`simd.rs`, `simd2.rs`, `ifma.rs`): CRT (or the `q1` reduction) on 16 lanes, in-register
+  16x16 / 8x8 transposes (constant index tables), the 36-bit reply read in place (u32 words + nibble stream), and the
+  same IEEE-754 operations in the same order as the portable code (`v * 2^-4 + w * 2^32/q1`, `+ 0.5`, truncation; no
+  FMA contraction; on AVX2 the u64 -> f64 conversions are exact or, above 2^53, one correctly rounded addition as in
+  `as f64`). Upload output: CRT digits computed as canonical residues (any correct formula gives the same digits), u64
+  assembly, 8x8 transposes, masked gathers of `r`, 64-byte row stores; the portable path writes each `b` row
+  sequentially.
+* **Noise sampler**: CBD(21) is unchanged, bit for bit (same `pks-e` stream: one 64-bit word per value, popcount of
+  21 + 21 bits; it equals the reference `lwe._cbd`). What changed is the CSPRNG implementation: a 16-way AVX-512 and an
+  8-way AVX2 ChaCha20 (RFC 8439 block function, same keystream as the `chacha20` crate, tested), 1 KiB at a time
+  (the old code allocated and page-faulted 512 KiB per call). A 42-bit packing (5.25 instead of 8 keystream bytes per
+  value) was not adopted: it would change the reference stream for ~0.3-0.6 ns per input-slot.
+* **Hint load / reply key**: AVX-512 masked 48-byte loads + byte shuffle + transpose for the 24-bit hint; reply-key
+  output via transpose (no strided reads).
+* **Exactness and constant time**: every copy equals the portable code bit for bit (Rust tests: all ISAs x 1/2/3
+  threads, partial chunks and groups, Words at 54 bits to exercise `as f64` rounding, Packed36), and the portable code
+  equals the numpy reference (Python tests, every ISA). No branch or memory index depends on secret data (Montgomery /
+  Shoup products, `vpminu*` reductions, masked selects; gathers are indexed by public slot/feature positions only);
+  secret buffers (`t`/`t'` NTTs, pads, NTT outputs, CRT temporaries, keystream scratch) are wiped.
+
+Measured (same shared 4-vCPU host, load 10-17 during the runs, single thread, best of 21 runs; `pks-bench`, m = 4096
+outputs / n = 3584 inputs, 4 groups, 36-bit replies read in place):
+
+| kernel (ns per output- / input-slot, ms per key) | before avx512 / avx2 / scalar | after avx512ifma | after avx512 | after avx2 | after scalar |
+|---|---|---|---|---|---|
+| **decrypt** total | 10.6 / 12.8 / 20.4 | **4.2** | 6.0 | 6.0 | 19.8 |
+| - inverse NTTs + hint load (2 primes; IFMA: 1 composite) | 6.5 / 7.9 / - | 2.9 | 4.0 | 4.3 | - |
+| - combine + final rounding | 4.2 / 4.9 / - | 1.3 | 2.0 | 1.8 | - |
+| decrypt at m = 8192 (72B `o`) | 9.7 | 4.1 | 6.3 | | |
+| **encrypt** incl. noise and message | 34.5 / 35.8 / 39.9 | **12.5** | 15.6 | 18.5 | 42.2 |
+| encrypt at n = 29568 (72B `down`) | 33.8 | 12.6 | 16.7 | | |
+| - CBD(21) noise per value (ChaCha20 + popcount) | 11.4 (7.5 table) | 1.6 | 1.6 | 3.1 | 5.4 |
+| **reply key** per (linear, group) | 5.3 / 5.1 / 5.6 ms | 2.1 ms | 2.0 ms | 2.2 ms | 6.0 ms |
+| 8192-pt 16-lane inverse NTT incl. pointwise, per element | 2.4 (portable) | | 1.75 | 1.8 | |
+| same, forward | 6.9 (portable) | | 1.95 | 1.9 | |
+
+("before" re-measured in the same runs with the previous binary; the scalar copy is the x86-64 baseline build, not a
+target. The AVX2 copy reaches the AVX-512 per-lane rate here because 256-bit ops issue on three ports.)
+
+Sizing with these kernels (`benchmarks/hemask_pks_model.py`, cores = customer CPU s/s at this host's single-thread
+speed; customer storage = compact hint; `r` keystream unchanged at 5.8 ns per input-slot):
+
+| model | kernels | customer storage | up / down MB per slot | CPU ms/slot | cores @25/s | cores @50/s | up+down MB/s @25 / @50 |
+|---|---|---|---|---|---|---|---|
+| 7B | before | 2.1 GB | 6.6 / 6.3 | 50.3 | 1.3 | 2.5 | 321 / 643 |
+| 7B | **after, avx512ifma** | 2.1 GB | 6.6 / 6.3 | 22.0 | **0.5** | **1.1** | 321 / 643 |
+| 7B | after, avx512 / avx2 | 2.1 GB | 6.6 / 6.3 | 27.0 / 29.5 | 0.7 / 0.7 | 1.4 / 1.5 | 321 / 643 |
+| 32B | before | 7.1 GB | 21.0 / 20.9 | 164.4 | 4.1 | 8.2 | 1049 / 2099 |
+| 32B | **after, avx512ifma** | 7.1 GB | 21.0 / 20.9 | 72.0 | **1.8** | **3.6** | 1049 / 2099 |
+| 32B | after, avx512 / avx2 | 7.1 GB | 21.0 / 20.9 | 88.8 / 97.0 | 2.2 / 2.4 | 4.4 / 4.9 | 1049 / 2099 |
+| 72B | before | 10.5 GB | 32.5 / 30.9 | 252.3 | 6.3 | 12.6 | 1585 / 3170 |
+| 72B | **after, avx512ifma** | 10.5 GB | 32.5 / 30.9 | 110.7 | **2.8** | **5.5** | 1585 / 3170 |
+| 72B | after, avx512 / avx2 | 10.5 GB | 32.5 / 30.9 | 136.4 / 149.2 | 3.4 / 3.7 | 6.8 / 7.5 | 1585 / 3170 |
+
+Bytes are unchanged (same scheme); the reply keys are 0.77 / 1.77 / 2.21 MB of the upload per slot (7.8). Of the
+72B "after" CPU, 25 ms per slot is the unchanged `r` keystream; the pks-v3 kernels themselves are 86 ms per slot
+(decrypt 29, encrypt 54, reply keys 2.6).
+
+The largest remaining customer costs: the upload pad NTTs (2-3 per input-slot and group), the `r` keystream of the
+existing `pgw_fast` expander (5.8 ns per input-slot, outside these kernels; the 16-way ChaCha20 here runs at ~0.15 ns
+per byte and could replace it), and memory traffic of `r` (int64 in) and `b` (8 B out) per input-slot.
+
+### 7.8 One reply key per group (shared across the linears of a group)? Analysis: not covered, not implemented
+
+Proposal: one upload secret `t_g` and one reply secret `t'_g` per 256-slot group for **all** linears of the pass (the
+per-linear `a` seeds already make the upload instances distinct), one reply key `beta_g` sent once and cached by the
+provider (bounded cache keyed by customer and group). Saving: the reply keys are 1.77 MB per (linear, group), i.e.
+0.77 / 1.77 / 2.21 MB of the upload per slot at 7B / 32B / 72B (12% / 8% / 7% of the upload), and 2.0-2.2 ms of
+customer CPU per (linear, group) (2-4% of the tuned customer CPU). Sharing `t'` alone is impossible: `beta` encrypts the
+upload secret's components, so one reply key per group means one upload secret per group across linears.
+
+* **Passive provider (the hybrid of the review packet, section 3).** View per group: all linears' bodies
+  `b_L = a_{L,C} t_g + e + 2^24 M` and one `beta_g`. H1 (`beta_g` -> uniform) is unchanged: `t'_g` still appears
+  nowhere else in the provider's view (decryption is local, the replies are functions of the provider's own inputs).
+  H2 (`b` -> uniform) then needs decision-RLWE(`R_u`, 2^56, ternary, CBD(21)) with `sum_L n_L / 16` samples under one
+  secret instead of `n / 16 <= 1848`: 52k (7B), 172k (32B), 271k (72B) ring samples. Still a polynomial number of
+  samples of a standard instance (the primal/dual estimates use at most a few `n` samples; BKW / Arora-Ge need
+  vastly more), but it is a different statement of the assumption and would need the reviewer's sign-off.
+* **Active provider (packet section 6) — not covered.** Today every `(t, t')` pair is used for exactly ONE decryption:
+  a deviating provider (wrong `c0` or `y`) learns at most one failure bit per secret pair, about a secret that is
+  never used again. With sharing, `t'_g` (and `t_g`, through the `H s` rounding term of the noise) decrypts the
+  replies of all 112-320 linears of the group, sequentially and pipelined (`he_depth` requests in flight): the
+  provider gets an adaptive decryption-failure / key-mismatch oracle against a **live** secret that still protects
+  the masks of the other linears of the group. Reaction attacks on RLWE need O(n)-ish queries per key, so this is
+  not a key recovery, but no reduction covers it. Even with abort-on-first-failure the transcript leaks the index of
+  the first failure (`log2(#linears + 1)` = 6.8-8.3 bits) about a key whose earlier masks are kept; only discarding
+  ALL masks of the group on any failure (group-atomic commit of a whole pass, buffering up to 27 MB x 256 slots =
+  7 GB of masks per group at 72B until its last linear decrypts) would bring it back to "leakage about dead keys
+  only". The generic guessing argument costs up to those 6.8-8.3 bits of security otherwise.
+* **New reuse hazard.** With `t_g` shared, any second upload of the same linear in the same group (a retry after a
+  transport error, a re-requested segment) under the same `a_{L,C}` gives `b - b' = e - e' + 2^24 (M - M')`, i.e.
+  the mask difference in the clear. Today's fresh `t` per call is immune; sharing would need a strict
+  one-upload-per-(linear, group) invariant on every error path.
+
+Conclusion: covered for a passive provider only with a restated (larger) sample count; **not covered** by the
+present argument for an active provider. Per the rule "only if the hybrid security argument stays intact", it is not
+implemented; the reply key stays per (linear, group) with a fresh `t, t'`. If wanted later, it needs (a) the
+reviewer's sign-off on the H2 sample count, (b) group-atomic mask commit with discard-on-failure, (c) a
+no-re-encryption invariant per (linear, group), (d) a provider key cache keyed by (customer, group) whose eviction
+only ever causes a re-send of the same `beta_g`.

@@ -3,8 +3,12 @@
 //! `pks-bench decrypt <m> <groups> <threads> [isa]`: reply decryption of one linear with `m` outputs;
 //! `pks-bench encrypt <n> <groups> <threads> [isa]`: upload encryption (pad + CBD noise + message) of a
 //! linear with `n` inputs; `pks-bench ksk <reps>`: one reply key (per linear and group);
-//! `pks-bench keyswitch <m> <groups> <threads>`: the provider's CPU key switch. Prints JSON lines with
-//! wall and process-CPU ns per output (input) and slot.
+//! `pks-bench keyswitch <m> <groups> <threads>`: the provider's CPU key switch; per-kernel micro timings:
+//! `pks-bench ntt <reps> 1 1 [isa]` (16-lane NTTs), `pks-bench cbd <count> 1 1 [isa]` (noise sampler),
+//! `pks-bench encout <reps>` (AVX-512 upload output on L2-resident data; timing only, dummy constants).
+//! `isa`: auto, avx512ifma, avx512, avx2, scalar. Env: `PKS_REPS` (repetitions, best wall time reported),
+//! `PKS_PACKED=1` (36-bit replies read in place), `PKS_ROWS` (slots per group). Prints JSON lines with the
+//! best wall time and the process CPU averaged over the repetitions, in ns per output (input) and slot.
 
 use pgw_pks::arith::Isa;
 use pgw_pks::kernel::{self, DecItem, EncItem, KsItem, D, NR, NU, PACK, RANK};

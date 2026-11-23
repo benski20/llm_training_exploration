@@ -6,7 +6,7 @@ Inputs are per-unit CPU costs measured on this repository's kernels (single thre
 sections 7.5 and 7.7); everything else is arithmetic on the real Qwen2.5 shapes. "cores" = customer CPU
 seconds per second at that single-thread speed (excluding the factory's every-row check and I/O).
 
-    python benchmarks/hemask_pks_model.py                       # 25 and 50 slots/s, AVX-512 kernels
+    python benchmarks/hemask_pks_model.py                       # 25 and 50 slots/s, AVX-512 IFMA kernels
     python benchmarks/hemask_pks_model.py --isa avx2            # the AVX2 copies (CPUs without AVX-512)
     python benchmarks/hemask_pks_model.py --rates 25 50 90
 """
@@ -23,18 +23,20 @@ MODELS = {  # layers, {kind: (m, n)} (masked LM head not included)
 
 #: Measured unit costs (ns per output-slot, ns per input-slot incl. CBD noise, ms per reply key).
 #: "before": 2026-11-23 kernels (auto-vectorised, section 7.5); "after": hand-written AVX-512 / AVX2 copies
-#: (section 7.7), `pks-bench` single thread, groups = 4, 36-bit replies read in place.
+#: (section 7.7), `pks-bench` single thread, best of 21, groups = 4, 36-bit replies read in place.
 KERNELS = {
     "before": {"dec": 10.0, "enc": 35.0, "ksk": 5.6},
-    "avx512": {"dec": 6.1, "enc": 17.4, "ksk": 2.3},
-    "avx2": {"dec": 9.5, "enc": 27.0, "ksk": 3.4},
+    "avx512ifma": {"dec": 4.2, "enc": 12.5, "ksk": 2.1},
+    "avx512": {"dec": 6.0, "enc": 15.6, "ksk": 2.0},
+    "avx2": {"dec": 6.0, "enc": 18.5, "ksk": 2.2},
 }
 KSK_BYTES = 16 * 8192 * (24 + 24 + 30 + 30) // 8  # wire bytes of one reply key (per linear and group)
 
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--isa", choices=["avx512", "avx2"], default="avx512", help="tuned kernel copy for 'after'")
+    ap.add_argument("--isa", choices=["avx512ifma", "avx512", "avx2"], default="avx512ifma",
+                    help="tuned kernel copy for the after row (avx512ifma: Ice Lake, Sapphire Rapids, Zen 4 and later)")
     ap.add_argument("--today-dec-ns", type=float, default=39.0, help="today, hint planes on disk/RAM (decrypt=ntt)")
     ap.add_argument("--today-pre-dec-ns", type=float, default=16.4, help="today, hint in NTT form (2x RAM)")
     ap.add_argument("--enc-ns", type=float, default=32.0, help="today's encryption per input and slot")

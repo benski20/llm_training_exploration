@@ -1,7 +1,7 @@
 [package]
 name = "pgw-pks"
 version = "0.2.0"
-description = "Customer and provider kernels of the compact-hint encrypted mask scheme pks-v3 (Python extension `pgw_pks`): ring-LWE upload encryption, reply keys, packed key-switched reply decryption (reply ring 8192, two ~2^24 primes), and the provider's modulus switch + packing + hybrid key switch. AVX-512 / AVX2 / baseline copies of the same code picked at run time; multi-threaded with deterministic output. Bit-identical to the numpy reference pgw.hemask.pks."
+description = "Customer and provider kernels of the compact-hint encrypted mask scheme pks-v3 (Python extension `pgw_pks`): ring-LWE upload encryption, reply keys, packed key-switched reply decryption (reply ring 8192, two ~2^24 primes), and the provider's modulus switch + packing + hybrid key switch. Hand-written AVX-512 IFMA / AVX-512 / AVX2 copies of the customer kernels and a portable baseline, picked at run time; multi-threaded with deterministic output. Bit-identical to the numpy reference pgw.hemask.pks."
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
