@@ -11,6 +11,7 @@
 //! | [`bitpack`] | `pgw.hemask.wire.pack_bits` / `unpack_bits` around maskgen requests (fused modulus switch, reply shift) |
 //! | [`writer`] | `SegmentWriter.write_linear` / `RawSegmentWriter.write_chunk`: pack, AES-256-GCM, `pwrite` (Unix only) |
 //! | [`local`] | `MaskedBackend._local_fast`: exact local linear (quantize, int8 GEMV, range check, rescale) for `local_linears` |
+//! | [`p61`] | `Fused2MaskedBackend._verify`: fused2 range + Freivalds check over `F_(2^61-1)` (both stages) |
 //! | [`noise`] | `OutboundNoiseMonitor.guard_packed`: duplicate-row fingerprints of a packed payload |
 //! | [`lmhead`] | `h @ lm_head^T` (float32, several rows per pass over the head, fixed summation order; same bits as `pgw.engine.lm_head.lm_head_reference`) |
 //! | [`lane`] | stub (chat-speed WP-A3): native trip lane client; registers nothing yet |
@@ -38,6 +39,7 @@ pub mod lmhead;
 pub mod local;
 pub mod localgpu;
 pub mod noise;
+pub mod p61;
 pub mod prepare;
 pub mod prime;
 pub mod store;
@@ -69,6 +71,7 @@ fn pgw_fast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     local::register(m)?;
     localgpu::register(m)?;
     noise::register(m)?;
+    p61::register(m)?;
     prepare::register(m)?;
     store::register(m)?;
     trip::register(m)?;

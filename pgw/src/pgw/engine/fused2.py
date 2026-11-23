@@ -859,12 +859,52 @@ def _limbs16(v: np.ndarray) -> list[np.ndarray]:
     return [(v >> (16 * i)) & 0xFFFF for i in range(4)]
 
 
-def dot_mod_p(y: np.ndarray, u: np.ndarray, p: int = P61) -> np.ndarray:
+def _limbs21(v: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Values in ``[0, 2^63)`` as three 21-bit limbs (int64; the top one < 2^21 for values < 2^63)."""
+    m = (1 << 21) - 1
+    return v & m, (v >> 21) & m, v >> 42
+
+
+def _mod_p61(y: np.ndarray) -> np.ndarray:
+    """``y mod (2^61 - 1)`` for int64 ``|y| < 2^62`` (Mersenne fold; ~2.5x faster than ``np.mod``)."""
+    r = (y & P61) + (y >> 61)  # y = hi * 2^61 + lo == hi + lo (mod p); hi in [-2, 1]
+    r = np.where(r < 0, r + P61, r)
+    return np.where(r >= P61, r - P61, r)
+
+
+def dot_mod_p(y: np.ndarray, u: np.ndarray, p: int = P61, *,
+              ul: tuple[np.ndarray, np.ndarray, np.ndarray] | None = None) -> np.ndarray:
     """``(y @ u^T) mod p`` exactly for int64 ``y (T, n)`` (any sign, ``|y| < 2^62``) and ``u (c, n)`` in ``[0, p)``.
 
-    Both sides are split in 16-bit limbs; each limb product is < 2^32, so int64 sums of up to 2^31 terms
-    are exact. Returns int64 ``(T, c)`` in ``[0, p)``.
+    Both sides (reduced to ``[0, p)``, 61 bits) are split in three 21-bit limbs; each limb product is < 2^42, so a
+    product group ``sum_{i+j=s} y_i . u_j`` over ``n <= 2^19`` terms (at most three products per group) stays
+    below 2^63: int64 sums are exact. The five groups are recombined with Python integers on the small
+    ``(T, c)`` result. Longer rows fall back to the 16-bit limb path (:func:`_dot_mod_p16`). Returns int64
+    ``(T, c)`` in ``[0, p)``. ``ul``: the limbs of ``u`` (:func:`_limbs21`), when the caller caches them.
     """
+    if y.shape[-1] > (1 << 19) or p != P61:
+        return _dot_mod_p16(y, u, p)
+    yl = _limbs21(_mod_p61(y.astype(np.int64)))
+    if ul is None:
+        ul = _limbs21(u.astype(np.int64))
+    out = np.zeros((y.shape[0], u.shape[0]), dtype=object)
+    # few rows (decode): elementwise products and sums vectorize far better than numpy's integer matmul
+    small = y.shape[0] * u.shape[0] * y.shape[-1] <= 1 << 21
+    for s in range(5):
+        acc = None
+        for i in range(max(0, s - 2), min(2, s) + 1):
+            if small:
+                t = (yl[i][:, None, :] * ul[s - i][None, :, :]).sum(axis=2)
+            else:
+                t = yl[i] @ ul[s - i].T
+            acc = t if acc is None else acc + t
+        assert acc is not None
+        out += acc.astype(object) * (1 << (21 * s))
+    return np.asarray(out % p, dtype=np.int64)
+
+
+def _dot_mod_p16(y: np.ndarray, u: np.ndarray, p: int = P61) -> np.ndarray:
+    """:func:`dot_mod_p` with 16-bit limbs (each limb product < 2^32; int64 sums of up to 2^31 terms exact)."""
     yp = np.mod(y.astype(np.int64), p)
     yl, ul = _limbs16(yp), _limbs16(u.astype(np.int64))
     out = np.zeros((y.shape[0], u.shape[0]), dtype=object)
@@ -888,6 +928,14 @@ def matmul_mod_p(u: np.ndarray, w8: torch.Tensor, p: int = P61) -> np.ndarray:
 class _Checks:
     u: np.ndarray  # (c, m) in [0, p)
     uw: np.ndarray  # (c, n) = u W8 mod p
+    _ul: Any = None  # cached 21-bit limbs of u and uw (dot_mod_p)
+    _uwl: Any = None
+
+    def limbs(self) -> tuple[Any, Any]:
+        if self._ul is None:
+            self._ul = _limbs21(self.u.astype(np.int64))
+            self._uwl = _limbs21(self.uw.astype(np.int64))
+        return self._ul, self._uwl
 
 
 @dataclass
@@ -1121,12 +1169,24 @@ class Fused2MaskedBackend(LinearBackend):
     def _verify(self, lin: F2Linear, xq: torch.Tensor, yq: torch.Tensor, offset: torch.Tensor | None = None) -> None:
         """Range check ``|yq| <= 2^C`` and ``u . (yq - offset) == (u W8) . xq (mod p)`` for every row."""
         bound = 1 << self.ring.cap
+        ch = self.masks.check_vectors(lin)
+        nat = _native_p61()
+        if nat is not None and yq.numel():  # the same predicate in Rust (pgw_fast.p61_check), GIL released
+            c = np.ascontiguousarray
+            st = nat(c(yq.numpy()), None if offset is None else c(offset.numpy()), c(ch.u), c(xq.numpy()),
+                     c(ch.uw), bound)
+            self.f2.checks += 1
+            if st == 2:
+                raise IntegrityError(f"fused2 {lin.key}: output out of range")
+            if st != 0:
+                raise IntegrityError(f"fused2 {lin.key}: Freivalds check failed")
+            return
         if int(yq.abs().max()) > bound if yq.numel() else False:
             raise IntegrityError(f"fused2 {lin.key}: output out of range")
-        ch = self.masks.check_vectors(lin)
         y = yq if offset is None else yq - offset
-        lhs = dot_mod_p(y.numpy(), ch.u)
-        rhs = dot_mod_p(xq.numpy(), ch.uw)
+        ul, uwl = ch.limbs()
+        lhs = dot_mod_p(y.numpy(), ch.u, ul=ul)
+        rhs = dot_mod_p(xq.numpy(), ch.uw, ul=uwl)
         self.f2.checks += 1
         if not np.array_equal(lhs, rhs):
             raise IntegrityError(f"fused2 {lin.key}: Freivalds check failed")
@@ -1173,6 +1233,16 @@ class Fused2MaskedBackend(LinearBackend):
 
     def forward_many(self, calls: Sequence[LinearCall]) -> list[torch.Tensor]:
         return [self.forward(c) for c in calls]
+
+
+def _native_p61() -> Any:
+    """``pgw_fast.p61_check`` when the extension has it and ``PGW_FUSED2_NATIVE_CHECK`` is not 0 (bit-identical
+    verdicts to the numpy path; default on when available)."""
+    if os.environ.get("PGW_FUSED2_NATIVE_CHECK", "1").strip().lower() in ("0", "false", "no", "off"):
+        return None
+    from pgw.core.native import fast
+
+    return getattr(fast, "p61_check", None) if fast is not None else None
 
 
 def soundness_bits(checks: int = 1, p: int = P61) -> float:

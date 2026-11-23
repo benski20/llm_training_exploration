@@ -298,3 +298,49 @@ kernels), pair-mask segments in the store (`W1 r_x`, `W2' v`, p61 check vectors)
 K56 (an HE modulus above 2^64: not supported) or a plain factory with weights on the gateway, a native p61
 check and a native per-trip path (the TripEngine / native decode driver have no pair op), speculation padding,
 the provider LM head folded into the last trip, and the 7B quality check.
+
+## 9. Update 2026-11-23: fast provider pair op, pair items on the lane, pair-mask segments, native p61 (opt-in)
+
+What changed relative to section 8 (all default off; masked == plain bit for bit; the provider still sees only
+uniformly masked ring elements of public shapes; every output still checked, both stages, 60.8 bits):
+
+- **Provider pair op** (`pgw.core.ring64`, kernels in `_ring64_kernel.py`): Triton kernels over `Z/2^K`, any
+  `K <= 64` that is a multiple of 8: unpack of the packed `K/8`-byte body, split-K GEMV partials (`sum`: wrapping
+  uint64 multiply-adds on CUDA cores, the memory-bound one/few-row kernel; `dot`: `K/8` balanced base-256 digit
+  planes of the input, one int8 tensor-core `tl.dot` per plane and tile, int32-exact per tile, recombined in
+  wrapping uint64), and an epilogue that sums the partials, multiplies by `hmul`, adds `R`, reduces mod `2^K`,
+  keeps `H` on the device for stage 2 and writes the packed reply. `PairOp.capture` makes one CUDA graph of
+  `[H2D pinned, unpack, gemv, epilogue, gemv, epilogue, D2H pinned]` per rows. Exactness: every ring operation is
+  a wrapping 64-bit unsigned operation (`Z_{2^K}` is a quotient of `Z_{2^64}`), so tiles, splits and digit order
+  cannot change the bits; `self_check` compares every variant with the Python-int reference.
+- **Lane** (`pgw.service.fused2_lane`, `LaneManager`): a fused2 weight set is its own lane model whose table has
+  one item per trip in pass order (`0.qkv/f2` single, `l.o+l.gate_up/f2` and `l.down+(l+1).qkv/f2` pairs, the
+  last `down` single). A pair item's table widths are `n = n1 + m1`, `m = m1 + m2`; body `pack(x_hat) ||
+  pack(R_hat)`, reply `pack(H_hat) || pack(Z_hat)`: the existing headers, tickets, admission, deadlines and UDS /
+  shared-memory / TLS transports carry it unchanged (no Rust change in `pgw-lane`). The lane fingerprint
+  (`fused2_fingerprint`) binds base pack, ring and every item's public `w8` / `hmul`. Entries come from a
+  provider-only weights file (`PGW_SERVICE_FUSED2_WEIGHTS`) or are derived from the provider's own pack
+  (`PGW_SERVICE_FUSED2_FROM_PACK=<bits>`: int8 fold + pack-time migration). On CUDA the lane captures one graph per
+  (item, rows) and checks each through the native serving path against the eager op; the eager op runs under the
+  same device lock as the graphs. `python -m pgw.service.fused2_lane serve` runs this without the HTTP front end
+  for the co-located harness (writes one 0600 ticket file).
+- **Gateway** (`pgw.engine.fused2_lane.LaneFused2Provider`): the provider interface over a native `TripChannel`
+  (UDS or shm); calls above the lane's 8 rows are split (rows are independent). The masked backend is unchanged.
+  **Native p61 check** (`pgw_fast.p61_check`, `rust/pgw-fast/src/p61.rs`): range + Freivalds for both stages, the
+  numpy path's verdicts, default on when the extension has it (`PGW_FUSED2_NATIVE_CHECK=0` turns it off). The
+  numpy path itself moved to 21-bit limbs and a Mersenne fold.
+- **Masks without weights on the gateway** (`pgw.engine.fused2_masks`): a customer-side plain factory
+  (`Fused2MaskFactory`, its own process: `python -m pgw.engine.fused2_masks factory`) writes pair-mask segments
+  (per trip key the ChaCha20 stream keys of `r_x` and `v`, the W1 correction `W1 r_x` and the W2' correction
+  `W2' v`, packed K-bit, SHA-256 trailer) and the secret check vectors once; the gateway (`Fused2SegmentMasks`)
+  derives `r_x`, `v` from the keys and `r_R = v - hmul * W1 r_x` itself, and holds no int8 matrix
+  (`gateway_tables`: stride-0 views). Same rows as the in-process source for the same seed; single use. Not yet
+  the encrypted maskstore format (AES-GCM segments, counters) nor an HE factory for K56.
+
+Measured here (4-vCPU box, CPU only; GPU numbers need `benchmarks/fused2_pair_bench.py` on an H100): gateway check
+per 7B layer (4 checks, 1 row): numpy 2.8 ms -> 0.9 ms (21-bit limbs) -> **0.17 ms native**; masking + packing
+0.2 ms, unpacking + unmasking 0.45 ms per layer (numpy, 7-byte elements).
+
+Still missing: the native decode driver (`rust/pgw-fast/src/decode.rs`) has no fused2 pass (the harness gateway is
+the Python `TransformerModel` with the torch float ops, about 1-2 ms of Python per trip at 7B), the maskstore / HE
+factory for pair segments, the provider LM head folded into the last trip, speculation padding.
