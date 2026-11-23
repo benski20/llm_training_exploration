@@ -189,3 +189,76 @@ the top-1 gap (section 4 lists candidates; target: top-1 vs float within 1 point
 (2) the 7B quality check that `GatewayModelConfig.schedule` is gated on passes, and (3) K40 holds at 7B with
 few rows below 12 bits (else K48 and an HE modulus above 64 bits). Then the wire op, segment format, native p61
 kernel and the async path are routine engineering on the prototype here.
+
+## 7. Update 2026-11-23: the top-1 gap diagnosed and closed (residual-grid migration)
+
+### 7.1 Diagnosis
+Measured with a float64 simulator of the exact fused2 arithmetic (the same quantizers, folds and residual
+grids as the engine; it reproduces the engine's numbers: std 96.4%, fused2 92.6-93.0% on ~1k tokens) by
+replacing one rounding at a time:
+
+| variant (Qwen2.5-0.5B, wikitext-2 test) | top-1 = float, 1k tok | 4k tok |
+|---|---|---|
+| int8 reference (std, K32A12C27) | 96.4% | 96.9% |
+| fused2 as of 2026-11-22 (int8 folded weights) | 92.6% | 93.9% |
+| fused2 with the folded weights kept in float (all other roundings as fused2) | 96.2% | **97.2%** |
+| ... and without residual rounding | 96.7% | - |
+| float qkv folds only (gate_up folds int8) | 93.6% | - |
+| float gate_up folds only (qkv folds int8) | 95.3% | - |
+| int8 fold of one single linear (all others float), any of the 48 | 96.0-97.1% | - |
+| top-16 columns of each fold kept off the int8 matrix (gateway, 16-bit) | 93.4-94.4% | - |
+
+So **the whole gap is the int8 rounding of the folded weights** `W diag(g * sw1)`, spread over all layers
+(gate_up folds more than qkv folds; no single layer or step dominates), not the residual or activation
+rounding. Mechanism: the folded column scales `c_j = |g_j| * sw1_j` spread by 7x (median over folds, up to
+32x) between the median and the largest column, so the per-row int8 grid (set by the largest `|W_ij| c_j`)
+is 2.2x coarser (median; up to 8x) for a median column than today's per-row int8 weight. Splitting off a
+few outlier columns does not help: the spread is broad, not a handful of outliers.
+
+### 7.2 Fix: migrate the gain into the residual's fixed-point grid (pack time, public, exact)
+Per trip's first linear (`o`, `down`) choose public integers `hmul_j >= 1` and let the provider return
+`H = R + hmul * (W1_8 aq)` (one elementwise integer multiply mod `2^K`), with the gateway's residual on the
+finer grid `R = rint(h / ((sw1 / hmul) s))`; the next fold becomes `int8(W2 diag(g * sw1 / hmul))`.
+With `hmul_j = max(1, floor(c_j / kappa))`, `kappa = max_j c_j / 2^b`
+(`pgw.engine.fused2.migration_multipliers`, b = 8), every column above `kappa` sees a scale within 2x of the
+others: the folded int8 rows are as fine as today's. It is SmoothQuant's migration, done exactly in the ring
+(the multiplier is on the integer side, the gateway's residual grid absorbs it), and it also makes the
+residual grid finer. Masks: `r_R = v - hmul * (W1 r_x)` (still uniform, `v` is); stage-1 check
+`u . (H - R) == ((u * hmul) W1) . aq (mod p)`, same soundness; same trips, elements, factory products.
+Cost: about `b` more bits in `H` and `Z` (0.5B, b = 8: `|H|` 41.5, `|Z|` 48.6 bits, a-priori bound 52) ->
+**ring K56C53** (7 bytes per element, 1.75x K32; K48 would drop activation bits on most rows).
+
+Also implemented and measured (opt-in): the calibrated split fold (`calibrate_fused2`: b-bit migration plus the
+top-k columns and the channels whose migrated `|H|` would exceed the calibration maximum are multiplied by the
+gateway itself from the verified `H`, `gateway_bits`-bit weights): it keeps K48, but needs calibration text,
+holds 4-18 columns per fold on the gateway and still exceeds the K48C45 bound by 1-2 bits on some rows.
+
+### 7.3 Quality (engine = the exact pinned reference; sim = the float64 simulator)
+QUALITY_TABLE
+
+## 8. Update 2026-11-23: an exact e2e harness (opt-in) and what the production path still lacks
+
+`pgw.engine.fused2_remote`: the provider's pair op as its own process (`Fused2Service`: CUDA ring products via
+`PreparedWeight`, any K <= 56, public `w8` + `hmul` only, from `Fused2Weights.save(provider_only=True)`) on a
+0600 Unix socket or loopback TCP, and the gateway's client `RemoteFused2Provider` (the `Fused2Provider`
+interface, so `Fused2MaskedBackend` masks, unmasks, range-checks and Freivalds-checks both stages unchanged).
+`Fused2MaskSource.prefill(rows)` batches the masks ahead of use (the same rows as the lazy path; single use).
+`benchmarks/fused2_e2e.py` runs one greedy generation through it and replays it on the plain reference;
+`deploy/modal/fused2_e2e.py` is the one-container Modal app for the 7B run (README: "fused2, 2 provider trips
+per layer").
+
+Mask demand: one slot per token row, as today (`r_x`, `W1 r_x`, `v`, `W2' v` per trip key: `5d + 3I + q`
+elements per layer, the same as the four linears of a standard slot), the same factory MACs per slot
+(0.5B: 357.8 M, measured), at K56 7 bytes per element instead of 4.
+
+Local check (Qwen2.5-0.5B, both processes on one loaded 4-vCPU box, provider on CPU, K56A12C53, b = 8):
+49 trips per token (2L + 1), all 9 forward calls bit-identical to the plain replay, every row at 12
+activation bits, 3.40 MB per token on the socket (K56), gateway work about 2 ms per trip in Python
+(+ the LM head), provider CPU products 113 ms per trip (a GPU's job).
+
+Still missing for the production stack (none needed by the harness): a pair item in the wire protocol and the
+binary trip lane, a service handler and batcher entry for it (two ring GEMMs, the multiply and the add, the same
+kernels), pair-mask segments in the store (`W1 r_x`, `W2' v`, p61 check vectors) and an encrypted factory for
+K56 (an HE modulus above 2^64: not supported) or a plain factory with weights on the gateway, a native p61
+check and a native per-trip path (the TripEngine / native decode driver have no pair op), speculation padding,
+the provider LM head folded into the last trip, and the 7B quality check.

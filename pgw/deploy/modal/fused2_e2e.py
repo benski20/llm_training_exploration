@@ -78,7 +78,8 @@ app = modal.App("pgw-fused2-e2e", image=image)
 
 @app.function(gpu=GPU, cpu=CPUS, memory=1024 * MEM_GIB, timeout=40 * 60, max_containers=1, retries=0)
 def run(tokens: int = 32, ring: str = "K56A12C53", migrate_bits: int = 8, columns: int = 0, gateway_bits: int = 12,
-        threads: int = 0, provider_user: bool = False, replay: bool = True, replay_calls: int = 3) -> dict:
+        threads: int = 0, provider_user: bool = False, replay: bool = True, replay_calls: int = 3,
+        auto_bits: bool = True) -> dict:
     """Start the provider (GPU) and the gateway (CPU); returns the e2e result (JSON)."""
     out = Path("/srv/f2_result.json")
     sock_dir = Path("/srv/f2prov")
@@ -91,7 +92,7 @@ def run(tokens: int = 32, ring: str = "K56A12C53", migrate_bits: int = 8, column
     cmd = [sys.executable, "/opt/pgw-modal/fused2_e2e.py", "--hf-dir", HF_DIR, "--pack", PACK, "--ring", ring,
            "--migrate-bits", str(migrate_bits), "--columns", str(columns), "--gateway-bits", str(gateway_bits),
            "--tokens", str(tokens), "--provider-device", "cuda", "--address", f"unix:{sock_dir / 'f2.sock'}",
-           "--provider-cmd-prefix", prefix, "--json", str(out)]
+           "--provider-cmd-prefix", prefix, "--json", str(out)] + (["--auto-bits"] if auto_bits else [])
     if threads:
         cmd += ["--threads", str(threads)]
     if not replay:
@@ -107,7 +108,9 @@ def run(tokens: int = 32, ring: str = "K56A12C53", migrate_bits: int = 8, column
 
 @app.local_entrypoint()
 def main(tokens: int = 32, ring: str = "K56A12C53", migrate_bits: int = 8, columns: int = 0, gateway_bits: int = 12,
-         threads: int = 0, provider_user: bool = False, replay: bool = True, replay_calls: int = 3) -> None:
-    res = run.remote(tokens, ring, migrate_bits, columns, gateway_bits, threads, provider_user, replay, replay_calls)
+         threads: int = 0, provider_user: bool = False, replay: bool = True, replay_calls: int = 3,
+         auto_bits: bool = True) -> None:
+    res = run.remote(tokens, ring, migrate_bits, columns, gateway_bits, threads, provider_user, replay, replay_calls,
+                     auto_bits)
     print(json.dumps(res, indent=1))
     Path("fused2_e2e_result.json").write_text(json.dumps(res, indent=1))

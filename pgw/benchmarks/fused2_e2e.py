@@ -63,6 +63,19 @@ def _pct(xs: list[float], q: float) -> float:
     return s[min(len(s) - 1, int(q * (len(s) - 1) + 0.5))]
 
 
+def probe_rows_below_a(pack: Any, w: Any, ring: Any, ids: torch.Tensor) -> float:
+    """Fraction of trip rows whose a-priori bound forces fewer than ``A`` activation bits on public text."""
+    from pgw.engine.fused2 import Fused2PlainBackend, enable_fused2
+    from pgw.engine.model import TransformerModel
+
+    m = TransformerModel(pack, Fused2PlainBackend(ring))
+    sched = enable_fused2(m, w, ring)
+    with torch.no_grad():
+        m.forward(ids, m.new_cache(len(ids) + 1))
+    tot = sum(sched.bits_hist.values())
+    return 1.0 - sched.bits_hist.get(ring.a, 0) / max(1, tot)
+
+
 def build_weights(args: argparse.Namespace, pack: Any, tok: Any, ring: Any) -> Any:
     from pgw.engine.fused2 import Fused2Weights, calibrate_fused2, hf_float_linears, migration_multipliers
 
@@ -73,8 +86,18 @@ def build_weights(args: argparse.Namespace, pack: Any, tok: Any, ring: Any) -> A
         w = Fused2Weights(pack, fl)
         info: dict[str, Any] = {"calibration": None, "fold": "unmigrated (old reference)"}
     elif args.columns <= 0:  # pure pack-time migration: public weights only, no calibration, no gateway columns
-        w = Fused2Weights(pack, fl, multipliers=migration_multipliers(pack, args.migrate_bits))
-        info = {"calibration": None, "fold": f"migrated {args.migrate_bits} bits"}
+        tries = [args.migrate_bits] + ([b for b in (6, 4) if b < args.migrate_bits] if args.auto_bits else [])
+        probes: dict[str, float] = {}
+        for b in tries:
+            w = Fused2Weights(pack, fl, multipliers=migration_multipliers(pack, b))
+            if not args.auto_bits:
+                break
+            below = probe_rows_below_a(pack, w, ring, tok(CALIB_TEXT, return_tensors="pt").input_ids[0][:128])
+            probes[str(b)] = below
+            print(f"migration {b} bits: {100 * below:.2f}% of probe rows below {ring.a} activation bits", flush=True)
+            if below <= args.max_rows_below_a:
+                break
+        info = {"calibration": None, "fold": f"migrated {b} bits", "migrate_bits_used": b, "probe_rows_below_a": probes}
     else:
         ids = tok(CALIB_TEXT, return_tensors="pt").input_ids[0][: args.calib_tokens]
         cal = calibrate_fused2(pack, fl, [ids], ring, bits=args.migrate_bits, columns=args.columns,
@@ -94,6 +117,9 @@ def main() -> None:
     ap.add_argument("--pack", default=None, help="pgw pack of the same checkpoint (default: built in memory)")
     ap.add_argument("--ring", default="K56A12C53")
     ap.add_argument("--migrate-bits", type=int, default=8, help="0: the unmigrated fold (old reference)")
+    ap.add_argument("--auto-bits", action="store_true",
+                    help="probe 128 public tokens; if too many rows drop activation bits, migrate fewer (8, 6, 4)")
+    ap.add_argument("--max-rows-below-a", type=float, default=0.01)
     ap.add_argument("--columns", type=int, default=0, help=">0: calibrated split fold with that many top columns")
     ap.add_argument("--gateway-bits", type=int, default=12)
     ap.add_argument("--calib-tokens", type=int, default=512)
