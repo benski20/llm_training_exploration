@@ -609,6 +609,7 @@ def run_e2e(live: Any, args: argparse.Namespace, ttl_s: int) -> int:
                   f"{ku.get('stock_slope_slots_per_s')} slots/s; token-weighted decode "
                   f"{sus.get('decode_tokens_per_s_overall')} tok/s", flush=True)
         if pair.colocated:  # one call: the service's log comes with the result
+            print("---- service log errors ----\n" + "\n".join(res.get("service_log_errors") or []))
             print("---- service log tail ----\n" + str(res.get("service_log_tail", ""))[-2500:])
         else:
             try:

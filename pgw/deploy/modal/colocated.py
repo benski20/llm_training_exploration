@@ -476,10 +476,16 @@ def pair(run_id: str, ttl_s: int = 80 * 60, e2e: bool = False, local_linears: st
     slog = LOGS / "service.log"
     gtail = glog.read_text(errors="replace") if glog.exists() else ""
     result["log_tail"] = (gtail.replace(token, "<setup-token>") if token else gtail)[-6000:]
-    result["service_log_tail"] = slog.read_text(errors="replace")[-4000:] if slog.exists() else ""
+    _stext = slog.read_text(errors="replace") if slog.exists() else ""
+    result["service_log_tail"] = _stext[-4000:]
+    # the root cause of a start-up failure is often far above the traceback tail: keep the error lines too
+    result["service_log_errors"] = [ln[:400] for ln in _stext.splitlines()
+                                    if any(k in ln for k in (" ERROR ", " CRITICAL ", "Error: ", "Exception: ",
+                                                             "SystemExit", "refus"))][-40:]
     result["reason"] = reason
     if e2e:
-        live["e2e"] = {k: v for k, v in result.items() if k not in ("log_tail", "service_log_tail")}
+        live["e2e"] = {k: v for k, v in result.items() if k not in ("log_tail", "service_log_tail",
+                                                                   "service_log_errors")}
     if info and (live.get("customer") or {}).get("run_id") == run_id:
         live["customer"] = {**info, "setup_token": "(expired)", "stopped_at": time.time(), "stop_reason": reason}
     if pinfo and (live.get("provider") or {}).get("run_id") == run_id:
