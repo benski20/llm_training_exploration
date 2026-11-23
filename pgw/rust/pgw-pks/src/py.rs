@@ -21,7 +21,7 @@ fn kerr(e: kernel::Error) -> PyErr {
 }
 
 fn isa_of(name: &str) -> PyResult<Isa> {
-    Isa::parse(name).ok_or_else(|| verr(format!("unknown isa {name:?} (auto, avx512, avx2, scalar)")))
+    Isa::parse(name).ok_or_else(|| verr(format!("unknown isa {name:?} (auto, avx512ifma, avx512, avx2, scalar)")))
 }
 
 fn key32(b: &[u8]) -> PyResult<[u8; 32]> {

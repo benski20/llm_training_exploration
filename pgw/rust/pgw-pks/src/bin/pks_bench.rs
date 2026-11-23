@@ -126,9 +126,9 @@ fn main() {
             let per = (n * 16) as f64;
             let reps = size.clamp(1, 1000);
             let (s0, _) = time(5, || kernel::ntt_bench(isa, pr, 0, &mut a, &h, &t, reps));
-            let (s1, _) = time(5, || kernel::ntt_bench(isa, pr, match isa { Isa::Avx512 => 5, Isa::Avx2 => 9, _ => 1 }, &mut a, &h, &t, reps));
+            let (s1, _) = time(5, || kernel::ntt_bench(isa, pr, match isa { Isa::Avx512 | Isa::Avx512Ifma => 5, Isa::Avx2 => 9, _ => 1 }, &mut a, &h, &t, reps));
                         let (s2, _) = time(5, || kernel::ntt_bench(isa, pr, 2, &mut a, &h, &t, reps));
-            let (s3, _) = time(5, || kernel::ntt_bench(isa, pr, match isa { Isa::Avx512 => 7, Isa::Avx2 => 11, _ => 3 }, &mut a, &h, &t, reps));
+            let (s3, _) = time(5, || kernel::ntt_bench(isa, pr, match isa { Isa::Avx512 | Isa::Avx512Ifma => 7, Isa::Avx2 => 11, _ => 3 }, &mut a, &h, &t, reps));
             let f = |s: f64| s * 1e9 / per / reps as f64;
             println!("{{\"mode\":\"ntt\",\"inv_l_mul\":{:.3},\"inv_l_mul_fast\":{:.3},\"fwd_l\":{:.3},\"fwd_l_fast\":{:.3}}}", f(s0), f(s1), f(s2), f(s3));
         }

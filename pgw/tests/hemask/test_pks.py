@@ -173,21 +173,22 @@ def test_native_isas_and_threads_identical(monkeypatch: pytest.MonkeyPatch) -> N
     hint = pn.keyswitch(hs, k_hat[None].astype(np.uint32))
     y = bytes(pack_bits(pn.keyswitch(hs, beta, matmul_mod64(w, b) & M56).reshape(-1), 36))
     th = np.stack([s.trhat for s in secrets])
-    outs = [nat.decrypt(hint, y, 36, th, [256], thr, isa) for isa in ("scalar", "avx2", "avx512") for thr in (1, 3)]
+    isas = ("scalar", "avx2", "avx512", "avx512ifma")
+    outs = [nat.decrypt(hint, y, 36, th, [256], thr, isa) for isa in isas for thr in (1, 3)]
     assert all(np.array_equal(o, outs[0]) for o in outs)
     assert np.array_equal(outs[0].astype(np.int64), ((w.astype(np.int64) @ r.T) & 0xFFFFFFFF).T)
     ts = np.stack([s.t for s in secrets])
-    encs = [nat.encrypt(b"q" * 32, r, ts, [b"e" * 32], thr, isa) for isa in ("scalar", "avx2", "avx512")
+    encs = [nat.encrypt(b"q" * 32, r, ts, [b"e" * 32], thr, isa) for isa in isas
             for thr in (1, 2, 3)]
     assert all(np.array_equal(e, encs[0]) for e in encs)
     kh = nat.KHat(k_hat.astype(np.uint32))
     tr = secrets[0].t_reply.copy()
-    keys = [nat.reply_key(kh, ts[0], tr, b"x" * 32, isa) for isa in ("scalar", "avx2", "avx512")]
+    keys = [nat.reply_key(kh, ts[0], tr, b"x" * 32, isa) for isa in isas]
     assert all(np.array_equal(k[0], keys[0][0]) and np.array_equal(k[1], keys[0][1]) for k in keys)
 
 
 @NATIVE
-@pytest.mark.parametrize("isa", ["scalar", "avx2", "avx512"])
+@pytest.mark.parametrize("isa", ["scalar", "avx2", "avx512", "avx512ifma"])
 def test_native_partial_chunks_equal_reference(isa: str) -> None:
     """Every ISA copy equals the numpy reference bit for bit at shapes with partial 16-block chunks (n = 400:
     25 blocks; m = 640: 20 row blocks) and partial groups (rows 300 = 256 + 44)."""

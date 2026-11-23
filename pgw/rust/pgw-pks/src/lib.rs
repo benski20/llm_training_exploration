@@ -13,6 +13,8 @@ pub mod simd;
 pub mod vntt;
 #[cfg(target_arch = "x86_64")]
 pub mod simd2;
+#[cfg(target_arch = "x86_64")]
+pub mod ifma;
 #[cfg(feature = "python")]
 mod py;
 

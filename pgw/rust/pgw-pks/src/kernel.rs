@@ -99,7 +99,7 @@ fn keystream(fast: Vx, key: &[u8; 32], offset: u64, out: &mut [u8]) {
     if offset % 64 == 0 && out.len() % 64 == 0 && offset / 64 + (out.len() / 64) as u64 <= 1 << 32 {
         // SAFETY: `fast` comes from `Vx::of` of an ISA capped at what the CPU supports (`Isa::parse`).
         match fast {
-            Vx::Z => return unsafe { crate::simd::chacha20_blocks(key, (offset / 64) as u32, out) },
+            Vx::Z | Vx::Zi => return unsafe { crate::simd::chacha20_blocks(key, (offset / 64) as u32, out) },
             Vx::Y => return unsafe { crate::simd2::chacha20_blocks(key, (offset / 64) as u32, out) },
             Vx::Port => {}
         }
@@ -172,22 +172,30 @@ pub fn keystream_isa(isa: Isa, key: &[u8; 32], offset: u64, out: &mut [u8]) {
     keystream(Vx::of(isa), key, offset, out)
 }
 
-/// Which hand-written vector copy a kernel uses: `Z` (AVX-512), `Y` (AVX2) or the portable code.
+/// Which hand-written vector copy a kernel uses: `Zi` (AVX-512 with the IFMA decryption), `Z` (AVX-512),
+/// `Y` (AVX2) or the portable code.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Vx {
     Port,
     Y,
     Z,
+    Zi,
 }
 
 impl Vx {
     /// The copy for an ISA that `Isa::parse` capped at what this CPU supports.
     pub fn of(isa: Isa) -> Vx {
         match isa {
+            Isa::Avx512Ifma if cfg!(target_arch = "x86_64") => Vx::Zi,
             Isa::Avx512 if cfg!(target_arch = "x86_64") => Vx::Z,
             Isa::Avx2 if cfg!(target_arch = "x86_64") => Vx::Y,
             _ => Vx::Port,
         }
+    }
+
+    /// An AVX-512 copy (with or without IFMA).
+    pub fn z(self) -> bool {
+        matches!(self, Vx::Z | Vx::Zi)
     }
 }
 
@@ -198,7 +206,7 @@ fn inv_mul(fast: Vx, pr: &Prime, a: &mut [u32], h: &[u32], t: &[u32]) {
     // SAFETY: `fast` comes from `Vx::of` of an ISA that `Isa::parse` capped at what the CPU supports.
     #[cfg(target_arch = "x86_64")]
     match fast {
-        Vx::Z => return unsafe { crate::vntt::inv_l_mul_512(pr, a, h, t) },
+        Vx::Z | Vx::Zi => return unsafe { crate::vntt::inv_l_mul_512(pr, a, h, t) },
         Vx::Y => return unsafe { crate::vntt::inv_l_mul_256(pr, a, h, t) },
         Vx::Port => {}
     }
@@ -212,7 +220,7 @@ fn fwd(fast: Vx, pr: &Prime, a: &mut [u32]) {
     // SAFETY: as in `inv_mul`.
     #[cfg(target_arch = "x86_64")]
     match fast {
-        Vx::Z => return unsafe { crate::vntt::fwd_l_512(pr, a) },
+        Vx::Z | Vx::Zi => return unsafe { crate::vntt::fwd_l_512(pr, a) },
         Vx::Y => return unsafe { crate::vntt::fwd_l_256(pr, a) },
         Vx::Port => {}
     }
@@ -225,7 +233,7 @@ fn fwd(fast: Vx, pr: &Prime, a: &mut [u32]) {
 #[inline(always)]
 fn ntt_kernel(pr: &Prime, which: u32, a: &mut [u32], h: &[u32], t: &[u32], reps: usize) {
     let fast = match which / 4 {
-        1 if Isa::detect() == Isa::Avx512 => Vx::Z,
+        1 if Isa::detect() >= Isa::Avx512 => Vx::Z,
         2 if Isa::detect() != Isa::Scalar => Vx::Y,
         _ => Vx::Port,
     };
@@ -335,7 +343,7 @@ fn enc_chunk(fast: Vx, cx: &Ctx, it: &EncItem<'_>, c0: usize, that: &[Vec<Vec<u3
             // g D + 255); the mask gather reads only rows < it.rows of r; `fast` is capped at the CPU.
             let (rp, valid) = (it.r.as_ptr().wrapping_add(g * D * it.n), it.rows.saturating_sub(g * D).min(D));
             unsafe {
-                if fast == Vx::Z {
+                if fast.z() {
                     crate::simd::enc_out(&kc, s16.as_ptr(), NU, lanes, c0, cols, it.n, rp, valid, noise.0.as_ptr(),
                                          b.0.add(g * D));
                 } else {
@@ -483,7 +491,7 @@ fn ksk_inner(fast: Vx, km: &[u32], t: &[i8], tr: &[i8], e_key: &[u8; 32], beta: 
         fwd(fast, pr, &mut m16.0);
         let (p, pn) = (pr.p, pr.pn);
         #[cfg(target_arch = "x86_64")]
-        if fast == Vx::Z {
+        if fast.z() {
             // SAFETY: km, beta hold 4 x RANK x NR words, th NR, m16 NR L; AVX-512 (`fast`).
             unsafe {
                 crate::simd::ksk_out(p, pn, NR, km[i * RANK * NR..].as_ptr(), th.0.as_ptr(), m16.0.as_ptr(),
@@ -542,13 +550,15 @@ pub struct DecItem<'a> {
 }
 
 #[inline(always)]
-fn dec_chunk(fast: Vx, cx: &Ctx, it: &DecItem<'_>, b0: usize, outs: &[Shared<u32>], h16: &mut [u32], s16: &mut [u32]) {
+#[allow(clippy::too_many_arguments)]
+fn dec_chunk(fast: Vx, cx: &Ctx, it: &DecItem<'_>, b0: usize, outs: &[Shared<u32>], h16: &mut [u32], s16: &mut [u32],
+             x64: &mut [u64], tq: &[u64]) {
     let nb = it.m / PACK;
     let lanes = (nb - b0).min(L);
     for i in 0..2 {
         let h = &mut h16[i * NR * L..(i + 1) * NR * L];
         #[cfg(target_arch = "x86_64")]
-        if fast == Vx::Z {
+        if fast.z() {
             let src: [*const u8; L] =
                 std::array::from_fn(|l| it.hint[((b0 + l.min(lanes - 1)) * 2 + i) * NR * 3..].as_ptr());
             // SAFETY: each source has 3 NR bytes (masked 48-byte loads), h has NR L words; AVX-512 (`fast`).
@@ -574,6 +584,34 @@ fn dec_chunk(fast: Vx, cx: &Ctx, it: &DecItem<'_>, b0: usize, outs: &[Shared<u32
     let wscale = (1u64 << K) as f64 / cx.q1 as f64;
     let mut tmp = [0u32; L * PACK];
     let mut wv = [0u64; L * PACK];
+    #[cfg(target_arch = "x86_64")]
+    if fast == Vx::Zi {
+        // one composite NTT modulo q1 (crate::ifma): same canonical c1 t' mod q1 as the two-prime path
+        let qc = crate::ifma::q1ctx(&cx.qp[0], &cx.qp[1]);
+        let kc = crate::simd::DecConsts { p0, p1, pn1, inv01_m: cx.inv01_m, c0scale, wscale };
+        let src = match it.c0r {
+            C0::Words(v) => crate::simd::C0p::Words(v.as_ptr()),
+            C0::Packed36 { data, count } => crate::simd::C0p::Packed36 { lo: data.as_ptr(), hi: data[4 * count..].as_ptr() },
+        };
+        let (h64, s64) = x64.split_at_mut(NR * L);
+        // SAFETY: `Vx::Zi` only for `Isa::Avx512Ifma`, capped at the CPU by `Isa::parse`; sizes asserted inside.
+        unsafe { crate::ifma::hint_to_q1(qc, h16, NR, h64) };
+        for (g, &rows) in it.rows.iter().enumerate() {
+            let (tg, tsg) = (&tq[g * 2 * NR..(g * 2 + 1) * NR], &tq[(g * 2 + 1) * NR..(g * 2 + 2) * NR]);
+            unsafe { crate::ifma::inv_mul_q1(qc, s64, h64, tg, tsg) };
+            let gbase = g * nb * NR;
+            let out = outs[g];
+            for u in 0..rows {
+                let idx0: [usize; L] = std::array::from_fn(|l| gbase + (b0 + l.min(lanes - 1)) * NR + PACK * u);
+                // SAFETY: as in the two-prime path below.
+                let outp: [*mut u32; L] =
+                    std::array::from_fn(|l| unsafe { out.0.add(u * it.m + PACK * (b0 + l.min(lanes - 1))) });
+                unsafe { crate::ifma::dec_combine_q1(qc, &kc, s64[PACK * u * L..].as_ptr(), lanes, src, &idx0, &outp) };
+            }
+        }
+        return;
+    }
+    let _ = (&x64, tq);
     for (g, &rows) in it.rows.iter().enumerate() {
         for i in 0..2 {
             let pr = &cx.qp[i];
@@ -599,7 +637,7 @@ fn dec_chunk(fast: Vx, cx: &Ctx, it: &DecItem<'_>, b0: usize, outs: &[Shared<u32
                     std::array::from_fn(|l| unsafe { out.0.add(u * it.m + PACK * (b0 + l.min(lanes - 1))) });
                 let (s0, s1) = (s16[PACK * u * L..].as_ptr(), s16[NR * L + PACK * u * L..].as_ptr());
                 unsafe {
-                    if fast == Vx::Z {
+                    if fast.z() {
                         crate::simd::dec_combine(&kc, s0, s1, lanes, src, &idx0, &outp);
                     } else {
                         crate::simd2::dec_combine(&kc, s0, s1, lanes, src, &idx0, &outp);
@@ -652,27 +690,44 @@ fn dec_chunk(fast: Vx, cx: &Ctx, it: &DecItem<'_>, b0: usize, outs: &[Shared<u32
 }
 
 #[inline(always)]
-fn dec_worker(fast: Vx, it: &DecItem<'_>, ptrs: &[Shared<u32>], th: usize, threads: usize) {
+fn dec_worker(fast: Vx, it: &DecItem<'_>, ptrs: &[Shared<u32>], th: usize, threads: usize, tq: &[u64]) {
     let cx = ctx();
     let chunks = (it.m / PACK).div_ceil(L);
     let mut h16 = vec![0u32; 2 * NR * L];
-    let mut s16 = Wiping(vec![0u32; 2 * NR * L]);
+    let mut s16 = Wiping(vec![0u32; if fast == Vx::Zi { 0 } else { 2 * NR * L }]);
+    // IFMA path: the hint and the NTT output modulo q1 (u64 lanes); the hint is public, the output is not
+    let mut x64 = Wiping(vec![0u64; if fast == Vx::Zi { 2 * NR * L } else { 0 }]);
     for ch in (th..chunks).step_by(threads) {
-        dec_chunk(fast, cx, it, ch * L, ptrs, &mut h16, &mut s16.0);
+        dec_chunk(fast, cx, it, ch * L, ptrs, &mut h16, &mut s16.0, &mut x64.0, tq);
     }
 }
 
-crate::multiversion!(fn dec_worker_isa(fast: Vx, it: &DecItem<'_>, ptrs: &[Shared<u32>], th: usize, threads: usize)
-    => dec_worker);
+crate::multiversion!(fn dec_worker_isa(fast: Vx, it: &DecItem<'_>, ptrs: &[Shared<u32>], th: usize, threads: usize,
+    tq: &[u64]) => dec_worker);
 
 fn decrypt_inner(isa: Isa, it: &DecItem<'_>, outs: &mut [&mut [u32]], threads: usize) {
     let chunks = (it.m / PACK).div_ceil(L);
     let ptrs: Vec<Shared<u32>> = outs.iter_mut().map(|o| Shared(o.as_mut_ptr())).collect();
     let threads = threads.clamp(1, chunks.max(1));
+    let fast = Vx::of(isa);
+    // IFMA path: each group's t' NTT as one operand modulo q1 with its Shoup companions (secret, wiped)
+    let mut tq = Wiping(Vec::new());
+    #[cfg(target_arch = "x86_64")]
+    if fast == Vx::Zi {
+        let cx = ctx();
+        let qc = crate::ifma::q1ctx(&cx.qp[0], &cx.qp[1]);
+        tq.0 = vec![0u64; it.rows.len() * 2 * NR];
+        for (g, ch) in tq.0.chunks_exact_mut(2 * NR).enumerate() {
+            let (t, ts) = ch.split_at_mut(NR);
+            let th = &it.trhat[g * 2 * NR..(g + 1) * 2 * NR];
+            crate::ifma::secret_operand(qc, &cx.qp[1], cx.inv01_m, &th[..NR], &th[NR..], t, ts);
+        }
+    }
+    let tq = &tq.0;
     std::thread::scope(|s| {
         for th in 0..threads {
             let ptrs = &ptrs;
-            s.spawn(move || dec_worker_isa(isa, Vx::of(isa), it, ptrs, th, threads));
+            s.spawn(move || dec_worker_isa(isa, fast, it, ptrs, th, threads, tq));
         }
     });
 }
@@ -920,7 +975,7 @@ mod tests {
 
     fn isas() -> Vec<Isa> {
         let mut v = vec![Isa::Scalar];
-        for name in ["avx2", "avx512"] {
+        for name in ["avx2", "avx512", "avx512ifma"] {
             let i = Isa::parse(name).unwrap();
             if !v.contains(&i) {
                 v.push(i);

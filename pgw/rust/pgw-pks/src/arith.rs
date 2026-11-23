@@ -469,11 +469,13 @@ impl Prime {
 }
 
 /// Instruction set of the kernels (all compiled in, picked at run time; identical results).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// `Avx512Ifma` is `Avx512` plus the IFMA decryption (one composite NTT modulo `q1`, [`crate::ifma`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Isa {
     Scalar,
     Avx2,
     Avx512,
+    Avx512Ifma,
 }
 
 impl Isa {
@@ -488,6 +490,9 @@ impl Isa {
                 && std::arch::is_x86_feature_detected!("fma")
                 && std::arch::is_x86_feature_detected!("bmi2")
             {
+                if std::arch::is_x86_feature_detected!("avx512ifma") {
+                    return Isa::Avx512Ifma;
+                }
                 return Isa::Avx512;
             }
             if std::arch::is_x86_feature_detected!("avx2")
@@ -501,7 +506,8 @@ impl Isa {
         Isa::Scalar
     }
 
-    /// `auto` (detect, or `PGW_PKS_ISA`), `avx512`, `avx2`, `scalar`; capped at what the CPU has.
+    /// `auto` (detect, or `PGW_PKS_ISA`), `avx512ifma`, `avx512`, `avx2`, `scalar`; capped at what the CPU
+    /// has (each level includes the ones below it).
     pub fn parse(name: &str) -> Option<Isa> {
         let best = Isa::detect();
         let want = match name {
@@ -509,16 +515,13 @@ impl Isa {
                 "" | "auto" => best,
                 other => return Isa::parse(other),
             },
+            "avx512ifma" => Isa::Avx512Ifma,
             "avx512" => Isa::Avx512,
             "avx2" => Isa::Avx2,
             "scalar" => Isa::Scalar,
             _ => return None,
         };
-        Some(match (want, best) {
-            (Isa::Avx512, Isa::Avx512) => Isa::Avx512,
-            (Isa::Avx512 | Isa::Avx2, Isa::Avx512 | Isa::Avx2) => Isa::Avx2,
-            _ => Isa::Scalar,
-        })
+        Some(want.min(best))
     }
 
     pub fn name(self) -> &'static str {
@@ -526,6 +529,7 @@ impl Isa {
             Isa::Scalar => "scalar",
             Isa::Avx2 => "avx2",
             Isa::Avx512 => "avx512",
+            Isa::Avx512Ifma => "avx512ifma",
         }
     }
 }
@@ -548,7 +552,7 @@ macro_rules! multiversion {
                 unsafe fn v256($($a: $t),*) $(-> $r)? { $inner($($a),*) }
                 match isa {
                     // SAFETY: `Isa::parse` caps the ISA at what this CPU supports.
-                    $crate::arith::Isa::Avx512 => return unsafe { v512($($a),*) },
+                    $crate::arith::Isa::Avx512 | $crate::arith::Isa::Avx512Ifma => return unsafe { v512($($a),*) },
                     $crate::arith::Isa::Avx2 => return unsafe { v256($($a),*) },
                     $crate::arith::Isa::Scalar => {}
                 }
