@@ -53,7 +53,7 @@ def _run(pack: Any, template: Path, monkeypatch: pytest.MonkeyPatch, driver: boo
     st = _Store(template, pack)
     monkeypatch.setattr(hooks, "_res", lambda p, n, seed: st.windowed(n, 5, 3))
     client = client or LocalComputeClient(pack, record=True)
-    noise = _Seeded()
+    noise = kw.pop("noise", None) or _Seeded()
     model = _masked(pack, client=client, trip_engine=True, sync_trips=True, noise_monitor=noise, **kw)
     model.set_float_ops("native")
     be = model.backend
@@ -313,3 +313,61 @@ def test_p31_driver_equals_plain_bytes_identical_and_tamper(qwen_pack: InMemoryP
         client = _Tamper(qwen_pack, 12)
         with pytest.raises(IntegrityError):
             _run(qwen_pack, p31_template, monkeypatch, True, client=client, **kw)
+
+
+class _AlarmAt(_Seeded):
+    """Alarms in the statistics of its ``at``-th sampled call and records how many payloads had left by then."""
+
+    def __init__(self, at: int, sent: Any):
+        super().__init__()
+        self.at = at
+        self.sent = sent
+        self.seen = 0
+        self.sent_at_alarm: int | None = None
+
+    def _inspect(self, x: torch.Tensor, xq: torch.Tensor | None, reasons: list[str]) -> None:
+        super()._inspect(x, xq, reasons)  # every path's statistics (guard, inspect_planned), under the lock
+        self.seen += 1
+        if self.seen == self.at:
+            reasons.append("test: statistics alarm")
+            self.sent_at_alarm = self.sent()
+
+
+@pytest.mark.parametrize("at", [18, 21])
+@pytest.mark.parametrize("noise_async", [False, True])
+@pytest.mark.parametrize("lane", [False, True])
+def test_sampled_alarm_stops_the_next_payload(qwen_pack: InMemoryPack, store_template: Path,  # noqa: F811
+                                              monkeypatch: pytest.MonkeyPatch, noise_async: bool,
+                                              lane: bool, at: int) -> None:
+    """An alarm raised by a sampled trip's statistics blocks the very next payload (fail closed), with and
+    without the driver: the driver ends its call at each sampled trip, so the statistics run (or are
+    joined) before the next trip's sampling draw and payload, as on the per-trip path; with inline statistics
+    the sampled trip's own payload never leaves (it is handed back before its send). The alarm comes in a
+    decode pass (past the first 16 always-sampled calls: the prompt pass and the first decode pass)."""
+    from pgw.wire.lane import native_channel_class
+
+    if lane and native_channel_class() is None:
+        pytest.skip("pgw_fast without the native lane channel")
+    got = []
+    for driver in (False, True):
+        with tempfile.TemporaryDirectory(prefix="pgwd") as d:
+            ln = _Lane(qwen_pack, d) if lane else None
+            client = ln.client if ln is not None else LocalComputeClient(qwen_pack, record=True)
+            def count(ln: Any = ln, client: Any = client) -> int:
+                return len(ln.local.lane.trips) + len(ln.local.received) if ln is not None else len(client.received)
+
+            noise = _AlarmAt(at, count)
+            try:
+                with pytest.raises(IntegrityError, match="outbound-noise monitor alarm"):
+                    _run(qwen_pack, store_template, monkeypatch, driver, client=client, noise_async=noise_async,
+                         noise=noise)
+            finally:
+                if ln is not None:
+                    ln.client.close()
+            assert noise.sent_at_alarm is not None
+            if not noise_async:  # inline statistics: nothing left after the alarm
+                assert count() == noise.sent_at_alarm, (driver, count(), noise.sent_at_alarm)
+            got.append(count())
+    # the same trip carried the alarm and the same payloads had left when it stopped traffic (with
+    # noise_async_sampled the statistics run beside the sampled trip's own send and are joined before the next)
+    assert got[0] == got[1]

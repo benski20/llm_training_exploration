@@ -106,7 +106,8 @@ class _Mgr:
 
 
 def _floor_us(kern: Any, rows: int, iters: int) -> float | None:
-    """Device-only time of the fused GEMV for shard 0 (CUDA events, back-to-back launches)."""
+    """Device-only time of the fused GEMV for shard 0 (CUDA events, back-to-back launches: bounded below by the
+    host's launch rate, tens of us per Triton launch; see :func:`_device_us` for the device time)."""
     from pgw.core.triton_gemv import ring_gemv
 
     k0 = getattr(kern, "shards", [kern])[0]
@@ -127,6 +128,21 @@ def _floor_us(kern: Any, rows: int, iters: int) -> float | None:
         b.record()
         b.synchronize()
         return float(a.elapsed_time(b)) * 1e3 / iters
+
+
+def _device_us(kern: Any, rows: int) -> float | None:
+    """Device time of the fused GEMV for shard 0 with its current launch configuration (tuned or not): 20
+    launches in one CUDA graph, best of 3 replays (no host launch cost)."""
+    from pgw.core.triton_gemv import graph_time_ms, ring_gemv
+
+    k0 = getattr(kern, "shards", [kern])[0]
+    if k0.device.type != "cuda" or not k0.triton_gemv:
+        return None
+    w = k0._pw._w_dev
+    n, m = int(k0.in_features), int(k0.out_features)
+    x = torch.randint(0, 1 << 31, (rows, n), dtype=torch.int32, device=k0.device)
+    y = torch.empty((rows, m), dtype=torch.int32, device=k0.device)
+    return round(graph_time_ms(lambda: ring_gemv(x, w, 32, n=n, m=m, out=y), k0.device) * 1e3, 2)
 
 
 def bench(preset: str, tp: int, rows_list: list[int], iters: int, cpu: bool, modes: list[str],
@@ -200,7 +216,9 @@ def bench(preset: str, tp: int, rows_list: list[int], iters: int, cpu: bool, mod
     def run_graph_mode() -> None:
         grep = capture_lane_graphs(mgr, rows_list=rows_list)  # type: ignore[arg-type]
         out["graph_report"] = {"captured": grep.captured, "checked": grep.checked, "disabled": grep.disabled,
-                               "skipped": grep.skipped, "s": round(grep.seconds, 1)}
+                               "skipped": grep.skipped, "s": round(grep.seconds, 1), "tuning": grep.tuning}
+        for r in rows_list:  # device time per linear with the configuration the graphs captured
+            out["rows"][r]["device_us"] = {KINDS[i]: _device_us(k, r) for i, k in enumerate(kerns)}
         if not grep.disabled:
             for r in rows_list:
                 res, bad = timed(lambda i, r, j: bytes(svc.run_graph(0, i, 0, r, packed[r][i][j])), r)
@@ -270,8 +288,13 @@ def main() -> int:
                     help="resident blocks per SM to time the persistent worker with, e.g. 1,2 (default: the "
                          "PGW_SERVICE_PERSISTENT_BLOCKS_PER_SM setting); the first is reported as 'persistent'")
     ap.add_argument("--cpu", action="store_true", help="CPU smoke test (emulated persistent workers)")
+    ap.add_argument("--tune-rows", action="store_true",
+                    help="PGW_SERVICE_TRITON_GEMV_TUNE_ROWS=1: time few-row launch configurations per (rows, shape) "
+                         "before the lane graphs are captured (rows >= 2; graph_report.tuning has the picks)")
     ap.add_argument("--json", default="")
     a = ap.parse_args()
+    if a.tune_rows:
+        os.environ["PGW_SERVICE_TRITON_GEMV_TUNE_ROWS"] = "1"
     ngpu = 0 if a.cpu else torch.cuda.device_count()
     if not a.cpu and ngpu == 0:
         print("no GPU (use --cpu for a smoke test)", file=sys.stderr)
