@@ -52,9 +52,17 @@ def _app(tiny_pack_dir: Path, tmp_path: Path, store: Any, svc: InProcessService,
                       transports={MODEL: svc.transport}, key_store=keys)
 
 
-def _calls(svc: InProcessService) -> list[tuple[str, int]]:
-    """What the provider saw: (linear, rows) of every call, in order."""
-    return [(lid, int(x.shape[0])) for lid, x in svc.received]
+def _calls(svc: InProcessService) -> list[tuple[str, tuple[int, ...]]]:
+    """What the provider saw, in order: per run of calls to one linear, their row counts. A prompt pass's
+    pipelined blocks (``TransformerModel.pipeline_blocks``) are concurrent requests whose arrival order varies
+    from run to run in any configuration, so the row counts within such a run are compared as a sorted tuple."""
+    out: list[tuple[str, list[int]]] = []
+    for lid, x in svc.received:
+        if out and out[-1][0] == lid:
+            out[-1][1].append(int(x.shape[0]))
+        else:
+            out.append((lid, [int(x.shape[0])]))
+    return [(lid, tuple(sorted(rows))) for lid, rows in out]
 
 
 # ---- unit: the chunked chain and the ledger ---------------------------------------------------------------
