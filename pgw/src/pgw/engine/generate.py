@@ -774,11 +774,8 @@ class FeatureHeadDrafter(BuiltinDrafter):
                 return w8.to(torch.int8), sc.to(torch.float32)
             return quantize_weight_rows(w)
 
-        mats = {n: q(n, w) for n, w in (("w_in", self.w_in), ("w1", self.w1), ("w2", self.w2),
-                                        ("w_out", self.w_out), ("u", self.u))}
-        w8, sc = mats.pop("w_in")
-        mats["w_in_f"] = (w8[:, :hidden].contiguous(), sc)
-        mats["w_in_e"] = (w8[:, hidden:].contiguous(), sc)
+        mats = {n: q(n, w) for n, w in (("w_in_f", self.w_in[:, :hidden]), ("w_in_e", self.w_in[:, hidden:]),
+                                        ("w1", self.w1), ("w2", self.w2), ("w_out", self.w_out), ("u", self.u))}
         return {n: _native_int8_linear(w8, sc, None, ring, threads) for n, (w8, sc) in mats.items()}
 
     @classmethod
@@ -793,6 +790,10 @@ class FeatureHeadDrafter(BuiltinDrafter):
             raise ConfigError(f"{path}: head for hidden size {blob['hidden']}, target has {int(embed.shape[1])}")
         q8 = {k: (v["w8"], v["scale"]) for k, v in blob["int8"].items()}
         w = {k: w8.to(torch.float32) * sc.to(torch.float32)[:, None] for k, (w8, sc) in q8.items()}
+        if "w_in" in w:  # one scale per row over both halves (older files): the kernel splits it below
+            q8.pop("w_in")
+        else:  # the feature and token halves quantized on their own (feature_head_train.py)
+            w["w_in"] = torch.cat([w.pop("w_in_f"), w.pop("w_in_e")], dim=1)
         w.update({k: v.to(torch.float32) for k, v in blob["bias"].items()})
         tv = target_vocab if target_vocab is not None else int(embed.shape[0])
         if any(int(t) < 0 or int(t) >= tv for t in blob["vocab"]):

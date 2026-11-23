@@ -70,10 +70,21 @@ def train(args: str, run: str) -> dict:
     return {"wall_s": round(time.time() - t, 1), "gpu": gpu, "error": err, "files": files}
 
 
+@app.function(gpu="A10G", cpu=4.0, memory=32768, timeout=22 * 60, volumes={"/vol": vol},
+              region=os.environ.get("PGW_MODAL_REGION", "us-east") or None)
+def train_only(args: str, run: str) -> dict:
+    """Train and evaluate again from an earlier run's saved features (``--from-features /vol/<run>``)."""
+    return train.local(args, run)
+
+
 @app.local_entrypoint()
-def main(out: str, args: str = DEFAULT_ARGS, run: str = "") -> None:
+def main(out: str, args: str = DEFAULT_ARGS, run: str = "", from_run: str = "") -> None:
+    """``--from-run run-...``: train only, from that run's features on the Volume (no target model)."""
     run = run or time.strftime("run-%Y%m%d-%H%M%S")
-    res = train.remote(args, run)
+    if from_run:
+        res = train_only.remote(f"{args} --from-features /vol/{from_run}", run)
+    else:
+        res = train.remote(args, run)
     d = Path(out)
     d.mkdir(parents=True, exist_ok=True)
     for name, data in res["files"].items():

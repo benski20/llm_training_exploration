@@ -1,0 +1,262 @@
+{
+ "target": "Qwen/Qwen2.5-7B-Instruct",
+ "args": {
+  "target": "Qwen/Qwen2.5-7B-Instruct",
+  "device": "cuda",
+  "n_gen": 3000,
+  "n_tf": 1500,
+  "n_eval": 100,
+  "max_new": 320,
+  "max_prompt": 400,
+  "tf_max_len": 1024,
+  "gen_batch": 96,
+  "tf_tokens": 12288,
+  "configs": "256:8192,384:8192,512:8192,512:16384",
+  "epochs": 4,
+  "batch": 1024,
+  "lr": 0.001,
+  "wd": 0.01,
+  "noise": 0.05,
+  "reg": 0.5,
+  "unroll": 3,
+  "depth": 7,
+  "budget_min": 38.0,
+  "save_train_features": true,
+  "out": "/vol/run-20261122-233926"
+ },
+ "train_rows": 1213882,
+ "windows_train": 1160858,
+ "windows_val": 37652,
+ "gen_answers": 2582,
+ "gen_tokens": 756372,
+ "dataset_replies": 1261,
+ "dataset_reply_tokens": 453667,
+ "eval_answers": 85,
+ "eval_tokens": 24712,
+ "configs": {
+  "d256_v8192": {
+   "vocab_coverage_train_labels": 0.9101939068212561,
+   "alpha_top1_d1": 0.19528973777921657,
+   "alpha_top1_d1_vs_tf_argmax": 0.20848170929103269,
+   "positions": 24712,
+   "weights_per_step": 5112832,
+   "training": {
+    "history": [
+     {
+      "epoch": 0,
+      "loss": 9.6017,
+      "val_top1_by_depth": [
+       0.3758,
+       0.2885,
+       0.2553
+      ],
+      "train_top1_d1": 0.4293,
+      "s": 17.9
+     },
+     {
+      "epoch": 1,
+      "loss": 7.3289,
+      "val_top1_by_depth": [
+       0.4117,
+       0.3251,
+       0.2882
+      ],
+      "train_top1_d1": 0.5014,
+      "s": 34.2
+     },
+     {
+      "epoch": 2,
+      "loss": 6.2281,
+      "val_top1_by_depth": [
+       0.434,
+       0.3521,
+       0.3199
+      ],
+      "train_top1_d1": 0.55,
+      "s": 50.3
+     },
+     {
+      "epoch": 3,
+      "loss": 5.4325,
+      "val_top1_by_depth": [
+       0.4418,
+       0.3613,
+       0.3345
+      ],
+      "train_top1_d1": 0.5629,
+      "s": 66.5
+     }
+    ],
+    "best_val_top1_d1": 0.44175606966018677
+   }
+  },
+  "d384_v8192": {
+   "vocab_coverage_train_labels": 0.9101939068212561,
+   "alpha_top1_d1": 0.18962447393978635,
+   "alpha_top1_d1_vs_tf_argmax": 0.20172385885399804,
+   "positions": 24712,
+   "weights_per_step": 7865856,
+   "training": {
+    "history": [
+     {
+      "epoch": 0,
+      "loss": 9.4875,
+      "val_top1_by_depth": [
+       0.3783,
+       0.2927,
+       0.2593
+      ],
+      "train_top1_d1": 0.4442,
+      "s": 18.9
+     },
+     {
+      "epoch": 1,
+      "loss": 7.1641,
+      "val_top1_by_depth": [
+       0.4148,
+       0.3218,
+       0.287
+      ],
+      "train_top1_d1": 0.5248,
+      "s": 37.8
+     },
+     {
+      "epoch": 2,
+      "loss": 5.7744,
+      "val_top1_by_depth": [
+       0.4476,
+       0.3632,
+       0.3272
+      ],
+      "train_top1_d1": 0.5979,
+      "s": 56.7
+     },
+     {
+      "epoch": 3,
+      "loss": 4.7153,
+      "val_top1_by_depth": [
+       0.4564,
+       0.3724,
+       0.3397
+      ],
+      "train_top1_d1": 0.6194,
+      "s": 75.6
+     }
+    ],
+    "best_val_top1_d1": 0.45641666650772095
+   }
+  },
+  "d512_v8192": {
+   "vocab_coverage_train_labels": 0.9101939068212561,
+   "alpha_top1_d1": 0.19180964713499515,
+   "alpha_top1_d1_vs_tf_argmax": 0.203666235027517,
+   "positions": 24712,
+   "weights_per_step": 10749952,
+   "training": {
+    "history": [
+     {
+      "epoch": 0,
+      "loss": 9.4967,
+      "val_top1_by_depth": [
+       0.3693,
+       0.2812,
+       0.249
+      ],
+      "train_top1_d1": 0.4449,
+      "s": 20.6
+     },
+     {
+      "epoch": 1,
+      "loss": 7.1943,
+      "val_top1_by_depth": [
+       0.4177,
+       0.3246,
+       0.2904
+      ],
+      "train_top1_d1": 0.5387,
+      "s": 41.1
+     },
+     {
+      "epoch": 2,
+      "loss": 5.5743,
+      "val_top1_by_depth": [
+       0.4512,
+       0.3631,
+       0.3289
+      ],
+      "train_top1_d1": 0.631,
+      "s": 61.7
+     },
+     {
+      "epoch": 3,
+      "loss": 4.2773,
+      "val_top1_by_depth": [
+       0.4599,
+       0.3743,
+       0.3429
+      ],
+      "train_top1_d1": 0.6582,
+      "s": 82.3
+     }
+    ],
+    "best_val_top1_d1": 0.45989587903022766
+   }
+  },
+  "d512_v16384": {
+   "vocab_coverage_train_labels": 0.9665873618687814,
+   "alpha_top1_d1": 0.18569925542246682,
+   "alpha_top1_d1_vs_tf_argmax": 0.19779864033667854,
+   "positions": 24712,
+   "weights_per_step": 14944256,
+   "training": {
+    "history": [
+     {
+      "epoch": 0,
+      "loss": 10.1438,
+      "val_top1_by_depth": [
+       0.3764,
+       0.2834,
+       0.2495
+      ],
+      "train_top1_d1": 0.4567,
+      "s": 30.2
+     },
+     {
+      "epoch": 1,
+      "loss": 7.6367,
+      "val_top1_by_depth": [
+       0.4225,
+       0.3305,
+       0.2961
+      ],
+      "train_top1_d1": 0.5574,
+      "s": 60.5
+     },
+     {
+      "epoch": 2,
+      "loss": 5.9651,
+      "val_top1_by_depth": [
+       0.4584,
+       0.3664,
+       0.3318
+      ],
+      "train_top1_d1": 0.6498,
+      "s": 90.7
+     },
+     {
+      "epoch": 3,
+      "loss": 4.6432,
+      "val_top1_by_depth": [
+       0.4683,
+       0.3782,
+       0.3476
+      ],
+      "train_top1_d1": 0.6795,
+      "s": 121.0
+     }
+    ],
+    "best_val_top1_d1": 0.4683416485786438
+   }
+  }
+ }
+}

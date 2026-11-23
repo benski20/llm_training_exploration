@@ -15,6 +15,15 @@ SLA pilot. Three reasons:
 2. The HSM, KMS and TPM integrations have never run against real hardware or cloud services.
 3. There has been no external security audit.
 
+## Update 2026-11-23: 7B feature draft head trained on Modal (export bug found; gateway opt-in `draft_backend="feature_head"`)
+
+Qwen2.5-7B-Instruct features (1.21M rows: 2,582 greedy UltraChat answers + 1,261 dataset replies; one A10G job,
+~$0.75): the float head reaches validation top-1 0.46 (depth 1), but the exported int8 heads hold alpha 0.19 on
+85 held-out answers because one per-row scale over `W_in`'s feature and token halves zeroed the feature half.
+Exporter and loader fixed; a train-only rerun from the saved features (~$0.35) is pending approval. Gateway
+loads a head file (`draft_backend = "feature_head"`, `draft_head_path`; strict speculation only, defaults off),
+bit-identical to plain decoding in tests; 0.6-0.75 ms per head step on CPU (d = 384). Details:
+`research/plans/tree-speculation.md` section 9.
 ## Update 2026-11-22: Qwen2.5-32B co-located Modal run prepared (CPU-only gateway, H100 provider; not run)
 
 `launch.py --model qwen2.5-32b-instruct` (H100 only, `--gateway-cache` required): the provider's 37.5 GB pack from a

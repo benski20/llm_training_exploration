@@ -275,8 +275,9 @@ def test_feature_head_drafter_strict_exact(qwen_pack: InMemoryPack, tiny_tokeniz
 
 
 def _head_file(model: TransformerModel, path: Any, d: int = 16, seed: int = 1) -> list[int]:
-    """A head in the trained-file format (``benchmarks/feature_head_train.py`` export): int8 per-row weights,
-    float biases, a reduced vocabulary and ``U = H_V W_out`` (here from the tied embedding)."""
+    """A head in the trained-file format (``benchmarks/feature_head_train.py`` export): int8 per-row weights
+    (``W_in`` as feature and token halves with their own scales), float biases, a reduced vocabulary and
+    ``U = H_V W_out`` (here from the tied embedding)."""
     from pgw.core.ring import quantize_weight_rows
 
     g = torch.Generator().manual_seed(seed)
@@ -286,7 +287,7 @@ def _head_file(model: TransformerModel, path: Any, d: int = 16, seed: int = 1) -
         return torch.randn(*shape, generator=g) * 0.1
 
     vocab = list(range(1, int(model.arch.vocab_size), 3))
-    w = {"w_in": r(d, 2 * h), "w1": r(2 * d, d), "w2": r(d, 2 * d), "w_out": r(h, d)}
+    w = {"w_in_f": r(d, h), "w_in_e": r(d, h) * 30, "w1": r(2 * d, d), "w2": r(d, 2 * d), "w_out": r(h, d)}
     w["u"] = model.embed_tokens.to(torch.float32)[torch.tensor(vocab)] @ w["w_out"]
     q = {k: quantize_weight_rows(v) for k, v in w.items()}
     torch.save({"format": "pgw-feature-head-v1", "target": "test", "hidden": h, "d": d, "vocab": vocab,

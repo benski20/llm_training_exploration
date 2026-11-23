@@ -195,8 +195,15 @@ def q8(w: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
 
 
 def export(head: Head, hv: torch.Tensor, vocab: list[int], target: str, extra: dict) -> dict:
-    """The FeatureHeadDrafter file: int8 per-row weights + float32 scales, float32 biases, ``U = H_V W_out``."""
-    ws = {"w_in": head.w_in_eff(), "w1": head.w1.weight, "w2": head.w2.weight, "w_out": head.w_out_eff()}
+    """The FeatureHeadDrafter file: int8 per-row weights + float32 scales, float32 biases, ``U = H_V W_out``.
+
+    ``W_in`` is stored as its feature half and token half, each quantized per row on its own: the folded input
+    scales make the token half's weights ~100x the feature half's, so one scale per row would round the
+    feature half to almost nothing. The float weights are kept too (``float``; not read by the gateway)."""
+    hidden = int(hv.shape[1])
+    w_in = head.w_in_eff()
+    ws = {"w_in_f": w_in[:, :hidden], "w_in_e": w_in[:, hidden:], "w1": head.w1.weight, "w2": head.w2.weight,
+          "w_out": head.w_out_eff()}
     q = {k: q8(v) for k, v in ws.items()}
     w_out_dq = q["w_out"][0].float() * q["w_out"][1][:, None]
     u = hv.detach().float().cpu() @ w_out_dq  # (V, d)
@@ -206,11 +213,14 @@ def export(head: Head, hv: torch.Tensor, vocab: list[int], target: str, extra: d
             "int8": {k: {"w8": v[0], "scale": v[1]} for k, v in q.items()},
             "bias": {"b_in": head.w_in.bias.detach().float().cpu(), "b1": head.w1.bias.detach().float().cpu(),
                      "b2": head.w2.bias.detach().float().cpu()},
+            "float": {k: v.detach().float().cpu() for k, v in {**ws, "b_in": head.w_in.bias}.items()},
             **extra}
 
 
 def dequant_head(blob: dict) -> dict[str, torch.Tensor]:
     w = {k: v["w8"].float() * v["scale"][:, None] for k, v in blob["int8"].items()}
+    if "w_in_f" in w:
+        w["w_in"] = torch.cat([w.pop("w_in_f"), w.pop("w_in_e")], dim=1)
     w.update(blob["bias"])
     return w
 
@@ -378,12 +388,32 @@ def main() -> None:
     ap.add_argument("--budget-min", type=float, default=40.0, help="wall budget; stages stop at their share")
     ap.add_argument("--save-train-features", action="store_true")
     ap.add_argument("--out", required=True)
+    ap.add_argument("--from-features", help="directory of an earlier run (train_features.pt, eval_features.pt): "
+                    "train and evaluate only, without the target model")
     args = ap.parse_args()
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
     dev = args.device
     budget = args.budget_min * 60
     commit = COMMIT_HOOK[0]
+    if args.from_features:
+        src = Path(args.from_features)
+        log(f"loading features from {src}")
+        ev = torch.load(src / "eval_features.pt", weights_only=True)
+        d0 = torch.load(src / "train_features.pt", weights_only=True, mmap=True)
+        feat = d0["feat"].to(dev)
+        ids, am = d0["ids"].to(dev), d0["am"].to(dev)
+        win_tr, win_va = d0["win_tr"], d0["win_va"]
+        del d0
+        emb, lmh = load_embeddings(args.target, dev)
+        cnt = Counter(dict(enumerate(torch.bincount(am.cpu(), minlength=emb.shape[0]).tolist())))
+        log(f"training rows {int(feat.shape[0])}, windows train {len(win_tr)} val {len(win_va)}")
+        summary: dict = {"target": args.target, "args": vars(args), "train_rows": int(feat.shape[0]),
+                         "windows_train": len(win_tr), "windows_val": len(win_va), "eval_answers": len(ev),
+                         "eval_tokens": sum(len(x["ids"]) - x["plen"] for x in ev), "configs": {}}
+        train_configs(args, out, feat, ids, am, win_tr, win_va, emb, lmh, cnt, ev, summary, budget, commit)
+        log("done")
+        return
     from transformers import AutoModelForCausalLM, AutoTokenizer
 
     torch.backends.cuda.matmul.allow_tf32 = True
@@ -465,6 +495,31 @@ def main() -> None:
                      "dataset_replies": len(tf_seqs), "dataset_reply_tokens": sum(len(a) for _, a in tf_seqs),
                      "eval_answers": len(ev), "eval_tokens": sum(len(x["ids"]) - x["plen"] for x in ev),
                      "configs": {}}
+    train_configs(args, out, feat, ids, am, win_tr, win_va, emb, lmh, cnt, ev, summary, budget, commit)
+    if saver is not None:
+        saver.join()
+    log("done")
+
+
+def load_embeddings(target: str, dev: str) -> tuple[torch.Tensor, torch.Tensor]:
+    """The target's input embedding and LM head (bf16) from its safetensors shards, without the model."""
+    from huggingface_hub import hf_hub_download
+    from safetensors import safe_open
+
+    try:
+        idx = json.load(open(hf_hub_download(target, "model.safetensors.index.json")))["weight_map"]
+    except Exception:  # one-file checkpoint
+        idx = {"model.embed_tokens.weight": "model.safetensors"}
+    out = []
+    for name in ("model.embed_tokens.weight", "lm_head.weight"):
+        name = name if name in idx else "model.embed_tokens.weight"  # tied
+        with safe_open(hf_hub_download(target, idx[name]), "pt") as fh:
+            out.append(fh.get_tensor(name).to(torch.bfloat16).to(dev))
+    return out[0], out[1]
+
+
+def train_configs(args, out: Path, feat, ids, am, win_tr, win_va, emb, lmh, cnt, ev, summary, budget, commit) -> None:
+    dev = feat.device
     configs = [tuple(int(v) for v in c.split(":")) for c in args.configs.split(",")]
     for ci, (d, V) in enumerate(configs):
         label = f"d{d}_v{V}"
@@ -483,6 +538,11 @@ def main() -> None:
             w = dequant_head(blob)
             u = blob["int8"]["u"]["w8"].float() * blob["int8"]["u"]["scale"][:, None]
             ranks2d, al = eval_ranks(w, emb, u, vid, ev, args.depth)
+            fw = dict(blob["float"])
+            fw["w_in"] = torch.cat([fw.pop("w_in_f"), fw.pop("w_in_e")], dim=1)
+            fw.update({k: v for k, v in blob["bias"].items() if k != "b_in"})
+            _, al_f = eval_ranks(fw, emb, hv.float().cpu() @ fw["w_out"], vid, ev, 1)
+            al["alpha_top1_d1_float_weights"] = al_f["alpha_top1_d1"]
             nw = (sum(int(v["w8"].numel()) for v in blob["int8"].values())
                   + sum(int(v.numel()) for v in blob["bias"].values()))
             rec = {"vocab_coverage_train_labels": cover, **al, "weights_per_step": nw, "training": info}
@@ -499,9 +559,6 @@ def main() -> None:
             summary["configs"][label] = {"error": repr(exc)}
         json.dump(summary, open(out / "summary.json", "w"), indent=1)
         commit()
-    if saver is not None:
-        saver.join()
-    log("done")
 
 
 COMMIT_HOOK = [lambda: None]
