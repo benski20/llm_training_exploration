@@ -70,11 +70,17 @@ class _Store:
         self.fp = pack.fingerprint
         self.made: list[Any] = []
 
-    def windowed(self, slots: int, first: int = 5, window: int = 3) -> WindowedReservation:
+    def windowed(self, slots: int, first: int = 5, window: int = 3, chunked: bool = False) -> WindowedReservation:
         def reserve(n: int) -> Any:
             return self.store.reserve(self.fp, DEFAULT_RING, n)
 
-        w = WindowedReservation(reserve(min(first, slots)), reserve, cap=slots, window=window)
+        if chunked:  # mask_reservation="incremental": chunk-aligned entitlement, ahead, background retirement
+            from pgw.gateway.masks import chunk_entitlement
+
+            w = WindowedReservation(reserve(first), reserve, cap=chunk_entitlement(first, slots, window),
+                                    window=window, ahead=True, chunked=True)
+        else:
+            w = WindowedReservation(reserve(min(first, slots)), reserve, cap=slots, window=window)
         self.made.append(w)
         return w
 
@@ -95,10 +101,10 @@ class _Seeded(OutboundNoiseMonitor):
 
 def _scenario(pack: Any, template: Path, monkeypatch: pytest.MonkeyPatch, fast: bool, nat: bool,
               noise_async: bool = False, mode: str = "sync", windows: tuple[int, int] = (5, 3),
-              **kw: Any) -> tuple[dict[str, torch.Tensor], list[Any], Any, Any]:
+              chunked: bool = False, **kw: Any) -> tuple[dict[str, torch.Tensor], list[Any], Any, Any]:
     _env(monkeypatch, fast, nat, noise_async)
     st = _Store(template, pack)
-    monkeypatch.setattr(hooks, "_res", lambda p, n, seed: st.windowed(n, *windows))
+    monkeypatch.setattr(hooks, "_res", lambda p, n, seed: st.windowed(n, *windows, chunked=chunked))
     client = kw.pop("client", None) or LocalComputeClient(pack, record=True)
     noise = _Seeded()
     model = _masked(pack, client=client, trip_engine=True, sync_trips=True, noise_monitor=noise, **kw)
@@ -148,6 +154,21 @@ def test_native_equals_plain_and_bytes_identical(qwen_pack: InMemoryPack, store_
     assert sent == base_sent  # byte-identical provider payloads, same order
     assert stats == base_stats  # same noise draws and statistics
     assert snap["integrity_failures"] == 0
+
+
+@pytest.mark.parametrize("nat", [False, True])
+def test_incremental_chunks_equal_plain_and_bytes_identical(qwen_pack: InMemoryPack, store_template: Path,
+                                                            monkeypatch: pytest.MonkeyPatch, nat: bool) -> None:
+    """``mask_reservation = "incremental"`` (chunked windows: whole-chunk extensions, ahead reservations in the
+    background, retired parts closed in the background), with and without native trip leases: masked == plain
+    bit for bit, no integrity failure. (Payload bytes differ from run to run here: the ahead reservations of the
+    scenario's concurrent sessions interleave in the store in a thread-dependent order, so a session's masks
+    differ; what the provider sees as row counts is checked at the gateway level.)"""
+    ref = _plain_ref(qwen_pack)
+    out, _, _, (served, _, snap) = _scenario(qwen_pack, store_template, monkeypatch, True, nat,
+                                             windows=(4, 2), chunked=True)
+    _same(ref, out)
+    assert (served > 0) == nat and snap["integrity_failures"] == 0
 
 
 @pytest.mark.parametrize("split", [2, 4])

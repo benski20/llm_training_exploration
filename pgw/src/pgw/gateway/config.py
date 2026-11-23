@@ -633,6 +633,20 @@ class GatewaySettings(PGWSettings):
         "the same size while generating, so an early stop or disconnect burns at most one window instead of "
         "max_tokens slots. 0 = reserve prompt + max_tokens up front",
     )
+    mask_reservation: Literal["window", "incremental"] = Field(
+        "window",
+        description="'window': reserve the prompt plus mask_window_tokens, extend by windows (admission only checks "
+        "the store's stock). 'incremental': reserve the prompt plus one mask_chunk_slots chunk, then whole chunks "
+        "ahead of decoding (background; retired chunks closed off the token step), so a finished answer burns at "
+        "most about one chunk; admission keeps an in-memory entitlement ledger (the store must cover every live "
+        "request's remaining prompt + max_tokens), so extensions do not run short mid-answer. Extension sizes and "
+        "times depend only on the rows taken (public), never on max_tokens",
+    )
+    mask_chunk_slots: int = Field(
+        8, ge=1, le=4096,
+        description="mask_reservation='incremental': slots per chunk (a public constant; mask_window_tokens is not "
+        "used then). Keep it >= 2 x the rows of a decode pass (spec_rows)",
+    )
     mask_burn_weight: float = Field(
         1.0,
         ge=0,
