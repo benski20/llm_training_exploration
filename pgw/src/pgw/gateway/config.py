@@ -691,12 +691,16 @@ class GatewaySettings(PGWSettings):
     min_soundness_bits: float = Field(
         20.0, ge=0, description="Refuse mask segments giving fewer bits of Freivalds soundness for any linear"
     )
-    prime_check: bool = Field(
-        False,
+    prime_check: bool | None = Field(
+        None,
         description="Accept mask segments in the prime-field Freivalds format (check_field 'p31', SPEC 5.1): one "
         "secret vector over F_p (p = 2^31 - 1) per linear, checked synchronously on the unmasked values (31 bits "
-        "per call; 1/7 of the check-vector reads at K32A12C27). Needs the native trip kernels; off = such "
-        "segments are refused before any mask row is used",
+        "per call; 1/7 of the check-vector reads at K32A12C27; a wrong mask is caught online, with the same "
+        "reaction for every input). Needs the native trip kernels; off = such segments are refused before any "
+        "mask row is used. Unset (default) = auto: on when the gateway already runs the TripEngine (trip lane or "
+        "PGW_TRIP_ENGINE) with the native prime kernels, the ring is K32 (or a smaller multiple of 8) and the model "
+        "makes no padded speculation calls (spec_rows / spec_mask_rows), where prime extents are refused; this is "
+        "the format encrypted factories write by default (check_field 'auto')",
     )
     pack_verify: Literal["full", "fingerprint"] = Field(
         "full",

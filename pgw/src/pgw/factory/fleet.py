@@ -54,7 +54,7 @@ from typing import Any
 from pgw.core.errors import ConfigError
 from pgw.core.fingerprint import short_fingerprint
 from pgw.factory.governor import FactoryStopped
-from pgw.factory.scheduler import FactoryScheduler, RefillPlan
+from pgw.factory.scheduler import HALT_FILE, FactoryScheduler, RefillPlan, is_provider_integrity_failure
 
 __all__ = [
     "FactoryFleet", "FleetScheduler", "ProductionLedger", "SegmentShardedRemote", "fleet_root", "worker_settings",
@@ -247,6 +247,9 @@ class FleetScheduler(FactoryScheduler):
         self.sink = _InflightSink(self.sink, self._peer_slots)
         #: Segments this worker produced (process lifetime).
         self.segments_produced = 0
+        #: A halt on provider integrity failures stops every worker of the fleet (``<fleet root>/factory-halted.json``;
+        #: worker state dirs are ``<fleet root>/w<k>``); ``pgw factory clear-halt`` clears it.
+        self.shared_halt_path = self.state_dir.parent / HALT_FILE
 
     def _peer_slots(self, fingerprint: str, ring: str) -> int:
         return sum(int(c.get("slots", 0)) for c in self._peers
@@ -309,6 +312,8 @@ class FleetScheduler(FactoryScheduler):
                     self._save_state()
                     log.error("segment generation failed for %s/%s: %s", short_fingerprint(plan.fingerprint),
                               plan.ring, self.state.last_error)
+                    if is_provider_integrity_failure(exc, self.generators.get((plan.fingerprint, plan.ring))):
+                        self._provider_integrity_failure(exc, plan.fingerprint, plan.ring)  # raises at the limit
                     errors.append(exc)
                     failed.add((plan.fingerprint, plan.ring))
                     continue

@@ -432,3 +432,38 @@ def test_verify_rows_native_matches_numpy(use_native: bool, k: int) -> None:
     lhs = (bad.astype(np.uint64) @ cu) & np.uint64(mask)
     rhs = (r.astype(np.uint64) @ cw) & np.uint64(mask)
     assert np.array_equal(flags, (lhs != rhs).any(axis=1))
+
+
+@pytest.mark.parametrize("c", [1, 2, 7, 8, 9, 14, 16, 17])
+@pytest.mark.parametrize("k", [24, 32, 40])
+def test_check_rows_simd_path_matches_wide_and_numpy(c: int, k: int) -> None:
+    """The 32-bit SIMD row check (K <= 32, up to 16 vectors: the 40-bit self-check of encrypted factories)
+    gives exactly the uint64 path's and numpy's flags, including high-valuation errors and row tails."""
+    from pgw.core.native import fast, native_available
+
+    if not native_available("he_check_rows"):
+        pytest.skip("pgw_fast not built")
+    try:
+        fast.he_check_rows(np.zeros((1, 1), np.int64), np.zeros((1, 1), np.int64), np.zeros((1, 1), np.uint64),
+                           np.zeros((1, 1), np.uint64), 1, True)
+    except TypeError:
+        pytest.skip("pgw_fast predates the 32-bit check path (rebuild: rust/tools/build_fast.py)")
+    rng = np.random.default_rng(c * 100 + k)
+    m, n, rows = 37, 45, 23  # rows not a multiple of the 4-row block
+    mask = (1 << k) - 1
+    w = rng.integers(-127, 128, size=(m, n))
+    r = rng.integers(0, 1 << k, size=(rows, n), dtype=np.int64)
+    wr = _ref_wr(w, r, k)
+    u = rng.integers(0, 1 << k, size=(c, m), dtype=np.int64)
+    uw = np.array((u.astype(object) @ w.astype(object)) % (1 << k), dtype=np.int64)
+    cu, cw = np.ascontiguousarray(u.T.astype(np.uint64)), np.ascontiguousarray(uw.T.astype(np.uint64))
+    bad = wr.copy()
+    for t, (i, e) in enumerate([(0, 1), (5, 1 << (k - 1)), (36, 1 << (k - 3)), (2, 3 << (k - 2))]):
+        bad[[t, rows - 1 - t][t % 2], i] = (bad[[t, rows - 1 - t][t % 2], i] + e) & mask
+    lhs = (bad.astype(np.uint64) @ cu) & np.uint64(mask)
+    rhs = (r.astype(np.uint64) @ cw) & np.uint64(mask)
+    want = (lhs != rhs).any(axis=1)
+    for wide in (False, True):
+        got = fast.he_check_rows(r, bad, cu, cw, mask, wide).astype(bool)
+        assert np.array_equal(got, want), wide
+        assert not fast.he_check_rows(r, wr, cu, cw, mask, wide).any()

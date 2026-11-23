@@ -370,6 +370,19 @@ class SetupController:
         }
         if self._masked_head():  # head_mode = "provider_int8" preset: masks for the derived masked-head pack
             env["PGW_FACTORY_MASKED_HEAD"] = "true"
+        if self._pks():  # deployment preset (PGW_SETUP_HE_SCHEME=pks-v3; pending external review): compact hint
+            env["PGW_FACTORY_HE_SCHEME"] = "pks-v3"
+            # the library still refuses pks-v3 without its acknowledgement: the preset must pass it explicitly
+            env["PGW_FACTORY_HE_PKS_ACK"] = os.environ.get("PGW_SETUP_HE_PKS_ACK", "")
+            # authenticates the hint store's metadata; kept with the wizard's secrets, outside the hint directory
+            env["PGW_FACTORY_HE_HINT_KEY_FILE"] = str(self.secrets_dir / "pks_hint.key")
+        opts = self.settings.setup_model_options or {}
+        pc = getattr(self.settings, "prime_check", None)
+        if opts.get("spec_rows") or opts.get("spec_mask_rows") or pc is False or (
+                pc is None and str(opts.get("lane", "off")) == "off"):
+            # the gateway's prime_check auto accepts p31 only on the TripEngine (a trip lane) and never with padded
+            # speculation passes: keep the encrypted factory's segments on the ring format there
+            env["PGW_FACTORY_CHECK_FIELD"] = "ring"
         if self._fused2():  # schedule = "fused2" preset: fused2 pair-mask segments (pgw.factory.fused2_gen)
             opts = self.settings.setup_model_options or {}
             env["PGW_FACTORY_SCHEDULE"] = "fused2"
@@ -397,6 +410,11 @@ class SetupController:
         opts = self.settings.setup_model_options or {}
         return str(opts.get("head_mode", "gateway")) == "provider_int8"
 
+    def _pks(self) -> bool:
+        """The deployment presets the compact-hint scheme (``PGW_SETUP_HE_SCHEME=pks-v3``; standard schedule only)."""
+        return (os.environ.get("PGW_SETUP_HE_SCHEME", "mlwe").strip().lower() == "pks-v3"
+                and not self._fused2())
+
     def _fused2(self) -> bool:
         """The deployment presets ``schedule = "fused2"`` (setup_model_options)."""
         opts = self.settings.setup_model_options or {}
@@ -414,8 +432,8 @@ class SetupController:
     def _start_masks(self) -> None:
         """Hint build, then the supervised factory (idempotent)."""
         model = self.state["model"]
-        if self._fused2():  # the fused2 factory builds its own (fused2-linear) hint when it starts, if encrypted
-            self._start_factory()
+        if self._fused2() or self._pks():  # these factories build their own hint (fused2 linears / pks-v3 compact
+            self._start_factory()           # hint) when they start; the mlwe hint job does not apply
             return
         if self.hint_job is None or (self.hint_job.finished and self.hint_job.status()["phase"] == "failed"):
             def after_hint(status: dict[str, Any]) -> None:

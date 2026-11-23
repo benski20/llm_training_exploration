@@ -194,6 +194,7 @@ data "cloudinit_config" "gateway" {
         PGW_IMAGE_REGISTRY  = var.image_registry
         PGW_IMAGE_TAG       = var.image_tag
         PGW_CHECK_FIELD     = var.check_field
+        PGW_HE_SCHEME       = local.he_scheme
         PGW_SEGMENT_SLOTS   = tostring(local.segment_slots)
         PGW_LOW_WATER_SLOTS = tostring(local.low_water_slots)
         PGW_TARGET_SLOTS    = tostring(local.target_slots)

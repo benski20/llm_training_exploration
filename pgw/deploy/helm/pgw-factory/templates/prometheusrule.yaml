@@ -36,4 +36,18 @@ spec:
           annotations:
             summary: "PGW mask factory runs are failing"
             description: "Several failed factory runs in 30 m. The factory backs off; see its logs."
+        - alert: PGWFactoryProviderIntegrityFailure
+          expr: sum by (namespace, job) (increase(pgw_factory_provider_integrity_failures_total[1h])) > 0
+          labels:
+            severity: page
+          annotations:
+            summary: "PGW encrypted mask factory: the compute provider returned wrong products"
+            description: "A segment's provider products failed the factory's private self-check (or a reply was malformed). An honest provider never causes this. The factory halts after max_provider_integrity_failures (default 3). Treat as a security incident."
+        - alert: PGWFactoryHalted
+          expr: max by (namespace, job) (pgw_factory_halted) == 1
+          labels:
+            severity: page
+          annotations:
+            summary: "PGW mask factory halted after provider integrity failures"
+            description: "No masks are produced until an operator investigates the provider and runs pgw factory clear-halt."
 {{- end }}

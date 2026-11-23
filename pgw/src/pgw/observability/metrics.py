@@ -106,6 +106,9 @@ METRIC_NAMES: dict[str, tuple[str, tuple[str, ...], str]] = {
     "pgw_factory_slots_per_second": ("gauge", ("fingerprint", "ring", "device"), "Generation throughput"),
     "pgw_factory_last_success_timestamp": ("gauge", (), "Unix time of the last successful scheduler plan/run"),
     "pgw_factory_errors_total": ("counter", (), "Failed factory runs"),
+    "pgw_factory_provider_integrity_failures_total": (
+        "counter", (), "Segments aborted because the encrypted-mask provider's products failed the self-check"),
+    "pgw_factory_halted": ("gauge", (), "1 while the factory is halted after provider integrity failures"),
 }
 
 #: Buckets for ``*_seconds`` histograms (sub-millisecond kernels up to multi-minute requests).

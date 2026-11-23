@@ -369,7 +369,19 @@ def encode_maskgen_response_parts(resp: MaskgenResponse) -> list[bytes | bytearr
 
 def decode_maskgen_response(data: bytes | bytearray | memoryview, req: MaskgenRequest,
                             out_features: dict[str, int] | None = None) -> MaskgenResponse:
-    """Decode and check the response against ``req`` (version, item order, sizes when ``out_features`` known)."""
+    """Decode and check the response against ``req`` (version, item order, sizes when ``out_features`` known).
+
+    A malformed reply raises :class:`ProtocolError` with ``details["reply"] = True``: a provider-attributable
+    integrity failure for the factory scheduler (:func:`pgw.factory.scheduler.is_provider_integrity_failure`)."""
+    try:
+        return _decode_response(data, req, out_features)
+    except ProtocolError as exc:
+        exc.details["reply"] = True
+        raise
+
+
+def _decode_response(data: bytes | bytearray | memoryview, req: MaskgenRequest,
+                     out_features: dict[str, int] | None) -> MaskgenResponse:
     obj = _load(data, "maskgen_result", (req.version,))
     if obj.get("id") != req.request_id:
         raise ProtocolError("maskgen: response id does not match the request")

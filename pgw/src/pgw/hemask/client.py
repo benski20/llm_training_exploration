@@ -427,7 +427,8 @@ class RemoteMulmod64:
 
     @staticmethod
     def _version_refusal(exc: PGWError) -> bool:
-        return exc.code in (ErrorCode.PROTOCOL, ErrorCode.VERSION_MISMATCH)
+        # a malformed reply (details["reply"]) is the provider's integrity failure, not a refusal of v2
+        return exc.code in (ErrorCode.PROTOCOL, ErrorCode.VERSION_MISMATCH) and not exc.details.get("reply")
 
     def __call__(self, linear: str, b: np.ndarray) -> np.ndarray:
         """Blocking call (from a worker thread). Returns ``y`` (``m x cols`` uint64, ``mod 2^q``)."""

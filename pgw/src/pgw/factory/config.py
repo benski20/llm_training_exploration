@@ -75,11 +75,17 @@ class FactorySettings(PGWSettings):
         description="Freivalds vectors per linear per segment; unset = smallest number meeting 20 bits of "
         "soundness for the ring and model (gateways and stores refuse weaker segments by default)",
     )
-    check_field: Literal["ring", "p31"] = Field(
-        "ring",
-        description="Freivalds check format of new segments (SPEC 5.1): 'ring' = vectors over Z_2^K (default); "
-        "'p31' = one vector over F_p, p = 2^31 - 1, checked on the unmasked values (K32 rings; 31 bits per "
-        "call with checks=1; gateways need prime_check=true to accept such segments)",
+    check_field: Literal["auto", "ring", "p31"] = Field(
+        "auto",
+        description="Freivalds check format of new segments (SPEC 5.1): 'ring' = vectors over Z_2^K; 'p31' = one "
+        "vector over F_p, p = 2^31 - 1, checked on the unmasked values (K32 rings; 31 bits per call with "
+        "checks=1; gateways accept such segments with prime_check=true, or by default when they run the TripEngine "
+        "on a trip lane; otherwise they refuse them before any row is used: fail closed). 'auto' (default) = "
+        "'p31' when the masks come from an encrypted factory (he_service_url, standard schedule, K32 rings): the "
+        "gateway then catches a wrong mask online with the same reaction for every input, whereas the ring check "
+        "verifies only the masked product (pks-v3 adversarial review, F4); else 'ring'. Set 'ring' for gateways "
+        "that cannot run the p31 check (no trip lane and prime_check unset, no native trip kernels, padded "
+        "speculation)",
     )
     gpu_memory_fraction: float = Field(0.85, gt=0, le=1, description="Above this, stream weights from host RAM")
     factory_id: str = Field("local", description="Recorded in segment headers")
@@ -97,6 +103,13 @@ class FactorySettings(PGWSettings):
         None, description="export: partner Ed25519 signing key; each exported segment gets a .sig sidecar (SPEC 7.7)"
     )
     poll_interval_s: float = Field(30.0, gt=0, description="Scheduler inventory poll period")
+    max_provider_integrity_failures: int = Field(
+        3, ge=1, le=100,
+        description="Encrypted factory: halt (fail closed) after this many provider-attributable integrity failures "
+        "(provider products failing the private self-check, malformed replies). Counted in factory-state.json, never "
+        "reset by a success or a restart; each one is a CRITICAL alert. Resume with 'pgw factory clear-halt' after "
+        "investigating the provider. Transport errors are retried with back-off and do not count",
+    )
     max_segments_per_run: int = Field(0, ge=0, description="0 = unlimited")
     low_water_slots: int | None = Field(None, ge=0, description="Start refilling below this (default: store setting)")
     target_slots: int | None = Field(None, ge=0, description="Refill up to this (default: store setting)")
@@ -180,6 +193,11 @@ class FactorySettings(PGWSettings):
     )
     he_client_key_file: Path | None = Field(None, description="Private key of he_client_cert_file (PEM, 0600)")
     he_hint_dir: Path | None = Field(None, description="Where the one-time hint W8.A is kept (default: <state>/hemask)")
+    he_hint_key_file: Path | None = Field(
+        None, description="pks-v3: 32-byte customer key (0600; created on first use) that authenticates the hint "
+        "store's meta.json (seeds, row norms, file digests) with HMAC-SHA256. Keep it outside he_hint_dir. Unset: "
+        "the digests only detect corruption, and he_hint_dir must be inside the customer's trust boundary",
+    )
     he_rank: int = Field(16, ge=8, le=32, description="MLWE module rank (LWE dimension = 256 x rank)")
     he_params_ack: str = Field(
         "", description="Opt in to an unreviewed HE parameter profile: ranks below 16 are refused unless this is the "
@@ -347,11 +365,27 @@ class FactorySettings(PGWSettings):
                                      f"2^(C+1) < 2^61 - 1, e.g. K56A12C53; not {r}")
             if self.masked_head or self.skip_kinds:
                 raise ValueError("schedule='fused2' makes every fused2 linear (no masked_head, no skip_linear_kinds)")
-            if self.check_field != "ring":
-                raise ValueError("schedule='fused2' segments carry p61 check words (leave check_field = 'ring')")
+            if self.check_field not in ("auto", "ring"):
+                raise ValueError("schedule='fused2' segments carry p61 check words (leave check_field = 'auto')")
             if self.fused2_weights_path is not None and len(self.all_pack_paths) > 1:
                 raise ValueError("fused2_weights_path serves one pack only")
         return self
+
+    @property
+    def effective_check_field(self) -> str:
+        """The check format new segments get: ``check_field``, with ``auto`` resolved to ``"p31"`` for an
+        encrypted factory (``he_service_url``), the standard schedule and K32 rings only, else ``"ring"``.
+
+        Why p31 there: masks from a provider can be wrong by an error the provider chose. The factory's private
+        self-check (40 bits) catches that before the segment is written; with the p31 format the gateway's online
+        check also verifies the unmasked output, so a wrong mask that escaped would be caught with the same
+        reaction (circuit breaker) for every input, never a data-dependent one (pks-v3 adversarial review, F4)."""
+        if self.check_field != "auto":
+            return self.check_field
+        if self.he_urls and self.schedule == "standard" and all(
+                RingParams.from_name(r).k == 32 for r in self.ring_names):
+            return "p31"
+        return "ring"
 
     @property
     def he_urls(self) -> tuple[str, ...]:

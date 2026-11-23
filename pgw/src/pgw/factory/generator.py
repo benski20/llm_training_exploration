@@ -320,9 +320,10 @@ class MaskGenerator:
         check_field: str | None = None,
     ):
         self.pack = pack
-        # Encrypted mask generation (pgw.hemask.HEMaskBackend): W8 r comes from the provider on
-        # MLWE ciphertexts. Every row is then verified with private check vectors (never the
-        # segment's stored u, which the provider could otherwise probe through rejections).
+        # Encrypted mask generation (pgw.hemask.HEMaskBackend, PKSMaskBackend): W8 r comes from the provider
+        # on ciphertexts. Every row is then verified with private check vectors (never the segment's stored
+        # u, which the provider could otherwise probe through rejections), enough of them for
+        # HE_SELF_CHECK_BITS against errors the provider chooses (_private_vectors).
         self.remote = remote
         if remote is not None:
             self_check_rows = -1
@@ -348,6 +349,9 @@ class MaskGenerator:
         # The masks of every other linear are unchanged: r and u derive from (seed, linear id) alone.
         self.specs: list[LinearSpec] = [s for s in all_specs if s.id.kind.value not in self.skip_kinds]
         self._weak_warned: set[int] = set()
+        #: Private self-check vectors kept across segments with a remote backend (:meth:`_private_check`).
+        self._priv_cache: dict[str, tuple[np.ndarray, np.ndarray]] = {}
+        self._priv_bytes = 0
         if not self.specs:
             raise ConfigError("skip_kinds leaves no linear to generate masks for")
         for s in self.specs:
@@ -747,10 +751,7 @@ class MaskGenerator:
                 else:
                     uw = torch.zeros((0, spec.in_features), dtype=torch.int64)
                 if cu is None and self.self_check_rows:  # private check vectors, never stored
-                    v = SeedExpander(new_seed()).ring_uniform((self._private_vectors(spec), spec.out_features), k,
-                                                              "v")
-                    cu, cw = _u64(v.t()), _u64(ring_vecmat(v, w, self.ring).t())
-                    v.zero_()
+                    cu, cw = self._private_check(spec, w)
                 stats.check_seconds += time.perf_counter() - t0
                 if dev_prng is not None:
                     # stream key derived on the CPU (SPEC 7.3, unchanged); expansion on the device
@@ -780,6 +781,10 @@ class MaskGenerator:
                 del kern, w
             while inflight:  # HE jobs of the last linears
                 yield finish(inflight.pop(0))
+        except BaseException:
+            # A failed or abandoned segment (the provider may see it aborted): never reuse these private vectors.
+            self._wipe_private()
+            raise
         finally:
             if inflight:  # an error or an abandoned generator: drop chunks that were never handed on
                 if cuda:  # pragma: no cover - GPU only
@@ -803,16 +808,67 @@ class MaskGenerator:
                 stats.extra["he"] = {key: he_stats.get(key, 0) - v for key, v in he0.items()
                                      if isinstance(v, int | float)}
 
-    def _private_vectors(self, spec: LinearSpec) -> int:
-        """Private self-check vectors of a linear: 2, or, when the encrypted backend asks for a soundness
-        target against an adversarial provider (``remote.self_check_bits``; pks-v3, opt-in), enough uniform
-        ring vectors to reach it (:func:`pgw.core.freivalds.private_check_vectors_for`)."""
-        bits = getattr(self.remote, "self_check_bits", None) if self.remote is not None else None
-        if not bits:
-            return 2
-        from pgw.core.freivalds import private_check_vectors_for
+    #: RAM budget for the private check vectors kept across segments with a remote backend (bytes).
+    PRIVATE_CACHE_BYTES = 1 << 30
 
-        return private_check_vectors_for(self.ring, spec.in_features, float(bits))
+    def _private_check(self, spec: LinearSpec, w: torch.Tensor) -> tuple[np.ndarray, np.ndarray]:
+        """``(cu, cw)`` of a linear's private self-check: ``c`` uniform vectors ``v`` (``(m, c)``) and ``v W8``
+        (``(n, c)``), uint64, C-contiguous.
+
+        With a remote backend they are kept across segments (within :attr:`PRIVATE_CACHE_BYTES`): ``v W8``
+        costs as much as a few hundred slots of checks per segment at 7B with 14 vectors, and reusing ``v`` does
+        not help a provider that picks its errors. A tampered row passes a fixed ``v`` with probability at
+        most ``2^-HE_SELF_CHECK_BITS`` whatever the provider saw before, as long as ``v`` was never used to
+        reject anything: every failed or aborted segment wipes and redraws all of them
+        (:meth:`_wipe_private`), so the provider never learns anything about the vectors in use (an accepted
+        segment tells it nothing it did not know). They never leave this process and are wiped on rotation."""
+        key = spec.id.key
+        cache = self.remote is not None
+        if cache:
+            hit = self._priv_cache.get(key)
+            if hit is not None:
+                return hit
+        v = SeedExpander(new_seed()).ring_uniform((self._private_vectors(spec), spec.out_features), self.ring.k, "v")
+        try:
+            vw = ring_vecmat(v, w, self.ring)
+            cu, cw = np.ascontiguousarray(_u64(v.t())), np.ascontiguousarray(_u64(vw.t()))
+            vw.zero_()
+        finally:
+            v.zero_()
+        nbytes = cu.nbytes + cw.nbytes
+        if cache and self._priv_bytes + nbytes <= self.PRIVATE_CACHE_BYTES:
+            self._priv_cache[key] = (cu, cw)
+            self._priv_bytes += nbytes
+        return cu, cw
+
+    def _wipe_private(self) -> None:
+        """Forget (and zero) every cached private check vector: the next segment draws fresh ones."""
+        for cu, cw in self._priv_cache.values():
+            cu.fill(0)
+            cw.fill(0)
+        self._priv_cache.clear()
+        self._priv_bytes = 0
+
+    def _private_vectors(self, spec: LinearSpec) -> int:
+        """Private self-check vectors of a linear.
+
+        * Local products (``remote is None``: this process's CPU / GPU computes ``W8 r``): 2. The check
+          guards against faults of our own kernels and devices, which do not choose their errors; a fault
+          affects many rows, and an error in the top bits fails the gateway's range check for every input.
+        * Products from an encrypted-mask provider (any ``remote``: mlwe v1/v2 over HTTP or the bulk
+          channel, a fleet's :class:`pgw.factory.fleet.SegmentShardedRemote`, pks-v3): the provider can add
+          an exact error of its choosing to any decrypted entry (the replies are additively malleable), so
+          the check must be sound against chosen errors: enough uniform ring vectors for
+          :data:`pgw.core.freivalds.HE_SELF_CHECK_BITS` (40) bits
+          (:func:`pgw.core.freivalds.private_check_vectors_for`; 14 at capped K32 widths). A backend may
+          ask for more (``remote.self_check_bits``), never for less (pks-v3 adversarial review, F1 / R1).
+        """
+        if self.remote is None:
+            return 2
+        from pgw.core.freivalds import HE_SELF_CHECK_BITS, private_check_vectors_for
+
+        bits = max(float(getattr(self.remote, "self_check_bits", None) or 0.0), HE_SELF_CHECK_BITS)
+        return private_check_vectors_for(self.ring, spec.in_features, bits)
 
     def _self_check(self, lid: LinearId, r: torch.Tensor | None, wr: torch.Tensor, cu: np.ndarray, cw: np.ndarray,
                     *, stream: _gp.DeviceRingStream | None = None, row0: int = 0) -> int:

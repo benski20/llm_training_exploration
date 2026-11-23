@@ -81,6 +81,24 @@ class FactoryMetrics:
             except Exception as exc:  # monitoring never breaks production
                 log.debug("cannot count factory error: %r", exc)
 
+    def provider_integrity_failure(self) -> None:
+        """A segment was aborted on a provider integrity failure (alert)."""
+        c = self._get("pgw_factory_provider_integrity_failures_total")
+        if c is not None:
+            try:
+                c.inc()
+            except Exception as exc:  # monitoring never breaks production
+                log.debug("cannot count provider integrity failure: %r", exc)
+
+    def halted(self, on: bool) -> None:
+        """The factory halted (``True``) or an operator cleared the halt (``False``)."""
+        g = self._get("pgw_factory_halted")
+        if g is not None:
+            try:
+                g.set(1 if on else 0)
+            except Exception as exc:  # monitoring never breaks production
+                log.debug("cannot set halted gauge: %r", exc)
+
     def render(self) -> tuple[bytes, str]:
         """Prometheus exposition of the registry these metrics live on."""
         render = getattr(self._m, "render", None)

@@ -192,7 +192,7 @@ class Fused2MaskGenerator:
             from pgw.core.freivalds import HE_SELF_CHECK_BITS
 
             self_check_rows = -1
-            self._priv_bits = float(getattr(he, "self_check_bits", None) or HE_SELF_CHECK_BITS)
+            self._priv_bits = max(float(getattr(he, "self_check_bits", None) or 0.0), HE_SELF_CHECK_BITS)
         self.self_check_rows = int(self_check_rows)
         self.chunk_rows = int(chunk_rows)
         if native_rng and not _NATIVE_RNG:
@@ -293,6 +293,12 @@ class Fused2MaskGenerator:
         rr.fill(0)
         yy.fill(0)
         if not np.array_equal(lhs, rhs):
+            # The provider may see the segment aborted: never reuse vectors that rejected something (a tampered
+            # row then passes the next, fresh vectors with probability at most 2^-HE_SELF_CHECK_BITS).
+            for a, b in self._priv.values():
+                a.fill(0)
+                b.fill(0)
+            self._priv.clear()
             raise IntegrityError(f"fused2 factory self-check failed for {key} (device {self.device}); segment aborted")
         return int(idx.size)
 

@@ -936,6 +936,22 @@ class ModelRuntime:
                 log.info("model %s connected after %d attempts", self.name, self.connect_attempts)
                 return
 
+    def _prime_check_auto(self, backend: Any) -> bool:
+        """``prime_check`` unset (auto): accept p31 check segments iff the backend already runs the TripEngine
+        (the trip lane, or ``PGW_TRIP_ENGINE``; the prime check runs there only, so auto never changes the
+        gateway's code path), the native kernels have the prime output half, the ring is at most 32 bits (a
+        multiple of 8) and the model makes no padded (fixed-structure) calls, which refuse prime extents.
+        Encrypted factories write p31 by default."""
+        from pgw.core.native import native_available
+
+        c = self.config
+        on = (bool(getattr(backend, "trip_engine", False)) and native_available("trip_prime_output")
+              and self.ring.k <= 32 and self.ring.k % 8 == 0 and getattr(c, "spec_rows", None) is None
+              and getattr(c, "spec_mask_rows", None) is None)
+        log.info("model %s: prime-field (p31) check segments %s (prime_check auto)", self.name,
+                 "accepted" if on else "refused")
+        return on
+
     @staticmethod
     def _close_pack(pack: Any) -> None:
         close = getattr(pack, "close", None)
@@ -966,8 +982,10 @@ class ModelRuntime:
                 deadline_ms=self.config.service_deadline_ms,
                 on_integrity_failure=self._on_integrity_failure,
                 min_soundness_bits=self.settings.min_soundness_bits,
-                prime_check=bool(getattr(self.settings, "prime_check", False)),
+                prime_check=getattr(self.settings, "prime_check", None),
             )
+            if getattr(self.settings, "prime_check", None) is None and self._prime_check_auto(self.backend):
+                self.backend.prime_check = True  # the TripEngine is on already: same as prime_check=True
             await self._warm_weight_norms()
             await self._configure_local_linears()
             await asyncio.to_thread(self._require_mask_linears)

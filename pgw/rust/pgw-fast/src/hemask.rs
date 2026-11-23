@@ -320,9 +320,195 @@ unsafe impl Sync for SendPtr {}
 // Row check
 // ---------------------------------------------------------------------------------------------
 
-/// `true` where `(wr[t] @ cu) & mask != (r[t] @ cw) & mask` (all arithmetic mod 2^64).
+/// Rows per block of the 32-bit check kernel (each check-vector row is loaded once per block).
+const CHECK_RB: usize = 4;
+
+/// Check vectors as zero-padded `u32` rows of `CP` lanes (`v` is `(len, c)` uint64; padding lanes are 0
+/// on both sides of the comparison, so they never differ).
+fn pad_u32<const CP: usize>(v: &[u64], len: usize, c: usize) -> Zeroizing<Vec<u32>> {
+    let mut out = Zeroizing::new(vec![0u32; len * CP]);
+    for (dst, src) in out.chunks_exact_mut(CP).zip(v.chunks_exact(c)) {
+        for (d, &s) in dst.iter_mut().zip(src) {
+            *d = s as u32;
+        }
+    }
+    out
+}
+
+/// `acc[b] += x[t + b] * v` over a block of `RB` rows (`x` row-major `(rows, len)`), mod 2^32.
+#[inline(always)]
+fn dot_block<const CP: usize, const RB: usize>(x: &[i64], len: usize, t: usize, v: &[u32], acc: &mut [[u32; CP]; RB]) {
+    let xs = &x[t * len..(t + RB) * len];
+    for (i, vrow) in v.chunks_exact(CP).enumerate().take(len) {
+        let vrow: &[u32; CP] = vrow.try_into().expect("CP lanes");
+        for (b, a) in acc.iter_mut().enumerate() {
+            let xv = xs[b * len + i] as u32;
+            for (aj, &vj) in a.iter_mut().zip(vrow) {
+                *aj = aj.wrapping_add(xv.wrapping_mul(vj));
+            }
+        }
+    }
+}
+
+#[inline(always)]
+#[allow(clippy::too_many_arguments)]
+fn check_u32_part<const CP: usize, const RB: usize>(
+    r: &[i64],
+    n: usize,
+    wr: &[i64],
+    m: usize,
+    cu: &[u32],
+    cw: &[u32],
+    mask: u32,
+    t: usize,
+    flags: &mut [u8],
+) {
+    let mut l = [[0u32; CP]; RB];
+    let mut rr = [[0u32; CP]; RB];
+    dot_block::<CP, RB>(wr, m, t, cu, &mut l);
+    dot_block::<CP, RB>(r, n, t, cw, &mut rr);
+    for (b, f) in flags.iter_mut().enumerate().take(RB) {
+        *f = u8::from(l[b].iter().zip(&rr[b]).any(|(&x, &y)| (x & mask) != (y & mask)));
+    }
+    for a in l.iter_mut().chain(rr.iter_mut()) {
+        a.zeroize();
+    }
+}
+
+#[inline(always)]
+#[allow(clippy::too_many_arguments)]
+fn check_u32_rows<const CP: usize>(
+    r: &[i64],
+    n: usize,
+    wr: &[i64],
+    m: usize,
+    cu: &[u32],
+    cw: &[u32],
+    mask: u32,
+    t0: usize,
+    part: &mut [u8],
+) {
+    let full = part.len() / CHECK_RB * CHECK_RB;
+    for (bi, fl) in part[..full].chunks_exact_mut(CHECK_RB).enumerate() {
+        check_u32_part::<CP, CHECK_RB>(r, n, wr, m, cu, cw, mask, t0 + bi * CHECK_RB, fl);
+    }
+    for ti in full..part.len() {
+        check_u32_part::<CP, 1>(r, n, wr, m, cu, cw, mask, t0 + ti, &mut part[ti..=ti]);
+    }
+}
+
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx512f,avx2")]
+#[allow(clippy::too_many_arguments)]
+unsafe fn check_u32_avx512<const CP: usize>(
+    r: &[i64],
+    n: usize,
+    wr: &[i64],
+    m: usize,
+    cu: &[u32],
+    cw: &[u32],
+    mask: u32,
+    t0: usize,
+    part: &mut [u8],
+) {
+    check_u32_rows::<CP>(r, n, wr, m, cu, cw, mask, t0, part);
+}
+
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2")]
+#[allow(clippy::too_many_arguments)]
+unsafe fn check_u32_avx2<const CP: usize>(
+    r: &[i64],
+    n: usize,
+    wr: &[i64],
+    m: usize,
+    cu: &[u32],
+    cw: &[u32],
+    mask: u32,
+    t0: usize,
+    part: &mut [u8],
+) {
+    check_u32_rows::<CP>(r, n, wr, m, cu, cw, mask, t0, part);
+}
+
+/// The check for `K <= 32` (`mask < 2^32`): the same flags as the uint64 path (every product and sum is
+/// taken mod 2^32, which `2^K` divides), on 32-bit SIMD lanes with the `c` vectors side by side (`CP` lanes)
+/// and blocks of [`CHECK_RB`] rows. This keeps the 40-bit self-check of encrypted factories (14 vectors at
+/// capped K32 widths) cheap.
+#[allow(clippy::too_many_arguments)]
+fn check_rows_u32<const CP: usize>(
+    r: &[i64],
+    n: usize,
+    wr: &[i64],
+    m: usize,
+    cu: &[u64],
+    cw: &[u64],
+    c: usize,
+    mask: u32,
+    bad: &mut [u8],
+) {
+    let rows = bad.len();
+    let cu32 = pad_u32::<CP>(cu, m, c);
+    let cw32 = pad_u32::<CP>(cw, n, c);
+    let (cu32, cw32) = (&cu32[..], &cw32[..]);
+    let one = |t0: usize, part: &mut [u8]| {
+        #[cfg(target_arch = "x86_64")]
+        {
+            if std::is_x86_feature_detected!("avx512f") && std::is_x86_feature_detected!("avx2") {
+                // SAFETY: the CPU supports the enabled features (checked above).
+                unsafe { check_u32_avx512::<CP>(r, n, wr, m, cu32, cw32, mask, t0, part) };
+                return;
+            }
+            if std::is_x86_feature_detected!("avx2") {
+                // SAFETY: as above.
+                unsafe { check_u32_avx2::<CP>(r, n, wr, m, cu32, cw32, mask, t0, part) };
+                return;
+            }
+        }
+        check_u32_rows::<CP>(r, n, wr, m, cu32, cw32, mask, t0, part);
+    };
+    let threads = threads_for(rows.saturating_mul(n + m) / 16).min(rows.div_ceil(CHECK_RB).max(1));
+    if threads <= 1 {
+        one(0, bad);
+        return;
+    }
+    let per = rows.div_ceil(threads).div_ceil(CHECK_RB) * CHECK_RB;
+    std::thread::scope(|s| {
+        let one = &one;
+        for (i, part) in bad.chunks_mut(per).enumerate() {
+            s.spawn(move || one(i * per, part));
+        }
+    });
+}
+
+/// `true` where `(wr[t] @ cu) & mask != (r[t] @ cw) & mask` (all arithmetic mod 2^64; for `mask < 2^32`
+/// and at most 16 vectors on 32-bit SIMD lanes, [`check_rows_u32`], with the same flags).
 #[allow(clippy::too_many_arguments)]
 pub fn check_rows(
+    r: &[i64],
+    n: usize,
+    wr: &[i64],
+    m: usize,
+    cu: &[u64],
+    cw: &[u64],
+    c: usize,
+    mask: u64,
+    bad: &mut [u8],
+) {
+    if mask <= u64::from(u32::MAX) && (1..=16).contains(&c) {
+        if c <= 8 {
+            check_rows_u32::<8>(r, n, wr, m, cu, cw, c, mask as u32, bad);
+        } else {
+            check_rows_u32::<16>(r, n, wr, m, cu, cw, c, mask as u32, bad);
+        }
+        return;
+    }
+    check_rows_u64(r, n, wr, m, cu, cw, c, mask, bad);
+}
+
+/// The uint64 path of [`check_rows`] (any `K` up to 63, any number of vectors).
+#[allow(clippy::too_many_arguments)]
+pub fn check_rows_u64(
     r: &[i64],
     n: usize,
     wr: &[i64],
@@ -636,12 +822,14 @@ fn he_decrypt_combine<'py>(
 }
 
 /// Every-row Freivalds self-check of the factory: ``bad[t] = any((wr[t] @ cu) & mask != (r[t] @ cw) & mask)``
-/// (uint64 arithmetic mod 2^64, as ``MaskGenerator._self_check``). Returns uint8 ``(rows,)`` flags.
+/// (uint64 arithmetic mod 2^64, as ``MaskGenerator._self_check``; for ``mask < 2^32`` and at most 16 vectors
+/// the same flags on 32-bit SIMD lanes, unless ``wide`` asks for the uint64 path). Returns uint8 ``(rows,)``.
 ///
 /// Args:
 ///     r: int64 ``(rows, n)``; wr: int64 ``(rows, m)``; cu: uint64 ``(m, c)``; cw: uint64 ``(n, c)``.
 #[pyfunction]
-#[pyo3(signature = (r, wr, cu, cw, mask))]
+#[pyo3(signature = (r, wr, cu, cw, mask, wide=false))]
+#[allow(clippy::too_many_arguments)]
 fn he_check_rows<'py>(
     py: Python<'py>,
     r: PyReadonlyArray2<'py, i64>,
@@ -649,6 +837,7 @@ fn he_check_rows<'py>(
     cu: PyReadonlyArray2<'py, u64>,
     cw: PyReadonlyArray2<'py, u64>,
     mask: u64,
+    wide: bool,
 ) -> PyResult<Bound<'py, PyArray1<u8>>> {
     let (rows, n) = (r.shape()[0], r.shape()[1]);
     let m = wr.shape()[1];
@@ -672,7 +861,13 @@ fn he_check_rows<'py>(
     let arr = PyArray1::<u8>::zeros(py, [rows], false);
     // SAFETY: freshly allocated, C-contiguous, not yet shared with Python code.
     let bad = unsafe { arr.as_slice_mut() }.map_err(|e| verr(e.to_string()))?;
-    py.allow_threads(|| check_rows(rs, n, ws, m, us, vs, c, mask, bad));
+    py.allow_threads(|| {
+        if wide {
+            check_rows_u64(rs, n, ws, m, us, vs, c, mask, bad)
+        } else {
+            check_rows(rs, n, ws, m, us, vs, c, mask, bad)
+        }
+    });
     Ok(arr)
 }
 

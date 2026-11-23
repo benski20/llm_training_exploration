@@ -46,16 +46,16 @@ the external review.
 
 | # | sev | finding | status |
 |---|---|---|---|
-| F1 | **high** | Factory self-check of provider products: 2 ring vectors give 2 bits (worst case) against a provider that picks its errors; replies are exactly additively malleable | **fixed for pks-v3** (40-bit target); open for mlwe v1/v2 |
+| F1 | **high** | Factory self-check of provider products: 2 ring vectors give 2 bits (worst case) against a provider that picks its errors; replies are exactly additively malleable | **fixed** (40-bit target for every provider product: mlwe v1/v2, bulk, fleet, pks-v3, fused2 digits; follow-up) |
 | F2 | **high** | Encrypted fused2 digit split self-checks 8 sampled rows per chunk | **fixed** (every row, 40-bit target) |
-| F3 | medium | Integrity failures from the provider are retried forever (backoff ≤ 10 min, reset by any success) | open (recommendation) |
-| F4 | medium | Default gateway ring-Freivalds check verifies only the masked product: wrong masks are invisible online; the range check's reaction depends on data | open (recommendation: p31 format with pks-v3) |
+| F3 | medium | Integrity failures from the provider are retried forever (backoff ≤ 10 min, reset by any success) | **fixed** (alert, persistent count, halt after 3, `pgw factory clear-halt`) |
+| F4 | medium | Default gateway ring-Freivalds check verifies only the masked product: wrong masks are invisible online; the range check's reaction depends on data | **fixed** (`check_field = "auto"`: p31 for encrypted factories; gateway `prime_check` auto; 40-bit factory check kept) |
 | F5 | medium | Parameter claims rest on a core-SVP model; no lattice-estimator run | open (my numbers below agree with the packet) |
-| F6 | low | Hint-store SHA-256 digests live in unauthenticated `meta.json` with the seeds and the row norms that drive the noise refusal | open |
-| F7 | low | Two factory processes on one hint root: a rebuild replaces seeds under a running process → every decryption fails (DoS) | open |
+| F6 | low | Hint-store SHA-256 digests live in unauthenticated `meta.json` with the seeds and the row norms that drive the noise refusal | **fixed** (HMAC under a customer key, `he_hint_key_file`; trust boundary documented without it) |
+| F7 | low | Two factory processes on one hint root: a rebuild replaces seeds under a running process → every decryption fails (DoS) | **fixed** (shared/exclusive `flock` on the store) |
 | F8 | low | Secret hygiene in Python: decrypted-mask and upload-secret copies left unwiped (fixed); per-group seeds and stream keys are immutable `bytes`; the numpy reference keeps keystreams in `bytes` | partly fixed |
 | F9 | info | Native decryption computes `round(c0r 2^-4 + w 2^32/q1)` in f64 without the reference's inner rounding: bit-identical on valid replies, may differ by 1 on adversarial values | documented |
-| F10 | info | Doc inconsistencies (reply-key core-SVP 218 vs 251; 16 vs 32 rows per reply ciphertext; prime names) | open |
+| F10 | info | Doc inconsistencies (reply-key core-SVP 218 vs 251; 16 vs 32 rows per reply ciphertext; prime names) | **fixed** (core-SVP 251/228, 218 is the HE-standard limit; 32 rows at n = 8192) |
 | F11 | info | `test_backend_in_real_factory_matches_local` always skips (spec ids lack `kind`); the "real factory" claim rested on a benchmark script | **fixed** (new test runs the real `MaskGenerator`) |
 | F12 | info | Power-of-two upload modulus: the only small quotient is evaluation at X = 1 mod 2, which reveals parity(Σe), uniform for CBD(21) | no issue |
 | F13-F17 | info | Hint integrity rule, randomness, downgrade, wire parsing, constant-time: checked, no issue (details below) | — |

@@ -283,9 +283,62 @@ def test_defaults_off(qwen_pack: InMemoryPack, monkeypatch: pytest.MonkeyPatch) 
 
     monkeypatch.delenv("PGW_PRIME_CHECK", raising=False)
     be = MaskedBackend(qwen_pack, None, LocalComputeClient(qwen_pack), DEFAULT_RING, qwen_pack.fingerprint)
-    assert not be.prime_check
-    assert FactorySettings.model_fields["check_field"].default == "ring"
-    assert GatewaySettings.model_fields["prime_check"].default is False
+    assert not be.prime_check  # the library backend: off unless asked for
+    # Settings: 'auto' = p31 for encrypted factories at K32 only (F4); the gateway accepts p31 where it can check it
+    assert FactorySettings.model_fields["check_field"].default == "auto"
+    assert GatewaySettings.model_fields["prime_check"].default is None
+    s = FactorySettings(pack_path=Path("."))
+    assert s.effective_check_field == "ring"  # local (customer-computed) masks keep the ring format
+    he = FactorySettings(pack_path=Path("."), he_service_url="https://svc:8443", ring="K32A12C27")
+    assert he.effective_check_field == "p31"
+    assert FactorySettings(pack_path=Path("."), he_service_url="https://svc:8443",
+                           ring="K40A12").effective_check_field == "ring"  # p31 is K32 only
+    assert FactorySettings(pack_path=Path("."), he_service_url="https://svc:8443", ring="K32A12C27",
+                           check_field="ring").effective_check_field == "ring"  # explicit wins
+
+
+class _WrongMask(LocalMaskReservation):
+    """A reservation whose first mask row of one linear is off by ``delta`` in one entry (what an
+    encrypted-mask provider could cause if the factory's self-check missed it); the product is honest."""
+
+    def __init__(self, *a: Any, key: str, col: int, delta: int, **kw: Any):
+        super().__init__(*a, **kw)
+        self.key, self.col, self.delta, self.hit = key, col, delta, False
+
+    def take(self, lid: Any, rows: int) -> tuple[torch.Tensor, torch.Tensor]:
+        r, wr = super().take(lid, rows)
+        if str(lid) == self.key and not self.hit:
+            self.hit = True
+            wr = wr.clone()
+            wr[0, self.col] = (wr[0, self.col] + self.delta) % (1 << self.ring.k)
+        return r, wr
+
+
+def test_wrong_mask_caught_online_only_by_p31(qwen_pack: InMemoryPack) -> None:
+    """F4: a mask wrong by 2^23 (inside the output range of this tiny model) in one entry. The ring check verifies the masked
+    product only: the outcome depends on the sign of the true output coordinate (silently wrong logits or a
+    range-check trip: a one-bit leak). The p31 check verifies the unmasked output: it trips for every
+    coordinate, the same reaction whatever the data."""
+    key = next(s.id.key for s in qwen_pack.linear_specs() if s.id.kind.value == "down")  # feeds the residual
+    ref = _run(qwen_pack, PlainBackend(qwen_pack, DEFAULT_RING), lambda n, s: None)[0]
+    outcome: dict[str, list[str]] = {"ring": [], "p31": []}
+    for fmt in outcome:
+        for col in range(12):
+            def sess(slots: int, s: int, fmt: str = fmt, col: int = col) -> Any:
+                kw: dict[str, Any] = {"checks": 1, "check_field": "p31"} if fmt == "p31" else {"checks": 7}
+                return _WrongMask(qwen_pack, DEFAULT_RING, slots, seed=bytes([s + 9]) * 32, key=key, col=col,
+                                  delta=1 << 23, **kw)
+
+            be = MaskedBackend(qwen_pack, None, LocalComputeClient(qwen_pack), DEFAULT_RING, qwen_pack.fingerprint,
+                               prime_check=True, min_soundness_bits=20)
+            try:
+                got = _run(qwen_pack, be, sess)[0]
+            except IntegrityError:
+                outcome[fmt].append("trip")
+            else:
+                outcome[fmt].append("silent" if not torch.equal(got, ref) else "exact")
+    assert set(outcome["p31"]) == {"trip"}
+    assert "silent" in outcome["ring"]  # what F4 is about: undetected, and data-dependent
 
 
 def test_gateway_without_prime_check_refuses(qwen_pack: InMemoryPack) -> None:

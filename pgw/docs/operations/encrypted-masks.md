@@ -114,9 +114,16 @@ After that, storage no longer grows with token volume.
 - **Public matrix:** its seed is always chosen by the customer. A provider-chosen matrix could
   expose the masks.
 - **Integrity:** every decrypted row is verified before it is stored, using private check
-  vectors that are never written to the segment. A provider that returns a wrong product causes
-  the segment to be rejected, and it cannot learn the online check vectors from those rejections.
-  Online, the existing Freivalds check and range check apply unchanged.
+  vectors that are never written to the segment. A provider can shift a decrypted mask entry by an
+  exact amount of its choosing (the reply is additively malleable), so the factory uses enough
+  vectors for 40 bits against chosen errors (14 at capped K32 widths, SPEC 7.9), redrawn after any
+  rejected segment. A provider that returns a wrong product causes the segment to be rejected, and
+  it cannot learn the online check vectors from those rejections. Each rejection is a CRITICAL
+  alert; after 3 (`PGW_FACTORY_MAX_PROVIDER_INTEGRITY_FAILURES`) the factory halts until an operator
+  has investigated the provider and runs `pgw factory clear-halt --yes`. Segments are written in the
+  p31 check format by default (`PGW_FACTORY_CHECK_FIELD=auto`), so the gateway also catches a wrong
+  mask online, with the same reaction for every input (the gateway accepts p31 on a trip lane or with `PGW_GATEWAY_PRIME_CHECK=true`; gateways without either, or
+  with padded speculation, need `PGW_FACTORY_CHECK_FIELD=ring`).
 - **Metadata the provider sees:** linear ids, group counts and timing of mask generation.
   Generation runs ahead of use, so this reveals at most the volume of masks being stocked.
 

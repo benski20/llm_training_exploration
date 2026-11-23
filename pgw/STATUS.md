@@ -15,6 +15,45 @@ SLA pilot. Three reasons:
 2. The HSM, KMS and TPM integrations have never run against real hardware or cloud services.
 3. There has been no external security audit.
 
+## 2026-11-23 — pks-v3 review fixes on the default path; pks-v3 the CPU-only demo preset (pending external review)
+
+Fixes for `research/reviews/pks-v3-adversarial-review.md` (F1, F3, F4, F6, F7, F10), now on **every** encrypted
+factory, the default mlwe v1/v2 path included:
+- **F1 (high), all backends:** any product from a provider (mlwe v1/v2 over HTTP or the bulk channel, fleet
+  `SegmentShardedRemote`, pks-v3, encrypted fused2 digits) is self-checked on every row with enough private
+  vectors for **40 bits** against errors the provider chooses (14 at capped K32 widths; was 2: a `2^31` error passed
+  with 1/4, a `2^27` one with 2^-10). A backend may ask for more, never less. Local masks (plain CPU/GPU factory,
+  mask service) keep 2 vectors: their errors are faults, not choices, and gross ones fail the range check.
+  Private vectors and `v W8` are reused across accepted segments and wiped/redrawn after any failed or aborted one.
+  Partner imports are unchanged (a partner is trusted with the seed; it runs this factory itself).
+- **Cost (this 4-vCPU box, m = 18944, n = 3584, 256 rows, one core):** the new 32-bit SIMD row check
+  (`pgw_fast.he_check_rows`, K <= 32, up to 16 vectors) runs 14 vectors in **2.2 ns per (slot, m+n)**, below the
+  former 2-vector uint64 check (2.3 ns; 14 vectors on the old path: 7.3 ns). 7B (Σ(m+n) = 2.2M): ~4.8 ms CPU per
+  slot, as before. The per-segment `v W8` (3.8 s CPU per 7B segment with 14 vectors, 2.1 s with 2) is now paid once
+  per process instead of per segment. Real v2 factory (`he_factory_overlap_bench.py`, 0.5B shapes, 2 layers,
+  in-process provider, 4 x 512-slot segments, 2 runs each): segments bit-identical (same digest); check stage
+  0.158 / 0.163 s with 14 vectors vs 0.173 / 0.188 s with the old 2, of 3.4-3.7 s wall. Rebuild `pgw_fast` (`rust/tools/build_fast.py`) to get it;
+  an older build falls back to the uint64 path (correct, slower).
+- **F3:** provider-attributable integrity failures (self-check mismatch, malformed reply) are a CRITICAL alert,
+  counted in `factory-state.json` (never reset by success or restart), and after `max_provider_integrity_failures`
+  (3) the factory **halts** (every fleet worker; `/healthz` unhealthy; alerts `PGWFactoryProviderIntegrityFailure`,
+  `PGWFactoryHalted`) until `pgw factory clear-halt --yes`. Transport errors keep retrying with back-off.
+- **F4:** `check_field = "auto"` (new default) writes **p31** segments for encrypted factories at K32; gateways accept
+  p31 by default (`prime_check` unset = auto: TripEngine already on, native prime kernels, K <= 32, no padded speculation). A wrong mask is
+  then caught online with the same reaction for every input (tested; the ring format lets it through silently).
+  The factory keeps its 40-bit check (not relaxed for pks-v3: the online check is a backstop, not a proof).
+- **F6/F7/F10:** pks-v3 hint `meta.json` HMAC under a customer key (`he_hint_key_file`, outside the hint dir;
+  without it the trust boundary is documented); hint store `flock` (a rebuild never replaces seeds under a running
+  factory); doc fixes (reply-key core-SVP 251/228, 32 rows per reply ciphertext at n = 8192).
+- **Defaults:** pks-v3 is the preset of the CPU-only co-located demo (`launch.py --he-scheme auto`) and of the
+  customer-cloud template's `cpu_encrypted` presets (`he_scheme = "auto"`); both pass the library's
+  acknowledgement explicitly. **pks-v3 remains pending external review (lattice-estimator run and cryptographer
+  sign-off).** The library default stays mlwe. Not run on Modal (no Modal in this session).
+- Tests: `tests/factory/test_provider_integrity.py`, `tests/hemask/test_factory_he.py` (chosen errors on mlwe,
+  vector floor for every remote, reuse/wipe), `tests/hemask/test_native_sampling.py` (SIMD path == uint64 == numpy),
+  `tests/hemask/test_pks.py` (hint MAC, lock), `tests/engine/test_prime_check.py` (wrong mask: p31 vs ring, defaults),
+  `tests/gateway/test_setup.py`, `tests/deploy/*` (launcher, template, alert rules).
+
 ## 2026-11-23 — 7B at 28 tok/s with the encrypted mask factory keeping up (Modal, H100, CPU-only gateway)
 
 Same stack as the 28 tok/s entry (shared-memory lane, native decode driver, masked head, p31, weight-free gateway),

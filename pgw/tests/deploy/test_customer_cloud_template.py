@@ -121,6 +121,26 @@ def test_bootstrap_scripts_parse_and_use_real_commands(script: Path) -> None:
         subprocess.run(["shellcheck", "-S", "warning", str(script)], check=True)  # noqa: S603, S607
 
 
+def test_cpu_only_preset_defaults_to_pks_v3_with_p31_and_explicit_ack() -> None:
+    """CPU-only presets (cpu_encrypted): pks-v3 by default (pending external review), the acknowledgement passed
+    explicitly, a hint key outside the hint directory, and check_field auto (p31 for provider-computed masks)."""
+    from pgw.hemask.pks import PKS_V3_ACK
+
+    variables = _blocks((AWS / "variables.tf").read_text(), "variable")
+    assert re.search(r'default\s*=\s*"auto"', variables["he_scheme"]) and "validation" in variables["he_scheme"]
+    assert re.search(r'default\s*=\s*"auto"', variables["check_field"])
+    assert "PENDING EXTERNAL REVIEW" in variables["he_scheme"]
+    main = (AWS / "main.tf").read_text()
+    assert re.search(r'local\.supply == "cpu_encrypted" \? "pks-v3" : "mlwe"', main)
+    assert "PGW_HE_SCHEME       = local.he_scheme" in (AWS / "instances.tf").read_text()
+    boot = (ROOT / "scripts" / "pgw-gateway-bootstrap.sh").read_text()
+    assert f"PGW_FACTORY_HE_PKS_ACK={PKS_V3_ACK}" in boot and "PGW_FACTORY_HE_SCHEME=pks-v3" in boot
+    assert "PGW_FACTORY_HE_HINT_KEY_FILE=/etc/pgw/secrets/pks-hint.key" in boot
+    assert "PGW_HE_SCHEME:-mlwe" in boot  # without the variable: the library default
+    assert "PGW_GATEWAY_PRIME_CHECK=true" in boot  # the gateway runs the p31 check whenever p31 is in use
+    assert "PENDING EXTERNAL REVIEW" in (ROOT / "README.md").read_text()
+
+
 def test_readme_has_onboarding_steps_and_sizing() -> None:
     text = (ROOT / "README.md").read_text()
     for needle in ("Onboarding in about an hour", "terraform destroy", "quota", "same region", "Sizing",
