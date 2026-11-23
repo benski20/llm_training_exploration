@@ -320,7 +320,7 @@ fn enc_chunk(fast: Vx, cx: &Ctx, it: &EncItem<'_>, c0: usize, that: &[Vec<Vec<u3
         // noise of the chunk's rows (row f = 16 (c0 + l) + k is stream values f*256 .. f*256 + 255)
         cbd_into(fast, &it.e_keys[g], c0 * RANK * D, &mut noise.0[..lanes * RANK * D]);
         #[cfg(target_arch = "x86_64")]
-        if fast == Vx::Z {
+        if fast != Vx::Port {
             let pr2 = &cx.ep[2];
             let kc = crate::simd::EncConsts {
                 e: [e0, e1, e2],
@@ -332,10 +332,16 @@ fn enc_chunk(fast: Vx, cx: &Ctx, it: &EncItem<'_>, c0: usize, that: &[Vec<Vec<u3
                 emod,
             };
             // SAFETY: rows 16 c0 .. 16 (c0 + lanes) of b are written by this chunk only (columns g D ..
-            // g D + 255); the mask gather reads only rows < it.rows of r; `fast` implies AVX-512.
+            // g D + 255); the mask gather reads only rows < it.rows of r; `fast` is capped at the CPU.
+            let (rp, valid) = (it.r.as_ptr().wrapping_add(g * D * it.n), it.rows.saturating_sub(g * D).min(D));
             unsafe {
-                crate::simd::enc_out(&kc, s16.as_ptr(), NU, lanes, c0, cols, it.n, it.r.as_ptr().wrapping_add(g * D * it.n),
-                                     it.rows.saturating_sub(g * D).min(D), noise.0.as_ptr(), b.0.add(g * D));
+                if fast == Vx::Z {
+                    crate::simd::enc_out(&kc, s16.as_ptr(), NU, lanes, c0, cols, it.n, rp, valid, noise.0.as_ptr(),
+                                         b.0.add(g * D));
+                } else {
+                    crate::simd2::enc_out(&kc, s16.as_ptr(), NU, lanes, c0, cols, it.n, rp, valid, noise.0.as_ptr(),
+                                          b.0.add(g * D));
+                }
             }
             continue;
         }
@@ -385,7 +391,7 @@ fn enc_worker(fast: Vx, it: &EncItem<'_>, that: &[Vec<Vec<u32>>], bp: Shared<u64
     let mut a16 = Wiping(vec![0u32; 3 * NU * L]);
     let mut s16 = Wiping(vec![0u32; 3 * NU * L]);
     let mut raw = vec![0u8; NU * 8];
-    let mut xb = Wiping(vec![0u64; if fast == Vx::Z { 0 } else { NU * L }]);
+    let mut xb = Wiping(vec![0u64; if fast == Vx::Port { NU * L } else { 0 }]);
     for ch in (th..chunks).step_by(threads) {
         enc_chunk(fast, cx, it, ch * L, that, bp, &mut a16.0, &mut s16.0, &mut raw, &mut xb.0);
     }
@@ -577,7 +583,7 @@ fn dec_chunk(fast: Vx, cx: &Ctx, it: &DecItem<'_>, b0: usize, outs: &[Shared<u32
         let gbase = g * nb * NR;
         let out = outs[g];
         #[cfg(target_arch = "x86_64")]
-        if fast == Vx::Z {
+        if fast != Vx::Port {
             let kc = crate::simd::DecConsts { p0, p1, pn1, inv01_m: cx.inv01_m, c0scale, wscale };
             let src = match it.c0r {
                 C0::Words(v) => crate::simd::C0p::Words(v.as_ptr()),
@@ -588,12 +594,16 @@ fn dec_chunk(fast: Vx, cx: &Ctx, it: &DecItem<'_>, b0: usize, outs: &[Shared<u32
             for u in 0..rows {
                 let idx0: [usize; L] = std::array::from_fn(|l| gbase + (b0 + l.min(lanes - 1)) * NR + PACK * u);
                 // SAFETY: columns 32 b0 .. 32 (b0 + lanes) of every row are written by this chunk only; reads
-                // stay inside c0r (idx0 + 32 <= count) and s16; `fast` implies AVX-512 (Isa::parse).
+                // stay inside c0r (idx0 + 32 <= count) and s16; `fast` is capped at the CPU (Isa::parse).
                 let outp: [*mut u32; L] =
                     std::array::from_fn(|l| unsafe { out.0.add(u * it.m + PACK * (b0 + l.min(lanes - 1))) });
+                let (s0, s1) = (s16[PACK * u * L..].as_ptr(), s16[NR * L + PACK * u * L..].as_ptr());
                 unsafe {
-                    crate::simd::dec_combine(&kc, s16.as_ptr().add(PACK * u * L), s16.as_ptr().add(NR * L + PACK * u * L),
-                                             lanes, src, &idx0, &outp);
+                    if fast == Vx::Z {
+                        crate::simd::dec_combine(&kc, s0, s1, lanes, src, &idx0, &outp);
+                    } else {
+                        crate::simd2::dec_combine(&kc, s0, s1, lanes, src, &idx0, &outp);
+                    }
                 }
             }
             continue;
