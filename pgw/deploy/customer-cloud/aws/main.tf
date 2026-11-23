@@ -17,6 +17,10 @@ locals {
 
   separate_vm = local.supply == "separate_vm"
   same_host   = local.supply == "same_host"
+  # cpu_encrypted: pks-v3 by default (pending external review; the hint is about 1.5 KB per output row, ~2.1 GB at
+  # 7B, ~3.2 GB at 14B, instead of hint_gb), else the reviewed mlwe scheme. Not used by the GPU mask service.
+  he_scheme = var.he_scheme == "auto" ? (local.supply == "cpu_encrypted" ? "pks-v3" : "mlwe") : var.he_scheme
+  hint_gb   = local.he_scheme == "pks-v3" ? ceil(local.p.hint_gb / 8) : local.p.hint_gb
 
   gateway_instance_type = var.gateway_instance_type != "" ? var.gateway_instance_type : (
   local.same_host ? (var.mask_service_instance_type != "" ? var.mask_service_instance_type : local.p.gpu_same_host) : local.p.gateway)
@@ -28,7 +32,7 @@ locals {
   segment_slots   = 2048 # per-segment fixed costs (check vectors, ~10 s at 72B on a T4) amortize over 2048 slots
   store_gb        = ceil(local.target_slots * local.p.slot_mb / 1000 * 1.3)
   gateway_data_gb = var.gateway_data_volume_gb > 0 ? var.gateway_data_volume_gb : (
-  local.p.pack_gb * (local.same_host ? 2 : 1) + (local.supply == "cpu_encrypted" ? 2 * local.p.hint_gb : 0) + local.store_gb + 40)
+  local.p.pack_gb * (local.same_host ? 2 : 1) + (local.supply == "cpu_encrypted" ? 2 * local.hint_gb : 0) + local.store_gb + 40)
   outbox_slots         = max(local.segment_slots * 2, ceil(local.target_slots / 4))
   mask_service_data_gb = var.mask_service_data_volume_gb > 0 ? var.mask_service_data_volume_gb : ceil(2 * local.p.pack_gb + 2 * local.outbox_slots * local.p.slot_mb / 1000 + 40)
   # gp3 at full throughput from 32B on: the mask store ingests and serves 0.5-2.6 GB/s at 32B-72B.

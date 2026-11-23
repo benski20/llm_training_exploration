@@ -115,6 +115,10 @@ CACHE_VOLUME = os.environ.get("PGW_MODAL_CACHE_VOLUME") or "pgw-gateway-cache"
 #: service (built in a separate package): refused here until that package wires it and sets this to True.
 MASK_SOURCES = ("factory", "gpu-service")
 GPU_MASK_SERVICE_READY = False
+#: ``pgw.hemask.pks.PKS_V3_ACK`` (the library's acknowledgement for the unreviewed pks-v3 scheme; a test keeps them
+#: equal). ``--he-scheme`` (auto: pks-v3 on the CPU-only co-located demo) passes it explicitly.
+PKS_V3_ACK = "pks-v3-unreviewed-n8192"
+HE_SCHEMES = ("auto", "mlwe", "pks-v3")
 #: Port of the provider's bulk maskgen channel in the co-located container (``--he-bulk``; 127.0.0.1 only).
 HE_BULK_PORT = 8445
 DEFAULT_MODEL = MODELS[0]
@@ -549,6 +553,12 @@ def _spawner(args: argparse.Namespace) -> Callable[..., Pair]:
     if getattr(args, "prime_check", False):  # one-vector Freivalds check over F_p: factory format + gateway acceptance
         genv.setdefault("PGW_FACTORY_CHECK_FIELD", "p31")
         genv.setdefault("PGW_GATEWAY_PRIME_CHECK", "true")
+    elif getattr(args, "spec_rows", 0) or (getattr(args, "spec_mask", "") or "").strip():
+        # padded speculation passes refuse p31 extents and the gateway's prime_check auto is off then: the
+        # encrypted factory's check_field auto (p31) must stay on the ring format
+        genv.setdefault("PGW_FACTORY_CHECK_FIELD", "ring")
+    for k, v in he_scheme_env(args).items():  # pks-v3 on the CPU-only co-located demo (pending external review)
+        (penv if k.startswith("PGW_SERVICE_") else genv).setdefault(k, v)
     if (getattr(args, "mask_source", None) or "factory") != "factory":  # hook (pgw_modal_boot.mask_source_env)
         genv["PGW_MODAL_MASK_SOURCE"] = args.mask_source
     if getattr(args, "masked_head", False):  # the masked LM head: service, factory and gateway model option
@@ -675,6 +685,33 @@ def prepare_cost_per_h(model: str) -> dict[str, float]:
     if big:
         out["prepare_provider_pack (CPU)"] = cpus * CORE_H + gib * GIB_H
     return out
+
+
+def resolve_he_scheme(args: argparse.Namespace) -> str:
+    """``--he-scheme``: ``auto`` = ``pks-v3`` on the CPU-only co-located demo (encrypted factory, standard schedule,
+    no ``--gateway-gpu``, a target whose hint is not a prepared Volume artefact), else ``mlwe``.
+
+    pks-v3 is PENDING EXTERNAL REVIEW (lattice-estimator run and cryptographer sign-off,
+    research/reviews/pks-v3-review-packet.md): the library still refuses it without the acknowledgement
+    ``pgw.hemask.pks.PKS_V3_ACK``; this demo preset passes it explicitly (``PGW_SETUP_HE_PKS_ACK``)."""
+    scheme = getattr(args, "he_scheme", "auto") or "auto"
+    if scheme != "auto":
+        return str(scheme)
+    if (normalize_placement(getattr(args, "placement", "colocated")) == "colocated"
+            and not getattr(args, "gateway_gpu", False)
+            and (getattr(args, "mask_source", None) or "factory") == "factory"
+            and getattr(args, "schedule", "standard") == "standard"
+            and getattr(args, "model", DEFAULT_MODEL) not in VOLUME_PACK_MODELS):
+        return "pks-v3"
+    return "mlwe"
+
+
+def he_scheme_env(args: argparse.Namespace) -> dict[str, str]:
+    """Gateway (``PGW_SETUP_*``, read by the setup wizard's factory) and provider (``PGW_SERVICE_*``) variables of
+    the encrypted-mask scheme; empty for mlwe (the library default)."""
+    if resolve_he_scheme(args) != "pks-v3":
+        return {}
+    return {"PGW_SETUP_HE_SCHEME": "pks-v3", "PGW_SETUP_HE_PKS_ACK": PKS_V3_ACK, "PGW_SERVICE_MASKGEN_V3": "true"}
 
 
 def dry_run(args: argparse.Namespace) -> dict[str, Any]:
@@ -966,6 +1003,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                     help="--placement colocated: where the gateway's masks come from: 'factory' (default; the "
                          "encrypted MLWE mask factory, which needs the hint) or 'gpu-service' (the customer-side GPU "
                          "mask service: a hook, refused until that package wires it; no hint needed then)")
+    ap.add_argument("--he-scheme", choices=HE_SCHEMES, default="auto",
+                    help="--placement colocated, --mask-source factory: the encrypted mask scheme of the gateway's "
+                         "factory. 'auto' (default): 'pks-v3' on the CPU-only demo (no --gateway-gpu, standard "
+                         "schedule; compact ~2.1 GB hint at 7B, built by the factory on first start; provider "
+                         "PGW_SERVICE_MASKGEN_V3=true; masks checked with 40-bit private vectors and the p31 format), "
+                         "else 'mlwe' (wire v2, the reviewed scheme). pks-v3 is PENDING EXTERNAL REVIEW (lattice-"
+                         "estimator run and cryptographer sign-off); the demo passes the library's acknowledgement")
     ap.add_argument("--dry-run", action="store_true",
                     help="validate the arguments, print the deploy-time sizing, the run-time environment and the "
                          "cost estimate, then exit (no Modal call, nothing deployed or spent)")
@@ -1102,6 +1146,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         ap.error("--ab-plain needs --e2e and --spec-rows (it measures the same run without speculation), and >= 0")
     if args.prepare_cache and not args.gateway_cache:
         ap.error("--prepare-cache needs --gateway-cache")
+    if args.he_scheme == "pks-v3" and (args.placement != "colocated" or args.mask_source != "factory"
+                                       or args.schedule != "standard"):
+        ap.error("--he-scheme pks-v3 needs --placement colocated, --mask-source factory and the standard schedule")
     if args.mask_source != "factory":
         if args.placement != "colocated":
             ap.error("--mask-source needs --placement colocated")
@@ -1156,7 +1203,7 @@ def main(argv: list[str] | None = None) -> None:
         return
     if (args.model in VOLUME_PACK_MODELS and not args.prepare_cache and not args.deploy_only
             and not (args.stop or args.show)):
-        pf = cache_preflight(args.model, need_hint=args.mask_source == "factory")
+        pf = cache_preflight(args.model, need_hint=args.mask_source == "factory" and resolve_he_scheme(args) == "mlwe")
         if not pf["ok"]:
             raise SystemExit(f"{args.model}: not prepared ({'; '.join(pf['problems'])}); run the same flags with "
                              "--prepare-cache first (nothing was deployed or started)")

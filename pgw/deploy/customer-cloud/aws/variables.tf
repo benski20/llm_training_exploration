@@ -145,12 +145,22 @@ variable "mask_service_data_volume_gb" {
 }
 
 variable "check_field" {
-  description = "Segment check format: 'ring' or 'p31' (the gateway must have prime_check enabled for p31)."
+  description = "Segment check format: 'auto' (p31 for the CPU encrypted factory, whose masks come from the provider: the gateway then catches a wrong mask online with the same reaction for every input; ring for masks computed by the customer's own GPU mask service), 'ring' or 'p31' (the gateway accepts p31 by default where its native trip kernels exist)."
   type        = string
-  default     = "ring"
+  default     = "auto"
   validation {
-    condition     = contains(["ring", "p31"], var.check_field)
-    error_message = "check_field: ring or p31."
+    condition     = contains(["auto", "ring", "p31"], var.check_field)
+    error_message = "check_field: auto, ring or p31."
+  }
+}
+
+variable "he_scheme" {
+  description = "Encrypted mask scheme of the CPU encrypted factory: 'auto' (pks-v3 for cpu_encrypted: compact ~2 GB hint at 7B instead of ~30 GB; PENDING EXTERNAL REVIEW, lattice-estimator run and cryptographer sign-off, research/reviews/pks-v3-review-packet.md; this preset passes the library's acknowledgement), 'mlwe' (wire v2, the reviewed scheme) or 'pks-v3'. pks-v3 needs the provider's PGW_SERVICE_MASKGEN_V3=true."
+  type        = string
+  default     = "auto"
+  validation {
+    condition     = contains(["auto", "mlwe", "pks-v3"], var.he_scheme)
+    error_message = "he_scheme: auto, mlwe or pks-v3."
   }
 }
 

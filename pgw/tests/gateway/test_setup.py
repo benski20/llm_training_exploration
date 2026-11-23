@@ -356,3 +356,45 @@ def test_setup_model_options_enable_strict_speculation_only(tmp_path: Path) -> N
     ok = {"spec_lookup": 4, "draft_pack_path": "/opt/packs/draft", "draft_device": "cuda", "spec_rows": 4,
           "spec_strict_passes": True}
     assert _settings(tmp_path, setup_model_options=ok).setup_model_options == ok
+
+
+@pytest.mark.parametrize("scheme", ["", "pks-v3"])
+@pytest.mark.parametrize("spec", [False, True])
+def test_factory_env_he_scheme_and_check_field_presets(tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+                                                       scheme: str, spec: bool) -> None:
+    """pks-v3 is a deployment preset (PGW_SETUP_HE_SCHEME; the CPU-only co-located demo, pending external review):
+    the factory gets the scheme, the acknowledgement only as the preset passes it, and a hint key outside the hint
+    directory. Padded speculation keeps the ring check format (its passes refuse p31 extents)."""
+    from pgw.factory.config import FactorySettings
+    from pgw.gateway.setup import SetupController
+    from pgw.hemask.pks import PKS_V3_ACK
+
+    monkeypatch.setenv("PGW_SETUP_HE_SCHEME", scheme)
+    monkeypatch.setenv("PGW_SETUP_HE_PKS_ACK", PKS_V3_ACK if scheme else "")
+    opts: dict[str, Any] = {"lane": "auto"}  # the trip lane: the gateway runs the TripEngine, p31 accepted
+    if spec:
+        opts.update(spec_lookup=4, spec_rows=3, spec_strict_passes=True)
+    ctl = SetupController(_settings(tmp_path, setup_model_options=opts))
+    ctl.state.update({"enroll": {"service_url": "https://svc:8443", "files": {"token": str(tmp_path / "t")}},
+                      "model": {"pack_path": str(tmp_path / "pack"), "ring": "K32A12C27"},
+                      "maskstore": {"root": str(tmp_path / "m"), "key_file": str(tmp_path / "k"),
+                                    "counter_file": str(tmp_path / "c")}})
+
+    def settings() -> FactorySettings:
+        return FactorySettings(**{k[len("PGW_FACTORY_"):].lower(): v for k, v in ctl.factory_env().items()
+                                  if k.startswith("PGW_FACTORY_")})
+
+    f = settings()
+    assert f.he_scheme == (scheme or "mlwe")
+    if scheme:
+        assert f.he_pks_ack == PKS_V3_ACK and f.he_hint_key_file is not None and f.he_hint_dir is not None
+        assert not str(f.he_hint_key_file).startswith(str(f.he_hint_dir))
+    assert f.effective_check_field == ("ring" if spec else "p31")
+    # without a trip lane the gateway does not run the TripEngine (prime_check auto off): ring segments
+    no_lane = SetupController(_settings(tmp_path, setup_model_options={}))
+    no_lane.state.update(ctl.state)
+    assert no_lane.factory_env()["PGW_FACTORY_CHECK_FIELD"] == "ring"
+    monkeypatch.setenv("PGW_SETUP_HE_PKS_ACK", "")  # the library still refuses pks-v3 without the acknowledgement
+    if scheme:
+        with pytest.raises(ValueError, match="external cryptographic review"):
+            settings()

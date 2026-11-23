@@ -130,6 +130,16 @@ token (qkv and o computed on the gateway), so about 0.85 s per token of network 
 at about 1 token/s while the T4 did almost nothing. Earlier tunnel placements measured 6.8, 8.1 and 26 ms.
 i6pn did not schedule within 10-25 minutes, twice.
 
+**Mask scheme (`--he-scheme`, default `auto`).** On the CPU-only co-located demo (no `--gateway-gpu`, standard
+schedule, factory masks, a target without a prepared Volume hint) the gateway's encrypted factory uses the
+compact-hint scheme **pks-v3** (~2.1 GB hint at 7B instead of ~34 GB; built by the factory on its first start,
+a CPU pass over every weight like the mlwe hint build; the gateway cache does not save it yet): the launcher sets `PGW_SETUP_HE_SCHEME=pks-v3` and passes the
+library's acknowledgement `PGW_SETUP_HE_PKS_ACK=pks-v3-unreviewed-n8192`, and the provider serves maskgen v3
+(`PGW_SERVICE_MASKGEN_V3=true`). **pks-v3 is pending external review (lattice-estimator run and cryptographer
+sign-off).** `--he-scheme mlwe` keeps the reviewed MLWE v2 factory. Either way the factory checks the provider's
+products with 40-bit private vectors, writes p31 segments (ring with `--spec-rows` / `--spec-mask`, whose padded
+passes refuse p31) and halts after 3 provider integrity failures. Not run on Modal in this change.
+
 `--placement colocated` (or `PGW_MODAL_PLACEMENT=colocated`) runs both parties in **one** container of a
 third app, `pgw-colocated` (`colocated.py`), so every round trip crosses loopback TCP instead:
 

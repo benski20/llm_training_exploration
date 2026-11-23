@@ -137,10 +137,27 @@ if [ ! -s /etc/pgw/tls/tls.crt ]; then
 fi
 
 # ---- 5. mask supply ------------------------------------------------------------------------------------------
+# check_field auto: p31 for the CPU encrypted factory (masks from the provider), ring for the customer's own GPU
+# mask service. The gateway runs the p31 check (prime_check, on the native TripEngine) whenever p31 is in use.
+if [ "$PGW_CHECK_FIELD" = p31 ] || { [ "$PGW_CHECK_FIELD" = auto ] && [ "$PGW_MASK_SUPPLY" = cpu_encrypted ]; }; then
+  grep -q '^PGW_GATEWAY_PRIME_CHECK=' /etc/pgw/gateway.env || echo "PGW_GATEWAY_PRIME_CHECK=true" >> /etc/pgw/gateway.env
+fi
 docker rm -f pgw-factory pgw-mask-service pgw-mask-pull >/dev/null 2>&1 || true
 case "$PGW_MASK_SUPPLY" in
   cpu_encrypted)
-    docker run -d --name pgw-factory --restart unless-stopped -u 10001:10001 --network host \
+    HE_ENV=()
+    if [ "${PGW_HE_SCHEME:-mlwe}" = "pks-v3" ]; then
+      # pks-v3 (compact hint) is PENDING EXTERNAL REVIEW (lattice-estimator run and cryptographer sign-off); the
+      # library refuses it without its acknowledgement, which this preset passes explicitly. The hint key
+      # authenticates the hint store's metadata and is kept outside the hint directory.
+      if [ ! -s /etc/pgw/secrets/pks-hint.key ]; then
+        head -c 32 /dev/urandom > /etc/pgw/secrets/pks-hint.key
+        chown 10001:10001 /etc/pgw/secrets/pks-hint.key; chmod 0600 /etc/pgw/secrets/pks-hint.key
+      fi
+      HE_ENV=(-e PGW_FACTORY_HE_SCHEME=pks-v3 -e PGW_FACTORY_HE_PKS_ACK=pks-v3-unreviewed-n8192
+              -e PGW_FACTORY_HE_HINT_KEY_FILE=/etc/pgw/secrets/pks-hint.key)
+    fi
+    docker run -d --name pgw-factory --restart unless-stopped -u 10001:10001 --network host "${HE_ENV[@]}" \
       --cpus "$PGW_FACTORY_CPUS" -v /etc/pgw:/etc/pgw -v /var/lib/pgw:/var/lib/pgw \
       -v /var/lib/pgw-counter:/var/lib/pgw-counter --env-file /etc/pgw/gateway.env \
       -e PGW_FACTORY_PACK_PATH="/var/lib/pgw/packs/$MODEL_NAME" -e PGW_FACTORY_HE_SERVICE_URL="$SERVICE_URL" \

@@ -80,6 +80,13 @@ runs pack -> factory -> service -> gateway as real processes (`tests/e2e`). GPU 
 Not in v0.1: tools/function calling, structured output, `n > 1`, multimodal inputs (rejected
 with 400, see `docs/api/gateway-api.md`).
 
+Encrypted mask factory: masks from the provider are self-checked with 40 bits against errors the provider
+chooses, written in the p31 check format by default, and the factory halts after 3 provider integrity failures
+(`pgw factory clear-halt` resumes it). The compact-hint scheme **pks-v3** is the default preset of the CPU-only
+co-located demo and of the customer-cloud template's CPU-only presets; it is **pending external review
+(lattice-estimator run and cryptographer sign-off)**, and the library still refuses it without its explicit
+acknowledgement (`PGW_FACTORY_HE_PKS_ACK`). See SPEC 7.9 and 16 and `research/reviews/pks-v3-adversarial-review.md`.
+
 ## Measured basis (Kaggle T4 prototype)
 
 | | value |

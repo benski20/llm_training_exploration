@@ -122,8 +122,9 @@ gateway` checks the whole gateway, including mask runway.
 Required: `region`, `enrollment_code` (sensitive), `client_api_cidrs`, `image_registry`. Important optional ones:
 `model` (sizing preset), `mask_supply` (`auto` | `cpu_encrypted` | `separate_vm` | `same_host`),
 `gateway_instance_type`, `mask_service_instance_type`, `create_vpc` / `vpc_id` / `subnet_id`,
-`provider_endpoint_service_name` (or `provider_cidrs`), `availability_zone`, `check_field` (`ring` | `p31`),
-`kms_key_arn`, `expose_client_api_publicly` (off), `allow_setup_egress`. See `aws/variables.tf`.
+`provider_endpoint_service_name` (or `provider_cidrs`), `availability_zone`, `check_field` (`auto` | `ring` |
+`p31`), `he_scheme` (`auto` | `mlwe` | `pks-v3`), `kms_key_arn`, `expose_client_api_publicly` (off),
+`allow_setup_egress`. See `aws/variables.tf`.
 
 Network rules created: gateway inbound only TCP 8443 from `client_api_cidrs` (or from the optional NLB);
 gateway outbound only to the provider endpoint (API and trip lane ports), the mask service's 8470, DNS, and HTTPS
@@ -133,7 +134,17 @@ only; every volume encrypted.
 `same_host` puts the GPU on the gateway VM (one g6.8xlarge / g6.16xlarge) and writes masks straight into the
 gateway's store: one VM fewer and no transfer, but the gateway's CPU and the GPU are billed together around the
 clock. `cpu_encrypted` (default up to 14B) needs no GPU at all: the CPU factory gets `W8 r` from the provider on
-MLWE ciphertexts (pgw.hemask) and builds a public hint once (about 20 min at 7B).
+ciphertexts (pgw.hemask) and builds a public hint once.
+
+CPU-only presets (`cpu_encrypted`) use the compact-hint scheme **pks-v3** by default (`he_scheme = "auto"`): a hint
+of about 1.5 KB per output row (~2.1 GB at 7B instead of ~30 GB) and about one core per 50 slots/s. **pks-v3 is
+PENDING EXTERNAL REVIEW** (lattice-estimator run and cryptographer sign-off, `research/reviews/pks-v3-review-packet.md`;
+the internal adversarial review's integrity findings are fixed). The library refuses it without its
+acknowledgement string, which this preset passes explicitly; set `he_scheme = "mlwe"` for the reviewed MLWE scheme.
+The provider must serve wire v3 (`PGW_SERVICE_MASKGEN_V3=true`). Whatever the scheme, masks computed by the provider
+are self-checked with 40 bits against errors the provider chooses, written in the `p31` check format
+(`check_field = "auto"`), so the gateway catches a wrong mask online with the same reaction for every input, and the
+factory halts after 3 provider integrity failures until an operator runs `pgw factory clear-halt`.
 
 ## Teardown
 

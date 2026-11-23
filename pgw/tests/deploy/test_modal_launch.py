@@ -633,15 +633,18 @@ def test_lane_tls_is_colocated_only_and_reaches_the_pair(monkeypatch: pytest.Mon
     # co-located default --float-threads 1: the gateway's torch threads pinned (the reference follows, colocated.py)
     assert log[-1][:2] == launch.COLOCATED_FUNCTION and log[-1][2] == (
         p.run_id, 600, True, "auto", 0, "tls", {"OMP_NUM_THREADS": "1", "PGW_FLOAT_OPS": "native",
-                                                "PGW_FACTORY_HE_BULK_PORT": "8445", "PGW_FACTORY_HE_BULK_SPLIT": "2"},
-        {"PGW_SERVICE_MASKGEN_BULK_PORT": "8445"}, 0.0)
+                                                "PGW_FACTORY_HE_BULK_PORT": "8445", "PGW_FACTORY_HE_BULK_SPLIT": "2",
+                                                # --he-scheme auto: pks-v3 on the CPU-only demo (pending review)
+                                                "PGW_SETUP_HE_SCHEME": "pks-v3",
+                                                "PGW_SETUP_HE_PKS_ACK": launch.PKS_V3_ACK},
+        {"PGW_SERVICE_MASKGEN_BULK_PORT": "8445", "PGW_SERVICE_MASKGEN_V3": "true"}, 0.0)
     nb = launch.parse_args(["--placement", "colocated", "--no-he-bulk"])
     launch._spawner(nb)(FakeDict(), "colocated", 600, True)
-    assert "PGW_FACTORY_HE_BULK_PORT" not in log[-1][2][6] and log[-1][2][7] == {}
+    assert "PGW_FACTORY_HE_BULK_PORT" not in log[-1][2][6] and log[-1][2][7] == {"PGW_SERVICE_MASKGEN_V3": "true"}
     with pytest.raises(SystemExit):
         launch.parse_args(["--he-bulk"])  # co-located only
     args0 = launch.parse_args(["--placement", "colocated", "--float-threads", "0", "--float-ops", "torch",
-                               "--no-he-bulk"])
+                               "--no-he-bulk", "--he-scheme", "mlwe"])
     launch._spawner(args0)(FakeDict(), "colocated", 600, True)
     assert log[-1][2][1:] == (600, True, "attention_down", 0, "uds")  # 0 = each process's default count
     with pytest.raises(SystemExit):
@@ -921,3 +924,34 @@ def test_schedule_fused2_flag_and_dry_run(monkeypatch: pytest.MonkeyPatch, capsy
     assert "dry run: nothing deployed or started" in out
     plan = json.loads(out[out.index("{"):out.rindex("}") + 1])
     assert plan["schedule"] == "fused2" and plan["run"]["provider_env"]["PGW_SERVICE_FUSED2_FROM_PACK"] == "8"
+
+
+def test_he_scheme_pks_v3_default_on_the_cpu_only_colocated_demo(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``--he-scheme auto``: pks-v3 (pending external review) on the CPU-only co-located demo, with the library's
+    acknowledgement passed explicitly and the provider's v3 maskgen on; mlwe with a gateway GPU, fused2 or the
+    prepared-Volume targets. Padded speculation keeps the ring check format."""
+    from pgw.hemask.pks import PKS_V3_ACK
+
+    _clear_modal_env(monkeypatch)
+    assert launch.PKS_V3_ACK == PKS_V3_ACK
+    calls: list = []
+    monkeypatch.setattr(launch, "spawn_pair", lambda *x, **kw: calls.append(kw))
+    base = ["--placement", "colocated", "--gpu", "H100", "--model", "qwen2.5-7b-instruct"]
+    a = launch.parse_args(base)
+    assert a.he_scheme == "auto" and launch.resolve_he_scheme(a) == "pks-v3"
+    launch._spawner(a)({}, "colocated", 600, True)
+    genv, penv = calls[-1]["gateway_env"], calls[-1]["provider_env"]
+    assert genv["PGW_SETUP_HE_SCHEME"] == "pks-v3" and genv["PGW_SETUP_HE_PKS_ACK"] == PKS_V3_ACK
+    assert penv["PGW_SERVICE_MASKGEN_V3"] == "true" and "PGW_FACTORY_CHECK_FIELD" not in genv  # auto: p31
+    for extra in (["--he-scheme", "mlwe"], ["--gateway-gpu"],
+                  ["--schedule", "fused2", "--lane", "uds", "--local-linears", "off", "--float-ops", "native"]):
+        b = launch.parse_args([*base, *extra])
+        assert launch.resolve_he_scheme(b) == "mlwe"
+        launch._spawner(b)({}, "colocated", 600, True)
+        assert "PGW_SETUP_HE_SCHEME" not in calls[-1]["gateway_env"]
+        assert "PGW_SERVICE_MASKGEN_V3" not in calls[-1]["provider_env"]
+    c = launch.parse_args([*base, "--spec-rows", "4"])
+    launch._spawner(c)({}, "colocated", 600, True)
+    assert calls[-1]["gateway_env"]["PGW_FACTORY_CHECK_FIELD"] == "ring"
+    with pytest.raises(SystemExit):
+        launch.parse_args([*base, "--he-scheme", "pks-v3", "--mask-source", "gpu-service"])
