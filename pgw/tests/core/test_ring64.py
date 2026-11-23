@@ -100,7 +100,7 @@ def test_planes_gemv_exact_all_rows_and_splits() -> None:
         if rows == 1:
             x[:] = -1  # all digits -1 / carries everywhere
         want, _ = pair_reference(64, w.cpu(), x)
-        for cfg in (PairConfig(16, 16, 1, 4, "planes"), PairConfig(32, 64, 4, 4, "planes"),
+        for cfg in (PairConfig(16, 32, 1, 4, "planes"), PairConfig(32, 64, 4, 4, "planes"),
                     PairConfig(64, 256, 2, 4, "planes")):
             p = gemm_planes(digit_planes(x).to(DEV), rows, w, cfg)
             assert torch.equal(p.sum(dim=0).cpu(), want), (rows, cfg)
@@ -120,8 +120,8 @@ def test_planes_pair_mixed_rows_reuse_buffers() -> None:
     w1, w2 = _w(gen, 40, 72), _w(gen, 90, 40)
     hm = torch.randint(1, 1 << 8, (40,), generator=gen, dtype=torch.int64)
     op = PairOp(56, w1, w2, hm, device=DEV, max_rows=8, variant="planes")
-    op.set_config(3, PairConfig(16, 32, 2, 4, "planes"), PairConfig(32, 16, 1, 4, "planes"))
+    op.set_config(3, PairConfig(16, 32, 2, 4, "planes"), PairConfig(32, 32, 1, 4, "planes"))
     for rows, extreme in ((8, True), (1, False), (3, False), (8, False), (2, True)):
         assert check_op(op, rows, seed=rows + 100, extreme=extreme) is None
     with pytest.raises(Exception):
-        op.set_config(1, PairConfig(16, 16, 1, 4, "planes"), PairConfig(16, 16, 1, 4, "sum"))
+        op.set_config(1, PairConfig(16, 32, 1, 4, "planes"), PairConfig(16, 16, 1, 4, "sum"))

@@ -120,8 +120,9 @@ class PairConfig:
     def validate(self) -> None:
         if self.variant not in VARIANTS:
             raise ShapeError(f"ring64: unknown variant {self.variant!r}")
-        if self.variant == "planes" and (self.block_m < 16 or self.block_n < 16):
-            raise ShapeError("ring64: the planes variant needs block sizes >= 16")
+        if self.variant == "planes" and (self.block_m < 16 or self.block_n < 32):
+            # int8 tl.dot on GPUs needs K >= 32 (block_n is the K tile of the weight x digit-plane product)
+            raise ShapeError("ring64: the planes variant needs block_m >= 16 and block_n >= 32")
         for v in (self.block_m, self.block_n):
             if v < 1 or v & (v - 1):
                 raise ShapeError("ring64: tile sizes must be powers of two")
@@ -546,7 +547,7 @@ def self_check(device: torch.device | str, *, k: int = 56, rows: tuple[int, ...]
                         if why:
                             fails.append(f"{variant}: {why}")
                 # small tiles and splits too: several partials per output, the unfused epilogue
-                small = PairConfig(16, 16, 3, 4, variant)
+                small = PairConfig(16, 32 if variant == "planes" else 16, 3, 4, variant)
                 rr = rows[-1]
                 op.set_config(rr, small, small if op.pair else None)
                 for case in range(2):
