@@ -44,7 +44,8 @@ def test_pair_op_exact(variant: str, k: int) -> None:
     w1, w2 = _w(gen, 24, 40), _w(gen, 33, 24)
     hm = torch.randint(1, 1 << 12, (24,), generator=gen, dtype=torch.int64)
     op = PairOp(k, w1, w2, hm, device=DEV, max_rows=5, variant=variant)
-    op.set_config(2, PairConfig(16, 16, 3, 4, variant), PairConfig(16, 16, 2, 4, variant))  # several partials
+    bn = 32 if variant == "planes" else 16  # int8 tl.dot needs K >= 32
+    op.set_config(2, PairConfig(16, bn, 3, 4, variant), PairConfig(16, bn, 2, 4, variant))  # several partials
     for rows in (1, 2, 5):
         for extreme in (False, True):
             assert check_op(op, rows, seed=rows, extreme=extreme) is None

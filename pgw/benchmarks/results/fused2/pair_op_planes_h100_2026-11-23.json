@@ -1,0 +1,788 @@
+{
+ "device": "NVIDIA H100 80GB HBM3",
+ "k": 56,
+ "shapes": {
+  "o": [
+   3584,
+   3584
+  ],
+  "gate_up": [
+   37888,
+   3584
+  ],
+  "down": [
+   3584,
+   18944
+  ],
+  "qkv": [
+   4608,
+   3584
+  ]
+ },
+ "torch": "2.15.0+cu132",
+ "self_check": {
+  "failures": [],
+  "s": 36.6
+ },
+ "pair": {
+  "o+gate_up": {
+   "1": {
+    "exact": true,
+    "graph_ms_best": 0.2313,
+    "graph_ms_heuristic": {
+     "planes": 0.2325,
+     "sum": 0.3592
+    },
+    "graph_ms_best_planes": 0.2313,
+    "graph_ms_best_sum": 0.3018,
+    "best_cfg": [
+     "PairConfig(block_m=64, block_n=256, split=2, num_warps=4, variant='planes')",
+     "PairConfig(block_m=64, block_n=256, split=1, num_warps=4, variant='planes')"
+    ],
+    "configs": [
+     {
+      "cfg": [
+       "PairConfig(block_m=64, block_n=256, split=4, num_warps=4, variant='planes')",
+       "PairConfig(block_m=64, block_n=256, split=1, num_warps=4, variant='planes')"
+      ],
+      "splits": [
+       4,
+       1
+      ],
+      "ms": 0.2325,
+      "exact": true
+     },
+     {
+      "cfg": [
+       "PairConfig(block_m=16, block_n=256, split=3, num_warps=4, variant='sum')",
+       "PairConfig(block_m=16, block_n=256, split=1, num_warps=4, variant='sum')"
+      ],
+      "splits": [
+       3,
+       1
+      ],
+      "ms": 0.3592,
+      "exact": true
+     },
+     {
+      "cfg": [
+       "PairConfig(block_m=64, block_n=256, split=8, num_warps=4, variant='planes')",
+       "PairConfig(block_m=64, block_n=256, split=2, num_warps=4, variant='planes')"
+      ],
+      "splits": [
+       7,
+       2
+      ],
+      "ms": 0.2428,
+      "exact": true
+     },
+     {
+      "cfg": [
+       "PairConfig(block_m=64, block_n=128, split=4, num_warps=4, variant='planes')",
+       "PairConfig(block_m=64, block_n=128, split=1, num_warps=4, variant='planes')"
+      ],
+      "splits": [
+       4,
+       1
+      ],
+      "ms": 0.2395,
+      "exact": true
+     },
+     {
+      "cfg": [
+       "PairConfig(block_m=128, block_n=256, split=4, num_warps=8, variant='planes')",
+       "PairConfig(block_m=128, block_n=256, split=1, num_warps=8, variant='planes')"
+      ],
+      "splits": [
+       4,
+       1
+      ],
+      "ms": 0.2444,
+      "exact": true
+     },
+     {
+      "cfg": [
+       "PairConfig(block_m=64, block_n=512, split=4, num_warps=4, variant='planes')",
+       "PairConfig(block_m=64, block_n=512, split=1, num_warps=4, variant='planes')"
+      ],
+      "splits": [
+       4,
+       1
+      ],
+      "ms": 0.2346,
+      "exact": true
+     },
+     {
+      "cfg": [
+       "PairConfig(block_m=64, block_n=256, split=2, num_warps=4, variant='planes')",
+       "PairConfig(block_m=64, block_n=256, split=1, num_warps=4, variant='planes')"
+      ],
+      "splits": [
+       2,
+       1
+      ],
+      "ms": 0.2313,
+      "exact": true
+     },
+     {
+      "cfg": [
+       "PairConfig(block_m=128, block_n=128, split=8, num_warps=4, variant='planes')",
+       "PairConfig(block_m=128, block_n=128, split=2, num_warps=4, variant='planes')"
+      ],
+      "splits": [
+       7,
+       2
+      ],
+      "ms": 0.2456,
+      "exact": true
+     },
+     {
+      "cfg": [
+       "PairConfig(block_m=64, block_n=256, split=4, num_warps=8, variant='planes')",
+       "PairConfig(block_m=64, block_n=256, split=1, num_warps=8, variant='planes')"
+      ],
+      "splits": [
+       4,
+       1
+      ],
+      "ms": 0.233,
+      "exact": true
+     },
+     {
+      "cfg": [
+       "PairConfig(block_m=8, block_n=512, split=3, num_warps=4, variant='sum')",
+       "PairConfig(block_m=8, block_n=512, split=1, num_warps=4, variant='sum')"
+      ],
+      "splits": [
+       3,
+       1
+      ],
+      "ms": 0.3018,
+      "exact": true
+     },
+     {
+      "cfg": [
+       "PairConfig(block_m=32, block_n=128, split=3, num_warps=4, variant='sum')",
+       "PairConfig(block_m=32, block_n=128, split=1, num_warps=4, variant='sum')"
+      ],
+      "splits": [
+       3,
+       1
+      ],
+      "ms": 0.5107,
+      "exact": true
+     }
+    ]
+   },
+   "2": {
+    "exact": true,
+    "graph_ms_best": 0.3943,
+    "graph_ms_heuristic": {
+     "planes": 0.395,
+     "sum": 0.6955
+    },
+    "graph_ms_best_planes": 0.3943,
+    "graph_ms_best_sum": 0.5446,
+    "best_cfg": [
+     "PairConfig(block_m=64, block_n=256, split=2, num_warps=4, variant='planes')",
+     "PairConfig(block_m=64, block_n=256, split=1, num_warps=4, variant='planes')"
+    ],
+    "configs": [
+     {
+      "cfg": [
+       "PairConfig(block_m=64, block_n=256, split=4, num_warps=4, variant='planes')",
+       "PairConfig(block_m=64, block_n=256, split=1, num_warps=4, variant='planes')"
+      ],
+      "splits": [
+       4,
+       1
+      ],
+      "ms": 0.395,
+      "exact": true
+     },
+     {
+      "cfg": [
+       "PairConfig(block_m=16, block_n=256, split=3, num_warps=4, variant='sum')",
+       "PairConfig(block_m=16, block_n=256, split=1, num_warps=4, variant='sum')"
+      ],
+      "splits": [
+       3,
+       1
+      ],
+      "ms": 0.6955,
+      "exact": true
+     },
+     {
+      "cfg": [
+       "PairConfig(block_m=64, block_n=256, split=8, num_warps=4, variant='planes')",
+       "PairConfig(block_m=64, block_n=256, split=2, num_warps=4, variant='planes')"
+      ],
+      "splits": [
+       7,
+       2
+      ],
+      "ms": 0.3983,
+      "exact": true
+     },
+     {
+      "cfg": [
+       "PairConfig(block_m=64, block_n=128, split=4, num_warps=4, variant='planes')",
+       "PairConfig(block_m=64, block_n=128, split=1, num_warps=4, variant='planes')"
+      ],
+      "splits": [
+       4,
+       1
+      ],
+      "ms": 0.3989,
+      "exact": true
+     },
+     {
+      "cfg": [
+       "PairConfig(block_m=128, block_n=256, split=4, num_warps=8, variant='planes')",
+       "PairConfig(block_m=128, block_n=256, split=1, num_warps=8, variant='planes')"
+      ],
+      "splits": [
+       4,
+       1
+      ],
+      "ms": 0.4013,
+      "exact": true
+     },
+     {
+      "cfg": [
+       "PairConfig(block_m=64, block_n=512, split=4, num_warps=4, variant='planes')",
+       "PairConfig(block_m=64, block_n=512, split=1, num_warps=4, variant='planes')"
+      ],
+      "splits": [
+       4,
+       1
+      ],
+      "ms": 0.398,
+      "exact": true
+     },
+     {
+      "cfg": [
+       "PairConfig(block_m=64, block_n=256, split=2, num_warps=4, variant='planes')",
+       "PairConfig(block_m=64, block_n=256, split=1, num_warps=4, variant='planes')"
+      ],
+      "splits": [
+       2,
+       1
+      ],
+      "ms": 0.3943,
+      "exact": true
+     },
+     {
+      "cfg": [
+       "PairConfig(block_m=128, block_n=128, split=8, num_warps=4, variant='planes')",
+       "PairConfig(block_m=128, block_n=128, split=2, num_warps=4, variant='planes')"
+      ],
+      "splits": [
+       7,
+       2
+      ],
+      "ms": 0.4067,
+      "exact": true
+     },
+     {
+      "cfg": [
+       "PairConfig(block_m=64, block_n=256, split=4, num_warps=8, variant='planes')",
+       "PairConfig(block_m=64, block_n=256, split=1, num_warps=8, variant='planes')"
+      ],
+      "splits": [
+       4,
+       1
+      ],
+      "ms": 0.3943,
+      "exact": true
+     },
+     {
+      "cfg": [
+       "PairConfig(block_m=8, block_n=512, split=3, num_warps=4, variant='sum')",
+       "PairConfig(block_m=8, block_n=512, split=1, num_warps=4, variant='sum')"
+      ],
+      "splits": [
+       3,
+       1
+      ],
+      "ms": 0.5446,
+      "exact": true
+     },
+     {
+      "cfg": [
+       "PairConfig(block_m=32, block_n=128, split=3, num_warps=4, variant='sum')",
+       "PairConfig(block_m=32, block_n=128, split=1, num_warps=4, variant='sum')"
+      ],
+      "splits": [
+       3,
+       1
+      ],
+      "ms": 1.0531,
+      "exact": true
+     }
+    ]
+   },
+   "4": {
+    "exact": true,
+    "graph_ms_best": 0.7248,
+    "graph_ms_heuristic": {
+     "planes": 0.7248,
+     "sum": 1.8068
+    },
+    "graph_ms_best_planes": 0.7248,
+    "graph_ms_best_sum": 1.8068,
+    "best_cfg": [
+     "PairConfig(block_m=64, block_n=256, split=4, num_warps=4, variant='planes')",
+     "PairConfig(block_m=64, block_n=256, split=1, num_warps=4, variant='planes')"
+    ],
+    "configs": [
+     {
+      "cfg": [
+       "PairConfig(block_m=64, block_n=256, split=4, num_warps=4, variant='planes')",
+       "PairConfig(block_m=64, block_n=256, split=1, num_warps=4, variant='planes')"
+      ],
+      "splits": [
+       4,
+       1
+      ],
+      "ms": 0.7248,
+      "exact": true
+     },
+     {
+      "cfg": [
+       "PairConfig(block_m=8, block_n=128, split=2, num_warps=4, variant='sum')",
+       "PairConfig(block_m=8, block_n=128, split=1, num_warps=4, variant='sum')"
+      ],
+      "splits": [
+       2,
+       1
+      ],
+      "ms": 1.8068,
+      "exact": true
+     }
+    ]
+   },
+   "8": {
+    "exact": true,
+    "graph_ms_best": 1.375,
+    "graph_ms_heuristic": {
+     "planes": 1.375,
+     "sum": 3.8156
+    },
+    "graph_ms_best_planes": 1.375,
+    "graph_ms_best_sum": 3.8156,
+    "best_cfg": [
+     "PairConfig(block_m=128, block_n=256, split=4, num_warps=4, variant='planes')",
+     "PairConfig(block_m=128, block_n=256, split=1, num_warps=4, variant='planes')"
+    ],
+    "configs": [
+     {
+      "cfg": [
+       "PairConfig(block_m=128, block_n=256, split=4, num_warps=4, variant='planes')",
+       "PairConfig(block_m=128, block_n=256, split=1, num_warps=4, variant='planes')"
+      ],
+      "splits": [
+       4,
+       1
+      ],
+      "ms": 1.375,
+      "exact": true
+     },
+     {
+      "cfg": [
+       "PairConfig(block_m=8, block_n=128, split=2, num_warps=4, variant='sum')",
+       "PairConfig(block_m=8, block_n=128, split=1, num_warps=4, variant='sum')"
+      ],
+      "splits": [
+       2,
+       1
+      ],
+      "ms": 3.8156,
+      "exact": true
+     }
+    ]
+   }
+  },
+  "down+qkv": {
+   "1": {
+    "exact": true,
+    "graph_ms_best": 0.0999,
+    "graph_ms_heuristic": {
+     "planes": 0.0999,
+     "sum": 0.1858
+    },
+    "graph_ms_best_planes": 0.0999,
+    "graph_ms_best_sum": 0.1858,
+    "best_cfg": [
+     "PairConfig(block_m=64, block_n=256, split=5, num_warps=4, variant='planes')",
+     "PairConfig(block_m=64, block_n=256, split=4, num_warps=4, variant='planes')"
+    ],
+    "configs": [
+     {
+      "cfg": [
+       "PairConfig(block_m=64, block_n=256, split=5, num_warps=4, variant='planes')",
+       "PairConfig(block_m=64, block_n=256, split=4, num_warps=4, variant='planes')"
+      ],
+      "splits": [
+       5,
+       4
+      ],
+      "ms": 0.0999,
+      "exact": true
+     },
+     {
+      "cfg": [
+       "PairConfig(block_m=16, block_n=256, split=3, num_warps=4, variant='sum')",
+       "PairConfig(block_m=16, block_n=256, split=2, num_warps=4, variant='sum')"
+      ],
+      "splits": [
+       3,
+       2
+      ],
+      "ms": 0.1858,
+      "exact": true
+     }
+    ]
+   },
+   "2": {
+    "exact": true,
+    "graph_ms_best": 0.1426,
+    "graph_ms_heuristic": {
+     "planes": 0.1426,
+     "sum": 0.3353
+    },
+    "graph_ms_best_planes": 0.1426,
+    "graph_ms_best_sum": 0.3353,
+    "best_cfg": [
+     "PairConfig(block_m=64, block_n=256, split=5, num_warps=4, variant='planes')",
+     "PairConfig(block_m=64, block_n=256, split=4, num_warps=4, variant='planes')"
+    ],
+    "configs": [
+     {
+      "cfg": [
+       "PairConfig(block_m=64, block_n=256, split=5, num_warps=4, variant='planes')",
+       "PairConfig(block_m=64, block_n=256, split=4, num_warps=4, variant='planes')"
+      ],
+      "splits": [
+       5,
+       4
+      ],
+      "ms": 0.1426,
+      "exact": true
+     },
+     {
+      "cfg": [
+       "PairConfig(block_m=16, block_n=256, split=3, num_warps=4, variant='sum')",
+       "PairConfig(block_m=16, block_n=256, split=2, num_warps=4, variant='sum')"
+      ],
+      "splits": [
+       3,
+       2
+      ],
+      "ms": 0.3353,
+      "exact": true
+     }
+    ]
+   },
+   "4": {
+    "exact": true,
+    "graph_ms_best": 0.2138,
+    "graph_ms_heuristic": {
+     "planes": 0.2138,
+     "sum": 0.9
+    },
+    "graph_ms_best_planes": 0.2138,
+    "graph_ms_best_sum": 0.9,
+    "best_cfg": [
+     "PairConfig(block_m=64, block_n=256, split=5, num_warps=4, variant='planes')",
+     "PairConfig(block_m=64, block_n=256, split=4, num_warps=4, variant='planes')"
+    ],
+    "configs": [
+     {
+      "cfg": [
+       "PairConfig(block_m=64, block_n=256, split=5, num_warps=4, variant='planes')",
+       "PairConfig(block_m=64, block_n=256, split=4, num_warps=4, variant='planes')"
+      ],
+      "splits": [
+       5,
+       4
+      ],
+      "ms": 0.2138,
+      "exact": true
+     },
+     {
+      "cfg": [
+       "PairConfig(block_m=8, block_n=128, split=2, num_warps=4, variant='sum')",
+       "PairConfig(block_m=8, block_n=128, split=1, num_warps=4, variant='sum')"
+      ],
+      "splits": [
+       2,
+       1
+      ],
+      "ms": 0.9,
+      "exact": true
+     }
+    ]
+   },
+   "8": {
+    "exact": true,
+    "graph_ms_best": 0.4047,
+    "graph_ms_heuristic": {
+     "planes": 0.4047,
+     "sum": 2.0416
+    },
+    "graph_ms_best_planes": 0.4047,
+    "graph_ms_best_sum": 2.0416,
+    "best_cfg": [
+     "PairConfig(block_m=128, block_n=256, split=10, num_warps=4, variant='planes')",
+     "PairConfig(block_m=128, block_n=256, split=4, num_warps=4, variant='planes')"
+    ],
+    "configs": [
+     {
+      "cfg": [
+       "PairConfig(block_m=128, block_n=256, split=10, num_warps=4, variant='planes')",
+       "PairConfig(block_m=128, block_n=256, split=4, num_warps=4, variant='planes')"
+      ],
+      "splits": [
+       10,
+       4
+      ],
+      "ms": 0.4047,
+      "exact": true
+     },
+     {
+      "cfg": [
+       "PairConfig(block_m=8, block_n=128, split=2, num_warps=4, variant='sum')",
+       "PairConfig(block_m=8, block_n=128, split=1, num_warps=4, variant='sum')"
+      ],
+      "splits": [
+       2,
+       1
+      ],
+      "ms": 2.0416,
+      "exact": true
+     }
+    ]
+   }
+  },
+  "qkv(single)": {
+   "1": {
+    "exact": true,
+    "graph_ms_best": 0.0483,
+    "graph_ms_heuristic": {
+     "planes": 0.0483,
+     "sum": 0.0656
+    },
+    "graph_ms_best_planes": 0.0483,
+    "graph_ms_best_sum": 0.0656,
+    "best_cfg": [
+     "PairConfig(block_m=64, block_n=256, split=4, num_warps=4, variant='planes')",
+     "None"
+    ],
+    "configs": [
+     {
+      "cfg": [
+       "PairConfig(block_m=64, block_n=256, split=4, num_warps=4, variant='planes')",
+       "None"
+      ],
+      "splits": [
+       4,
+       null
+      ],
+      "ms": 0.0483,
+      "exact": true
+     },
+     {
+      "cfg": [
+       "PairConfig(block_m=16, block_n=256, split=2, num_warps=4, variant='sum')",
+       "None"
+      ],
+      "splits": [
+       2,
+       null
+      ],
+      "ms": 0.0656,
+      "exact": true
+     }
+    ]
+   },
+   "2": {
+    "exact": true,
+    "graph_ms_best": 0.0584,
+    "graph_ms_heuristic": {
+     "planes": 0.0584,
+     "sum": 0.099
+    },
+    "graph_ms_best_planes": 0.0584,
+    "graph_ms_best_sum": 0.099,
+    "best_cfg": [
+     "PairConfig(block_m=64, block_n=256, split=4, num_warps=4, variant='planes')",
+     "None"
+    ],
+    "configs": [
+     {
+      "cfg": [
+       "PairConfig(block_m=64, block_n=256, split=4, num_warps=4, variant='planes')",
+       "None"
+      ],
+      "splits": [
+       4,
+       null
+      ],
+      "ms": 0.0584,
+      "exact": true
+     },
+     {
+      "cfg": [
+       "PairConfig(block_m=16, block_n=256, split=2, num_warps=4, variant='sum')",
+       "None"
+      ],
+      "splits": [
+       2,
+       null
+      ],
+      "ms": 0.099,
+      "exact": true
+     }
+    ]
+   },
+   "4": {
+    "exact": true,
+    "graph_ms_best": 0.0881,
+    "graph_ms_heuristic": {
+     "planes": 0.0881,
+     "sum": 0.2357
+    },
+    "graph_ms_best_planes": 0.0881,
+    "graph_ms_best_sum": 0.2357,
+    "best_cfg": [
+     "PairConfig(block_m=64, block_n=256, split=4, num_warps=4, variant='planes')",
+     "None"
+    ],
+    "configs": [
+     {
+      "cfg": [
+       "PairConfig(block_m=64, block_n=256, split=4, num_warps=4, variant='planes')",
+       "None"
+      ],
+      "splits": [
+       4,
+       null
+      ],
+      "ms": 0.0881,
+      "exact": true
+     },
+     {
+      "cfg": [
+       "PairConfig(block_m=8, block_n=128, split=1, num_warps=4, variant='sum')",
+       "None"
+      ],
+      "splits": [
+       1,
+       null
+      ],
+      "ms": 0.2357,
+      "exact": true
+     }
+    ]
+   },
+   "8": {
+    "exact": true,
+    "graph_ms_best": 0.1536,
+    "graph_ms_heuristic": {
+     "planes": 0.1536,
+     "sum": 0.4877
+    },
+    "graph_ms_best_planes": 0.1536,
+    "graph_ms_best_sum": 0.4877,
+    "best_cfg": [
+     "PairConfig(block_m=128, block_n=256, split=4, num_warps=4, variant='planes')",
+     "None"
+    ],
+    "configs": [
+     {
+      "cfg": [
+       "PairConfig(block_m=128, block_n=256, split=4, num_warps=4, variant='planes')",
+       "None"
+      ],
+      "splits": [
+       4,
+       null
+      ],
+      "ms": 0.1536,
+      "exact": true
+     },
+     {
+      "cfg": [
+       "PairConfig(block_m=8, block_n=128, split=1, num_warps=4, variant='sum')",
+       "None"
+      ],
+      "splits": [
+       1,
+       null
+      ],
+      "ms": 0.4877,
+      "exact": true
+     }
+    ]
+   }
+  }
+ },
+ "k32_single_graph_ms": {
+  "o": {
+   "1": 0.0294,
+   "8": 0.0961
+  },
+  "gate_up": {
+   "1": 0.1489,
+   "8": 0.7729
+  },
+  "down": {
+   "1": 0.0632,
+   "8": 0.1843
+  },
+  "qkv": {
+   "1": 0.0298,
+   "8": 0.1142
+  }
+ },
+ "summary": {
+  "1 rows, planes": {
+   "o+gate_up pair / (o + gate_up singles)": 1.297,
+   "down+qkv pair / (down + qkv singles)": 1.074,
+   "per-token provider compute fused2 (28 layers, ms)": 9.274,
+   "per-token provider compute standard K32 (28 layers, ms)": 7.596
+  },
+  "1 rows, sum": {
+   "o+gate_up pair / (o + gate_up singles)": 1.693,
+   "down+qkv pair / (down + qkv singles)": 1.998,
+   "per-token provider compute fused2 (28 layers, ms)": 13.653,
+   "per-token provider compute standard K32 (28 layers, ms)": 7.596
+  },
+  "1 rows, best": {
+   "o+gate_up pair / (o + gate_up singles)": 1.297,
+   "down+qkv pair / (down + qkv singles)": 1.074,
+   "per-token provider compute fused2 (28 layers, ms)": 9.274,
+   "per-token provider compute standard K32 (28 layers, ms)": 7.596
+  },
+  "8 rows, planes": {
+   "o+gate_up pair / (o + gate_up singles)": 1.582,
+   "down+qkv pair / (down + qkv singles)": 1.356,
+   "per-token provider compute fused2 (28 layers, ms)": 49.832,
+   "per-token provider compute standard K32 (28 layers, ms)": 32.69
+  },
+  "8 rows, sum": {
+   "o+gate_up pair / (o + gate_up singles)": 4.391,
+   "down+qkv pair / (down + qkv singles)": 6.84,
+   "per-token provider compute fused2 (28 layers, ms)": 164.002,
+   "per-token provider compute standard K32 (28 layers, ms)": 32.69
+  },
+  "8 rows, best": {
+   "o+gate_up pair / (o + gate_up singles)": 1.582,
+   "down+qkv pair / (down + qkv singles)": 1.356,
+   "per-token provider compute fused2 (28 layers, ms)": 49.832,
+   "per-token provider compute standard K32 (28 layers, ms)": 32.69
+  }
+ },
+ "wall_s": 62.5
+}
