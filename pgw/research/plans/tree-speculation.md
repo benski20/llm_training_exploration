@@ -289,3 +289,48 @@ alpha <= ~0.7 and R >= 8; below R = 8 the chain is (near) optimal at any alpha >
   `spec_rows` cap above 8 for trees.
 * Gateway settings for `spec_tree` / the head drafter (engine opt-in only so far; defaults off).
 * Sampled requests: trees should matter more (lower coupled alpha); not measured (greedy answers only).
+
+## 9. Feature head trained on Qwen2.5-7B-Instruct features (2026-11-23, Modal A10G)
+
+Job: `deploy/modal/head_train.py` running `benchmarks/feature_head_train.py` (one A10G container, 25 min wall,
+about $0.75 with a 2-minute OOM-crashed first attempt). Data: UltraChat 200k (MIT) first-turn prompts,
+`train_sft` shard 0 for training, `test_sft` for the held-out evaluation. The 7B in bf16 answered 2,582 training
+prompts greedily (756k answer tokens, max 320 new tokens); 1,261 more conversations were taken with the dataset's
+own first reply (454k tokens, prefill only); one teacher-forced pass recorded per position the final-norm hidden
+state, the next token and the target's greedy next-next token: **1.21M training rows** (8.7 GB bf16, kept on the
+Modal Volume `pgw-head-out-head`, run `run-20261122-233926`). Held out: 85 test prompts, 24.7k greedy answer
+tokens. Head: as in section 3, input/output scales folded into `W_in`/`W_out`, unrolled 3 steps on its own
+features, CE to the target's token + smooth-L1 feature regression, AdamW (wd 0.01), feature noise, 4 epochs,
+3% of the training sequences as validation.
+
+| head (d : V) | int8 MB/step | vocab coverage | val top-1, depth 1 / 2 / 3 (float weights) | held-out alpha (exported int8) |
+|---|---|---|---|---|
+| 256 : 8192 | 5.1 | 0.910 | 0.442 / 0.361 / 0.335 | 0.195 |
+| 384 : 8192 | 7.9 | 0.910 | 0.456 / 0.372 / 0.340 | 0.190 |
+| 512 : 8192 | 10.8 | 0.910 | 0.460 / 0.374 / 0.343 | 0.192 |
+| 512 : 16384 | 14.9 | 0.967 | 0.468 / 0.378 / 0.348 | 0.186 |
+
+**The exported heads are broken by the export, not by training**: `W_in` was quantized with one int8 scale per
+row over both halves, and the folded input scales make the token half's weights ~2,000x the feature half's
+(mean |w8| 26.7 vs 0.011), so 98.9% of the feature half rounds to 0 and the exported head drafts from the token
+alone (alpha 0.19 whatever its size). Fixed in the exporter (halves quantized separately, float weights kept,
+float alpha evaluated next to the int8 one) and the loader (both layouts). The fix needs a train-only rerun from
+the saved features (`modal run deploy/modal/head_train.py --from-run run-20261122-233926 ...`, ~15 min, ~$0.35);
+not run here (a second job needs approval).
+
+What the numbers say until then: the float head's validation top-1 is 0.46 at depth 1 (rising ~1 point per
+epoch at epoch 4; capacity barely matters: d = 256-512 within 2 points), i.e. alpha ~0.45-0.5 for this
+MLP-only head, well below EAGLE's ~0.8 (EAGLE has an attention layer over the draft's past features). With
+alpha ~0.46 the chain gives roughly tau 1.46 / 1.7 / 1.8 at R = 2 / 3 / 4 (estimate), i.e. **16.5-18 tok/s** at
+the measured trip costs, against 13.0 plain; 25 tok/s at R = 4 needs tau ~2.5, i.e. alpha ~0.7.
+
+Measured with the broken int8 heads (exact replay, `benchmarks/feature_head_projection.py`, step 0.74 ms):
+tau 1.19 / 1.22 / 1.22 at R = 2 / 3 / 4, 13.6 / 13.0 / 12.2 tok/s (`benchmarks/results/feature_head/`).
+
+Per-step CPU time on this 4-vCPU box (`benchmarks/feature_head_cpu_bench.py`, H = 3584, vocab 152,064; load
+0.4-4 from other jobs): d = 384: float32 (torch, 4 threads) 0.61 ms, native int8 single core 0.74 ms;
+d = 512: 0.89 / 1.18 ms. Per pass: R - 1 steps (chain). A fresh full-vocabulary row per step cost ~1 ms on
+its own; the drafter now reuses one buffer.
+
+Gateway: `draft_backend = "feature_head"` + `draft_head_path` (strict speculation only, defaults off; tests:
+`test_feature_head_file_strict_exact`, `test_cpu_only_gateway_strict_speculation_feature_head`).

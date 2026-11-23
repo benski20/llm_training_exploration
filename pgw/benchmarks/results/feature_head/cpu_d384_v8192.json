@@ -1,0 +1,47 @@
+{
+ "head": "/tmp/claude-0/-home-user-llm-training-exploration/ccb74ae1-1118-5730-a172-4d0053661708/scratchpad/head_out/head_d384_v8192.pt",
+ "hidden": 3584,
+ "d": 384,
+ "vocab": 8192,
+ "cpu": 4,
+ "torch_threads": 4,
+ "runs": {
+  "float R=2": {
+   "us_per_pass": 623.3835010789335,
+   "us_per_step": 623.3835010789335
+  },
+  "float R=3": {
+   "us_per_pass": 1236.3440000626724,
+   "us_per_step": 618.1720000313362
+  },
+  "float R=4": {
+   "us_per_pass": 1822.129999709432,
+   "us_per_step": 607.3766665698107
+  },
+  "native_int8 threads=1 R=2": {
+   "us_per_pass": 750.1405016228091,
+   "us_per_step": 750.1405016228091
+  },
+  "native_int8 threads=1 R=3": {
+   "us_per_pass": 1461.896001273999,
+   "us_per_step": 730.9480006369995
+  },
+  "native_int8 threads=1 R=4": {
+   "us_per_pass": 2207.0300019549904,
+   "us_per_step": 735.6766673183301
+  },
+  "native_int8 threads=pool R=2": {
+   "us_per_pass": 1723.9695007447153,
+   "us_per_step": 1723.9695007447153
+  },
+  "native_int8 threads=pool R=3": {
+   "us_per_pass": 2306.8044993124204,
+   "us_per_step": 1153.4022496562102
+  },
+  "native_int8 threads=pool R=4": {
+   "us_per_pass": 3437.362000113353,
+   "us_per_step": 1145.7873333711177
+  }
+ },
+ "bytes_per_step_int8": 7865856
+}

@@ -272,3 +272,92 @@ def test_feature_head_drafter_strict_exact(qwen_pack: InMemoryPack, tiny_tokeniz
     assert head.stats["steps"] == levels * (out.completion_tokens - 1)
     assert seen and all(seen)
     assert head.nbytes_per_step() > 0
+
+
+def _head_file(model: TransformerModel, path: Any, d: int = 16, seed: int = 1) -> list[int]:
+    """A head in the trained-file format (``benchmarks/feature_head_train.py`` export): int8 per-row weights
+    (``W_in`` as feature and token halves with their own scales), float biases, a reduced vocabulary and
+    ``U = H_V W_out`` (here from the tied embedding)."""
+    from pgw.core.ring import quantize_weight_rows
+
+    g = torch.Generator().manual_seed(seed)
+    h = int(model.arch.hidden_size)
+
+    def r(*shape: int) -> torch.Tensor:
+        return torch.randn(*shape, generator=g) * 0.1
+
+    vocab = list(range(1, int(model.arch.vocab_size), 3))
+    w = {"w_in_f": r(d, h), "w_in_e": r(d, h) * 30, "w1": r(2 * d, d), "w2": r(d, 2 * d), "w_out": r(h, d)}
+    w["u"] = model.embed_tokens.to(torch.float32)[torch.tensor(vocab)] @ w["w_out"]
+    q = {k: quantize_weight_rows(v) for k, v in w.items()}
+    torch.save({"format": "pgw-feature-head-v1", "target": "test", "hidden": h, "d": d, "vocab": vocab,
+                "int8": {k: {"w8": w8, "scale": sc} for k, (w8, sc) in q.items()},
+                "bias": {"b_in": r(d), "b1": r(2 * d), "b2": r(d)}}, path)
+    return vocab
+
+
+KERNELS = ["float", "native_int8"] if NativeInt8DraftBackend.available() else ["float"]
+
+
+@pytest.mark.parametrize("kernel", KERNELS)
+@pytest.mark.parametrize("params", PARAMS, ids=["greedy", "seeded"])
+@pytest.mark.parametrize("native", FLOATS, ids=lambda x: "native" if x else "torch")
+def test_feature_head_file_strict_exact(qwen_pack: InMemoryPack, tiny_tokenizer: ChatTokenizer, tmp_path: Any,
+                                        kernel: str, params: SamplingParams, native: bool) -> None:
+    """A trained-format head file (int8 weights, reduced vocabulary, precomputed U) loaded with
+    ``FeatureHeadDrafter.from_file`` on the float or native int8 kernel: strict speculation stays
+    bit-identical to plain decoding, R rows per linear on every decode pass, L passes, R - 1 head steps
+    per pass; proposals stay inside the head's vocabulary."""
+    from pgw.engine.generate import FeatureHeadDrafter
+
+    rows = 4
+    prompt = LONG * 2
+    base = Generator(_plain(qwen_pack, native), tiny_tokenizer).generate(prompt, params)
+    model, client = _masked(qwen_pack, native)
+    vocab = _head_file(model, tmp_path / "head.pt")
+    head = FeatureHeadDrafter.from_file(tmp_path / "head.pt", model.embed_tokens.to(torch.float32),
+                                        target_vocab=int(model.arch.vocab_size), kernel=kernel, ring=DEFAULT_RING)
+    assert head.kernel == kernel
+    proposed: list[int] = []
+    orig = head.propose
+
+    def spy(jobs: Any) -> None:
+        orig(jobs)
+        proposed.extend(t for j in jobs for t in j.out)
+
+    head.propose = spy  # type: ignore[method-assign]
+    gen = Generator(model, tiny_tokenizer, spec_rows=rows, spec_strict=True, spec_mask_rows=rows, drafter=head)
+    res = LocalMaskReservation(qwen_pack, DEFAULT_RING, gen.mask_rows_needed(len(prompt), params.max_tokens))
+    out = gen.generate(prompt, params, session=res)
+    assert out.token_ids == base.token_ids and out.text == base.text and out.logprobs == base.logprobs
+    passes = [int(x.shape[0]) for k, x in client.received if k == "0.qkv"]
+    assert passes[0] == len(prompt) and all(n == rows for n in passes[1:])
+    assert len(passes) == out.completion_tokens
+    assert head.stats["steps"] == (rows - 1) * (out.completion_tokens - 1)
+    assert proposed and set(proposed) <= set(vocab)
+
+
+def test_feature_head_file_checks(qwen_pack: InMemoryPack, tmp_path: Any) -> None:
+    from pgw.engine.generate import FeatureHeadDrafter
+
+    model = _plain(qwen_pack)
+    emb = model.embed_tokens.to(torch.float32)
+    _head_file(model, tmp_path / "head.pt")
+    blob = torch.load(tmp_path / "head.pt", weights_only=True)
+    torch.save({**blob, "hidden": blob["hidden"] + 1}, tmp_path / "bad_hidden.pt")
+    torch.save({**blob, "format": "other"}, tmp_path / "bad_format.pt")
+    torch.save({**blob, "vocab": [*blob["vocab"][:-1], int(model.arch.vocab_size)]}, tmp_path / "bad_vocab.pt")
+    for bad in ("bad_hidden.pt", "bad_format.pt", "bad_vocab.pt"):
+        with pytest.raises(ConfigError):
+            FeatureHeadDrafter.from_file(tmp_path / bad, emb, target_vocab=int(model.arch.vocab_size))
+    with pytest.raises(ConfigError):
+        FeatureHeadDrafter.from_file(tmp_path / "head.pt", emb, kernel="nope")
+    # the float and native int8 kernels agree closely (the int8 one is approximate: drafts only)
+    if NativeInt8DraftBackend.available():
+        a = FeatureHeadDrafter.from_file(tmp_path / "head.pt", emb, kernel="float")
+        b = FeatureHeadDrafter.from_file(tmp_path / "head.pt", emb, kernel="native_int8", ring=DEFAULT_RING)
+        f = torch.randn(3, int(model.arch.hidden_size))
+        _, la = a._step(f, [5, 6, 7])
+        _, lb = b._step(f, [5, 6, 7])
+        assert torch.allclose(la, lb, atol=0.05 * float(la.abs().max()))
+        assert a.nbytes_per_step() == b.nbytes_per_step() > 0
