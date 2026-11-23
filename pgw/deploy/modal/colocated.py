@@ -191,6 +191,8 @@ if DRAFT:
     image = image.run_commands(
         f"python -m pgw.cli pack {DRAFT_REPO} {DRAFT_PACK} --name draft --revision {DRAFT_REVISION} -q"
         " && rm -rf /root/.cache/huggingface && chmod -R a+rX /opt/packs")
+if DRAFT_HEAD_LOCAL and modal.is_local():  # before the users and the mounted files (a build step)
+    image = image.add_local_file(DRAFT_HEAD_LOCAL, DRAFT_HEAD, copy=True).run_commands(f"chmod a+r {DRAFT_HEAD}")
 image = (
     image
     # one Unix user per party (own group, no login shell)
@@ -202,8 +204,6 @@ image = (
     .add_local_file(HERE / "trip_gate.py", "/opt/pgw-modal/trip_gate.py")
     .add_local_file(HERE / "e2e_driver.py", "/opt/pgw-modal/e2e_driver.py")
 )
-if DRAFT_HEAD_LOCAL and modal.is_local():
-    image = image.add_local_file(DRAFT_HEAD_LOCAL, DRAFT_HEAD, copy=True)
 
 app = modal.App("pgw-colocated" + APP_SUFFIX, image=image)
 
