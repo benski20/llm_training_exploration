@@ -22,6 +22,8 @@
 //!   device call, never waiting when the key is idle; replies cut back per call.
 //! * [`persistent`]: opt-in persistent GPU worker: a resident kernel polls a descriptor in mapped
 //!   pinned memory; a trip is a memcpy, a doorbell store and a spin (no launch), TP shards gathered.
+//! * [`shm`]: opt-in shared-memory transport of a UDS connection (co-located, sealed memfd passed
+//!   over the authenticated socket; same headers and bodies, the socket stays the doorbell).
 //! * [`tls`]: the TCP transport, TLS 1.3 only (rustls/ring): the service's certificate, client
 //!   certificates verified against its client CA, tickets optionally bound to the client certificate
 //!   that requested them. Same frames as the Unix domain socket.
@@ -35,6 +37,7 @@ pub mod exec;
 pub mod persistent;
 pub mod proto;
 pub mod server;
+pub mod shm;
 pub mod stats;
 mod sync;
 pub mod tls;

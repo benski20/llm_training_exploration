@@ -52,7 +52,14 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from pgw.core.errors import ProtocolError
-from pgw.wire.lane import LaneComputeClient, LaneConfig, LaneRefusedError, Status, native_channel_class
+from pgw.wire.lane import (
+    LaneComputeClient,
+    LaneConfig,
+    LaneRefusedError,
+    Status,
+    native_channel_class,
+    tune_channel,
+)
 from pgw.wire.messages import LaneTicket, LinearInfo
 
 __all__ = [
@@ -310,10 +317,12 @@ class ServiceLaneOpener:
             if native is None:
                 raise ProtocolError("the TCP service lane needs the native pgw_fast.TripChannel")
             assert ticket.port is not None
-            return _connect_tls(native, self._client.config, ticket, use, timeout, int(cfg.spin_us))
+            return tune_channel(_connect_tls(native, self._client.config, ticket, use, timeout, int(cfg.spin_us)),
+                                cfg)
         assert ticket.path is not None
         if native is not None and cfg.native is not False:
-            return native.connect_service_uds(ticket.path, use, timeout, int(ticket.max_rows), int(cfg.spin_us))
+            return tune_channel(native.connect_service_uds(ticket.path, use, timeout, int(ticket.max_rows),
+                                                           int(cfg.spin_us)), cfg)
         if cfg.native is True:
             raise ProtocolError("lane native channel required but pgw_fast has no service-lane TripChannel")
         return ServiceLaneChannel(ticket.path, use, timeout, ticket.max_rows)
@@ -376,10 +385,18 @@ def build_lane_client(client: Any, *, uds_dir: str | None = None, pool_wait_s: f
             spin_us = min(100_000, max(0, int(raw))) if raw else 50
         except ValueError as exc:
             raise ValueError(f"PGW_LANE_SPIN_US must be an integer, got {raw!r}") from exc
+    # opt-in latency knobs of the native channel (defaults off): PGW_LANE_SPIN_AUTO_US (adaptive spin cap, us)
+    # and PGW_LANE_SHM=1 (shared-memory transport of a UDS connection, when the service offers it)
+    raw = os.environ.get("PGW_LANE_SPIN_AUTO_US", "").strip()
+    try:
+        spin_auto_us = min(100_000, max(0, int(raw))) if raw else 0
+    except ValueError as exc:
+        raise ValueError(f"PGW_LANE_SPIN_AUTO_US must be an integer, got {raw!r}") from exc
+    shm = os.environ.get("PGW_LANE_SHM", "0").strip().lower() in ("1", "true", "yes", "on")
     bad = set(transports) - {"uds", "tcp"}
     if bad or not transports:
         raise ValueError(f"unknown lane transports {sorted(bad)}")
     cfg = LaneConfig(native=native, uds_dir=uds_dir, pool_wait_s=pool_wait_s, max_channels=max_channels,
-                     transports=tuple(transports), spin_us=spin_us)
+                     transports=tuple(transports), spin_us=spin_us, spin_auto_us=spin_auto_us, shm=shm)
     opener = ServiceLaneOpener(client, cfg, tcp_ports=tcp_ports)
     return LaneComputeClient(opener, cfg, channel_factory=opener.channel)

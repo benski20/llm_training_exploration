@@ -9,13 +9,13 @@
 //! serves calls no graph covers: it returns the packed `y_hat` (bytes-like) or an int lane status
 //! to refuse with; an exception refuses with `internal` (the client falls back to the stream channel).
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use pgw_lane::admission::{Admission, Limits, Refusal};
 use pgw_lane::coalesce::Coalescer;
 use pgw_lane::cuda::{driver_status, GraphExecutor, GraphShard, GraphSpec};
-use pgw_lane::exec::{micros, Call, Chain, DeviceLock, Done, Executor, LinearEntry, ModelEntry, RingEntry};
+use pgw_lane::exec::{micros, Call, Chain, DeviceLock, Done, Executor, LinearEntry, ModelEntry, ReplySink, RingEntry};
 use pgw_lane::persistent::{GroupSpec, LinearSlot, PersistentExecutor, WorkerSpec};
 use pgw_lane::proto::{Status, TICKET_LEN};
 use pgw_lane::server::{LaneServer, ServerConfig, TlsListen};
@@ -64,8 +64,58 @@ impl Executor for PyExecutor {
                 Err(_) => return Err(Refusal::new(Status::Internal)),
             }
             let now = Instant::now();
-            Ok(Done { queue_us: micros(call.received, t_gil), compute_us: micros(t_gil, now), backend: "lane_python" })
+            Ok(Done { queue_us: micros(t0, t_gil), compute_us: micros(t_gil, now), backend: "lane_python" })
         })
+    }
+}
+
+/// Benchmark-only stand-in for the device (`LaneService(bench_stub_us=[...])`; the service never passes
+/// it): under its own lock (like the device lock) it busy-waits `delays_us[linear % len]` microseconds and
+/// answers zeros from its own buffer, so the zero-copy reply path runs as with CUDA graphs.
+struct BenchStub {
+    delays_us: Vec<u32>,
+    buf: Mutex<Vec<u8>>,
+}
+
+impl BenchStub {
+    fn run(&self, call: &Call<'_>, f: &mut dyn FnMut(Done, &[u8])) {
+        let t0 = Instant::now();
+        let mut buf = self.buf.lock().unwrap_or_else(|p| p.into_inner());
+        let t1 = Instant::now();
+        let d = Duration::from_micros(u64::from(self.delays_us[call.linear as usize % self.delays_us.len()]));
+        while t1.elapsed() < d {
+            std::hint::spin_loop();
+        }
+        if buf.len() < call.out_len {
+            buf.resize(call.out_len, 0);
+        }
+        let done = Done { queue_us: micros(t0, t1), compute_us: micros(t1, Instant::now()), backend: "bench_stub" };
+        f(done, &buf[..call.out_len]);
+    }
+}
+
+impl Executor for BenchStub {
+    fn execute(&self, call: &Call<'_>, out: &mut Vec<u8>) -> Result<Done, Refusal> {
+        let mut res = None;
+        self.run(call, &mut |d, y| {
+            out.extend_from_slice(y);
+            res = Some(d);
+        });
+        res.ok_or(Refusal::new(Status::Internal))
+    }
+
+    fn execute_to(
+        &self,
+        call: &Call<'_>,
+        _out: &mut Vec<u8>,
+        sink: &mut dyn ReplySink,
+    ) -> Result<(Done, bool), Refusal> {
+        let mut res = None;
+        self.run(call, &mut |d, y| {
+            sink.deliver(d, y);
+            res = Some(d);
+        });
+        res.map(|d| (d, true)).ok_or(Refusal::new(Status::Internal))
     }
 }
 
@@ -160,7 +210,8 @@ impl PyLaneService {
                         executor = None, use_graphs = false, spin_us = 50, poll_ms = 100,
                         open_timeout_s = 10.0, stall_timeout_s = 30.0, tls_addr = None, tls_cert_pem = None,
                         tls_key_pem = None, tls_client_ca_pem = None, require_client_cert = false, read_spin_us = 0,
-                        persistent = false, coalesce = false, coalesce_max_rows = 0))]
+                        persistent = false, coalesce = false, coalesce_max_rows = 0, zero_copy = false,
+                        shm = false, bench_stub_us = None))]
     #[allow(clippy::too_many_arguments)]
     fn new(
         py: Python<'_>,
@@ -189,6 +240,9 @@ impl PyLaneService {
         persistent: bool,
         coalesce: bool,
         coalesce_max_rows: u16,
+        zero_copy: bool,
+        shm: bool,
+        bench_stub_us: Option<Vec<u32>>,
     ) -> PyResult<Self> {
         // TCP lane: TLS 1.3 only (there is no plaintext TCP listener)
         let tls = match tls_addr {
@@ -226,7 +280,13 @@ impl PyLaneService {
         let gl = graphs.clone();
         let pers = Arc::new(PersistentExecutor::new(Arc::new(move |d| gl.device_lock(d))));
         pers.set_spin_us(spin_us.max(200));
-        let graph_ex: Option<Arc<dyn Executor>> = if use_graphs { Some(graphs.clone()) } else { None };
+        let graph_ex: Option<Arc<dyn Executor>> = match bench_stub_us {
+            // benchmarks only: a native stand-in for the device (see `BenchStub`)
+            Some(d) if !d.is_empty() => Some(Arc::new(BenchStub { delays_us: d, buf: Mutex::new(Vec::new()) })),
+            Some(_) => return Err(PyValueError::new_err("bench_stub_us needs at least one delay")),
+            None if use_graphs => Some(graphs.clone()),
+            None => None,
+        };
         let device: Option<Arc<dyn Executor>> = if persistent {
             Some(Arc::new(Chain { primary: Some(pers.clone()), secondary: graph_ex }))
         } else {
@@ -253,6 +313,8 @@ impl PyLaneService {
             stall_timeout: Duration::from_secs_f64(stall_timeout_s.max(0.001)),
             poll: Duration::from_millis(poll_ms.max(1)),
             read_spin: Duration::from_micros(read_spin_us.min(100_000)),
+            zero_copy,
+            shm,
         };
         let adm = admission.clone();
         let server = py

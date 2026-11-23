@@ -186,7 +186,7 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
 
         lane_proc = _LaneProc(pack, ring, args.service_delay_ms, work)
         client = LaneComputeClient(_ProcLaneClient(StubLane(), lane_proc),
-                                   LaneConfig(native=None, spin_us=args.spin_us))
+                                   LaneConfig(native=None, spin_us=args.spin_us, spin_auto_us=args.spin_auto_us))
     backend = MaskedBackend(pack, None, client, ring, pack.fingerprint, min_soundness_bits=20,
                             noise_monitor=noise, **({"prime_check": True} if args.prime else {}))
     if args.wnorm_frac > 0:
@@ -343,7 +343,8 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
                           file=sys.stderr)
     if lane_proc is not None:
         result["lane"] = {"trips": client.lane_stats.trips,
-                          "fallbacks": dict(client.lane_stats.fallback_reasons)}
+                          "fallbacks": dict(client.lane_stats.fallback_reasons),
+                          "channels": client.channel_stats()}
         result["decode_native"] = bool(getattr(backend, "decode_native", False))
         nd = getattr(model, "_native_decode", None)
         if nd is not None:
@@ -568,6 +569,8 @@ def main() -> None:
                     help="realistic weight-row norm for the zero synthetic weights (0.3 ~ Qwen2.5; 0 = true norm)")
     ap.add_argument("--service-delay-ms", type=float, default=0.0, help="stub round-trip latency (sleep, GIL free)")
     ap.add_argument("--spin-us", type=int, default=50, help="--lane-proc: the native channel's reply busy-poll (us)")
+    ap.add_argument("--spin-auto-us", type=int, default=0,
+                    help="--lane-proc: the native channel's adaptive reply spin, capped at this many us (0 = off)")
     ap.add_argument("--lane-proc", action="store_true",
                     help="the service as a lane stub server in a child process, reached over the native UDS channel "
                          "(LaneComputeClient; the stub's regular path stays the fallback)")

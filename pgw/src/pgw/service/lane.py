@@ -238,6 +238,40 @@ def _coalesce_wanted() -> bool:
     raise ConfigError(f"PGW_SERVICE_COALESCE must be 0 or 1, got {v!r}")
 
 
+def _flag(name: str) -> bool:
+    """A 0/1 environment switch (default off)."""
+    v = os.environ.get(name, "0").strip().lower()
+    if v in ("", "0", "false", "no", "off"):
+        return False
+    if v in ("1", "true", "yes", "on"):
+        return True
+    raise ConfigError(f"{name} must be 0 or 1, got {v!r}")
+
+
+def _zero_copy_wanted() -> bool:
+    """``PGW_SERVICE_LANE_ZERO_COPY=1`` (default off): a UDS connection's OK replies are written straight from
+    the CUDA graph's pinned output buffer (non-blocking ``writev`` while the device lock is held; a remainder
+    the socket does not take at once is copied and sent after the lock). Same bytes, one copy less."""
+    return _flag("PGW_SERVICE_LANE_ZERO_COPY")
+
+
+def _shm_wanted() -> bool:
+    """``PGW_SERVICE_LANE_SHM=1`` (default off): a UDS connection may move its calls to a sealed shared-memory
+    segment passed over the authenticated socket (``rust/pgw-lane/src/shm.rs``; same headers and bodies; the
+    gateway asks with ``PGW_LANE_SHM=1``). Costs one core per connection while it spins
+    (``PGW_SERVICE_LANE_READ_SPIN_US``, 500 us when unset)."""
+    return _flag("PGW_SERVICE_LANE_SHM")
+
+
+def _own_lock_wanted() -> bool:
+    """``PGW_SERVICE_LANE_OWN_LOCK=1`` (default off): the lane's CUDA-graph replays take their own per-device
+    lock instead of sharing ``DeviceExecutor``'s, so a 1-row lane trip never waits behind a Python-path call
+    (stream-channel batches, prefill) on the same GPU. The lane's graphs have their own stream, pinned buffers,
+    device buffers and graph pool, so the two paths touch no common memory; the GPU interleaves their kernels.
+    Not with the persistent worker (which keeps the shared lock)."""
+    return _flag("PGW_SERVICE_LANE_OWN_LOCK")
+
+
 def _graphs_wanted() -> bool:
     """``PGW_SERVICE_LANE_GRAPHS=0`` turns CUDA-graph replay off (the lane then uses the kernel path)."""
     return os.environ.get("PGW_SERVICE_LANE_GRAPHS", "1").strip().lower() not in ("0", "false", "no", "off")
@@ -339,6 +373,10 @@ class LaneManager:
         use_persistent = exec_mode() == "persistent" and self._any_cuda()
         if use_persistent:
             opt["persistent"] = True
+        if _zero_copy_wanted():
+            opt["zero_copy"] = True
+        if _shm_wanted() and self.transport != "tcp":
+            opt["shm"] = True
         listen: dict[str, Any] = {}
         if self.transport == "tcp":
             if not hasattr(fast.LaneService, "port"):
@@ -367,7 +405,7 @@ class LaneManager:
         for m in self.state.registry.models():
             self._slot_for(m.fingerprint)
         self.state.handler.lane_admission = self.svc
-        if use_graphs or use_persistent:
+        if use_persistent or (use_graphs and not _own_lock_wanted()):
             self._install_device_locks()
         if use_graphs:
             self.graph_report = capture_lane_graphs(self)
@@ -703,6 +741,19 @@ def capture_lane_graphs(mgr: LaneManager, *, inject_mismatch: bool = False,
     return rep
 
 
+def _capture_locks(mgr: LaneManager, ex: Any, device: torch.device) -> Any:  # pragma: no cover - GPU only
+    """The locks a lane graph capture holds: the Python path's device lock and, when the lane has its own
+    (``PGW_SERVICE_LANE_OWN_LOCK``), the lane's too, so no lane replay is launched on the capture stream while
+    a graph is being captured on it."""
+    import contextlib
+
+    stack = contextlib.ExitStack()
+    stack.enter_context(ex.lock)
+    if _own_lock_wanted():  # otherwise ``ex.lock`` is the lane's lock already (one lock, not re-entrant)
+        stack.enter_context(mgr.svc.device_lock(int(device.index or 0)))
+    return stack
+
+
 def _capture_device(mgr: LaneManager, device: torch.device, entries: list[tuple[int, int, int, Any, RingParams]],
                     rows_list: list[int], rep: GraphReport, inject_mismatch: bool) -> None:  # pragma: no cover - GPU
     from pgw.core.triton_gemv import max_rows, ring_gemv
@@ -740,7 +791,7 @@ def _capture_device(mgr: LaneManager, device: torch.device, entries: list[tuple[
                     ring_gemv(xin, w, 32, n=n, m=m, out=yout)
                     hout.copy_(yout, non_blocking=True)
 
-                with ex.lock:
+                with _capture_locks(mgr, ex, device):
                     stream.wait_stream(torch.cuda.current_stream(device))
                     with torch.cuda.stream(stream):
                         body()  # warm-up: compiles the kernel outside the capture
@@ -824,7 +875,7 @@ def _capture_sharded(mgr: LaneManager, entries: list[tuple[int, int, int, Any, R
                         hout.copy_(yout, non_blocking=True)
 
                     d, stream = st["dev"], st["stream"]
-                    with torch.cuda.device(d), st["ex"].lock:
+                    with torch.cuda.device(d), _capture_locks(mgr, st["ex"], d):
                         stream.wait_stream(torch.cuda.current_stream(d))
                         with torch.cuda.stream(stream):
                             body()
