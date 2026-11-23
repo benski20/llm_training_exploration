@@ -92,13 +92,17 @@ struct Shared<T>(*mut T);
 unsafe impl<T> Send for Shared<T> {}
 unsafe impl<T> Sync for Shared<T> {}
 
-/// ChaCha20 (zero nonce) keystream bytes `offset ..` of the stream `key`. With `fast` (AVX-512) and
-/// block-aligned ranges: the 16-block AVX-512 copy (same bytes, tested against the `chacha20` crate).
-fn keystream(fast: bool, key: &[u8; 32], offset: u64, out: &mut [u8]) {
+/// ChaCha20 (zero nonce) keystream bytes `offset ..` of the stream `key`. Block-aligned ranges use the
+/// 16-block AVX-512 or 8-block AVX2 copy (same bytes, tested against the `chacha20` crate).
+fn keystream(fast: Vx, key: &[u8; 32], offset: u64, out: &mut [u8]) {
     #[cfg(target_arch = "x86_64")]
-    if fast && offset % 64 == 0 && out.len() % 64 == 0 && offset / 64 + (out.len() / 64) as u64 <= 1 << 32 {
-        // SAFETY: `fast` is set only for `Isa::Avx512` (capped at what the CPU supports by `Isa::parse`).
-        return unsafe { crate::simd::chacha20_blocks(key, (offset / 64) as u32, out) };
+    if offset % 64 == 0 && out.len() % 64 == 0 && offset / 64 + (out.len() / 64) as u64 <= 1 << 32 {
+        // SAFETY: `fast` comes from `Vx::of` of an ISA capped at what the CPU supports (`Isa::parse`).
+        match fast {
+            Vx::Z => return unsafe { crate::simd::chacha20_blocks(key, (offset / 64) as u32, out) },
+            Vx::Y => return unsafe { crate::simd2::chacha20_blocks(key, (offset / 64) as u32, out) },
+            Vx::Port => {}
+        }
     }
     let _ = fast;
     let mut c = ChaCha20::new(key.into(), &[0u8; 12].into());
@@ -114,7 +118,7 @@ fn keystream(fast: bool, key: &[u8; 32], offset: u64, out: &mut [u8]) {
 /// first `2n + 64` bytes do not suffice (probability < 2^-1000; the caller falls back to the reference).
 pub fn ternary(key: &[u8; 32], n: usize) -> Option<Wiping<i8>> {
     let mut raw = Wiping(vec![0u8; 2 * n + 64]);
-    keystream(Isa::parse("auto") == Some(Isa::Avx512), key, 0, &mut raw.0);
+    keystream(Vx::of(Isa::parse("auto").unwrap_or(Isa::Scalar)), key, 0, &mut raw.0);
     let mut out = Wiping(vec![0i8; n]);
     let mut k = 0usize;
     for &b in raw.0.iter() {
@@ -133,7 +137,7 @@ pub fn ternary(key: &[u8; 32], n: usize) -> Option<Wiping<i8>> {
 
 /// CBD(eta) values `count` starting at value index `start` of the stream `key` (8 bytes per value:
 /// `popcount(w & mask) - popcount((w >> eta) & mask)`).
-fn cbd_into(fast: bool, key: &[u8; 32], start: usize, out: &mut [i32]) {
+fn cbd_into(fast: Vx, key: &[u8; 32], start: usize, out: &mut [i32]) {
     // 1 KiB of keystream (16 ChaCha blocks, 128 values) at a time: no allocation, stays in L1
     const CH: usize = 128;
     let mut raw = [0u8; 8 * CH];
@@ -151,52 +155,80 @@ fn cbd_into(fast: bool, key: &[u8; 32], start: usize, out: &mut [i32]) {
 }
 
 #[inline(always)]
-fn cbd_kernel(fast: bool, key: &[u8; 32], start: usize, out: &mut [i32]) {
+fn cbd_kernel(fast: Vx, key: &[u8; 32], start: usize, out: &mut [i32]) {
     cbd_into(fast, key, start, out)
 }
 
-crate::multiversion!(fn cbd_isa(fast: bool, key: &[u8; 32], start: usize, out: &mut [i32]) => cbd_kernel);
+crate::multiversion!(fn cbd_isa(fast: Vx, key: &[u8; 32], start: usize, out: &mut [i32]) => cbd_kernel);
 
 /// CBD(21) noise values `start .. start + out.len()` of the stream `key` (the upload / reply-key noise
 /// sampler; benchmark and test hook). Same values for every ISA.
 pub fn cbd(isa: Isa, key: &[u8; 32], start: usize, out: &mut [i32]) {
-    cbd_isa(isa, isa == Isa::Avx512, key, start, out)
+    cbd_isa(isa, Vx::of(isa), key, start, out)
 }
 
 /// ChaCha20 keystream bytes (test hook for the AVX-512 copy).
 pub fn keystream_isa(isa: Isa, key: &[u8; 32], offset: u64, out: &mut [u8]) {
-    keystream(isa == Isa::Avx512, key, offset, out)
+    keystream(Vx::of(isa), key, offset, out)
 }
 
-/// `INTT(h * t)` without `N^-1` on `L` interleaved polynomials: AVX-512 copy when `fast`, else portable.
+/// Which hand-written vector copy a kernel uses: `Z` (AVX-512), `Y` (AVX2) or the portable code.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Vx {
+    Port,
+    Y,
+    Z,
+}
+
+impl Vx {
+    /// The copy for an ISA that `Isa::parse` capped at what this CPU supports.
+    pub fn of(isa: Isa) -> Vx {
+        match isa {
+            Isa::Avx512 if cfg!(target_arch = "x86_64") => Vx::Z,
+            Isa::Avx2 if cfg!(target_arch = "x86_64") => Vx::Y,
+            _ => Vx::Port,
+        }
+    }
+}
+
+/// `INTT(h * t)` without `N^-1` on `L` interleaved polynomials (hand-written AVX-512 / AVX2 copies, else
+/// the portable code; identical values).
 #[inline(always)]
-fn inv_mul(fast: bool, pr: &Prime, a: &mut [u32], h: &[u32], t: &[u32]) {
+fn inv_mul(fast: Vx, pr: &Prime, a: &mut [u32], h: &[u32], t: &[u32]) {
+    // SAFETY: `fast` comes from `Vx::of` of an ISA that `Isa::parse` capped at what the CPU supports.
     #[cfg(target_arch = "x86_64")]
-    if fast {
-        // SAFETY: `fast` is set only for `Isa::Avx512`, which `Isa::parse` caps at what the CPU supports.
-        return unsafe { crate::simd::inv_l_mul(pr, a, h, t) };
+    match fast {
+        Vx::Z => return unsafe { crate::vntt::inv_l_mul_512(pr, a, h, t) },
+        Vx::Y => return unsafe { crate::vntt::inv_l_mul_256(pr, a, h, t) },
+        Vx::Port => {}
     }
     let _ = fast;
     pr.inv_l_mul(a, h, t)
 }
 
-/// Forward NTT on `L` interleaved polynomials (AVX-512 copy when `fast`).
+/// Forward NTT on `L` interleaved polynomials (vector copies as in `inv_mul`).
 #[inline(always)]
-fn fwd(fast: bool, pr: &Prime, a: &mut [u32]) {
+fn fwd(fast: Vx, pr: &Prime, a: &mut [u32]) {
+    // SAFETY: as in `inv_mul`.
     #[cfg(target_arch = "x86_64")]
-    if fast {
-        // SAFETY: as in `inv_mul`.
-        return unsafe { crate::simd::fwd_l(pr, a) };
+    match fast {
+        Vx::Z => return unsafe { crate::vntt::fwd_l_512(pr, a) },
+        Vx::Y => return unsafe { crate::vntt::fwd_l_256(pr, a) },
+        Vx::Port => {}
     }
     let _ = fast;
     pr.fwd_l_fast(a, 256)
 }
 
-/// Benchmark hook: one NTT kernel (`which`: 0 `inv_l_mul`, 1 `inv_l_mul_fast`, 2 `fwd_l`, 3 `fwd_l_fast`)
-/// compiled for the chosen ISA, `reps` times.
+/// Benchmark hook: one NTT kernel (`which % 4`: 0 portable `inv_l_mul`, 1 `inv_mul`, 2 portable `fwd_l`,
+/// 3 `fwd`; `which / 4`: 0 portable, 1 AVX-512 copy, 2 AVX2 copy), `reps` times.
 #[inline(always)]
 fn ntt_kernel(pr: &Prime, which: u32, a: &mut [u32], h: &[u32], t: &[u32], reps: usize) {
-    let fast = which >= 4 && Isa::detect() == Isa::Avx512;
+    let fast = match which / 4 {
+        1 if Isa::detect() == Isa::Avx512 => Vx::Z,
+        2 if Isa::detect() != Isa::Scalar => Vx::Y,
+        _ => Vx::Port,
+    };
     for _ in 0..reps {
         match which % 4 {
             0 => pr.inv_l_mul(a, h, t),
@@ -242,8 +274,8 @@ pub struct EncItem<'a> {
 
 #[inline(always)]
 #[allow(clippy::too_many_arguments)]
-fn enc_chunk(fast: bool, cx: &Ctx, it: &EncItem<'_>, c0: usize, that: &[Vec<Vec<u32>>], b: Shared<u64>, a16: &mut [u32],
-             s16: &mut [u32], raw: &mut [u8]) {
+fn enc_chunk(fast: Vx, cx: &Ctx, it: &EncItem<'_>, c0: usize, that: &[Vec<Vec<u32>>], b: Shared<u64>, a16: &mut [u32],
+             s16: &mut [u32], raw: &mut [u8], xb: &mut [u64]) {
     let nblk = it.n / RANK;
     let groups = it.e_keys.len();
     let cols = groups * D;
@@ -288,7 +320,7 @@ fn enc_chunk(fast: bool, cx: &Ctx, it: &EncItem<'_>, c0: usize, that: &[Vec<Vec<
         // noise of the chunk's rows (row f = 16 (c0 + l) + k is stream values f*256 .. f*256 + 255)
         cbd_into(fast, &it.e_keys[g], c0 * RANK * D, &mut noise.0[..lanes * RANK * D]);
         #[cfg(target_arch = "x86_64")]
-        if fast {
+        if fast == Vx::Z {
             let pr2 = &cx.ep[2];
             let kc = crate::simd::EncConsts {
                 e: [e0, e1, e2],
@@ -307,14 +339,10 @@ fn enc_chunk(fast: bool, cx: &Ctx, it: &EncItem<'_>, c0: usize, that: &[Vec<Vec<
             }
             continue;
         }
-        // u outer, then (k, lane): contiguous NTT-output reads, row-local writes and r reads
-        for u in 0..D {
-            let row = g * D + u;
-            let rrow = if row < it.rows { Some(&it.r[row * it.n..(row + 1) * it.n]) } else { None };
-            for k in 0..RANK {
-                let cb = (RANK * u + k) * L;
-                for l in 0..lanes {
-                    let c = cb + l;
+        // pass 1: the centred CRT of the pad for all 16 lanes (contiguous, vectorised over the lanes)
+        for (c, xo) in xb.iter_mut().enumerate() {
+            {
+                {
                     let r0 = red(red(s16[c], 2 * e0), e0);
                     let r1 = red(red(s16[NU * L + c], 2 * e1), e1);
                     let r2 = s16[2 * NU * L + c]; // [0, 2 e2)
@@ -328,31 +356,42 @@ fn enc_chunk(fast: bool, cx: &Ctx, it: &EncItem<'_>, c0: usize, that: &[Vec<Vec<
                     let mut x = x01.wrapping_add(p01.wrapping_mul(k2 as u64));
                     let neg = ((half2 as i64 - k2 as i64) >> 63) as u64; // all ones when k2 > e2/2
                     x = x.wrapping_sub(emod & neg);
-                    let f = (c0 + l) * RANK + k;
-                    let msg = match rrow { Some(rr) => (rr[f] as u64) & 0xFFFF_FFFF, None => 0 };
-                    let e = noise.0[(l * RANK + k) * D + u];
-                    let v = x.wrapping_add(e as i64 as u64).wrapping_add(msg << (QBITS - K)) & M56;
-                    // SAFETY: rows 16 c0 .. 16 (c0 + lanes) of b are written by this chunk only.
-                    unsafe { *b.0.add(f * cols + g * D + u) = v };
+                    *xo = x;
                 }
+            }
+        }
+        // pass 2: one b row segment (256 slots) per feature f = 16 (c0 + l) + k, written sequentially
+        let valid = it.rows.saturating_sub(g * D).min(D);
+        for l in 0..lanes {
+            for k in 0..RANK {
+                let f = (c0 + l) * RANK + k;
+                let er = &noise.0[(l * RANK + k) * D..(l * RANK + k + 1) * D];
+                let mut row = [0u64; D];
+                for (u, o) in row.iter_mut().enumerate() {
+                    let msg = if u < valid { (it.r[(g * D + u) * it.n + f] as u64) & 0xFFFF_FFFF } else { 0 };
+                    *o = xb[(RANK * u + k) * L + l].wrapping_add(er[u] as i64 as u64).wrapping_add(msg << (QBITS - K)) & M56;
+                }
+                // SAFETY: rows 16 c0 .. 16 (c0 + lanes) of b are written by this chunk only.
+                unsafe { std::ptr::copy_nonoverlapping(row.as_ptr(), b.0.add(f * cols + g * D), D) };
             }
         }
     }
 }
 
 #[inline(always)]
-fn enc_worker(fast: bool, it: &EncItem<'_>, that: &[Vec<Vec<u32>>], bp: Shared<u64>, th: usize, threads: usize) {
+fn enc_worker(fast: Vx, it: &EncItem<'_>, that: &[Vec<Vec<u32>>], bp: Shared<u64>, th: usize, threads: usize) {
     let cx = ctx();
     let chunks = (it.n / RANK).div_ceil(L);
     let mut a16 = Wiping(vec![0u32; 3 * NU * L]);
     let mut s16 = Wiping(vec![0u32; 3 * NU * L]);
     let mut raw = vec![0u8; NU * 8];
+    let mut xb = Wiping(vec![0u64; if fast == Vx::Z { 0 } else { NU * L }]);
     for ch in (th..chunks).step_by(threads) {
-        enc_chunk(fast, cx, it, ch * L, that, bp, &mut a16.0, &mut s16.0, &mut raw);
+        enc_chunk(fast, cx, it, ch * L, that, bp, &mut a16.0, &mut s16.0, &mut raw, &mut xb.0);
     }
 }
 
-crate::multiversion!(fn enc_worker_isa(fast: bool, it: &EncItem<'_>, that: &[Vec<Vec<u32>>], bp: Shared<u64>, th: usize,
+crate::multiversion!(fn enc_worker_isa(fast: Vx, it: &EncItem<'_>, that: &[Vec<Vec<u32>>], bp: Shared<u64>, th: usize,
     threads: usize) => enc_worker);
 
 fn encrypt_inner(isa: Isa, it: &EncItem<'_>, b: &mut [u64], threads: usize) {
@@ -367,7 +406,7 @@ fn encrypt_inner(isa: Isa, it: &EncItem<'_>, b: &mut [u64], threads: usize) {
     std::thread::scope(|s| {
         for th in 0..threads {
             let that = &that;
-            s.spawn(move || enc_worker_isa(isa, isa == Isa::Avx512, it, that, bp, th, threads));
+            s.spawn(move || enc_worker_isa(isa, Vx::of(isa), it, that, bp, th, threads));
         }
     });
     for g in that.iter_mut() {
@@ -412,7 +451,7 @@ pub fn k_mont(k_hat: &[u32]) -> Result<Vec<u32>, Error> {
 }
 
 #[inline(always)]
-fn ksk_inner(fast: bool, km: &[u32], t: &[i8], tr: &[i8], e_key: &[u8; 32], beta: &mut [u32], trhat: &mut [u32]) {
+fn ksk_inner(fast: Vx, km: &[u32], t: &[i8], tr: &[i8], e_key: &[u8; 32], beta: &mut [u32], trhat: &mut [u32]) {
     let cx = ctx();
     let mut e = Wiping(vec![0i32; RANK * NR]);
     cbd_into(fast, e_key, 0, &mut e.0);
@@ -438,7 +477,7 @@ fn ksk_inner(fast: bool, km: &[u32], t: &[i8], tr: &[i8], e_key: &[u8; 32], beta
         fwd(fast, pr, &mut m16.0);
         let (p, pn) = (pr.p, pr.pn);
         #[cfg(target_arch = "x86_64")]
-        if fast {
+        if fast == Vx::Z {
             // SAFETY: km, beta hold 4 x RANK x NR words, th NR, m16 NR L; AVX-512 (`fast`).
             unsafe {
                 crate::simd::ksk_out(p, pn, NR, km[i * RANK * NR..].as_ptr(), th.0.as_ptr(), m16.0.as_ptr(),
@@ -457,7 +496,7 @@ fn ksk_inner(fast: bool, km: &[u32], t: &[i8], tr: &[i8], e_key: &[u8; 32], beta
     }
 }
 
-crate::multiversion!(fn ksk_isa(fast: bool, km: &[u32], t: &[i8], tr: &[i8], e_key: &[u8; 32], beta: &mut [u32], trhat: &mut [u32]) => ksk_inner);
+crate::multiversion!(fn ksk_isa(fast: Vx, km: &[u32], t: &[i8], tr: &[i8], e_key: &[u8; 32], beta: &mut [u32], trhat: &mut [u32]) => ksk_inner);
 
 /// Reply key of one group: `beta_l = k_l t' + e_l + P iota(t_l) mod q1 P` in the NTT domain
 /// (`beta`: `4 x RANK x NR`, `< p`), and the NTT of `t'` mod the two `Q1` primes (`trhat`: `2 x NR`, `< p`).
@@ -468,7 +507,7 @@ pub fn reply_key(isa: Isa, km: &[u32], t: &[i8], tr: &[i8], e_key: &[u8; 32], be
     {
         return err("reply_key: inconsistent shapes");
     }
-    ksk_isa(isa, isa == Isa::Avx512, km, t, tr, e_key, beta, trhat);
+    ksk_isa(isa, Vx::of(isa), km, t, tr, e_key, beta, trhat);
     Ok(())
 }
 
@@ -497,13 +536,13 @@ pub struct DecItem<'a> {
 }
 
 #[inline(always)]
-fn dec_chunk(fast: bool, cx: &Ctx, it: &DecItem<'_>, b0: usize, outs: &[Shared<u32>], h16: &mut [u32], s16: &mut [u32]) {
+fn dec_chunk(fast: Vx, cx: &Ctx, it: &DecItem<'_>, b0: usize, outs: &[Shared<u32>], h16: &mut [u32], s16: &mut [u32]) {
     let nb = it.m / PACK;
     let lanes = (nb - b0).min(L);
     for i in 0..2 {
         let h = &mut h16[i * NR * L..(i + 1) * NR * L];
         #[cfg(target_arch = "x86_64")]
-        if fast {
+        if fast == Vx::Z {
             let src: [*const u8; L] =
                 std::array::from_fn(|l| it.hint[((b0 + l.min(lanes - 1)) * 2 + i) * NR * 3..].as_ptr());
             // SAFETY: each source has 3 NR bytes (masked 48-byte loads), h has NR L words; AVX-512 (`fast`).
@@ -538,7 +577,7 @@ fn dec_chunk(fast: bool, cx: &Ctx, it: &DecItem<'_>, b0: usize, outs: &[Shared<u
         let gbase = g * nb * NR;
         let out = outs[g];
         #[cfg(target_arch = "x86_64")]
-        if fast {
+        if fast == Vx::Z {
             let kc = crate::simd::DecConsts { p0, p1, pn1, inv01_m: cx.inv01_m, c0scale, wscale };
             let src = match it.c0r {
                 C0::Words(v) => crate::simd::C0p::Words(v.as_ptr()),
@@ -603,7 +642,7 @@ fn dec_chunk(fast: bool, cx: &Ctx, it: &DecItem<'_>, b0: usize, outs: &[Shared<u
 }
 
 #[inline(always)]
-fn dec_worker(fast: bool, it: &DecItem<'_>, ptrs: &[Shared<u32>], th: usize, threads: usize) {
+fn dec_worker(fast: Vx, it: &DecItem<'_>, ptrs: &[Shared<u32>], th: usize, threads: usize) {
     let cx = ctx();
     let chunks = (it.m / PACK).div_ceil(L);
     let mut h16 = vec![0u32; 2 * NR * L];
@@ -613,7 +652,7 @@ fn dec_worker(fast: bool, it: &DecItem<'_>, ptrs: &[Shared<u32>], th: usize, thr
     }
 }
 
-crate::multiversion!(fn dec_worker_isa(fast: bool, it: &DecItem<'_>, ptrs: &[Shared<u32>], th: usize, threads: usize)
+crate::multiversion!(fn dec_worker_isa(fast: Vx, it: &DecItem<'_>, ptrs: &[Shared<u32>], th: usize, threads: usize)
     => dec_worker);
 
 fn decrypt_inner(isa: Isa, it: &DecItem<'_>, outs: &mut [&mut [u32]], threads: usize) {
@@ -623,7 +662,7 @@ fn decrypt_inner(isa: Isa, it: &DecItem<'_>, outs: &mut [&mut [u32]], threads: u
     std::thread::scope(|s| {
         for th in 0..threads {
             let ptrs = &ptrs;
-            s.spawn(move || dec_worker_isa(isa, isa == Isa::Avx512, it, ptrs, th, threads));
+            s.spawn(move || dec_worker_isa(isa, Vx::of(isa), it, ptrs, th, threads));
         }
     });
 }
@@ -886,7 +925,7 @@ mod tests {
         let key = g.key();
         for &(off, len) in &[(0u64, 64usize), (0, 1024), (64, 960), (64 * 1000, 64 * 37), (8 * 4096 * 5, 4096 * 8), (3, 77)] {
             let mut want = vec![0u8; len];
-            keystream(false, &key, off, &mut want);
+            keystream(Vx::Port, &key, off, &mut want);
             for isa in isas() {
                 let mut got = vec![0u8; len];
                 keystream_isa(isa, &key, off, &mut got);

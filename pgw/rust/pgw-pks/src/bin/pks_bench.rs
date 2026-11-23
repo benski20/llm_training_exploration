@@ -27,14 +27,16 @@ impl Lcg {
 }
 
 fn time<F: FnMut()>(reps: usize, mut f: F) -> (f64, f64) {
-    let (mut best, mut best_cpu) = (f64::INFINITY, f64::INFINITY);
+    // best wall time; process CPU time (10 ms ticks) averaged over all repetitions
+    f();
+    let mut best = f64::INFINITY;
+    let c0 = cpu_s();
     for _ in 0..reps {
-        let (t0, c0) = (Instant::now(), cpu_s());
+        let t0 = Instant::now();
         f();
         best = best.min(t0.elapsed().as_secs_f64());
-        best_cpu = best_cpu.min(cpu_s() - c0);
     }
-    (best, best_cpu)
+    (best, (cpu_s() - c0) / reps as f64)
 }
 
 fn main() {
@@ -124,11 +126,28 @@ fn main() {
             let per = (n * 16) as f64;
             let reps = size.clamp(1, 1000);
             let (s0, _) = time(5, || kernel::ntt_bench(isa, pr, 0, &mut a, &h, &t, reps));
-            let (s1, _) = time(5, || kernel::ntt_bench(isa, pr, if isa == Isa::Avx512 { 5 } else { 1 }, &mut a, &h, &t, reps));
+            let (s1, _) = time(5, || kernel::ntt_bench(isa, pr, match isa { Isa::Avx512 => 5, Isa::Avx2 => 9, _ => 1 }, &mut a, &h, &t, reps));
                         let (s2, _) = time(5, || kernel::ntt_bench(isa, pr, 2, &mut a, &h, &t, reps));
-            let (s3, _) = time(5, || kernel::ntt_bench(isa, pr, if isa == Isa::Avx512 { 7 } else { 3 }, &mut a, &h, &t, reps));
+            let (s3, _) = time(5, || kernel::ntt_bench(isa, pr, match isa { Isa::Avx512 => 7, Isa::Avx2 => 11, _ => 3 }, &mut a, &h, &t, reps));
             let f = |s: f64| s * 1e9 / per / reps as f64;
             println!("{{\"mode\":\"ntt\",\"inv_l_mul\":{:.3},\"inv_l_mul_fast\":{:.3},\"fwd_l\":{:.3},\"fwd_l_fast\":{:.3}}}", f(s0), f(s1), f(s2), f(s3));
+        }
+        #[cfg(target_arch = "x86_64")]
+        "encout" => {
+            // the upload CRT/output kernel alone on L2-resident data (one 16-block chunk, one group)
+            let e = [cx.ep[0].p, cx.ep[1].p, cx.ep[2].p];
+            let s16: Vec<u32> = (0..3 * NU * 16).map(|i| (g.next() % (2 * e[i / (NU * 16)] as u64)) as u32).collect();
+            let noise: Vec<i32> = (0..16 * RANK * D).map(|_| (g.next() % 43) as i32 - 21).collect();
+            let n = 256;
+            let r: Vec<i64> = (0..D * n).map(|_| g.next() as i64).collect();
+            let mut b = vec![0u64; n * D];
+            let kc = pgw_pks::simd::EncConsts { e, pn: [cx.ep[0].pn, cx.ep[1].pn, cx.ep[2].pn], inv01_m: 1, e0_m2: 1,
+                inv012_m: 1, p01: e[0] as u64 * e[1] as u64, emod: 12345 };
+            let reps = size.max(1);
+            let (s, _) = time(5, || for _ in 0..reps {
+                unsafe { pgw_pks::simd::enc_out(&kc, s16.as_ptr(), NU, 16, 0, D, n, r.as_ptr(), D, noise.as_ptr(), b.as_mut_ptr()) }
+            });
+            println!("{{\"mode\":\"encout\",\"ns_per_value\":{:.3}}}", s * 1e9 / (reps * NU * 16) as f64);
         }
         "cbd" => {
             let mut out = vec![0i32; size];

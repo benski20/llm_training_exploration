@@ -11,7 +11,7 @@
 #![cfg(target_arch = "x86_64")]
 #![allow(unsafe_op_in_unsafe_fn, clippy::missing_safety_doc)]
 
-use crate::arith::{Prime, L};
+use crate::arith::L;
 use std::arch::x86_64::*;
 
 /// Montgomery constants of one prime, broadcast.
@@ -63,170 +63,81 @@ pub unsafe fn mont_bc(a: __m512i, b: __m512i, m: M) -> __m512i {
     _mm512_mask_blend_epi32(0xAAAA, _mm512_srli_epi64(s0, 32), s1)
 }
 
-/// Gentleman-Sande butterfly on the vectors at `x`, `y` (twiddle `z` broadcast).
-#[inline(always)]
-unsafe fn gs(x: *mut u32, y: *mut u32, z: __m512i, m: M) {
-    let (u, w) = (ld(x), ld(y));
-    st(x, red(_mm512_add_epi32(u, w), m.p2));
-    st(y, mont_bc(_mm512_sub_epi32(_mm512_add_epi32(u, m.p2), w), z, m));
-}
-
-/// Cooley-Tukey butterfly.
-#[inline(always)]
-unsafe fn ct(x: *mut u32, y: *mut u32, z: __m512i, m: M) {
-    let (u, w) = (ld(x), ld(y));
-    let t = mont_bc(w, z, m);
-    st(x, red(_mm512_add_epi32(u, t), m.p2));
-    st(y, red(_mm512_sub_epi32(_mm512_add_epi32(u, m.p2), t), m.p2));
-}
-
-const SUB: usize = 256;
-const MAXPTS: usize = 32;
-
-/// [`Prime::inv_l_mul`] (same values): pointwise product and the stages `len < 256` per 256-coefficient
-/// sub-block, then the stages `len >= 256` column-wise through an L1 buffer.
-#[target_feature(enable = "avx512f,avx512dq,avx512bw,avx512vl")]
-pub unsafe fn inv_l_mul(pr: &Prime, a: &mut [u32], h: &[u32], t: &[u32]) {
-    let n = pr.n;
-    assert!(a.len() >= n * L && h.len() >= n * L && t.len() >= n && n >= 2);
-    let m = consts(pr.p, pr.pn);
-    let ap = a.as_mut_ptr();
-    let hp = h.as_ptr();
-    let sub = SUB.min(n);
-    for sb in 0..n / sub {
-        let base = sb * sub;
-        for c in base..base + sub {
-            st(ap.add(c * L), mont_bc(ld(hp.add(c * L)), _mm512_set1_epi32(t[c] as i32), m));
-        }
-        let mut len = 1usize;
-        while len < sub {
-            let nb = n / (2 * len);
-            let b0 = base / (2 * len);
-            for bb in 0..sub / (2 * len) {
-                let z = _mm512_set1_epi32(pr.izm[nb + b0 + bb] as i32);
-                let x = ap.add((base + 2 * bb * len) * L);
-                for i in 0..len {
-                    gs(x.add(i * L), x.add((i + len) * L), z, m);
-                }
-            }
-            len *= 2;
-        }
-    }
-    if sub < n {
-        inv_cols(pr, a, sub, m);
-    }
-}
-
-#[inline(always)]
-unsafe fn inv_cols(pr: &Prime, a: &mut [u32], from: usize, m: M) {
-    let n = pr.n;
-    let pts = n / from;
-    assert!(pts <= MAXPTS);
-    let ap = a.as_mut_ptr();
-    let mut buf = [0u32; MAXPTS * L];
-    let bp = buf.as_mut_ptr();
-    for c0 in 0..from {
-        for k in 0..pts {
-            st(bp.add(k * L), ld(ap.add((c0 + from * k) * L)));
-        }
-        let mut lk = 1usize;
-        while lk < pts {
-            let nb = pts / (2 * lk);
-            for bk in 0..nb {
-                let z = _mm512_set1_epi32(pr.izm[nb + bk] as i32);
-                let x = bp.add(2 * bk * lk * L);
-                for i in 0..lk {
-                    gs(x.add(i * L), x.add((i + lk) * L), z, m);
-                }
-            }
-            lk *= 2;
-        }
-        for k in 0..pts {
-            st(ap.add((c0 + from * k) * L), ld(bp.add(k * L)));
-        }
-    }
-    for k in 0..MAXPTS {
-        st(bp.add(k * L), _mm512_setzero_si512());
-    }
-}
-
-/// [`Prime::fwd_l`] (same values): stages `len >= 256` column-wise, then the rest per sub-block.
-#[target_feature(enable = "avx512f,avx512dq,avx512bw,avx512vl")]
-pub unsafe fn fwd_l(pr: &Prime, a: &mut [u32]) {
-    let n = pr.n;
-    assert!(a.len() >= n * L && n >= 2);
-    let m = consts(pr.p, pr.pn);
-    let ap = a.as_mut_ptr();
-    let to = SUB.min(n / 2).max(n / MAXPTS);
-    let pts = n / to;
-    let mut buf = [0u32; MAXPTS * L];
-    let bp = buf.as_mut_ptr();
-    for c0 in 0..to {
-        for k in 0..pts {
-            st(bp.add(k * L), ld(ap.add((c0 + to * k) * L)));
-        }
-        let mut lk = pts / 2;
-        while lk >= 1 {
-            let nb = pts / (2 * lk);
-            for bk in 0..nb {
-                let z = _mm512_set1_epi32(pr.zm[nb + bk] as i32);
-                let x = bp.add(2 * bk * lk * L);
-                for i in 0..lk {
-                    ct(x.add(i * L), x.add((i + lk) * L), z, m);
-                }
-            }
-            lk /= 2;
-        }
-        for k in 0..pts {
-            st(ap.add((c0 + to * k) * L), ld(bp.add(k * L)));
-        }
-    }
-    for k in 0..MAXPTS {
-        st(bp.add(k * L), _mm512_setzero_si512());
-    }
-    for sb in 0..pts {
-        let base = sb * to;
-        let mut len = to / 2;
-        while len >= 1 {
-            let nb = n / (2 * len);
-            let b0 = base / (2 * len);
-            for bb in 0..to / (2 * len) {
-                let z = _mm512_set1_epi32(pr.zm[nb + b0 + bb] as i32);
-                let x = ap.add((base + 2 * bb * len) * L);
-                for i in 0..len {
-                    ct(x.add(i * L), x.add((i + len) * L), z, m);
-                }
-            }
-            len /= 2;
-        }
-    }
-}
-
 /// In-register transpose of a 16 x 16 u32 block (`r[i]` lane `c` -> `r[c]` lane `i`).
 #[inline(always)]
 pub unsafe fn transpose16(r: &mut [__m512i; 16]) {
-    let mut s = 8usize;
-    while s >= 1 {
-        let mut lo = [0i32; 16];
-        let mut hi = [0i32; 16];
-        for c in 0..16 {
-            if c & s == 0 {
-                lo[c] = c as i32;
-                hi[c] = (c + s) as i32;
-            } else {
-                lo[c] = (16 + c - s) as i32;
-                hi[c] = (16 + c) as i32;
-            }
+    round16::<8>(r);
+    round16::<4>(r);
+    round16::<2>(r);
+    round16::<1>(r);
+}
+
+/// Index vectors of one transpose round (swap the elements whose row and column differ in bit `s`):
+/// lane `c` of the new low row takes `a[c]` or `b[c - s]`, of the new high row `a[c + s]` or `b[c]`.
+const fn tr_idx<const W: usize>(s: usize, hi: bool) -> [i32; W] {
+    let mut a = [0i32; W];
+    let mut c = 0;
+    while c < W {
+        a[c] = match (c & s == 0, hi) {
+            (true, false) => c as i32,
+            (true, true) => (c + s) as i32,
+            (false, false) => (W + c - s) as i32,
+            (false, true) => (W + c) as i32,
+        };
+        c += 1;
+    }
+    a
+}
+
+static TR16: [[[i32; 16]; 2]; 4] = [
+    [tr_idx::<16>(8, false), tr_idx::<16>(8, true)],
+    [tr_idx::<16>(4, false), tr_idx::<16>(4, true)],
+    [tr_idx::<16>(2, false), tr_idx::<16>(2, true)],
+    [tr_idx::<16>(1, false), tr_idx::<16>(1, true)],
+];
+
+static TR8: [[[i64; 8]; 2]; 3] = {
+    const fn w(a: [i32; 8]) -> [i64; 8] {
+        let mut o = [0i64; 8];
+        let mut i = 0;
+        while i < 8 {
+            o[i] = a[i] as i64;
+            i += 1;
         }
-        let (il, ih) = (_mm512_loadu_si512(lo.as_ptr() as *const _), _mm512_loadu_si512(hi.as_ptr() as *const _));
-        for i in 0..16 {
-            if i & s == 0 {
-                let (a, b) = (r[i], r[i + s]);
-                r[i] = _mm512_permutex2var_epi32(a, il, b);
-                r[i + s] = _mm512_permutex2var_epi32(a, ih, b);
-            }
+        o
+    }
+    [
+        [w(tr_idx::<8>(4, false)), w(tr_idx::<8>(4, true))],
+        [w(tr_idx::<8>(2, false)), w(tr_idx::<8>(2, true))],
+        [w(tr_idx::<8>(1, false)), w(tr_idx::<8>(1, true))],
+    ]
+};
+
+#[inline(always)]
+unsafe fn round16<const S: usize>(r: &mut [__m512i; 16]) {
+    let k = S.trailing_zeros() as usize; // 8 -> 3
+    let t = &TR16[3 - k];
+    let (il, ih) = (_mm512_loadu_si512(t[0].as_ptr() as *const _), _mm512_loadu_si512(t[1].as_ptr() as *const _));
+    for i in 0..16 {
+        if i & S == 0 {
+            let (a, b) = (r[i], r[i + S]);
+            r[i] = _mm512_permutex2var_epi32(a, il, b);
+            r[i + S] = _mm512_permutex2var_epi32(a, ih, b);
         }
-        s /= 2;
+    }
+}
+
+#[inline(always)]
+unsafe fn round8<const S: usize>(r: &mut [__m512i; 8]) {
+    let k = S.trailing_zeros() as usize; // 4 -> 2
+    let t = &TR8[2 - k];
+    let (il, ih) = (_mm512_loadu_si512(t[0].as_ptr() as *const _), _mm512_loadu_si512(t[1].as_ptr() as *const _));
+    for i in 0..8 {
+        if i & S == 0 {
+            let (a, b) = (r[i], r[i + S]);
+            r[i] = _mm512_permutex2var_epi64(a, il, b);
+            r[i + S] = _mm512_permutex2var_epi64(a, ih, b);
+        }
     }
 }
 
@@ -308,29 +219,9 @@ pub unsafe fn chacha20_blocks(key: &[u8; 32], first: u32, out: &mut [u8]) {
 /// In-register transpose of an 8 x 8 u64 block.
 #[inline(always)]
 pub unsafe fn transpose8(r: &mut [__m512i; 8]) {
-    let mut s = 4usize;
-    while s >= 1 {
-        let mut lo = [0i64; 8];
-        let mut hi = [0i64; 8];
-        for c in 0..8 {
-            if c & s == 0 {
-                lo[c] = c as i64;
-                hi[c] = (c + s) as i64;
-            } else {
-                lo[c] = (8 + c - s) as i64;
-                hi[c] = (8 + c) as i64;
-            }
-        }
-        let (il, ih) = (_mm512_loadu_si512(lo.as_ptr() as *const _), _mm512_loadu_si512(hi.as_ptr() as *const _));
-        for i in 0..8 {
-            if i & s == 0 {
-                let (a, b) = (r[i], r[i + s]);
-                r[i] = _mm512_permutex2var_epi64(a, il, b);
-                r[i + s] = _mm512_permutex2var_epi64(a, ih, b);
-            }
-        }
-        s /= 2;
-    }
+    round8::<4>(r);
+    round8::<2>(r);
+    round8::<1>(r);
 }
 
 /// Constants of the upload's CRT (pad primes `e0 > e1 > e2`, all `< 2^30`).
