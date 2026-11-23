@@ -96,7 +96,7 @@ unsafe impl<T> Sync for Shared<T> {}
 /// 16-block AVX-512 or 8-block AVX2 copy (same bytes, tested against the `chacha20` crate).
 fn keystream(fast: Vx, key: &[u8; 32], offset: u64, out: &mut [u8]) {
     #[cfg(target_arch = "x86_64")]
-    if offset % 64 == 0 && out.len() % 64 == 0 && offset / 64 + (out.len() / 64) as u64 <= 1 << 32 {
+    if offset.is_multiple_of(64) && out.len().is_multiple_of(64) && offset / 64 + (out.len() / 64) as u64 <= 1 << 32 {
         // SAFETY: `fast` comes from `Vx::of` of an ISA capped at what the CPU supports (`Isa::parse`).
         match fast {
             Vx::Z | Vx::Zi => return unsafe { crate::simd::chacha20_blocks(key, (offset / 64) as u32, out) },
@@ -495,7 +495,7 @@ fn encrypt_inner(isa: Isa, it: &EncItem<'_>, b: &mut [u64], threads: usize) {
 /// (a_C t_g)[16 u + k] + e_g[16 C + k, u] + 2^24 r[256 g + u, 16 C + k]`.
 pub fn encrypt_item(isa: Isa, it: &EncItem<'_>, b: &mut [u64], threads: usize) -> Result<(), Error> {
     let groups = it.e_keys.len();
-    if it.n == 0 || it.n % RANK != 0 || groups == 0 || it.rows > groups * D || it.r.len() != it.rows * it.n
+    if it.n == 0 || !it.n.is_multiple_of(RANK) || groups == 0 || it.rows > groups * D || it.r.len() != it.rows * it.n
         || it.t.len() != groups * NU || b.len() != it.n * groups * D
     {
         return err("encrypt_item: inconsistent shapes");
@@ -797,7 +797,7 @@ fn decrypt_inner(isa: Isa, it: &DecItem<'_>, outs: &mut [&mut [u32]], threads: u
 pub fn decrypt_item(isa: Isa, it: &DecItem<'_>, outs: &mut [&mut [u32]], threads: usize) -> Result<(), Error> {
     let groups = it.rows.len();
     let nb = it.m / PACK;
-    if it.m == 0 || it.m % PACK != 0 || it.hint.len() != nb * 2 * NR * 3
+    if it.m == 0 || !it.m.is_multiple_of(PACK) || it.hint.len() != nb * 2 * NR * 3
         || it.trhat.len() != groups * 2 * NR || outs.len() != groups || !(K..=QBITS).contains(&it.yb)
         || !match it.c0r {
             C0::Words(v) => v.len() == groups * nb * NR,
@@ -986,7 +986,7 @@ fn keyswitch_inner(isa: Isa, it: &KsItem<'_>, out: &mut [u64], threads: usize) {
 
 pub fn keyswitch(isa: Isa, it: &KsItem<'_>, out: &mut [u64], threads: usize) -> Result<(), Error> {
     let nb = it.m / PACK;
-    if it.m == 0 || it.m % PACK != 0 || it.hs.len() != it.m * NU || it.groups == 0
+    if it.m == 0 || !it.m.is_multiple_of(PACK) || it.hs.len() != it.m * NU || it.groups == 0
         || it.ops.len() != it.groups * 4 * RANK * NR
     {
         return err("keyswitch: inconsistent shapes");

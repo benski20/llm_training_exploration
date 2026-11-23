@@ -3,7 +3,7 @@
 //! [`crate::arith::Prime::inv_l_mul`] / [`crate::arith::Prime::fwd_l`] (tested bit for bit). Branch-free in
 //! the data (Montgomery products by `vpmuludq`, reductions by `vpminud`).
 #![cfg(target_arch = "x86_64")]
-#![allow(unsafe_op_in_unsafe_fn, clippy::missing_safety_doc)]
+#![allow(unsafe_op_in_unsafe_fn, clippy::missing_safety_doc, clippy::needless_range_loop)]
 
 use crate::arith::{Prime, L};
 use std::arch::x86_64::*;

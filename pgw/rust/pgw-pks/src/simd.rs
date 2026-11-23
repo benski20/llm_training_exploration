@@ -9,7 +9,7 @@
 //! Montgomery product needs the same number of 512-bit multiplier uops per lane (6 per 16 lanes against
 //! 3 per 8), while the additions and reductions would run on half as many lanes per instruction.
 #![cfg(target_arch = "x86_64")]
-#![allow(unsafe_op_in_unsafe_fn, clippy::missing_safety_doc)]
+#![allow(unsafe_op_in_unsafe_fn, clippy::missing_safety_doc, clippy::needless_range_loop)]
 
 use crate::arith::L;
 use std::arch::x86_64::*;
@@ -146,7 +146,7 @@ unsafe fn round8<const S: usize>(r: &mut [__m512i; 8]) {
 /// per lane, so the bytes are exactly those of the `chacha20` crate's `ChaCha20` seeked to `64 first`.
 #[target_feature(enable = "avx512f,avx512dq,avx512bw,avx512vl")]
 pub unsafe fn chacha20_blocks(key: &[u8; 32], first: u32, out: &mut [u8]) {
-    assert!(out.len() % 64 == 0);
+    assert!(out.len().is_multiple_of(64));
     let nblk = out.len() / 64;
     assert!(first as u64 + nblk as u64 <= 1u64 << 32, "chacha20: block counter overflow");
     let kw: [u32; 8] = std::array::from_fn(|i| u32::from_le_bytes(key[4 * i..4 * i + 4].try_into().unwrap()));

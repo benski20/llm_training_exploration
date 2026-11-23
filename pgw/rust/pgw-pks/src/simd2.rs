@@ -1,7 +1,7 @@
 //! Hand-written AVX2 copies (x86-64, used when the ISA is `avx2`): an 8-way ChaCha20 keystream (same bytes
 //! as the `chacha20` crate, tested). The NTTs shared with AVX-512 are in [`crate::vntt`].
 #![cfg(target_arch = "x86_64")]
-#![allow(unsafe_op_in_unsafe_fn, clippy::missing_safety_doc)]
+#![allow(unsafe_op_in_unsafe_fn, clippy::missing_safety_doc, clippy::needless_range_loop)]
 
 use std::arch::x86_64::*;
 
@@ -223,7 +223,7 @@ pub unsafe fn enc_out(k: &crate::simd::EncConsts, s: *const u32, nu: usize, lane
 /// 64 bytes), 8 blocks per iteration (one per lane).
 #[target_feature(enable = "avx2")]
 pub unsafe fn chacha20_blocks(key: &[u8; 32], first: u32, out: &mut [u8]) {
-    assert!(out.len() % 64 == 0);
+    assert!(out.len().is_multiple_of(64));
     let nblk = out.len() / 64;
     assert!(first as u64 + nblk as u64 <= 1u64 << 32, "chacha20: block counter overflow");
     let kw: [u32; 8] = std::array::from_fn(|i| u32::from_le_bytes(key[4 * i..4 * i + 4].try_into().unwrap()));

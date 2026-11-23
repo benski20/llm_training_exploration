@@ -11,7 +11,7 @@
 //! fixed `w < q` with `w' = floor(w 2^52 / q)` gives a value in `[0, 2q)`, branch-free. Per 16-lane GS
 //! butterfly: 2 x (3 IFMA + 7 simple ops) on 8-lane vectors, against 2 x 17 ops for two 24-bit primes.
 #![cfg(target_arch = "x86_64")]
-#![allow(unsafe_op_in_unsafe_fn, clippy::missing_safety_doc)]
+#![allow(unsafe_op_in_unsafe_fn, clippy::missing_safety_doc, clippy::needless_range_loop)]
 
 use crate::arith::{mont, powmod, red as red32, Prime, L};
 use crate::simd::{transpose8, C0p, DecConsts};

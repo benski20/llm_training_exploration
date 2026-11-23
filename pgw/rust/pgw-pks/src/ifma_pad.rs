@@ -3,7 +3,7 @@
 //! 32-bit lanes. The pad is an exact integer, so the bodies `b` are bit-identical to the three-prime path
 //! and the numpy reference whatever primes are used (tested); the primes are an internal choice.
 #![cfg(target_arch = "x86_64")]
-#![allow(unsafe_op_in_unsafe_fn, clippy::missing_safety_doc)]
+#![allow(unsafe_op_in_unsafe_fn, clippy::missing_safety_doc, clippy::needless_range_loop)]
 
 use crate::arith::L;
 use crate::ifma::{inv_mul_tab, ld, mulq, red, shoup_ct, shoup_exact, st, K};
@@ -33,7 +33,7 @@ fn is_prime64(n: u64) -> bool {
         return false;
     }
     for p in [2u64, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37] {
-        if n % p == 0 {
+        if n.is_multiple_of(p) {
             return n == p;
         }
     }

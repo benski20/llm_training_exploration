@@ -565,7 +565,7 @@ macro_rules! multiversion {
 
 /// Bit unpacking of `pgw.hemask.wire.pack_bits` (fields of 64/32/16/8 bits, then a `bits mod 8` tail stream).
 pub fn unpack_bits(data: &[u8], count: usize, bits: u32) -> Result<Vec<u64>, String> {
-    if !(1..=64).contains(&bits) || count % 8 != 0 || data.len() != count * bits as usize / 8 {
+    if !(1..=64).contains(&bits) || !count.is_multiple_of(8) || data.len() != count * bits as usize / 8 {
         return Err(format!("packed data: {} bytes is not {count} values of {bits} bits", data.len()));
     }
     let mut out = vec![0u64; count];
