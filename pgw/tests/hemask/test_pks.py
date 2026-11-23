@@ -178,8 +178,7 @@ def test_native_isas_and_threads_identical(monkeypatch: pytest.MonkeyPatch) -> N
     assert all(np.array_equal(o, outs[0]) for o in outs)
     assert np.array_equal(outs[0].astype(np.int64), ((w.astype(np.int64) @ r.T) & 0xFFFFFFFF).T)
     ts = np.stack([s.t for s in secrets])
-    encs = [nat.encrypt(b"q" * 32, r, ts, [b"e" * 32], thr, isa) for isa in isas
-            for thr in (1, 2, 3)]
+    encs = [nat.encrypt(b"q" * 32, r, ts, [b"e" * 32], thr, isa) for isa in isas for thr in (1, 2, 3)]
     assert all(np.array_equal(e, encs[0]) for e in encs)
     kh = nat.KHat(k_hat.astype(np.uint32))
     tr = secrets[0].t_reply.copy()

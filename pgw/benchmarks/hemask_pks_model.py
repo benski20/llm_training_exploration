@@ -60,7 +60,7 @@ def main() -> None:
         sn = layers * sum(n for _, n in kinds.values())
         lin = layers * len(kinds)
 
-        def pks(k: dict[str, float]) -> float:
+        def pks(k: dict[str, float], sm: int = sm, sn: int = sn, lin: int = lin) -> float:
             return sm * k["dec"] / 1e6 + sn * (k["enc"] + a.r_ns) / 1e6 + lin * k["ksk"] / 256
 
         enc_today = sn * (a.enc_ns + a.r_ns) / 1e6
