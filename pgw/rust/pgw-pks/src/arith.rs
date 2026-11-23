@@ -9,6 +9,10 @@
 
 /// Lanes of the interleaved kernels (16 x u32 = one AVX-512 register).
 pub const L: usize = 16;
+/// Largest column (points) of the column-wise NTT passes.
+const MAXPTS: usize = 32;
+
+use zeroize::Zeroize;
 
 fn is_prime(n: u64) -> bool {
     if n < 2 {
@@ -115,9 +119,9 @@ pub struct Prime {
     pub pn: u32,
     pub n: usize,
     /// `psi^brv(k) R mod p`.
-    zm: Vec<u32>,
+    pub(crate) zm: Vec<u32>,
     /// `psi^-brv(k) R mod p`.
-    izm: Vec<u32>,
+    pub(crate) izm: Vec<u32>,
     /// `R^2 mod p`.
     pub r2: u32,
     /// `N^-1 R^2 mod p`: `mont(x, ninv_r2) = x N^-1 R` (hint form of a plain value).
@@ -305,6 +309,143 @@ impl Prime {
         }
     }
 
+    /// Inverse (Gentleman-Sande) stages `len = from, 2 from, .., n/2` on `L` interleaved polynomials,
+    /// column by column: the `n / from` points `c0 + from k` of column `c0` are the only words these stages
+    /// combine, so all `log2(n / from)` stages of one column run while its lines are in L1 (one pass over
+    /// the array instead of one per stage). Same values as the corresponding stages of [`Prime::inv_l`].
+    #[inline(always)]
+    pub fn inv_l_cols(&self, a: &mut [u32], from: usize) {
+        let (p, pn, p2, n) = (self.p, self.pn, 2 * self.p, self.n);
+        let pts = n / from;
+        assert!(pts <= MAXPTS);
+        // the column's lines are `from * 64` bytes apart (same L1 set): copy them to a contiguous buffer
+        let mut buf = [[0u32; L]; MAXPTS];
+        for c0 in 0..from {
+            for k in 0..pts {
+                buf[k].copy_from_slice(&a[(c0 + from * k) * L..(c0 + from * k + 1) * L]);
+            }
+            let mut lk = 1usize; // half-block length in points
+            while lk < pts {
+                let nb = pts / (2 * lk); // = n / (2 len)
+                for bk in 0..nb {
+                    let z = self.izm[nb + bk];
+                    let (lo, hi) = buf[2 * bk * lk..2 * (bk + 1) * lk].split_at_mut(lk);
+                    for (x, y) in lo.iter_mut().zip(hi.iter_mut()) {
+                        for l in 0..L {
+                            let (u, w) = (x[l], y[l]);
+                            x[l] = red(u.wrapping_add(w), p2);
+                            y[l] = mont(u.wrapping_add(p2).wrapping_sub(w), z, p, pn);
+                        }
+                    }
+                }
+                lk *= 2;
+            }
+            for k in 0..pts {
+                a[(c0 + from * k) * L..(c0 + from * k + 1) * L].copy_from_slice(&buf[k]);
+            }
+        }
+        buf.zeroize();
+    }
+
+    /// Forward (Cooley-Tukey) stages `len = n/2 .. to` column by column (see [`Prime::inv_l_cols`]), then
+    /// the stages `len < to` per `to`-coefficient sub-block (in L1). Same values as [`Prime::fwd_l`].
+    #[inline(always)]
+    pub fn fwd_l_fast(&self, a: &mut [u32], to: usize) {
+        let (p, pn, p2, n) = (self.p, self.pn, 2 * self.p, self.n);
+        let to = to.min(n / 2).max(n / MAXPTS);
+        let pts = n / to;
+        let mut buf = [[0u32; L]; MAXPTS];
+        for c0 in 0..to {
+            for k in 0..pts {
+                buf[k].copy_from_slice(&a[(c0 + to * k) * L..(c0 + to * k + 1) * L]);
+            }
+            let mut lk = pts / 2;
+            while lk >= 1 {
+                let nb = pts / (2 * lk);
+                for bk in 0..nb {
+                    let z = self.zm[nb + bk];
+                    let (lo, hi) = buf[2 * bk * lk..2 * (bk + 1) * lk].split_at_mut(lk);
+                    for (x, y) in lo.iter_mut().zip(hi.iter_mut()) {
+                        for l in 0..L {
+                            let t = mont(y[l], z, p, pn);
+                            let u = x[l];
+                            x[l] = red(u.wrapping_add(t), p2);
+                            y[l] = red(u.wrapping_add(p2).wrapping_sub(t), p2);
+                        }
+                    }
+                }
+                lk /= 2;
+            }
+            for k in 0..pts {
+                a[(c0 + to * k) * L..(c0 + to * k + 1) * L].copy_from_slice(&buf[k]);
+            }
+        }
+        buf.zeroize();
+        // stages len = to/2 .. 1 inside each sub-block of `to` coefficients
+        for sb in 0..pts {
+            let base = sb * to;
+            let blk = &mut a[base * L..(base + to) * L];
+            let mut len = to / 2;
+            while len >= 1 {
+                let nb = n / (2 * len);
+                let b0 = base / (2 * len);
+                for bb in 0..to / (2 * len) {
+                    let z = self.zm[nb + b0 + bb];
+                    let off = 2 * bb * len * L;
+                    let (lo, hi) = blk[off..off + 2 * len * L].split_at_mut(len * L);
+                    for (x, y) in lo.iter_mut().zip(hi.iter_mut()) {
+                        let t = mont(*y, z, p, pn);
+                        let u = *x;
+                        *x = red(u.wrapping_add(t), p2);
+                        *y = red(u.wrapping_add(p2).wrapping_sub(t), p2);
+                    }
+                }
+                len /= 2;
+            }
+        }
+    }
+
+    /// [`Prime::inv_l_mul`] with the stages `len >= 256` done column-wise ([`Prime::inv_l_cols`]): two
+    /// passes over the array instead of `log2(n) - 7`. Same values.
+    #[inline(always)]
+    pub fn inv_l_mul_fast(&self, a: &mut [u32], h: &[u32], t: &[u32]) {
+        const B: usize = 256;
+        let (p, pn, p2, n) = (self.p, self.pn, 2 * self.p, self.n);
+        let sub = B.min(n);
+        for sb in 0..n / sub {
+            let base = sb * sub;
+            let blk = &mut a[base * L..(base + sub) * L];
+            let hs = &h[base * L..(base + sub) * L];
+            for c in 0..sub {
+                let tc = t[base + c];
+                let o: &mut [u32; L] = (&mut blk[c * L..(c + 1) * L]).try_into().unwrap();
+                let hv: &[u32; L] = (&hs[c * L..(c + 1) * L]).try_into().unwrap();
+                for l in 0..L {
+                    o[l] = mont(hv[l], tc, p, pn);
+                }
+            }
+            let mut len = 1usize;
+            while len < sub {
+                let nb = n / (2 * len);
+                let b0 = base / (2 * len);
+                for bb in 0..sub / (2 * len) {
+                    let z = self.izm[nb + b0 + bb];
+                    let off = 2 * bb * len * L;
+                    let (lo, hi) = blk[off..off + 2 * len * L].split_at_mut(len * L);
+                    for (x, y) in lo.iter_mut().zip(hi.iter_mut()) {
+                        let (u, w) = (*x, *y);
+                        *x = red(u.wrapping_add(w), p2);
+                        *y = mont(u.wrapping_add(p2).wrapping_sub(w), z, p, pn);
+                    }
+                }
+                len *= 2;
+            }
+        }
+        if sub < n {
+            self.inv_l_cols(a, sub);
+        }
+    }
+
     /// [`Prime::inv`] on `L` interleaved polynomials (`n * L` words).
     #[inline(always)]
     pub fn inv_l(&self, a: &mut [u32]) {
@@ -343,10 +484,17 @@ impl Isa {
                 && std::arch::is_x86_feature_detected!("avx512dq")
                 && std::arch::is_x86_feature_detected!("avx512bw")
                 && std::arch::is_x86_feature_detected!("avx512vl")
+                && std::arch::is_x86_feature_detected!("popcnt")
+                && std::arch::is_x86_feature_detected!("fma")
+                && std::arch::is_x86_feature_detected!("bmi2")
             {
                 return Isa::Avx512;
             }
-            if std::arch::is_x86_feature_detected!("avx2") {
+            if std::arch::is_x86_feature_detected!("avx2")
+                && std::arch::is_x86_feature_detected!("popcnt")
+                && std::arch::is_x86_feature_detected!("fma")
+                && std::arch::is_x86_feature_detected!("bmi2")
+            {
                 return Isa::Avx2;
             }
         }
@@ -393,10 +541,10 @@ macro_rules! multiversion {
             #[cfg(target_arch = "x86_64")]
             {
                 #[allow(clippy::too_many_arguments)]
-                #[target_feature(enable = "avx512f,avx512dq,avx512bw,avx512vl,avx2,fma,bmi2")]
+                #[target_feature(enable = "avx512f,avx512dq,avx512bw,avx512vl,avx2,fma,bmi2,popcnt")]
                 unsafe fn v512($($a: $t),*) $(-> $r)? { $inner($($a),*) }
                 #[allow(clippy::too_many_arguments)]
-                #[target_feature(enable = "avx2,fma,bmi2")]
+                #[target_feature(enable = "avx2,fma,bmi2,popcnt")]
                 unsafe fn v256($($a: $t),*) $(-> $r)? { $inner($($a),*) }
                 match isa {
                     // SAFETY: `Isa::parse` caps the ISA at what this CPU supports.
@@ -472,6 +620,30 @@ mod tests {
             let ninv = powmod(n as u64, pr.p as u64 - 2, pr.p as u64);
             for (x, y) in a.iter().zip(&b) {
                 assert_eq!(*x as u64, pr.reduce(*y) as u64 * ninv % pr.p as u64);
+            }
+        }
+    }
+
+    #[test]
+    fn fused_ntt_passes_equal_plain() {
+        for &(bits, n) in &[(24u32, 8192usize), (30, 8192), (30, 4096)] {
+            let pr = Prime::new(ntt_primes(bits, 1, 16384)[0], n);
+            let mut s = 7u64;
+            let mut rnd = |m: u32| {
+                s = s.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                ((s >> 20) % m as u64) as u32
+            };
+            let h: Vec<u32> = (0..n * L).map(|_| rnd(2 * pr.p)).collect();
+            let t: Vec<u32> = (0..n).map(|_| rnd(pr.p)).collect();
+            let (mut a, mut b) = (vec![0u32; n * L], vec![0u32; n * L]);
+            pr.inv_l_mul(&mut a, &h, &t);
+            pr.inv_l_mul_fast(&mut b, &h, &t);
+            assert_eq!(a, b);
+            for to in [1usize, 16, 256, 512] {
+                let (mut x, mut y) = (h.clone(), h.clone());
+                pr.fwd_l(&mut x);
+                pr.fwd_l_fast(&mut y, to);
+                assert_eq!(x, y);
             }
         }
     }

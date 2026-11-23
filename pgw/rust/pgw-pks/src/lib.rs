@@ -7,6 +7,8 @@
 
 pub mod arith;
 pub mod kernel;
+#[cfg(target_arch = "x86_64")]
+pub mod simd;
 #[cfg(feature = "python")]
 mod py;
 

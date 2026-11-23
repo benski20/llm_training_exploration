@@ -114,6 +114,28 @@ fn main() {
                 isa.name(), s * 1e9 / per, c * 1e9 / per
             );
         }
-        _ => eprintln!("modes: decrypt | encrypt | ksk | keyswitch"),
+        "ntt" => {
+            // per-kernel micro timing (ns per coefficient-lane): inverse NTT (decrypt), forward NTT
+            let pr = &cx.qp[0];
+            let n = NR;
+            let h: Vec<u32> = (0..n * 16).map(|_| (g.next() % pr.p as u64) as u32).collect();
+            let t: Vec<u32> = (0..n).map(|_| (g.next() % pr.p as u64) as u32).collect();
+            let mut a = vec![0u32; n * 16];
+            let per = (n * 16) as f64;
+            let reps = size.clamp(1, 1000);
+            let (s0, _) = time(5, || kernel::ntt_bench(isa, pr, 0, &mut a, &h, &t, reps));
+            let (s1, _) = time(5, || kernel::ntt_bench(isa, pr, if isa == Isa::Avx512 { 5 } else { 1 }, &mut a, &h, &t, reps));
+                        let (s2, _) = time(5, || kernel::ntt_bench(isa, pr, 2, &mut a, &h, &t, reps));
+            let (s3, _) = time(5, || kernel::ntt_bench(isa, pr, if isa == Isa::Avx512 { 7 } else { 3 }, &mut a, &h, &t, reps));
+            let f = |s: f64| s * 1e9 / per / reps as f64;
+            println!("{{\"mode\":\"ntt\",\"inv_l_mul\":{:.3},\"inv_l_mul_fast\":{:.3},\"fwd_l\":{:.3},\"fwd_l_fast\":{:.3}}}", f(s0), f(s1), f(s2), f(s3));
+        }
+        "cbd" => {
+            let mut out = vec![0i32; size];
+            let k = key(&mut g);
+            let (s, _) = time(5, || kernel::cbd(isa, &k, 0, &mut out));
+            println!("{{\"mode\":\"cbd\",\"isa\":\"{}\",\"ns_per_sample\":{:.3}}}", isa.name(), s * 1e9 / size as f64);
+        }
+        _ => eprintln!("modes: decrypt | encrypt | ksk | keyswitch | ntt | cbd"),
     }
 }
