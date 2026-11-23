@@ -12,4 +12,5 @@ __pycache__/
 src/pgw_fast*.so
 src/pgw_fast*.pyd
 src/pgw_ntt*.so
+src/pgw_pks*.so
 src/pgw_ntt*.pyd
