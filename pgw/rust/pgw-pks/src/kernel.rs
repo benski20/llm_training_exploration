@@ -392,39 +392,100 @@ fn enc_chunk(fast: Vx, cx: &Ctx, it: &EncItem<'_>, c0: usize, that: &[Vec<Vec<u3
     }
 }
 
+/// IFMA pad (`Vx::Zi`): per group, the NTT of `t` modulo the two ~2^50 pad primes and Shoup companions.
+type ThQ = ([Vec<u64>; 2], [Vec<u64>; 2]);
+
 #[inline(always)]
-fn enc_worker(fast: Vx, it: &EncItem<'_>, that: &[Vec<Vec<u32>>], bp: Shared<u64>, th: usize, threads: usize) {
+fn enc_worker(fast: Vx, it: &EncItem<'_>, that: &[Vec<Vec<u32>>], thq: &[ThQ], bp: Shared<u64>, th: usize,
+              threads: usize) {
     let cx = ctx();
     let chunks = (it.n / RANK).div_ceil(L);
-    let mut a16 = Wiping(vec![0u32; 3 * NU * L]);
-    let mut s16 = Wiping(vec![0u32; 3 * NU * L]);
-    let mut raw = vec![0u8; NU * 8];
+    let zi = fast == Vx::Zi;
+    let mut a16 = Wiping(vec![0u32; if zi { 0 } else { 3 * NU * L }]);
+    let mut s16 = Wiping(vec![0u32; if zi { 0 } else { 3 * NU * L }]);
+    let mut raw = vec![0u8; if zi { L * NU * 8 } else { NU * 8 }];
     let mut xb = Wiping(vec![0u64; if fast == Vx::Port { NU * L } else { 0 }]);
+    // IFMA pad: a in the NTT domain (public) and the pad (secret-dependent), 2 primes x NU x 16 lanes
+    let mut a64 = vec![0u64; if zi { 2 * NU * L } else { 0 }];
+    let mut s64 = Wiping(vec![0u64; if zi { 2 * NU * L } else { 0 }]);
     for ch in (th..chunks).step_by(threads) {
+        #[cfg(target_arch = "x86_64")]
+        if zi {
+            enc_chunk_ifma(cx, it, ch * L, thq, bp, &mut raw, &mut a64, &mut s64.0);
+            continue;
+        }
+        let _ = (thq, &mut a64);
         enc_chunk(fast, cx, it, ch * L, that, bp, &mut a16.0, &mut s16.0, &mut raw, &mut xb.0);
     }
 }
 
-crate::multiversion!(fn enc_worker_isa(fast: Vx, it: &EncItem<'_>, that: &[Vec<Vec<u32>>], bp: Shared<u64>, th: usize,
-    threads: usize) => enc_worker);
+/// One 16-block chunk with the IFMA pad (two ~2^50 primes, [`crate::ifma_pad`]); same bodies `b`.
+#[cfg(target_arch = "x86_64")]
+#[inline(always)]
+#[allow(clippy::too_many_arguments)]
+fn enc_chunk_ifma(cx: &Ctx, it: &EncItem<'_>, c0: usize, thq: &[ThQ], b: Shared<u64>, raw: &mut [u8], a64: &mut [u64],
+                  s64: &mut [u64]) {
+    let _ = cx;
+    let pc = crate::ifma_pad::pad_ctx(NU);
+    let nblk = it.n / RANK;
+    let groups = it.e_keys.len();
+    let cols = groups * D;
+    let lanes = (nblk - c0).min(L);
+    for l in 0..lanes {
+        keystream(Vx::Zi, &it.a_key, ((c0 + l) * NU * 8) as u64, &mut raw[l * NU * 8..(l + 1) * NU * 8]);
+    }
+    // SAFETY: `Vx::Zi` only for `Isa::Avx512Ifma` (capped at the CPU by `Isa::parse`); sizes asserted inside;
+    // rows 16 c0 .. 16 (c0 + lanes) of b are written by this chunk only, the gather reads rows < it.rows.
+    unsafe { crate::ifma_pad::pad_a(pc, raw, lanes, a64) };
+    let mut noise = Wiping(vec![0i32; L * RANK * D]);
+    for (g, (th, ths)) in thq.iter().enumerate() {
+        unsafe { crate::ifma_pad::pad_mul(pc, a64, th, ths, s64) };
+        cbd_into(Vx::Zi, &it.e_keys[g], c0 * RANK * D, &mut noise.0[..lanes * RANK * D]);
+        let (rp, valid) = (it.r.as_ptr().wrapping_add(g * D * it.n), it.rows.saturating_sub(g * D).min(D));
+        unsafe {
+            crate::ifma_pad::pad_out(pc, s64, lanes, c0, cols, it.n, rp, valid, noise.0.as_ptr(), b.0.add(g * D));
+        }
+    }
+}
+
+crate::multiversion!(fn enc_worker_isa(fast: Vx, it: &EncItem<'_>, that: &[Vec<Vec<u32>>], thq: &[ThQ], bp: Shared<u64>,
+    th: usize, threads: usize) => enc_worker);
 
 fn encrypt_inner(isa: Isa, it: &EncItem<'_>, b: &mut [u64], threads: usize) {
     let cx = ctx();
     let groups = it.e_keys.len();
-    let mut that: Vec<Vec<Vec<u32>>> = (0..groups)
-        .map(|g| cx.ep.iter().map(|pr| ternary_hat(pr, &it.t[g * NU..(g + 1) * NU])).collect())
-        .collect();
+    let fast = Vx::of(isa);
+    let mut that: Vec<Vec<Vec<u32>>> = if fast == Vx::Zi {
+        Vec::new()
+    } else {
+        (0..groups).map(|g| cx.ep.iter().map(|pr| ternary_hat(pr, &it.t[g * NU..(g + 1) * NU])).collect()).collect()
+    };
+    let mut thq: Vec<ThQ> = Vec::new();
+    #[cfg(target_arch = "x86_64")]
+    if fast == Vx::Zi {
+        let pc = crate::ifma_pad::pad_ctx(NU);
+        for g in 0..groups {
+            let mut q: ThQ = Default::default();
+            crate::ifma_pad::secret_hat(pc, &it.t[g * NU..(g + 1) * NU], &mut q.0, &mut q.1);
+            thq.push(q);
+        }
+    }
     let chunks = (it.n / RANK).div_ceil(L);
     let bp = Shared(b.as_mut_ptr());
     let threads = threads.clamp(1, chunks.max(1));
     std::thread::scope(|s| {
         for th in 0..threads {
-            let that = &that;
-            s.spawn(move || enc_worker_isa(isa, Vx::of(isa), it, that, bp, th, threads));
+            let (that, thq) = (&that, &thq);
+            s.spawn(move || enc_worker_isa(isa, fast, it, that, thq, bp, th, threads));
         }
     });
     for g in that.iter_mut() {
         for v in g.iter_mut() {
+            v.zeroize();
+        }
+    }
+    for (a, s) in thq.iter_mut() {
+        for v in a.iter_mut().chain(s.iter_mut()) {
             v.zeroize();
         }
     }

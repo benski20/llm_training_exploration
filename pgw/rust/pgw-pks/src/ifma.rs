@@ -29,7 +29,7 @@ pub struct Q1 {
     as_: [u64; 2],
 }
 
-fn shoup_exact(w: u64, q: u64) -> u64 {
+pub(crate) fn shoup_exact(w: u64, q: u64) -> u64 {
     (((w as u128) << 52) / q as u128) as u64
 }
 
@@ -62,54 +62,61 @@ pub fn q1ctx(pr0: &Prime, pr1: &Prime) -> &'static Q1 {
 pub fn secret_operand(qc: &Q1, pr1: &Prime, inv01_m: u32, t0: &[u32], t1: &[u32], out_t: &mut [u64], out_s: &mut [u64]) {
     let q = qc.q;
     let (p0, p1) = ((q / pr1.p as u64) as u32, pr1.p);
-    let c = 4503599627370496.0f64 / q as f64; // 2^52 / q
     for i in 0..t0.len() {
         // Garner (Montgomery, branch-free): T = t0 + p0 ((t1 - t0) p0^-1 mod p1), t_i < p_i
         let r0m1 = red32(t0[i], p1);
         let k = red32(mont(t1[i].wrapping_add(p1).wrapping_sub(r0m1), inv01_m, p1, pr1.pn), p1);
         let v = t0[i] as u64 + p0 as u64 * k as u64;
-        let mut est = (v as f64 * c) as i64 as i128;
-        let mut rem = ((v as i128) << 52) - est * q as i128;
-        for _ in 0..2 {
-            let neg = (rem < 0) as i128;
-            est -= neg;
-            rem += neg * q as i128;
-        }
-        for _ in 0..2 {
-            let big = (rem >= q as i128) as i128;
-            est += big;
-            rem -= big * q as i128;
-        }
         out_t[i] = v;
-        out_s[i] = est as u64;
+        out_s[i] = shoup_ct(v, q);
     }
 }
 
+/// `floor(v 2^52 / q)` for a secret `v < q < 2^50` in constant time: an f64 estimate (within 2 of the
+/// quotient) and four masked corrections; no division.
+#[inline(always)]
+pub(crate) fn shoup_ct(v: u64, q: u64) -> u64 {
+    let c = 4503599627370496.0f64 / q as f64; // 2^52 / q (public)
+    let mut est = ((v as i64) as f64 * c) as i64 as i128; // signed conversions: one instruction each
+    let mut rem = ((v as i128) << 52) - est * q as i128;
+    for _ in 0..2 {
+        let neg = (rem < 0) as i128;
+        est -= neg;
+        rem += neg * q as i128;
+    }
+    for _ in 0..2 {
+        let big = (rem >= q as i128) as i128;
+        est += big;
+        rem -= big * q as i128;
+    }
+    est as u64
+}
+
 #[derive(Clone, Copy)]
-struct K {
-    q: __m512i,
-    q2: __m512i,
-    m52: __m512i,
+pub(crate) struct K {
+    pub(crate) q: __m512i,
+    pub(crate) q2: __m512i,
+    pub(crate) m52: __m512i,
 }
 
 #[inline(always)]
-unsafe fn ld(p: *const u64) -> __m512i {
+pub(crate) unsafe fn ld(p: *const u64) -> __m512i {
     _mm512_loadu_si512(p as *const _)
 }
 
 #[inline(always)]
-unsafe fn st(p: *mut u64, v: __m512i) {
+pub(crate) unsafe fn st(p: *mut u64, v: __m512i) {
     _mm512_storeu_si512(p as *mut _, v)
 }
 
 #[inline(always)]
-unsafe fn red(v: __m512i, q: __m512i) -> __m512i {
+pub(crate) unsafe fn red(v: __m512i, q: __m512i) -> __m512i {
     _mm512_min_epu64(v, _mm512_sub_epi64(v, q))
 }
 
 /// Shoup product `a w mod q` in `[0, 2q)` (`a < 2^52`, `w < q`, `ws = floor(w 2^52 / q)`).
 #[inline(always)]
-unsafe fn mulq(a: __m512i, w: __m512i, ws: __m512i, k: K) -> __m512i {
+pub(crate) unsafe fn mulq(a: __m512i, w: __m512i, ws: __m512i, k: K) -> __m512i {
     let z = _mm512_setzero_si512();
     let qh = _mm512_madd52hi_epu64(z, a, ws);
     let lo = _mm512_madd52lo_epu64(z, a, w);
@@ -119,7 +126,7 @@ unsafe fn mulq(a: __m512i, w: __m512i, ws: __m512i, k: K) -> __m512i {
 
 /// GS butterfly on 16 lanes (two 8-lane vectors per coefficient), values in `[0, 2q)`.
 #[inline(always)]
-unsafe fn gs(x: *mut u64, y: *mut u64, z: __m512i, zs: __m512i, k: K) {
+pub(crate) unsafe fn gs(x: *mut u64, y: *mut u64, z: __m512i, zs: __m512i, k: K) {
     for h in 0..2 {
         let (u, w) = (ld(x.add(8 * h)), ld(y.add(8 * h)));
         st(x.add(8 * h), red(_mm512_add_epi64(u, w), k.q2));
@@ -151,12 +158,19 @@ const MAXPTS: usize = 32;
 /// blocking as [`crate::vntt::inv_l_mul`].
 #[target_feature(enable = "avx512f,avx512dq,avx512bw,avx512vl,avx512ifma")]
 pub unsafe fn inv_mul_q1(qc: &Q1, a: &mut [u64], h: &[u64], t: &[u64], ts: &[u64]) {
-    let n = qc.izq.len();
-    assert!(a.len() >= n * L && h.len() >= n * L && t.len() >= n && ts.len() >= n);
-    let k = K { q: _mm512_set1_epi64(qc.q as i64), q2: _mm512_set1_epi64(2 * qc.q as i64), m52: _mm512_set1_epi64((1 << 52) - 1) };
+    inv_mul_tab(qc.q, &qc.izq, &qc.izs, a, h, t, ts)
+}
+
+/// [`inv_mul_q1`] for any modulus `q < 2^50` with inverse twiddles `iz` (`psi^-brv(k)`) and their Shoup
+/// companions `izs` (length `n`).
+#[inline(always)]
+pub(crate) unsafe fn inv_mul_tab(q: u64, iz: &[u64], izs: &[u64], a: &mut [u64], h: &[u64], t: &[u64], ts: &[u64]) {
+    let n = iz.len();
+    assert!(a.len() >= n * L && h.len() >= n * L && t.len() >= n && ts.len() >= n && izs.len() == n);
+    let k = K { q: _mm512_set1_epi64(q as i64), q2: _mm512_set1_epi64(2 * q as i64), m52: _mm512_set1_epi64((1 << 52) - 1) };
     let (ap, hp) = (a.as_mut_ptr(), h.as_ptr());
     let sub = SUB.min(n);
-    let tw = |i: usize| (_mm512_set1_epi64(qc.izq[i] as i64), _mm512_set1_epi64(qc.izs[i] as i64));
+    let tw = |i: usize| (_mm512_set1_epi64(iz[i] as i64), _mm512_set1_epi64(izs[i] as i64));
     for sb in 0..n / sub {
         let base = sb * sub;
         for c in base..base + sub {
