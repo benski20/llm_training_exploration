@@ -48,6 +48,7 @@ plain factory (:class:`Fused2MaskSource`) and whose provider is the in-process :
 
 from __future__ import annotations
 
+import dataclasses
 import math
 import os
 import threading
@@ -76,8 +77,11 @@ __all__ = [
     "Fused2Schedule",
     "Fused2Trip",
     "Fused2Weights",
+    "calibrate_fused2",
     "enable_fused2",
+    "gateway_product",
     "hf_float_linears",
+    "select_gateway_columns",
 ]
 
 #: Mersenne prime of the fused2 Freivalds field.
@@ -100,8 +104,22 @@ class F2Linear:
         w8: int8 ``(m, n)``.
         scale: float64 ``(m,)`` row scales (the float32 scales widened).
         bias: float64 ``(m,)`` or None.
-        wnorm: ``max_i ||w8_i||_2``.
-        sigma: Upper bound on the spectral norm of ``w8`` (0 when not needed).
+        wnorm: ``max_i ||w8_i||_2`` (``max_i hmul_i ||w8_i||_2`` with ``hmul``).
+        sigma: Upper bound on the spectral norm of ``w8`` (of ``diag(hmul) w8`` with ``hmul``; 0 when
+            not needed).
+        hmul: Residual-grid multipliers of a trip's first linear (o, down; int64 ``(m,)``) or None. The
+            provider returns ``H = R + hmul * (w8 x)``, so the residual lives on the finer grid
+            ``scale / hmul`` (:attr:`grid`): a per-channel migration of the next RMSNorm gain out of the
+            folded weight into the residual's fixed-point grid (see :func:`calibrate_fused2`).
+        sigma_in: On a folded linear with gateway columns: upper bound on the spectral norm of the
+            previous first linear's ``diag(hmul) w8`` restricted to the provider's (non-gateway) channels,
+            for the tighter bound ``|Z| <= wnorm (||R_keep|| + sigma_in ||aq||)`` (0: not set).
+        gcols: Gateway columns of a folded linear (int64 ``(g,)``, sorted) or None. ``w8`` is zero on
+            them (the provider's product skips them); the gateway adds ``gw @ H[:, gcols]`` itself from
+            the verified ``H`` it gets back in the same trip (see :func:`gateway_product`).
+        gw: int64 ``(m, g)`` integer weights of the gateway columns (``gbits``-bit, per-row scales).
+        gscale: float64 ``(m,)`` row scales of ``gw``.
+        gbits: Bits of ``gw`` (0 without gateway columns).
     """
 
     key: str
@@ -110,6 +128,26 @@ class F2Linear:
     bias: torch.Tensor | None
     wnorm: float
     sigma: float = 0.0
+    gcols: torch.Tensor | None = None
+    gw: torch.Tensor | None = None
+    gscale: torch.Tensor | None = None
+    gbits: int = 0
+    hmul: torch.Tensor | None = None
+    sigma_in: float = 0.0
+
+    @property
+    def grid(self) -> torch.Tensor:
+        """float64 ``(m,)`` residual grid of a first linear's output channels: ``scale / hmul``."""
+        return self.scale if self.hmul is None else self.scale / self.hmul.to(torch.float64)
+
+    @property
+    def keep(self) -> torch.Tensor | None:
+        """bool ``(n,)`` mask of the provider's input columns of a split fold (None: all)."""
+        if self.gcols is None:
+            return None
+        k = torch.ones(self.n, dtype=torch.bool)
+        k[self.gcols] = False
+        return k
 
     @property
     def w8t(self) -> torch.Tensor:
@@ -126,20 +164,71 @@ class F2Linear:
 
 
 def _make_linear(key: str, w8: torch.Tensor, sw: torch.Tensor, bias: torch.Tensor | None,
-                 sigma: bool = False) -> F2Linear:
+                 sigma: bool = False, hmul: torch.Tensor | None = None) -> F2Linear:
     w8 = w8.to(torch.int8).contiguous()
     w64 = w8.to(torch.float64)
+    if hmul is not None:
+        hmul = torch.as_tensor(hmul, dtype=torch.int64).contiguous()
+        if hmul.shape != (w8.shape[0],) or int(hmul.min()) < 1 or int(hmul.max()) >= 1 << 20:
+            raise ConfigError(f"fused2 {key}: multipliers must be integers in [1, 2^20), one per row")
+        if int(hmul.max()) == 1:
+            hmul = None
+        else:
+            w64 = w64 * hmul.to(torch.float64)[:, None]
     wnorm = float(w64.pow(2).sum(dim=1).sqrt().max())
     sig = float(torch.linalg.matrix_norm(w64, ord=2)) * _SIGMA_MARGIN if sigma else 0.0
     return F2Linear(key, w8, sw.to(torch.float32).to(torch.float64), None if bias is None
-                    else bias.to(torch.float32).to(torch.float64), wnorm, sig)
+                    else bias.to(torch.float32).to(torch.float64), wnorm, sig, hmul=hmul)
 
 
-def _fold(key: str, w: torch.Tensor, d: torch.Tensor, bias: torch.Tensor | None) -> F2Linear:
-    """int8 per-row quantization of ``w diag(d)`` (float64 product, then :func:`quantize_weight_rows`)."""
+def _sigma_rows(lin: F2Linear, keep: torch.Tensor) -> float:
+    """Spectral norm bound of ``diag(hmul) w8`` restricted to the rows in ``keep``."""
+    w64 = lin.w8.to(torch.float64)
+    if lin.hmul is not None:
+        w64 = w64 * lin.hmul.to(torch.float64)[:, None]
+    return float(torch.linalg.matrix_norm(w64[keep], ord=2)) * _SIGMA_MARGIN
+
+
+def _quantize_rows_bits(w: torch.Tensor, bits: int) -> tuple[torch.Tensor, torch.Tensor]:
+    """Per-row absmax quantization of float64 ``w`` to signed ``bits``-bit integers (int64, float32 scales
+    widened to float64), the same rule as :func:`quantize_weight_rows` with ``qmax = 2^(bits-1) - 1``."""
+    qmax = (1 << (bits - 1)) - 1
+    amax = w.abs().amax(dim=1)
+    sw = torch.where(amax > 0, amax / qmax, torch.ones_like(amax)).to(torch.float32).to(torch.float64)
+    q = torch.round(w / sw[:, None]).clamp_(-qmax, qmax).to(torch.int64)
+    return q, sw
+
+
+def _fold(key: str, w: torch.Tensor, d: torch.Tensor, bias: torch.Tensor | None,
+          gcols: torch.Tensor | None = None, gbits: int = 16) -> F2Linear:
+    """int8 per-row quantization of ``w diag(d)`` (float64 product, then :func:`quantize_weight_rows`).
+
+    With ``gcols`` those columns are cut out of the int8 matrix before its row scales are taken (they are
+    zero in ``w8``) and quantized on their own, per row, to ``gbits``-bit integers for the gateway.
+    """
     wf = w.to(torch.float64) * d.to(torch.float64)[None, :]
-    w8, sw = quantize_weight_rows(wf)
-    return _make_linear(key, w8, sw, bias)
+    if gcols is None or not len(gcols):
+        w8, sw = quantize_weight_rows(wf)
+        return _make_linear(key, w8, sw, bias)
+    gcols = torch.as_tensor(gcols, dtype=torch.int64).unique(sorted=True)
+    main = wf.clone()
+    main[:, gcols] = 0.0
+    w8, sw = quantize_weight_rows(main)
+    gw, gs = _quantize_rows_bits(wf[:, gcols], gbits)
+    lin = _make_linear(key, w8, sw, bias)
+    return F2Linear(lin.key, lin.w8, lin.scale, lin.bias, lin.wnorm, lin.sigma, gcols, gw.contiguous(), gs, gbits)
+
+
+def select_gateway_columns(w: torch.Tensor, g: torch.Tensor, count: int) -> torch.Tensor:
+    """Pack-time choice of a folded linear's gateway columns, from public weights only.
+
+    The ``count`` columns with the largest absmax of ``w diag(g)`` (``g`` the RMSNorm gain): the columns
+    that set the int8 row scales of the folded matrix (Qwen's gain outliers) and so coarsen all others.
+    """
+    if count <= 0:
+        return torch.zeros(0, dtype=torch.int64)
+    score = (w.to(torch.float64).abs() * g.to(torch.float64).abs()[None, :]).amax(dim=0)
+    return score.topk(min(count, int(score.numel()))).indices.sort().values
 
 
 class _LazyFloat(Mapping[str, torch.Tensor]):
@@ -166,12 +255,19 @@ def hf_float_linears(state_dict: Mapping[str, torch.Tensor] | Any, arch: Any) ->
     from pgw.modelpack.arch import hf_linear_parts
 
     if not isinstance(state_dict, Mapping):
+        from pathlib import Path
+
         from safetensors import safe_open
 
-        path = str(state_dict)
+        root = Path(state_dict)
+        files = sorted(root.glob("*.safetensors")) if root.is_dir() else [root]  # a file, or a sharded dir
+        where: dict[str, str] = {}
+        for fp in files:
+            with safe_open(str(fp), framework="pt") as f:
+                where.update({k: str(fp) for k in f.keys()})
 
         def get(name: str) -> torch.Tensor:
-            with safe_open(path, framework="pt") as f:
+            with safe_open(where[name], framework="pt") as f:
                 return f.get_tensor(name)
     else:
         def get(name: str) -> torch.Tensor:
@@ -195,13 +291,34 @@ class Fused2Weights:
     sw_o[l]`` into gate_up; ``qkv[l]`` folds ``input_norm[l] * sw_down[l-1]`` (``input_norm[0]`` for layer
     0) into qkv. ``float_linears`` (from :func:`hf_float_linears`) folds the original float weights;
     without it the pack's dequantized int8 weights are folded (a second rounding; measured slightly worse).
+
+    ``gateway_columns`` (default 0: none, the original reference) splits the fold: per folded linear,
+    that many columns (chosen by :func:`select_gateway_columns`, or an explicit ``{key: columns}``
+    mapping with keys like ``"3.gate_up/f2"``) are taken out of the provider's int8 matrix and multiplied
+    by the gateway itself, as ``gateway_bits``-bit integers, with the verified ``H`` of the same trip.
+    Trips, wire bytes and masks are unchanged; the gateway does ``m * g`` extra integer MACs per row.
+
+    ``multipliers`` (``{"3.o": hmul, "3.down": hmul}``, int ``>= 1``; default none) puts the residual of
+    the trips started by that first linear on the finer grid ``sw / hmul`` (see :attr:`F2Linear.hmul`);
+    the following fold then uses ``g * sw / hmul``. :func:`calibrate_fused2` chooses both maps. The last
+    layer's down (a single trip) takes no multipliers.
     """
 
-    def __init__(self, pack: Any, float_linears: Mapping[str, torch.Tensor] | None = None):
+    def __init__(self, pack: Any, float_linears: Mapping[str, torch.Tensor] | None = None, *,
+                 gateway_columns: int | Mapping[str, Sequence[int]] = 0, gateway_bits: int = 16,
+                 multipliers: Mapping[str, Any] | None = None):
         a = pack.arch
         self.num_layers = int(a.num_layers)
         self.fingerprint = str(getattr(pack, "fingerprint", ""))
         self.folded_from = "float" if float_linears is not None else "int8"
+        if not 2 <= int(gateway_bits) <= 32:
+            raise ConfigError("gateway_bits must be in [2, 32]")
+        self.gateway_bits = int(gateway_bits)
+        self.gateway_columns = gateway_columns if isinstance(gateway_columns, int) else dict(gateway_columns)
+        mults = dict(multipliers or {})
+        if f"{self.num_layers - 1}.down" in mults:
+            raise ConfigError("fused2: the last layer's down (a single trip) takes no multipliers")
+        self.migrated = bool(mults)
         self.o: list[F2Linear] = []
         self.down: list[F2Linear] = []
         self.gu: list[F2Linear] = []
@@ -220,20 +337,88 @@ class Fused2Weights:
 
         for i in range(self.num_layers):
             lo, ld = lin(i, LinearKind.O), lin(i, LinearKind.DOWN)
-            self.o.append(_make_linear(f"{i}.o", lo.w8, lo.scale, lo.bias, sigma=True))
-            self.down.append(_make_linear(f"{i}.down", ld.w8, ld.scale, ld.bias, sigma=True))
+            self.o.append(_make_linear(f"{i}.o", lo.w8, lo.scale, lo.bias, sigma=True, hmul=mults.get(f"{i}.o")))
+            self.down.append(_make_linear(f"{i}.down", ld.w8, ld.scale, ld.bias, sigma=True,
+                                          hmul=mults.get(f"{i}.down")))
+        def cols(key: str, wf: torch.Tensor, g: torch.Tensor) -> torch.Tensor | None:
+            gc = self.gateway_columns
+            if isinstance(gc, int):
+                return select_gateway_columns(wf, g, gc) if gc > 0 else None
+            sel = gc.get(key)
+            return None if sel is None else torch.as_tensor(list(sel), dtype=torch.int64)
+
         for i in range(self.num_layers):
             lq, lg = lin(i, LinearKind.QKV), lin(i, LinearKind.GATE_UP)
-            c_in = g_in[i].to(torch.float64) * (self.down[i - 1].scale if i else 1.0)
-            self.qkv.append(_fold(f"{i}.qkv/f2", float_w(i, LinearKind.QKV), c_in, lq.bias))
-            c_post = g_post[i].to(torch.float64) * self.o[i].scale
-            self.gu.append(_fold(f"{i}.gate_up/f2", float_w(i, LinearKind.GATE_UP), c_post, lg.bias))
+            c_in = g_in[i].to(torch.float64) * (self.down[i - 1].grid if i else 1.0)
+            wq = float_w(i, LinearKind.QKV)
+            key = f"{i}.qkv/f2"
+            self.qkv.append(_fold(key, wq, c_in, lq.bias, cols(key, wq, g_in[i]), self.gateway_bits))
+            del wq
+            c_post = g_post[i].to(torch.float64) * self.o[i].grid
+            wg = float_w(i, LinearKind.GATE_UP)
+            key = f"{i}.gate_up/f2"
+            self.gu.append(_fold(key, wg, c_post, lg.bias, cols(key, wg, g_post[i]), self.gateway_bits))
+            del wg
+        # tighter Z bounds for split folds: only the provider's channels of H enter Z
+        for i in range(self.num_layers):
+            pairs = [(self.o[i], self.gu, i)] + ([(self.down[i], self.qkv, i + 1)] if i + 1 < self.num_layers else [])
+            for l1, folds, j in pairs:
+                keep = folds[j].keep
+                if keep is not None:
+                    folds[j] = dataclasses.replace(folds[j], sigma_in=_sigma_rows(l1, keep))
+
+    _META = ("num_layers", "fingerprint", "folded_from", "gateway_bits", "migrated")
+
+    def save(self, path: str | os.PathLike[str], *, provider_only: bool = False) -> None:
+        """Write the public weights (tensors and numbers only; ``torch.load(weights_only=True)`` reads it).
+
+        ``provider_only``: just what the provider's pair op needs (``w8`` and ``hmul`` per key).
+        """
+        def one(lin: F2Linear) -> dict[str, Any]:
+            if provider_only:
+                return {"key": lin.key, "w8": lin.w8, "hmul": lin.hmul}
+            return {f.name: getattr(lin, f.name) for f in dataclasses.fields(F2Linear)}
+
+        blob: dict[str, Any] = {name: getattr(self, name) for name in self._META}
+        blob["provider_only"] = provider_only
+        for part in ("qkv", "o", "gu", "down"):
+            blob[part] = [one(lin) for lin in getattr(self, part)]
+        torch.save(blob, os.fspath(path))
+
+    @classmethod
+    def load(cls, path: str | os.PathLike[str]) -> Fused2Weights:
+        """Read :meth:`save`'s file. A provider-only file has ``w8`` / ``hmul`` and zero scales and norms
+        (enough for :class:`Fused2Provider`, not for a gateway)."""
+        blob = torch.load(os.fspath(path), weights_only=True)
+        self = cls.__new__(cls)
+        for name in cls._META:
+            setattr(self, name, blob[name])
+        self.gateway_columns = 0
+        for part in ("qkv", "o", "gu", "down"):
+            lins = []
+            for d in blob[part]:
+                if blob.get("provider_only"):
+                    m = int(d["w8"].shape[0])
+                    d = {"key": d["key"], "w8": d["w8"], "hmul": d["hmul"],
+                         "scale": torch.zeros(m, dtype=torch.float64), "bias": None, "wnorm": 0.0}
+                lins.append(F2Linear(**d))
+            setattr(self, part, lins)
+        return self
 
     def linears(self) -> list[F2Linear]:
         out: list[F2Linear] = []
         for i in range(self.num_layers):
             out += [self.qkv[i], self.o[i], self.gu[i], self.down[i]]
         return out
+
+    def gateway_cost(self) -> dict[str, int]:
+        """Gateway side of the split fold: columns, public weight bytes it holds, integer MACs per token."""
+        lins = [lin for lin in self.qkv + self.gu if lin.gw is not None]
+        return {
+            "columns": sum(int(lin.gw.shape[1]) for lin in lins),  # type: ignore[union-attr]
+            "weight_bytes": sum(int(lin.gw.numel()) * ((lin.gbits + 7) // 8) for lin in lins),  # type: ignore[union-attr]
+            "macs_per_token": sum(int(lin.gw.numel()) for lin in lins),  # type: ignore[union-attr]
+        }
 
 
 # ---- gateway arithmetic (shared by the plain and masked backends) ----------------------------------
@@ -296,7 +481,8 @@ def quantize_pair(a: torch.Tensor, h: np.ndarray, l1: F2Linear, l2: F2Linear | N
     """Gateway quantization of a trip: ``(aq, R, s, bits)`` for activations ``a`` and residual ``h`` (float64).
 
     Per row the most bits ``A_t <= A`` such that ``max|R| + wn1 ||aq|| <= 2^C`` and (with ``l2``)
-    ``wn2 (||R|| + sigma1 ||aq||) <= 2^C``.
+    ``wn2 (||R|| + sigma1 ||aq||) <= 2^C`` (for a split fold: ``R`` and ``sigma1`` restricted to the
+    provider's channels). ``R`` is on ``l1``'s residual grid ``sw1 / hmul``.
     """
     af = a.detach().to(torch.float64).numpy()
     if not (np.isfinite(af).all() and np.isfinite(h).all()):
@@ -308,7 +494,8 @@ def quantize_pair(a: torch.Tensor, h: np.ndarray, l1: F2Linear, l2: F2Linear | N
     bits_used = np.zeros(rows, dtype=np.int64)
     todo = np.arange(rows)
     limit = float(1 << ring.cap)
-    sw1 = l1.scale.numpy()
+    sw1 = l1.grid.numpy()
+    keep = None if l2 is None or l2.keep is None or not l2.sigma_in else l2.keep.numpy()
     for bits in range(ring.a, 1, -1):
         q, sb = _quant_rows(af[todo], bits)
         rr = np.rint(h[todo] / (sw1[None, :] * sb[:, None]))
@@ -316,7 +503,11 @@ def quantize_pair(a: torch.Tensor, h: np.ndarray, l1: F2Linear, l2: F2Linear | N
         b_h = np.abs(rr).max(axis=1) + l1.wnorm * na
         fits = b_h * _SLACK <= limit
         if l2 is not None:
-            b_z = l2.wnorm * (np.sqrt((rr * rr).sum(axis=1)) + l1.sigma * na)
+            if keep is None:
+                b_z = l2.wnorm * (np.sqrt((rr * rr).sum(axis=1)) + l1.sigma * na)
+            else:  # Z = W2'[:, keep] H[keep] (W2' is zero on the gateway columns)
+                rk = rr[:, keep]
+                b_z = l2.wnorm * (np.sqrt((rk * rk).sum(axis=1)) + l2.sigma_in * na)
             fits &= b_z * _SLACK <= limit
         idx = todo[fits]
         aq[idx] = q[fits].astype(np.int64)
@@ -332,8 +523,8 @@ def quantize_pair(a: torch.Tensor, h: np.ndarray, l1: F2Linear, l2: F2Linear | N
 
 
 def residual_from(hq: torch.Tensor, lin: F2Linear, s: np.ndarray) -> np.ndarray:
-    """``h = (H * sw) * s`` in float64 (the fixed-point residual as floats)."""
-    return (hq.numpy().astype(np.float64) * lin.scale.numpy()[None, :]) * s[:, None]
+    """``h = (H * grid) * s`` in float64 (the fixed-point residual as floats; ``grid = sw / hmul``)."""
+    return (hq.numpy().astype(np.float64) * lin.grid.numpy()[None, :]) * s[:, None]
 
 
 def rinv_rows(h: np.ndarray, eps: float) -> np.ndarray:
@@ -341,9 +532,24 @@ def rinv_rows(h: np.ndarray, eps: float) -> np.ndarray:
     return 1.0 / np.sqrt((h * h).mean(axis=1) + eps)
 
 
-def normed_output(zq: torch.Tensor, lin: F2Linear, s: np.ndarray, rinv: np.ndarray) -> torch.Tensor:
-    """``z = (Z * sw) * (s * rinv) + bias`` as float32."""
-    z = (zq.numpy().astype(np.float64) * lin.scale.numpy()[None, :]) * (s * rinv)[:, None]
+def gateway_product(xin: torch.Tensor, lin: F2Linear) -> torch.Tensor:
+    """Exact int64 ``xin[:, gcols] @ gw^T`` (the gateway columns of a split fold; ``xin`` is the verified
+    ``H`` of the trip, or layer 0's quantized embedding). :class:`Fused2Schedule` checks the bound
+    ``g * qmax_g * 2^C < 2^63``, so the int64 sums cannot wrap."""
+    assert lin.gcols is not None and lin.gw is not None
+    return xin.index_select(1, lin.gcols) @ lin.gw.t()
+
+
+def normed_output(zq: torch.Tensor, lin: F2Linear, s: np.ndarray, rinv: np.ndarray,
+                  xin: torch.Tensor | None = None) -> torch.Tensor:
+    """``z = (Z * sw [+ Zg * sg]) * (s * rinv) + bias`` as float32 (``Zg`` the gateway columns' product)."""
+    zf = zq.numpy().astype(np.float64) * lin.scale.numpy()[None, :]
+    if lin.gcols is not None:
+        if xin is None:
+            raise ConfigError(f"fused2 {lin.key}: the gateway columns need the trip's input")
+        assert lin.gscale is not None
+        zf = zf + gateway_product(xin, lin).numpy().astype(np.float64) * lin.gscale.numpy()[None, :]
+    z = zf * (s * rinv)[:, None]
     if lin.bias is not None:
         z = z + lin.bias.numpy()[None, :]
     return torch.from_numpy(z.astype(np.float32))
@@ -364,8 +570,16 @@ class Fused2Schedule:
             raise ConfigError("fused2 needs a capped ring (e.g. K48A12C45)")
         if ring.cap + 1 >= 61:
             raise ConfigError("fused2 cap must satisfy 2^(C+1) < 2^61 - 1 (Freivalds field)")
+        for lin in weights.qkv + weights.gu:
+            if lin.gw is not None and (int(lin.gw.shape[1]) * ((1 << (lin.gbits - 1)) - 1)
+                                       * (1 << ring.cap)) >= 1 << 63:
+                raise ConfigError(f"fused2 {lin.key}: gateway columns' product can exceed int64 at this cap")
         self.w = weights
         self.ring = ring
+        #: Gateway integer MACs of split-fold columns (cost accounting).
+        self.gateway_macs = 0
+        #: When a dict: per first-linear key, the per-channel max ``|H| / hmul`` seen (calibration only).
+        self.h_absmax: dict[str, torch.Tensor] | None = None
         #: Activation bits used per trip row (diagnostics: ``{bits: rows}``).
         self.bits_hist: dict[int, int] = {}
         self._lock = threading.Lock()
@@ -378,6 +592,23 @@ class Fused2Schedule:
         with self._lock:
             for b in bits.tolist():
                 self.bits_hist[int(b)] = self.bits_hist.get(int(b), 0) + 1
+
+    def _rec(self, l1: F2Linear, hq: torch.Tensor) -> None:
+        if self.h_absmax is None or not hq.numel():
+            return
+        a = hq.abs().to(torch.float64)
+        if l1.hmul is not None:
+            a = a / l1.hmul.to(torch.float64)
+        a = a.amax(dim=0)
+        with self._lock:
+            old = self.h_absmax.get(l1.key)
+            self.h_absmax[l1.key] = a if old is None else torch.maximum(old, a)
+
+    def _gw(self, lin: F2Linear, trips: Sequence[tuple[Any, np.ndarray]]) -> None:
+        if lin.gw is not None:
+            rows = sum(int(s.shape[0]) for _, s in trips)
+            with self._lock:
+                self.gateway_macs += rows * int(lin.gw.numel())
 
     def layer(self, model: Any, layer: int, st: Any) -> Any:
         w, ring, eps = self.w, self.ring, float(model.eps)
@@ -392,7 +623,9 @@ class Fused2Schedule:
                 trips.append((Fused2Trip("single", lin, xq, ring.cap), s))
             ys = yield [LinearCall(LinearId(0, LinearKind.QKV), t.x, sess, {FUSED2_META: t})
                         for (t, _), sess in zip(trips, sessions, strict=True)]
-            qkv = [normed_output(y, lin, s, rinv_rows(h, eps)) for y, (_, s), h in zip(ys, trips, hs, strict=True)]
+            qkv = [normed_output(y, lin, s, rinv_rows(h, eps), t.x)
+                   for y, (t, s), h in zip(ys, trips, hs, strict=True)]
+            self._gw(lin, trips)
         else:
             hs, qkv = ex["h"], ex["qkv"]
         attn = model._fused2_attention(layer, st, qkv)
@@ -409,8 +642,10 @@ class Fused2Schedule:
         inter = model.split_gate_up[0]
         for y, (_, s) in zip(outs, trips, strict=True):
             h1 = residual_from(y[:, : l1.m], l1, s)
-            gu = normed_output(y[:, l1.m :], l2, s, rinv_rows(h1, eps))
+            self._rec(l1, y[:, : l1.m])
+            gu = normed_output(y[:, l1.m :], l2, s, rinv_rows(h1, eps), y[:, : l1.m])
             hs1.append(h1)
+            self._gw(l2, [(None, s)])
             acts.append(st.ops.silu_mul(gu[:, :inter].to(model.dtype), gu[:, inter:].to(model.dtype)))
         # trip B: down + residual add -> next layer's qkv (input norm folded); the last layer: down only
         l1 = w.down[layer]
@@ -432,9 +667,11 @@ class Fused2Schedule:
                 hs2.append(residual_from(hq, l1, s))
             else:
                 h2 = residual_from(y[:, : l1.m], l1, s)
+                self._rec(l1, y[:, : l1.m])
                 hs2.append(h2)
                 assert l2 is not None
-                nxt.append(normed_output(y[:, l1.m :], l2, s, rinv_rows(h2, eps)))
+                nxt.append(normed_output(y[:, l1.m :], l2, s, rinv_rows(h2, eps), y[:, : l1.m]))
+                self._gw(l2, [(None, s)])
         ex["h"], ex["qkv"] = hs2, nxt
         st.hs = [torch.from_numpy(h.astype(np.float32)).to(model.dtype) for h in hs2]
 
@@ -448,6 +685,103 @@ def enable_fused2(model: Any, weights: Fused2Weights, ring: RingParams) -> Fused
     sched = Fused2Schedule(weights, ring)
     model.schedule = sched
     return sched
+
+
+def migration_multipliers(pack: Any, bits: int = 8, *, sw: Mapping[str, torch.Tensor] | None = None
+                          ) -> dict[str, torch.Tensor]:
+    """Pure pack-time migration (no calibration data, no gateway columns): public integer multipliers.
+
+    Per trip's first linear ``l1`` (every ``o``, every ``down`` but the last) and the gain ``g`` of the norm
+    folded after it, with ``c_j = |g_j| * sw1_j`` and ``kappa = max_j c_j / 2^bits``:
+    ``hmul_j = max(1, floor(c_j / kappa))``. The folded matrix then sees column scales ``c_j / hmul_j`` within
+    a factor 2 of each other above ``kappa`` (its per-row int8 grid is as fine as today's int8 weights for
+    those columns), and the residual of the trip lives on the ``bits``-finer grid ``sw1 / hmul``. Costs about
+    ``bits`` more bits in ``H`` and ``Z`` (Qwen2.5-0.5B, 8 bits: ``|H|`` 41.5, ``|Z|`` 48.6 bits; ring K56C53).
+    """
+    nl = int(pack.arch.num_layers)
+    out: dict[str, torch.Tensor] = {}
+    for i in range(nl):
+        pairs = [(LinearId(i, LinearKind.O), f"layers.{i}.post_attn_norm")]
+        if i + 1 < nl:
+            pairs.append((LinearId(i, LinearKind.DOWN), f"layers.{i + 1}.input_norm"))
+        for lid, gname in pairs:
+            g = pack.load_plain(gname, dtype=torch.float32).to(torch.float64).abs()
+            key = f"{i}.{'o' if lid.kind == LinearKind.O else 'down'}"
+            s1 = (sw[key] if sw is not None else pack.load_linear(lid, device="cpu").scale).to(torch.float32)
+            c = g * s1.to(torch.float64)
+            kappa = float(c.max()) / 2.0 ** bits
+            out[key] = (torch.floor(c / kappa).clamp(min=1.0) if kappa > 0 else torch.ones_like(c)).to(torch.int64)
+    return out
+
+
+def calibrate_fused2(pack: Any, float_linears: Mapping[str, torch.Tensor] | None, calib: Sequence[torch.Tensor],
+                     ring: RingParams, *, bits: int = 6, columns: int = 4, headroom_bits: int = 0,
+                     gateway_bits: int = 16) -> dict[str, Any]:
+    """Pack-time choice of the migrated split fold (``Fused2Weights(multipliers=..., gateway_columns=...)``).
+
+    Why: folding ``g * sw1`` into the next linear before per-row int8 rounding makes the folded matrix's
+    column scales ``c = g * sw1`` vary 10-30x within a row, so its int8 rows are coarse for most columns
+    (measured: the whole top-1 gap of the unsplit fold on Qwen2.5-0.5B). Per trip's first linear and its
+    fold, with ``c_j = |g_j| * sw1_j``:
+
+    1. ``columns`` gateway columns: the largest column absmax of ``|W| * c`` (they set the row scales);
+    2. integer multipliers ``hmul_j = max(1, floor(c_j / kappa))``, ``kappa = max_{j kept} c_j / 2^bits``,
+       so the provider's columns see ``c_j / hmul_j`` within ``[kappa, 2 kappa)`` (the int8 rows of the
+       folded matrix then look like today's per-row int8 weights);
+    3. channels whose migrated residual would exceed the largest ``|H|`` seen on ``calib`` (the reference
+       without migration, all trips, times ``2^headroom_bits``) keep ``hmul = 1`` and go to the gateway
+       too (Qwen's massive-activation channels), so ``H`` gains no bits.
+
+    ``calib`` is public calibration text (token ids; not the evaluation data). The result is public and
+    deterministic for a pack + calibration set. Layer 0's qkv takes step 1 only; the last down none.
+    """
+    from pgw.engine.model import TransformerModel
+
+    base = Fused2Weights(pack, float_linears)
+    model = TransformerModel(pack, Fused2PlainBackend(ring))
+    sched = enable_fused2(model, base, ring)
+    sched.h_absmax = {}
+    with torch.no_grad():
+        for ids in calib:
+            model.forward(ids, model.new_cache(len(ids) + 1))
+    hmax = sched.h_absmax
+    h_glob = max(float(v.max()) for v in hmax.values()) * 2.0 ** headroom_bits
+    nl = base.num_layers
+    g_in = [pack.load_plain(f"layers.{i}.input_norm", dtype=torch.float32).to(torch.float64) for i in range(nl)]
+    g_post = [pack.load_plain(f"layers.{i}.post_attn_norm", dtype=torch.float32).to(torch.float64) for i in range(nl)]
+
+    def float_w(layer: int, kind: LinearKind) -> torch.Tensor:
+        if float_linears is not None:
+            return float_linears[f"{layer}.{kind.value}"].to(torch.float64)
+        lw = pack.load_linear(LinearId(layer, kind), device="cpu")
+        return lw.w8.to(torch.float64) * lw.scale.to(torch.float64)[:, None]
+
+    mults: dict[str, torch.Tensor] = {}
+    gcols: dict[str, torch.Tensor] = {}
+    gcols["0.qkv/f2"] = select_gateway_columns(float_w(0, LinearKind.QKV), g_in[0], columns)
+    for i in range(nl):
+        pairs = [(base.o[i], g_post[i], f"{i}.gate_up/f2", (i, LinearKind.GATE_UP))]
+        if i + 1 < nl:
+            pairs.append((base.down[i], g_in[i + 1], f"{i + 1}.qkv/f2", (i + 1, LinearKind.QKV)))
+        for l1, g, fkey, (fl, fk) in pairs:
+            c = g.abs() * l1.scale
+            wf = float_w(fl, fk)
+            score = (wf.abs() * c[None, :]).amax(dim=0)
+            del wf
+            keep = torch.ones_like(c, dtype=torch.bool)
+            keep[score.topk(min(columns, int(c.numel()))).indices] = False
+            kappa = float(c[keep].max()) / 2.0 ** bits
+            m = torch.floor(c / kappa).clamp(min=1.0) if kappa > 0 else torch.ones_like(c)
+            seen = hmax.get(l1.key, torch.zeros_like(c))
+            keep &= ~(m * seen > h_glob)
+            m[~keep] = 1.0
+            mults[l1.key] = m.to(torch.int64)
+            gcols[fkey] = (~keep).nonzero().flatten()
+    cols_per = [int(v.numel()) for v in gcols.values()]
+    return {"multipliers": mults, "gateway_columns": gcols, "gateway_bits": gateway_bits,
+            "stats": {"h_max_bits": math.log2(max(h_glob, 1.0)) - headroom_bits,
+                      "gateway_columns_max": max(cols_per), "gateway_columns_mean": sum(cols_per) / len(cols_per),
+                      "hmul_max": max(int(v.max()) for v in mults.values())}}
 
 
 # ---- exact integer products --------------------------------------------------------------------------
@@ -468,8 +802,11 @@ def _prepared(lin: F2Linear) -> PreparedWeight:
 
 def _exact(x: torch.Tensor, lin: F2Linear, ring: RingParams) -> torch.Tensor:
     """Exact ``x @ W8^T`` for a genuine product bounded by ``2^C < 2^(K-1)``: the ring product, centered."""
-    if int(x.abs().max() if x.numel() else 0) <= ring.qmax:
+    xmax = int(x.abs().max() if x.numel() else 0)
+    if xmax <= ring.qmax:
         return exact_int_matmul(x, lin.w8t, ring.a)  # small inputs (activations): the int8 digit path
+    if xmax * 128 * lin.n < 1 << 53:  # every partial sum an exact float64 integer: the same integers
+        return torch.round(x.to(torch.float64) @ lin.w8t.to(torch.float64)).to(torch.int64)
     return _center(_prepared(lin).matmul(x, ring.k), ring.k)
 
 
@@ -496,7 +833,7 @@ class Fused2PlainBackend(LinearBackend):
             self._note("single", y1)
             return y1
         assert t.r is not None and t.l2 is not None
-        h = t.r + y1
+        h = t.r + (y1 if t.l1.hmul is None else y1 * t.l1.hmul)
         z = _exact(h, t.l2, self.ring)
         self._note("H", h)
         self._note("Z", z)
@@ -587,6 +924,11 @@ class Fused2MaskSource:
         self._checks: dict[str, _Checks] = {}
         #: Factory work done: ring-product MACs per trip kind (cost accounting).
         self.macs = 0
+        #: Precomputed rows per trip key (:meth:`prefill`): ``[(first row, TripMasks)]`` in row order.
+        self._stock: dict[str, list[tuple[int, TripMasks]]] = {}
+        self.prefill_s = 0.0
+        self.stock_hits = 0
+        self.stock_misses = 0
 
     def _prepared(self, lin: F2Linear) -> PreparedWeight:
         pw = self._pw.get(lin.key)
@@ -599,8 +941,88 @@ class Fused2MaskSource:
         if hit is None:
             raw = self._sx.ring_uniform((self.checks, lin.m), 64, "u-p61", lin.key).numpy().view(np.uint64)
             u = (raw % np.uint64(P61)).astype(np.int64)
-            hit = self._checks[lin.key] = _Checks(u, matmul_mod_p(u, lin.w8))
+            # u . (H - R) == u . (hmul * W1 x) == ((u * hmul) W1) . x  (mod p)
+            uh = u if lin.hmul is None else (u.astype(object) * lin.hmul.numpy().astype(object)[None, :] % P61
+                                              ).astype(np.int64)
+            hit = self._checks[lin.key] = _Checks(u, matmul_mod_p(uh, lin.w8))
         return hit
+
+    def trip_plan(self) -> list[tuple[F2Linear, F2Linear | None]]:
+        """The ``(l1, l2)`` of every trip of one pass, in order (``l2`` None: a single trip)."""
+        w = self.w
+        plan: list[tuple[F2Linear, F2Linear | None]] = [(w.qkv[0], None)]
+        for i in range(w.num_layers):
+            plan.append((w.o[i], w.gu[i]))
+            plan.append((w.down[i], w.qkv[i + 1] if i + 1 < w.num_layers else None))
+        return plan
+
+    def prefill(self, rows: int) -> float:
+        """Compute the next ``rows`` rows of every trip key ahead of use (batched products), so a trip's
+        :meth:`take` is a slice. The same rows :meth:`take` would compute lazily (same seeds, cursors);
+        still single use. Returns the seconds spent. One "slot" = one row of every trip key (one token
+        row of one pass): ``r_x``, ``W1 r_x``, ``v``, ``W2' v``, element counts equal to today's slot."""
+        import time as _time
+
+        t0 = _time.perf_counter()
+        k = self.ring.k
+        for l1, l2 in self.trip_plan():
+            key = l1.key + ("+" + l2.key if l2 is not None else "")
+            with self._lock:
+                stock = self._stock.setdefault(key, [])
+                start = self._cursor.get(key, 0) + sum(int(s[1].r_x.shape[0]) for s in stock)
+            r_x = self._sx.ring_uniform_rows(l1.n, k, start, rows, "f2", "r", key)
+            wr_x = self._prepared(l1).matmul(r_x, k)
+            self.macs += rows * l1.n * l1.m
+            tm = TripMasks(r_x, wr_x)
+            if l2 is not None:
+                tm.v = self._sx.ring_uniform_rows(l1.m, k, start, rows, "f2", "v", key)
+                tm.wv = self._prepared(l2).matmul(tm.v, k)
+                self.macs += rows * l2.n * l2.m
+            with self._lock:
+                stock.append((start, tm))
+        self.prefill_s += _time.perf_counter() - t0
+        return _time.perf_counter() - t0
+
+    def stocked_rows(self) -> int:
+        """Rows ready for every trip key (the minimum over keys; 0 without :meth:`prefill`)."""
+        with self._lock:
+            if not self._stock:
+                return 0
+            return min(sum(int(s[1].r_x.shape[0]) for s in st) for st in self._stock.values())
+
+    def _from_stock(self, key: str, start: int, rows: int) -> TripMasks | None:
+        st = self._stock.get(key)
+        if not st:
+            return None
+        parts: list[TripMasks] = []
+        need, pos = rows, start
+        while need:
+            if not st or st[0][0] != pos:
+                break
+            s0, tm = st[0]
+            n = int(tm.r_x.shape[0])
+            take = min(need, n)
+            parts.append(TripMasks(*(None if t is None else t[:take].clone() for t in (tm.r_x, tm.wr_x, tm.v, tm.wv))))
+            if take == n:
+                st.pop(0)
+                tm.wipe()
+            else:
+                rest = TripMasks(*(None if t is None else t[take:].clone() for t in (tm.r_x, tm.wr_x, tm.v, tm.wv)))
+                tm.wipe()
+                st[0] = (s0 + take, rest)
+            need -= take
+            pos += take
+        if need:
+            for p in parts:
+                p.wipe()
+            return None
+        if len(parts) == 1:
+            return parts[0]
+        cat = [None if parts[0].v is None and i >= 2 else torch.cat([getattr(p, f) for p in parts])
+               for i, f in enumerate(("r_x", "wr_x", "v", "wv"))]
+        for p in parts:
+            p.wipe()
+        return TripMasks(*cat)
 
     def take(self, trip: Fused2Trip) -> TripMasks:
         rows = int(trip.x.shape[0])
@@ -608,6 +1030,11 @@ class Fused2MaskSource:
         with self._lock:
             start = self._cursor.get(key, 0)
             self._cursor[key] = start + rows
+            hit = self._from_stock(key, start, rows)
+        if hit is not None:
+            self.stock_hits += 1
+            return hit
+        self.stock_misses += 1
         k = self.ring.k
         r_x = self._sx.ring_uniform_rows(trip.l1.n, k, start, rows, "f2", "r", key)
         wr_x = self._prepared(trip.l1).matmul(r_x, k)
@@ -624,13 +1051,15 @@ class Fused2MaskSource:
 class Fused2Provider:
     """The compute service's fused2 op: exact products mod ``2^K`` of public int8 weights.
 
-    ``pair(k1, k2, r_hat, x_hat) -> (H_hat, Z_hat)`` with ``H_hat = r_hat + W1 x_hat`` and ``Z_hat = W2 H_hat``;
+    ``pair(k1, k2, r_hat, x_hat) -> (H_hat, Z_hat)`` with ``H_hat = r_hat + hmul1 * (W1 x_hat)`` and
+    ``Z_hat = W2 H_hat`` (``hmul1`` the first linear's public multipliers, 1 by default);
     ``single(k1, x_hat) -> W1 x_hat``. Inputs are uniform ring elements; the provider holds no secret.
     """
 
     def __init__(self, weights: Fused2Weights, k: int):
         self.k = int(k)
         self._w = {lin.key: PreparedWeight(lin.w8, cache_float=False) for lin in weights.linears()}
+        self._hmul = {lin.key: lin.hmul for lin in weights.linears() if lin.hmul is not None}
         #: Every array the provider received (tests inspect what it saw).
         self.seen: list[tuple[str, torch.Tensor]] = []
         self.record = False
@@ -645,7 +1074,11 @@ class Fused2Provider:
             self.seen.append((k1, x_hat.clone()))
             self.seen.append((k1 + ":r", r_hat.clone()))
         mask = (1 << self.k) - 1
-        h_hat = (r_hat + self._w[k1].matmul(x_hat, self.k)) & mask
+        y = self._w[k1].matmul(x_hat, self.k)
+        hm = self._hmul.get(k1)
+        if hm is not None:
+            y = (y * hm) & mask  # public per-channel multipliers (the residual grid), exact mod 2^K
+        h_hat = (r_hat + y) & mask
         return h_hat, self._w[k2].matmul(h_hat, self.k)
 
 
@@ -714,13 +1147,14 @@ class Fused2MaskedBackend(LinearBackend):
                 self._verify(t.l1, t.x, y)
                 return y
             assert t.r is not None and t.l2 is not None and m.v is not None and m.wv is not None
-            r_r = (m.v - m.wr_x) & mask  # r_R = v - W1 r_x: then H_hat - v = R + W1 x exactly
+            wr = m.wr_x if t.l1.hmul is None else (m.wr_x * t.l1.hmul) & mask
+            r_r = (m.v - wr) & mask  # r_R = v - hmul * W1 r_x: then H_hat - v = R + hmul * W1 x exactly
             r_hat = (t.r + r_r) & mask
             self.f2.bytes_up += (x_hat.numel() + r_hat.numel()) * bpe
             h_hat, z_hat = self.provider.pair(t.l1.key, t.l2.key, r_hat, x_hat)
             self.f2.bytes_down += (h_hat.numel() + z_hat.numel()) * bpe
             h = _center(h_hat - m.v, k)
-            self._verify(t.l1, t.x, h, offset=t.r)  # stage 1: H - R == W1 x
+            self._verify(t.l1, t.x, h, offset=t.r)  # stage 1: H - R == hmul * W1 x
             z = _center(z_hat - m.wv, k)
             self._verify(t.l2, h, z)  # stage 2: Z == W2' H (H verified)
             return torch.cat([h, z], dim=1)

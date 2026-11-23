@@ -248,3 +248,263 @@ def test_fold_from_float_weights(pack: InMemoryPack, tiny_hf_dir: Any) -> None:
     got = _run(_model(pack, Fused2MaskedBackend(ring, Fused2Provider(w, ring.k), Fused2MaskSource(w, ring)), w, ring))
     for a, b in zip(ref, got, strict=True):
         assert torch.equal(a, b)
+
+
+# ---- split fold: gateway columns (the outlier columns of the folded weight stay off the provider) -----------
+@pytest.fixture(scope="module")
+def split_weights(pack: InMemoryPack) -> Fused2Weights:
+    return Fused2Weights(pack, gateway_columns=3)
+
+
+def test_split_fold_layout(pack: InMemoryPack, split_weights: Fused2Weights) -> None:
+    w = split_weights
+    for lin in w.qkv + w.gu:
+        assert lin.gcols is not None and lin.gw is not None and lin.gscale is not None
+        assert lin.gcols.numel() == 3 and torch.equal(lin.gcols, lin.gcols.sort().values)
+        assert int(lin.w8[:, lin.gcols].abs().max()) == 0  # the provider's matrix skips those columns
+        assert lin.gw.shape == (lin.m, 3) and int(lin.gw.abs().max()) <= (1 << 15) - 1
+    for lin in w.o + w.down:
+        assert lin.gcols is None  # only the folded linears are split
+    cost = w.gateway_cost()
+    per_layer = 3 * (w.qkv[0].m + w.gu[0].m)
+    assert cost["columns"] == 3 * 2 * w.num_layers and cost["macs_per_token"] == per_layer * w.num_layers
+    assert cost["weight_bytes"] == 2 * cost["macs_per_token"]  # int16 gateway weights
+    # an explicit {key: columns} choice is taken as given
+    w2 = Fused2Weights(pack, gateway_columns={"0.qkv/f2": [5, 1]})
+    assert w2.qkv[0].gcols.tolist() == [1, 5]  # type: ignore[union-attr]
+    assert w2.gu[0].gcols is None and w2.qkv[1].gcols is None
+
+
+@pytest.mark.parametrize("ring", RINGS, ids=lambda r: r.name)
+def test_split_fold_masked_equals_plain(pack: InMemoryPack, split_weights: Fused2Weights, ring: RingParams) -> None:
+    w = split_weights
+    plain = _model(pack, Fused2PlainBackend(ring), w, ring)
+    ref = _run(plain)
+    provider = Fused2Provider(w, ring.k)
+    provider.record = True
+    be = Fused2MaskedBackend(ring, provider, Fused2MaskSource(w, ring))
+    masked = _model(pack, be, w, ring)
+    got = _run(masked)
+    for a, b in zip(ref, got, strict=True):
+        assert torch.equal(a, b)
+    layers = pack.arch.num_layers
+    assert be.f2.trips == 4 * 2 * (2 * layers + 1)  # the same trips as the unsplit fold
+    assert be.f2.checks == 4 * 2 * (1 + 2 * (2 * layers - 1) + 1)
+    for _key, arr in provider.seen:
+        assert int(arr.min()) >= 0 and int(arr.max()) < (1 << ring.k)
+    big = [arr for _k, arr in provider.seen if arr.numel() >= 32]
+    assert big and all(int((arr >> (ring.k - 4)).max()) > 0 for arr in big)
+    assert masked.schedule.gateway_macs == plain.schedule.gateway_macs > 0  # type: ignore[union-attr]
+    # the split reference is a different model from the unsplit one
+    unsplit = _run(_model(pack, Fused2PlainBackend(ring), Fused2Weights(pack), ring))
+    assert any(not torch.equal(a, b) for a, b in zip(ref, unsplit, strict=True))
+
+
+def test_split_fold_same_bytes_and_factory_work(pack: InMemoryPack, weights: Fused2Weights,
+                                                split_weights: Fused2Weights) -> None:
+    ring = RINGS[1]
+    stats = []
+    for w in (weights, split_weights):
+        be = Fused2MaskedBackend(ring, Fused2Provider(w, ring.k), Fused2MaskSource(w, ring))
+        _run(_model(pack, be, w, ring))
+        stats.append((be.f2.trips, be.f2.rows, be.f2.bytes_up, be.f2.bytes_down, be.masks.macs))
+    assert stats[0] == stats[1]  # wire bytes per trip and factory products are unchanged by the split
+
+
+class _EvilCol(Fused2Provider):
+    """Moves ``H`` only on a gateway column (the gateway multiplies that column itself), with ``Z``
+    recomputed consistently: stage 1 must catch it before the gateway uses it."""
+
+    def __init__(self, weights: Fused2Weights, k: int, col: int, delta: int):
+        super().__init__(weights, k)
+        self.col, self.delta, self.n = col, delta, 0
+
+    def pair(self, k1: str, k2: str, r_hat: torch.Tensor, x_hat: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        h, z = super().pair(k1, k2, r_hat, x_hat)
+        self.n += 1
+        if self.n < 3:
+            return h, z
+        h = h.clone()
+        h[:, self.col] += self.delta
+        h &= (1 << self.k) - 1
+        return h, self._w[k2].matmul(h, self.k)
+
+
+@pytest.mark.parametrize("delta", [1, -(1 << 25)], ids=["one", "neg"])
+def test_split_fold_tamper_on_gateway_column(pack: InMemoryPack, split_weights: Fused2Weights, delta: int) -> None:
+    ring = RINGS[0]
+    col = int(split_weights.gu[0].gcols[0])  # type: ignore[index]
+    be = Fused2MaskedBackend(ring, _EvilCol(split_weights, ring.k, col, delta), Fused2MaskSource(split_weights, ring))
+    with pytest.raises(IntegrityError):
+        _run(_model(pack, be, split_weights, ring))
+
+
+@pytest.mark.parametrize("what", ["single", "H", "H_consistent", "Z", "Z_skip_residual"])
+def test_split_fold_tamper_detected(pack: InMemoryPack, split_weights: Fused2Weights, what: str) -> None:
+    ring = RINGS[1]
+    be = Fused2MaskedBackend(ring, _Evil(split_weights, ring.k, what, when=2, delta=1),
+                             Fused2MaskSource(split_weights, ring))
+    with pytest.raises(IntegrityError):
+        _run(_model(pack, be, split_weights, ring))
+
+
+def test_split_fold_int64_bound_refused(pack: InMemoryPack) -> None:
+    w = Fused2Weights(pack, gateway_columns=3, gateway_bits=32)
+    m = TransformerModel(pack, Fused2PlainBackend(RINGS[0]))
+    with pytest.raises(ConfigError):
+        enable_fused2(m, w, RINGS[0])  # 3 * (2^31 - 1) * 2^45 >= 2^63: refused, never wrapped
+    with pytest.raises(ConfigError):
+        Fused2Weights(pack, gateway_columns=1, gateway_bits=40)
+
+
+# ---- migrated split fold: residual-grid multipliers + gateway columns (calibrate_fused2) -------------------
+@pytest.fixture(scope="module")
+def migrated(pack: InMemoryPack) -> Fused2Weights:
+    from pgw.engine.fused2 import calibrate_fused2
+
+    g = torch.Generator().manual_seed(3)
+    calib = [torch.randint(0, pack.arch.vocab_size, (24,), generator=g) for _ in range(2)]
+    cal = calibrate_fused2(pack, None, calib, RINGS[0], bits=4, columns=2, gateway_bits=12)
+    return Fused2Weights(pack, gateway_columns=cal["gateway_columns"], multipliers=cal["multipliers"],
+                         gateway_bits=cal["gateway_bits"])
+
+
+def test_migrated_layout(pack: InMemoryPack, migrated: Fused2Weights) -> None:
+    w = migrated
+    assert w.migrated
+    assert any(lin.hmul is not None and int(lin.hmul.max()) > 1 for lin in w.o + w.down)
+    assert w.down[-1].hmul is None  # the last layer's down is a single trip
+    for lin in w.o + w.down:
+        if lin.hmul is not None:
+            assert int(lin.hmul.min()) >= 1
+            assert torch.allclose(lin.grid, lin.scale / lin.hmul.to(torch.float64))
+    for lin in w.qkv + w.gu:
+        assert lin.gcols is not None and lin.gcols.numel() >= 2
+        assert int(lin.w8[:, lin.gcols].abs().max()) == 0
+    with pytest.raises(ConfigError):
+        Fused2Weights(pack, multipliers={f"{pack.arch.num_layers - 1}.down": torch.ones(pack.arch.hidden_size)})
+    with pytest.raises(ConfigError):
+        Fused2Weights(pack, multipliers={"0.o": torch.zeros(pack.arch.hidden_size)})  # multipliers are >= 1
+
+
+@pytest.mark.parametrize("ring", RINGS, ids=lambda r: r.name)
+def test_migrated_masked_equals_plain(pack: InMemoryPack, weights: Fused2Weights, migrated: Fused2Weights,
+                                     ring: RingParams) -> None:
+    w = migrated
+    plain = Fused2PlainBackend(ring)
+    ref = _run(_model(pack, plain, w, ring))
+    assert plain.max_bits and max(plain.max_bits.values()) <= ring.cap
+    provider = Fused2Provider(w, ring.k)
+    provider.record = True
+    be = Fused2MaskedBackend(ring, provider, Fused2MaskSource(w, ring))
+    got = _run(_model(pack, be, w, ring))
+    for a, b in zip(ref, got, strict=True):
+        assert torch.equal(a, b)
+    layers = pack.arch.num_layers
+    assert be.f2.trips == 4 * 2 * (2 * layers + 1)
+    assert be.f2.checks == 4 * 2 * (1 + 2 * (2 * layers - 1) + 1)
+    for _key, arr in provider.seen:
+        assert int(arr.min()) >= 0 and int(arr.max()) < (1 << ring.k)
+    big = [arr for _k, arr in provider.seen if arr.numel() >= 32]
+    assert big and all(int((arr >> (ring.k - 4)).max()) > 0 for arr in big)
+    # the same wire bytes and factory products as the unmigrated reference
+    be0 = Fused2MaskedBackend(ring, Fused2Provider(weights, ring.k), Fused2MaskSource(weights, ring))
+    _run(_model(pack, be0, weights, ring))
+    assert (be.f2.trips, be.f2.bytes_up, be.f2.bytes_down, be.masks.macs) == (
+        be0.f2.trips, be0.f2.bytes_up, be0.f2.bytes_down, be0.masks.macs)
+
+
+@pytest.mark.parametrize("what", ["H", "H_consistent", "Z", "Z_skip_residual"])
+@pytest.mark.parametrize("delta", [1, -(1 << 20)], ids=["one", "neg"])
+def test_migrated_tamper_detected(pack: InMemoryPack, migrated: Fused2Weights, what: str, delta: int) -> None:
+    ring = RINGS[0]
+    be = Fused2MaskedBackend(ring, _Evil(migrated, ring.k, what, when=2, delta=delta),
+                             Fused2MaskSource(migrated, ring))
+    with pytest.raises(IntegrityError):
+        _run(_model(pack, be, migrated, ring))
+
+
+def test_remote_provider_over_socket_exact(pack: InMemoryPack, migrated: Fused2Weights, tmp_path: Any) -> None:
+    """The e2e harness path: provider in its own server (public w8 + hmul from a provider-only file) on a Unix
+    socket, masks prefilled; bit-identical to the plain reference, same trips, prefilled masks used."""
+    import threading
+
+    from pgw.engine.fused2_remote import Fused2Service, RemoteFused2Provider, serve
+
+    ring = RINGS[0]
+    ref = _run(_model(pack, Fused2PlainBackend(ring), migrated, ring))
+    f_full, f_prov = tmp_path / "w.pt", tmp_path / "p.pt"
+    migrated.save(f_full)
+    migrated.save(f_prov, provider_only=True)
+    w = Fused2Weights.load(f_full)
+    prov_w = Fused2Weights.load(f_prov)
+    assert all(a.scale.abs().max() == 0 for a in prov_w.linears())  # provider file: no scales, norms
+    for a, b in zip(w.linears(), migrated.linears(), strict=True):
+        assert a.key == b.key and torch.equal(a.w8, b.w8) and a.wnorm == b.wnorm and a.sigma_in == b.sigma_in
+        assert (a.hmul is None) == (b.hmul is None) and (a.gcols is None) == (b.gcols is None)
+    addr = f"unix:{tmp_path / 's.sock'}"
+    ready = threading.Event()
+    threading.Thread(target=serve, args=(Fused2Service(prov_w, ring.k, "cpu"), addr), kwargs={"ready": ready},
+                     daemon=True).start()
+    assert ready.wait(30)
+    client = RemoteFused2Provider(addr, ring.k, {lin.key: (lin.m, lin.n) for lin in w.linears()})
+    src = Fused2MaskSource(w, ring)
+    src.prefill(4)
+    src.prefill(20)  # two stock chunks: a take can span them
+    assert src.stocked_rows() == 24
+    be = Fused2MaskedBackend(ring, client, src)
+    got = _run(_model(pack, be, w, ring))
+    for a, b in zip(ref, got, strict=True):
+        assert torch.equal(a, b)
+    assert src.stock_hits > 0 and len(client.trip_ms) == be.f2.trips
+    client.close()
+
+
+def test_pure_migration_k56(pack: InMemoryPack) -> None:
+    """migration_multipliers (pack time, public weights only, no gateway columns) at K56C53: exact, checked."""
+    from pgw.engine.fused2 import migration_multipliers
+
+    ring = RingParams(56, 12, 53)
+    mults = migration_multipliers(pack, 8)
+    assert f"{pack.arch.num_layers - 1}.down" not in mults and int(max(int(v.max()) for v in mults.values())) > 1
+    w = Fused2Weights(pack, multipliers=mults)
+    plain = Fused2PlainBackend(ring)
+    ref = _run(_model(pack, plain, w, ring))
+    assert max(plain.max_bits.values()) <= ring.cap
+    be = Fused2MaskedBackend(ring, Fused2Provider(w, ring.k), Fused2MaskSource(w, ring))
+    got = _run(_model(pack, be, w, ring))
+    for a, b in zip(ref, got, strict=True):
+        assert torch.equal(a, b)
+    evil = Fused2MaskedBackend(ring, _Evil(w, ring.k, "H_consistent", when=2), Fused2MaskSource(w, ring))
+    with pytest.raises(IntegrityError):
+        _run(_model(pack, evil, w, ring))
+
+
+def test_prefilled_masks_equal_lazy(weights: Fused2Weights) -> None:
+    ring = RINGS[0]
+    from pgw.engine.fused2 import Fused2Trip
+
+    seed = bytes(range(32))
+    a, b = Fused2MaskSource(weights, ring, seed=seed), Fused2MaskSource(weights, ring, seed=seed)
+    b.prefill(5)
+    for rows in (2, 3):
+        t = Fused2Trip("pair", weights.o[0], torch.zeros((rows, weights.o[0].n), dtype=torch.int64), ring.cap,
+                       weights.gu[0], torch.zeros((rows, weights.o[0].m), dtype=torch.int64))
+        x, y = a.take(t), b.take(t)
+        for f in ("r_x", "wr_x", "v", "wv"):
+            assert torch.equal(getattr(x, f), getattr(y, f))
+    assert b.stock_hits == 2 and a.stock_misses == 2
+
+
+def test_migrated_provider_skipping_multiplier_detected(pack: InMemoryPack, migrated: Fused2Weights) -> None:
+    """A provider that ignores the public multipliers (``H = R + W1 x``) is caught by stage 1."""
+    ring = RINGS[0]
+
+    class NoMul(Fused2Provider):
+        def __init__(self, weights: Fused2Weights, k: int):
+            super().__init__(weights, k)
+            self._hmul = {}
+
+    be = Fused2MaskedBackend(ring, NoMul(migrated, ring.k), Fused2MaskSource(migrated, ring))
+    with pytest.raises(IntegrityError):
+        _run(_model(pack, be, migrated, ring))
