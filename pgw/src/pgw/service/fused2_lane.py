@@ -174,7 +174,8 @@ class Fused2LaneEntry:
         from pgw.engine.fused2 import Fused2Weights, migration_multipliers
 
         mults = migration_multipliers(pack, int(migrate_bits)) if migrate_bits else None
-        return cls.from_weights(Fused2Weights(pack, None, multipliers=mults), ring, **kw)
+        # sigma=False: the pair op and the fingerprint use w8 and hmul only (no SVDs on the provider)
+        return cls.from_weights(Fused2Weights(pack, None, multipliers=mults, sigma=False), ring, **kw)
 
     def table(self) -> list[tuple[int, int, str]]:
         """``[(n, m, kind)]`` for :meth:`LaneService.set_model`."""

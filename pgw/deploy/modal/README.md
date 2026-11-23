@@ -1038,6 +1038,97 @@ remove them (`modal volume rm pgw-gateway-cache qwen2.5-32b-instruct -r`, `modal
 (the 7B's per-trip cost scaled by the 1.45x vector sizes) = 100-115 ms, the CPU LM head over 1.56 GB of bfloat16 25-40
 ms: 200-245 ms, i.e. **plain about 3.5-5 tok/s** (the 7B's 11 tok/s scaled by 2.3-3x). Speculation, the masked head and
 the gateway attention work in `research/plans/scaling-32b-70b.md` are what would take it toward 25-30.
+
+#### Qwen2.5-32B with the full fast stack (2026-11-23, dry-run tested, not run)
+
+The 7B 28 tok/s stack (shared-memory lane, native decode driver, masked head, p31, native float ops) at 32B, plus the
+32B-width gateway knobs measured locally (`STATUS.md`, 2026-11-23 "32B widths"): `PGW_LANE_WAIT_PREFETCH=1` (the trip's
+`W r` and check vectors prefetched while the lane waits), the trip split over 12 warm, pinned pool workers
+(`PGW_TRIP_SPLIT`, `PGW_POOL_WORKERS=12`, `PGW_POOL_ACTIVE_SPIN_US=20000`: workers poll only while a decode call is
+active; `PGW_POOL_CPUS=4-15`: their own cores, so they do not share cores with the 4 factory workers and the
+service). Every knob is timing only (same bits; `tests/native/test_scale32_knobs.py`); the split was not
+shown to pay on the 4-vCPU dev box (oversubscribed there), so for an A/B drop `PGW_TRIP_SPLIT` / `PGW_FUSED2_SPLIT`
+and `PGW_POOL_ACTIVE_SPIN_US` from the command and compare `decode_native` per-trip times. Expected (model,
+`python benchmarks/scaling_model.py --colocated`): about 12-13 tok/s on one H100 (lane 23 ms + device 25 ms + gateway
+18-27 ms + 9 ms serving per token): the question this run answers is whether the per-trip gateway work at 32B widths
+is the measured-and-calibrated 0.07-0.11 ms and the lane stays at 0.09 ms per trip, not 25 tok/s.
+
+Standard path (needs the 2026-11-22 `--prepare-cache` of this target; from `pgw/deploy/modal`):
+
+```bash
+python launch.py --placement colocated --gpu H100 --model qwen2.5-32b-instruct --gateway-cache \
+  --gateway-cpus 32 --provider-cpus 12 --e2e --ttl-min 20 --sustain-s 60 \
+  --local-linears off --float-ops native --trip-native --decode-native --masked-head --prime-check \
+  --gateway-env PGW_LANE_SHM=1 --gateway-env PGW_LANE_SPIN_AUTO_US=400 --gateway-env PGW_TRIP_DECRYPT_AHEAD=1 \
+  --gateway-env PGW_LANE_WAIT_PREFETCH=1 --gateway-env PGW_TRIP_SPLIT=12 --gateway-env PGW_TRIP_SPLIT_MIN_ELEMS=4096 \
+  --gateway-env PGW_POOL_WORKERS=12 --gateway-env PGW_POOL_ACTIVE_SPIN_US=20000 --gateway-env PGW_POOL_CPUS=4-15 \
+  --provider-env PGW_SERVICE_LANE_SHM=1 --provider-env PGW_SERVICE_LANE_ZERO_COPY=1 \
+  --provider-env PGW_SERVICE_LANE_OWN_LOCK=1 \
+  --gateway-env PGW_MODAL_SUSTAIN_MIN_STOCK=640 --gateway-env PGW_FACTORY_TARGET_SLOTS=1536 \
+  --gateway-env PGW_FACTORY_LOW_WATER_SLOTS=640 --gateway-env PGW_FACTORY_SEGMENT_SLOTS=256 \
+  --gateway-env PGW_FACTORY_WORKERS=4 --gateway-env PGW_FACTORY_CPU_THREADS=4 --gateway-env PGW_FACTORY_NICE=10 \
+  --gateway-env PGW_THREAD_NAMES=1 --gateway-env PGW_MODAL_REF_INT_THREADS=16 --gateway-env PGW_MODAL_CACHE_SAVE=0
+```
+
+fused2 (two trips per layer, the `planes` pair op): first add the public fused2 tables to the gateway cache once
+(`--prepare-cache --schedule fused2`: `prepare_cache` resumes, keeps the cached pack and hint, and derives the tables on
+its 16 cores, about 10-15 min, +31 GB in the cache), then:
+
+```bash
+python launch.py --placement colocated --gpu H100 --model qwen2.5-32b-instruct --gateway-cache \
+  --gateway-cpus 32 --provider-cpus 12 --schedule fused2 --prepare-cache            # once: + fused2 tables
+python launch.py --placement colocated --gpu H100 --model qwen2.5-32b-instruct --gateway-cache \
+  --gateway-cpus 32 --provider-cpus 12 --provider-mem-gib 96 --schedule fused2 --fused2-factory plain \
+  --e2e --ttl-min 30 --sustain-s 60 \
+  --gateway-env PGW_LANE_SHM=1 --gateway-env PGW_LANE_SPIN_AUTO_US=400 --gateway-env PGW_LANE_WAIT_PREFETCH=1 \
+  --gateway-env PGW_FUSED2_SPLIT=12 --gateway-env PGW_POOL_WORKERS=12 --gateway-env PGW_POOL_ACTIVE_SPIN_US=20000 \
+  --gateway-env PGW_POOL_CPUS=4-15 \
+  --provider-env PGW_SERVICE_LANE_SHM=1 --provider-env PGW_SERVICE_LANE_ZERO_COPY=1 \
+  --provider-env PGW_SERVICE_LANE_OWN_LOCK=1 --provider-env PGW_SERVICE_FUSED2_VARIANT=planes \
+  --gateway-env PGW_MODAL_SUSTAIN_MIN_STOCK=256 --gateway-env PGW_FACTORY_TARGET_SLOTS=768 \
+  --gateway-env PGW_FACTORY_LOW_WATER_SLOTS=256 --gateway-env PGW_FACTORY_SEGMENT_SLOTS=64 \
+  --gateway-env PGW_FACTORY_WORKERS=2 --gateway-env PGW_FACTORY_CPU_THREADS=8 --gateway-env PGW_FACTORY_NICE=10 \
+  --gateway-env PGW_THREAD_NAMES=1 --gateway-env PGW_MODAL_REF_INT_THREADS=16 --gateway-env PGW_MODAL_CACHE_SAVE=0
+```
+
+What the 32B combinations needed (checked here, `--dry-run` of both commands; nothing ran on Modal):
+
+* **fused2 tables** (new): the public fused2 tables' derivation does one dense SVD per `o` / `down` for `sigma` (about
+  27 s each at 32B widths on 4 vCPUs single-threaded; the gateway's `OMP_NUM_THREADS=1`): about an hour per party,
+  and the gateway, each factory worker, the provider and the e2e's reference each derived them. Now: the provider
+  and the factory derive without `sigma` (`Fused2Weights(..., sigma=False)`: their pair op, fingerprint and masks
+  use `w8` / `hmul` only), and `--prepare-cache --schedule fused2` derives the full tables once into the cache
+  (`<model>/fused2/fused2-m8.pt`), restored next to the pack; the gateway (`fused2_weights_path`, base fingerprint
+  checked, now an allowed wizard preset), the factory (`PGW_FACTORY_FUSED2_WEIGHTS_PATH`) and the plaintext reference
+  load that one file, so `sigma` is the same bits everywhere. Without the cached file the run still works but
+  derives on the gateway at start (beyond a 30-min TTL at 32B).
+* **fused2 has no masked head yet** (refused with `--masked-head`): the gateway streams the 1.56 GB bfloat16 head per
+  token (about 50-80 ms): the fused2 32B run measures exactness, pair-trip timings and the planes op at 32B, not
+  speed (expected 5-7 tok/s). Combining fused2 with the masked head (one more K32 trip and reservation) is the
+  next code step for fused2 at 32B.
+* **provider memory**: with `--schedule fused2` the service holds the K32 kernels (31.2 GB) and the fused2 pair-op
+  weights (31.2 GB) on the H100: about 63 GB of 80 (fits; the planes graphs and buffers come on top). Host RAM for
+  the provider's own derivation (31 GB of `w8` plus float64 temporaries): `--provider-mem-gib 96`.
+* **masked head at 32B**: the provider derives the 0.78 GB int8 head; the gateway factory extends the cached hint
+  with the head's `W8 A` at start (3.2e12 int8 MACs on CPU, estimated 2-4 min; not cached by `--prepare-cache`).
+  `PGW_MODAL_CACHE_SAVE=0`: `save_cache` would copy the extension's hard-linked base files (114 GB) into the cache
+  at shutdown; the pack and base hint are already cached.
+* **pool and factory cores**: 32 gateway cores = the driver thread + 12 pinned split workers (CPUs 4-15) + the
+  factory (4 x 4 threads, nice 10; fused2: 2 x 8) + attention/float threads; the warm workers poll only while a
+  decode call runs (`PGW_POOL_ACTIVE_SPIN_US`), so the factory keeps its cores between passes.
+* **fused2 masks**: `--fused2-factory plain` (customer-side plain CPU factory; no fused2 hint, which at 32B would be a
+  K40 digit hint of several hundred GB built on first start); at 32B about 4-5 slots/s on 16 cores (7B: 5.3 slots/s
+  on 4 vCPUs, x4.8 the products per slot), so the window starts from stock (256-768 slots of about 33 MB).
+
+**Cost (Modal list prices; `launch.py` prints the same).** Container: H100 + 12 + 32 cores + 208 GiB = $7.70/h
+(fused2 with `--provider-mem-gib 96`: about $8.1/h).
+
+| command | expected time | expected cost | cap (TTL) |
+|---|---|---|---|
+| standard, full stack | 14-20 min: start + Volume copies 3-8, service start 1-2, wizard + pack verification 1-2, head hint extension 2-4, first segment 1, chats 1-2, reference 2-4, window 1, shutdown 1 | **$1.8-2.6** | 20 min, $2.57 |
+| `--prepare-cache --schedule fused2` (once, resumes) | 10-15 min on the T4 container (tables only) | $0.3-0.45 | 150 min |
+| fused2 | 20-28 min: as above + tables load 1, provider fused2 derivation without SVDs 2-4, factory stock 3-4, slower chats (float head) | **$2.7-3.8** | 30 min, $4.04 |
+
 ### Masked LM head (`--masked-head`, opt-in; 2026-11-22, package W3)
 
 `--masked-head` (co-located only) takes the LM head off the gateway's CPU: the head becomes one more masked linear

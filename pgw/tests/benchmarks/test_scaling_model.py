@@ -150,3 +150,17 @@ def test_report_runs() -> None:
     rep = sm.report(["qwen2.5-7b"], 2048, 0.7)
     assert len(rep["results"]) == len(sm.SCENARIOS)
     assert "| A today | qwen2.5-7b |" in sm._fmt_table(rep)
+
+
+def test_colocated_budget_reproduces_the_7b_run_and_counts_32b_trips() -> None:
+    v = sm.validate_7b_colocated()
+    assert v["model_wait_ms"] == pytest.approx(v["measured_wait_ms"], abs=0.3)  # 0.09 ms lane + device bytes
+    assert v["model_total_ms"] == pytest.approx(v["measured_total_ms"], abs=0.3)
+    std = sm.colocated_budget(sm.CoLocated("s", gw_trip_ms=0.1))
+    f2 = sm.colocated_budget(sm.CoLocated("f", fused2=True, pair_ratio=1.0, gw_trip_ms=0.1))
+    assert std["trips"] == 257 and f2["trips"] == 130  # 4L + head; 2L + 1 + the masked head
+    assert f2["lane_ms"] == pytest.approx(std["lane_ms"] * 130 / 257, abs=0.01)
+    tp2 = sm.colocated_budget(sm.CoLocated("s2", tp=2, gw_trip_ms=0.1))
+    assert tp2["device_ms"] == pytest.approx(std["device_ms"] / 2 + 257 * sm.TP2_GATHER_MS, abs=0.02)
+    rows = sm.colocated_32b_table(sm.colocated_calibration(), sm.DEVBOX_US)
+    assert len(rows) == 14 and all(r["total_ms"] > 0 for r in rows)

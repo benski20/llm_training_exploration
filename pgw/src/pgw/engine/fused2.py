@@ -306,11 +306,16 @@ class Fused2Weights:
     the trips started by that first linear on the finer grid ``sw / hmul`` (see :attr:`F2Linear.hmul`);
     the following fold then uses ``g * sw / hmul``. :func:`calibrate_fused2` chooses both maps. The last
     layer's down (a single trip) takes no multipliers.
+
+    ``sigma=False`` skips the spectral-norm bounds ``sigma`` of the trips' first linears (one dense SVD per ``o`` and
+    ``down``: about 27 s each at Qwen2.5-32B widths on a 4-vCPU box, the whole derivation's cost) and leaves them 0.
+    Only the gateway's quantization (and the plaintext reference) reads ``sigma``; the provider's pair op, the
+    lane fingerprint (``w8`` and ``hmul``) and the mask factory do not, so they derive their tables without it.
     """
 
     def __init__(self, pack: Any, float_linears: Mapping[str, torch.Tensor] | None = None, *,
                  gateway_columns: int | Mapping[str, Sequence[int]] = 0, gateway_bits: int = 16,
-                 multipliers: Mapping[str, Any] | None = None):
+                 multipliers: Mapping[str, Any] | None = None, sigma: bool = True):
         a = pack.arch
         self.num_layers = int(a.num_layers)
         self.fingerprint = str(getattr(pack, "fingerprint", ""))
@@ -341,8 +346,8 @@ class Fused2Weights:
 
         for i in range(self.num_layers):
             lo, ld = lin(i, LinearKind.O), lin(i, LinearKind.DOWN)
-            self.o.append(_make_linear(f"{i}.o", lo.w8, lo.scale, lo.bias, sigma=True, hmul=mults.get(f"{i}.o")))
-            self.down.append(_make_linear(f"{i}.down", ld.w8, ld.scale, ld.bias, sigma=True,
+            self.o.append(_make_linear(f"{i}.o", lo.w8, lo.scale, lo.bias, sigma=sigma, hmul=mults.get(f"{i}.o")))
+            self.down.append(_make_linear(f"{i}.down", ld.w8, ld.scale, ld.bias, sigma=sigma,
                                           hmul=mults.get(f"{i}.down")))
         def cols(key: str, wf: torch.Tensor, g: torch.Tensor) -> torch.Tensor | None:
             gc = self.gateway_columns

@@ -890,6 +890,16 @@ pub struct TripTicket {
 }
 
 impl TripTicket {
+    /// Register this trip's `W r` rows for the lane's wait-time prefetch (see `lane::wait_prefetch`).
+    pub(crate) fn prefetch_wr(&self) {
+        let nb = (self.k / 8) as usize;
+        for sg in &self.segs {
+            // SAFETY: an address inside (or one past) the held chunk; only used as a prefetch hint.
+            let p = unsafe { sg.hold.ptr.add(sg.elem_off * nb) };
+            crate::lane::wait_prefetch::add(p, sg.rows * self.m * nb);
+        }
+    }
+
     /// Zero this trip's `W r` rows in the chunk, `sx` and `rhs`; release the chunk.
     pub(crate) fn wipe_all(&mut self) {
         let nb = (self.k / 8) as usize;

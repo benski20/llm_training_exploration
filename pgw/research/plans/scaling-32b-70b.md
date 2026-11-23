@@ -332,3 +332,29 @@ Factory schemes at the with-prompts rate (estimates scaled from the 7B measureme
 4. Acceptance of the 0.5B (int4) draft against 32B and 72B targets, chain and hypothesis-tree pipelined.
 5. Lane RTT between two VMs in one placement group without gVisor (target 30 us).
 6. Perplexity of K32A12C27 at 72B vs K40A12 (the ring choice changes wire and masks by 25%).
+
+## 11. Update 2026-11-23: the co-located 32B budget from the measured 7B stack
+
+The 7B run at 28 tok/s (shm lane, native decode driver, masked head, p31) fixes constants this plan's section 3 had
+to estimate: **0.09 ms of fixed lane cost per trip** (shared-memory transport inside Modal's sandbox, service
+included) and **0.8 us of H100 device time per MB of int8 weights** (the graphed K32 singles: 0.186 ms per 233 MB
+layer). `benchmarks/scaling_model.py --colocated` (`CoLocated`, `colocated_budget`, `validate_7b_colocated`)
+reproduces that run (15.8 vs 15.7 ms of waiting, 35.8 vs 35.7 ms per token) and gives the 32B budget with the per-trip
+gateway work measured at 32B widths on the dev box and calibrated on the 7B (full table: `STATUS.md`, 2026-11-23
+"Qwen2.5-32B at 25 tok/s?").
+
+| 32B, ms per token | lane | device | gateway | other | tok/s |
+|---|---|---|---|---|---|
+| standard, 1 H100, gateway 1 core (measured) | 23.1 | 25.5 | 27.2 | 9.2 | 11.8 |
+| standard, 2 H100, split 16 (extrapolated) | 23.1 | 15.3 | 18.1 | 9.2 | 15.2 |
+| fused2 1.07x, 2 H100, split 12 (extrapolated) | 11.7 | 14.9 | 41.0 | 9.2 | 13.0 |
+| needed: fused2 1.07x, 2 H100, 0.06 ms per pair, 2 ms other | 11.7 | 14.9 | 7.8 | 2.0 | 27.4 |
+
+Revisions to sections 0 and 4: (1) with the shm lane a round trip is one measured 0.09 ms, so the standard path's 257
+trips cost 23 ms per token before any device or gateway work: **fused2 is needed for 25 tok/s at 32B** (section 0 had
+it only for 70B-class); (2) the device term at the 7B's achieved bandwidth (1.25 TB/s) is 25.5 ms on one H100: **2
+H100s (output-row TP) or a better-streaming kernel** are needed; (3) the gateway term at 32B is the fused2 pair trip,
+measured 0.58 ms on one core (calibrated): the split (built, opt-in) and the pair quantization (not split yet) must
+bring it to <= 0.06-0.09 ms; (4) a per-token serving residual of 9.2 ms outside the forward pass (measured at 7B, not
+modelled before) must fall to ~2 ms; (5) fused2 must be combined with the masked head. Attention is not the bound at
+the short contexts these runs use.

@@ -523,6 +523,8 @@ pub mod pool {
 
     /// Upper bound on worker threads (the gateway also runs the event loop and the wire client).
     const MAX_WORKERS: usize = 7;
+    /// Upper bound with `PGW_POOL_WORKERS` set explicitly (a 32-48 core gateway).
+    const MAX_WORKERS_OPT_IN: usize = 47;
     /// Workers poll for the next job this long before sleeping on the condvar (a condvar wake-up
     /// costs 10-50 us natively, more in a gVisor sandbox; jobs of one step come back to back).
     /// `PGW_POOL_SPIN_US` (read once) overrides it, e.g. to keep the workers awake across a decode
@@ -536,6 +538,105 @@ pub mod pool {
             Duration::from_micros(us.unwrap_or(SPIN_DEFAULT_US).min(1_000_000))
         })
     }
+
+    /// Opt-in "warm while active" spin (`PGW_POOL_ACTIVE_SPIN_US`, default 0 = off): while at least one
+    /// [`Warm`] guard is alive (the native decode drivers hold one for each call, i.e. for a decode pass's
+    /// trips, float work and lane waits), idle workers keep polling for the next job up to this long
+    /// after their last job instead of sleeping on the condvar after [`spin`]. Outside a pass they fall
+    /// back to the ordinary short spin, so an idle gateway does not burn its cores (and does not take
+    /// them from a co-located mask factory). Timing only: which thread runs a task never changes a bit.
+    fn active_spin() -> Duration {
+        static SPIN: OnceLock<Duration> = OnceLock::new();
+        *SPIN.get_or_init(|| {
+            let us = std::env::var("PGW_POOL_ACTIVE_SPIN_US").ok().and_then(|v| v.trim().parse::<u64>().ok());
+            Duration::from_micros(us.unwrap_or(0).min(1_000_000))
+        })
+    }
+
+    /// Live [`Warm`] guards (process-wide).
+    static ACTIVE: AtomicUsize = AtomicUsize::new(0);
+
+    /// Keeps the pool's workers polling while alive (see [`active_spin`]; a no-op when it is off).
+    pub struct Warm(bool);
+
+    impl Warm {
+        /// Start a warm window (wakes sleeping workers so they are polling when the first job comes).
+        pub fn new() -> Warm {
+            if active_spin().is_zero() {
+                return Warm(false);
+            }
+            if ACTIVE.fetch_add(1, Ordering::AcqRel) == 0 {
+                if let Some(p) = GLOBAL.get() {
+                    let _slot = p.shared.slot.lock().unwrap_or_else(|e| e.into_inner());
+                    p.shared.cv.notify_all();
+                }
+            }
+            Warm(true)
+        }
+    }
+
+    impl Default for Warm {
+        fn default() -> Self {
+            Warm::new()
+        }
+    }
+
+    impl Drop for Warm {
+        fn drop(&mut self) {
+            if self.0 {
+                ACTIVE.fetch_sub(1, Ordering::AcqRel);
+            }
+        }
+    }
+
+    /// `PGW_POOL_CPUS` (read once; default unset = no pinning): a CPU list such as `2-9,12` the workers
+    /// are pinned to (worker `i` on the `i`-th CPU of the list, cyclically), so the trip split's workers
+    /// own their cores and do not share them with a co-located factory or the attention pool
+    /// (give those the other CPUs). Linux only; a failed pin leaves the worker unpinned.
+    fn pin_cpus() -> &'static [usize] {
+        static CPUS: OnceLock<Vec<usize>> = OnceLock::new();
+        CPUS.get_or_init(|| std::env::var("PGW_POOL_CPUS").ok().map(|v| parse_cpu_list(&v)).unwrap_or_default())
+    }
+
+    /// `"2-5,8"` -> `[2, 3, 4, 5, 8]` (invalid parts are skipped).
+    pub fn parse_cpu_list(v: &str) -> Vec<usize> {
+        let mut out = Vec::new();
+        for part in v.split(',').map(str::trim).filter(|p| !p.is_empty()) {
+            match part.split_once('-') {
+                Some((a, b)) => {
+                    if let (Ok(a), Ok(b)) = (a.trim().parse::<usize>(), b.trim().parse::<usize>()) {
+                        if a <= b && b < 4096 {
+                            out.extend(a..=b);
+                        }
+                    }
+                }
+                None => {
+                    if let Ok(c) = part.parse::<usize>() {
+                        if c < 4096 {
+                            out.push(c);
+                        }
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    #[cfg(target_os = "linux")]
+    fn pin_to(cpu: usize) {
+        // SAFETY: a zeroed cpu_set_t is a valid empty set; the index is checked against its size;
+        // sched_setaffinity(0, ...) only changes the calling thread's mask.
+        unsafe {
+            let mut set: libc::cpu_set_t = std::mem::zeroed();
+            if cpu < 8 * std::mem::size_of::<libc::cpu_set_t>() {
+                libc::CPU_SET(cpu, &mut set);
+                let _ = libc::sched_setaffinity(0, std::mem::size_of::<libc::cpu_set_t>(), &set);
+            }
+        }
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    fn pin_to(_cpu: usize) {}
 
     /// Lifetime-erased task function. Only called for task indices `< n`, while the submitting
     /// caller waits in [`Pool::run`], so the borrow it points to is alive at every call.
@@ -584,18 +685,38 @@ pub mod pool {
         workers: usize,
     }
 
-    fn worker(shared: Arc<Shared>) {
+    fn worker(shared: Arc<Shared>, cpu: Option<usize>) {
+        if let Some(c) = cpu {
+            pin_to(c);
+        }
         let mut seen = 0u64;
         let spin = spin();
+        let warm = active_spin();
         loop {
             let t0 = Instant::now();
-            while shared.generation.load(Ordering::Acquire) == seen && t0.elapsed() < spin {
+            loop {
+                if shared.generation.load(Ordering::Acquire) != seen {
+                    break;
+                }
+                let el = t0.elapsed();
+                if el >= spin && (warm.is_zero() || el >= warm || ACTIVE.load(Ordering::Acquire) == 0) {
+                    break;
+                }
                 std::hint::spin_loop();
             }
             let job = {
                 let mut slot = shared.slot.lock().unwrap_or_else(|e| e.into_inner());
+                let mut rewarm = false;
                 while shared.generation.load(Ordering::Acquire) == seen {
+                    if !warm.is_zero() && ACTIVE.load(Ordering::Acquire) > 0 {
+                        rewarm = true; // a warm window is open (or just opened): poll again
+                        break;
+                    }
                     slot = shared.cv.wait(slot).unwrap_or_else(|e| e.into_inner());
+                }
+                if rewarm {
+                    drop(slot);
+                    continue;
                 }
                 seen = shared.generation.load(Ordering::Acquire);
                 slot.clone()
@@ -611,9 +732,12 @@ pub mod pool {
         pub fn new(workers: usize) -> Pool {
             let shared = Arc::new(Shared { slot: Mutex::new(None), cv: Condvar::new(), generation: AtomicU64::new(0) });
             let mut started = 0;
+            let cpus = pin_cpus();
             for i in 0..workers {
                 let s = Arc::clone(&shared);
-                let ok = std::thread::Builder::new().name(format!("pgw-prep-{i}")).spawn(move || worker(s)).is_ok();
+                let cpu = if cpus.is_empty() { None } else { Some(cpus[i % cpus.len()]) };
+                let ok =
+                    std::thread::Builder::new().name(format!("pgw-prep-{i}")).spawn(move || worker(s, cpu)).is_ok();
                 started += usize::from(ok);
             }
             Pool { shared, busy: Mutex::new(()), workers: started }
@@ -673,16 +797,19 @@ pub mod pool {
         }
     }
 
+    static GLOBAL: OnceLock<Pool> = OnceLock::new();
+
     /// The process-wide pool: `min(available_parallelism, 8) - 1` workers (`available_parallelism`
-    /// honours the cgroup CPU quota), started on first use. `PGW_POOL_WORKERS` (read once) lowers the
-    /// worker count (e.g. to leave cores to a co-located mask factory).
+    /// honours the cgroup CPU quota), started on first use. `PGW_POOL_WORKERS` (read once) sets the
+    /// worker count: lower (e.g. to leave cores to a co-located mask factory) or, opt-in, higher than
+    /// the default 7 for a many-core gateway splitting 32B/72B trips (at most `available_parallelism - 1`
+    /// and `MAX_WORKERS_OPT_IN`).
     pub fn global() -> &'static Pool {
-        static POOL: OnceLock<Pool> = OnceLock::new();
-        POOL.get_or_init(|| {
+        GLOBAL.get_or_init(|| {
             let cpus = std::thread::available_parallelism().map_or(1, |n| n.get());
             let mut workers = cpus.min(MAX_WORKERS + 1).saturating_sub(1);
             if let Some(w) = std::env::var("PGW_POOL_WORKERS").ok().and_then(|v| v.trim().parse::<usize>().ok()) {
-                workers = workers.min(w);
+                workers = w.min(cpus.saturating_sub(1)).min(MAX_WORKERS_OPT_IN);
             }
             Pool::new(workers)
         })
@@ -691,6 +818,24 @@ pub mod pool {
     #[cfg(test)]
     mod tests {
         use super::*;
+
+        #[test]
+        fn cpu_list_parsing() {
+            assert_eq!(parse_cpu_list("2-5,8"), vec![2, 3, 4, 5, 8]);
+            assert_eq!(parse_cpu_list(" 1 , 3-3 ,x, 9-7"), vec![1, 3]);
+            assert!(parse_cpu_list("").is_empty());
+        }
+
+        #[test]
+        fn warm_guard_keeps_results() {
+            let _w = Warm::new();
+            let p = Pool::new(2);
+            let sum = AtomicUsize::new(0);
+            assert!(p.run(64, &|i| {
+                sum.fetch_add(i, Ordering::Relaxed);
+            }));
+            assert_eq!(sum.load(Ordering::Relaxed), 64 * 63 / 2);
+        }
 
         #[test]
         fn runs_every_index_once() {

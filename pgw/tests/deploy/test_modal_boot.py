@@ -338,6 +338,28 @@ def test_gateway_cache_round_trip(tmp_path: Path) -> None:
     assert boot.restore_cache(tmp_path / "empty", "m", tmp_path / "n2") == {}
 
 
+def test_fused2_tables_cache_restore(tmp_path: Path) -> None:
+    """--prepare-cache --schedule fused2 leaves the public fused2 tables under <model>/fused2; restore_cache copies
+    them next to the pack and fused2_tables() finds them (None without); the path is an allowed wizard preset."""
+    boot = _boot()
+    cache = tmp_path / "cache"
+    paths = boot.cache_paths(cache, "qwen2.5-32b-instruct")
+    (paths["pack"]).mkdir(parents=True)
+    (paths["pack"] / "manifest.json").write_text("{}")
+    data = tmp_path / "data"
+    rep = boot.restore_cache(cache, "qwen2.5-32b-instruct", data)
+    assert "fused2" not in rep and boot.fused2_tables(data, 8) is None
+    paths["fused2"].mkdir(parents=True)
+    (paths["fused2"] / boot.fused2_tables_name(8)).write_bytes(b"t" * 10)
+    rep = boot.restore_cache(cache, "qwen2.5-32b-instruct", tmp_path / "data2")
+    assert rep["fused2"]["files"] == 1
+    assert boot.fused2_tables(tmp_path / "data2", 8) == tmp_path / "data2" / "fused2" / "fused2-m8.pt"
+    assert boot.fused2_tables(tmp_path / "data2", 6) is None
+    from pgw.gateway.config import SETUP_MODEL_OPTION_KEYS
+
+    assert "fused2_weights_path" in SETUP_MODEL_OPTION_KEYS
+
+
 def test_per_trip_cpu_derived_figures() -> None:
     boot = _boot()
     sus = {"seconds": 100.0, "tokens": 2000, "trips": {"trips": 50000}, "cores": {"gateway": 5.0},

@@ -112,6 +112,37 @@ pub fn check(y: &[i64], offset: Option<&[i64]>, u: &[u64], x: &[i64], uw: &[u64]
     0
 }
 
+/// [`check`] for one row and one check vector without offset, with the range check and the left-hand dot
+/// product over `parts` fixed element ranges on the persistent pool: the partial sums are canonical values
+/// mod p, so their sum mod p is the same field element (same verdict, bit for bit).
+#[allow(clippy::too_many_arguments)]
+pub fn check_split(y: &[i64], u: &[u64], x: &[i64], uw: &[u64], m: usize, n: usize, bound: i64, parts: usize) -> u8 {
+    if y.len() != m || u.len() != m || x.len() != n || uw.len() != n {
+        return check(y, None, u, x, uw, m, n, bound);
+    }
+    debug_assert!(bound < 1 << 61);
+    let per = m.div_ceil(parts.max(1)).div_ceil(64) * 64;
+    let partial: Vec<std::sync::atomic::AtomicU64> = (0..parts).map(|_| std::sync::atomic::AtomicU64::new(0)).collect();
+    let out_of_range = std::sync::atomic::AtomicBool::new(false);
+    let ok = crate::prepare::pool::global().run(parts, &|i| {
+        let (a, b) = ((i * per).min(m), ((i + 1) * per).min(m));
+        if y[a..b].iter().any(|&v| v.unsigned_abs() > bound as u64) {
+            out_of_range.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+        let ys = &y[a..b];
+        partial[i].store(dot_signed(&u[a..b], |j| ys[j]), std::sync::atomic::Ordering::Relaxed);
+    });
+    if !ok || out_of_range.load(std::sync::atomic::Ordering::Acquire) {
+        return 2;
+    }
+    let mut acc: u64 = 0;
+    for v in &partial {
+        acc = fold128(acc as u128 + v.load(std::sync::atomic::Ordering::Acquire) as u128);
+    }
+    let rhs = dot_signed(uw, |i| x[i]);
+    u8::from(acc != rhs)
+}
+
 /// Python: `p61_check(y, offset, u, x, uw, bound) -> int` (0 pass, 1 Freivalds mismatch, 2 range). int64 C-contiguous
 /// arrays; `u` / `uw` entries in `[0, p)` (refused otherwise). Releases the GIL.
 #[pyfunction]
@@ -172,6 +203,38 @@ fn p61_check<'py>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn split_check_equals_check() {
+        let (m, n) = (20_000usize, 777usize);
+        let mut s = 5u64;
+        let bound = (1i64 << 53) - 1;
+        let u: Vec<u64> = (0..m).map(|_| lcg(&mut s) % P).collect();
+        let x: Vec<i64> = (0..n).map(|_| (lcg(&mut s) >> 11) as i64 - (1 << 52)).collect();
+        let uw: Vec<u64> = (0..n).map(|_| lcg(&mut s) % P).collect();
+        // y chosen so the check passes: put the whole difference into y[0] is impossible in range, so
+        // compare verdicts on random (failing) and on a consistent instance built from u = e_0-like scaling
+        let mut y: Vec<i64> = (0..m).map(|_| (lcg(&mut s) >> 11) as i64 - (1 << 52)).collect();
+        for parts in [2usize, 3, 4, 7, 16] {
+            assert_eq!(check_split(&y, &u, &x, &uw, m, n, bound, parts), check(&y, None, &u, &x, &uw, m, n, bound));
+        }
+        // a consistent instance: uw := 0, y such that u . y == 0 mod p (pairs cancel: u0 y0 + u1 y1 = 0)
+        let zero = vec![0u64; n];
+        let mut u2 = u.clone();
+        for j in (0..m).step_by(2) {
+            u2[j + 1] = u2[j]; // y[j+1] = -y[j] cancels
+            y[j + 1] = -y[j];
+        }
+        for parts in [2usize, 3, 5, 8] {
+            assert_eq!(check(&y, None, &u2, &x, &zero, m, n, bound), 0);
+            assert_eq!(check_split(&y, &u2, &x, &zero, m, n, bound, parts), 0);
+            let mut bad = y.clone();
+            bad[m - 3] += 1;
+            assert_eq!(check_split(&bad, &u2, &x, &zero, m, n, bound, parts), 1);
+            bad[m - 3] = bound + 1;
+            assert_eq!(check_split(&bad, &u2, &x, &zero, m, n, bound, parts), 2);
+        }
+    }
 
     fn lcg(s: &mut u64) -> u64 {
         *s = s.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);

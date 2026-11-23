@@ -45,6 +45,9 @@ SETUP_MODEL_OPTION_KEYS: frozenset[str] = frozenset({
     "spec_tokens", "inline_max_rows", "schedule", "ring", "fused2_migrate_bits", "fused2_decode_native",
     "batch_lm_head", "engine_pingpong", "max_concurrent_sessions", "draft_pack_path", "draft_device",
     "draft_backend", "spec_pipeline_steps", "head_mode", "draft_head_path",
+    # public fused2 tables precomputed from the same pack (base fingerprint checked at load; the lane fingerprint
+    # binds w8 / hmul to the service's): a deployment's cache of the derivation, not a check or privacy setting
+    "fused2_weights_path",
 })
 #: Draft sources among the presets: a preset that enables one must also enable strict fixed-row speculation
 #: (``spec_rows`` + ``spec_strict_passes``), so a deployment preset can never switch on the variable-row mode,

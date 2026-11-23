@@ -29,7 +29,8 @@ def run(live: Any, run_id: str, url: str, token: str, deadline: float, local_url
         float_ops: str | None = None, ab: list[tuple[str, Any]] | None = None, masked_head: bool = False,
         ab_cleanup: Any = None, ab_chats: int = 3, sustain_min_stock: int = 0,
         private: dict[str, Any] | None = None, ref_int_threads: int | None = None,
-        fused2_bits: int | None = None, fused2_ring: str = "K56A12C53") -> dict[str, Any]:
+        fused2_bits: int | None = None, fused2_ring: str = "K56A12C53",
+        fused2_tables: str | None = None) -> dict[str, Any]:
     """Wizard + two chats + exactness check; see the module docstring.
 
     ``ref_int_threads`` (``--gateway-env PGW_MODAL_REF_INT_THREADS=N``): the plaintext reference's exact integer
@@ -119,7 +120,7 @@ def run(live: Any, run_id: str, url: str, token: str, deadline: float, local_url
     ref_ring = fused2_ring if fused2_bits is not None else (st["model"].get("ring") or boot.RING)
     ref = wiz.plaintext_reference(st["model"]["pack_path"], ref_ring, PROMPT, 32,
                                   float_threads=float_threads, float_ops=float_ops, int_threads=ref_int_threads,
-                                  masked_head=masked_head, fused2_bits=fused2_bits)
+                                  masked_head=masked_head, fused2_bits=fused2_bits, fused2_tables=fused2_tables)
     ref_s = time.time() - t
     cmp = wiz.compare(out, ref)
     sustain: dict[str, Any] | None = None

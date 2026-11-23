@@ -337,8 +337,15 @@ def pair(run_id: str, ttl_s: int = 80 * 60, e2e: bool = False, local_linears: st
             if masked_head:  # no float head on the gateway at all: the head is one more masked linear
                 gdev = {k: v for k, v in gdev.items() if k != "lm_head_device"}
                 gdev["head_mode"] = "provider_int8"
+            f2_tables = None
             if fused2_bits is not None:  # schedule = "fused2" (pgw_modal_boot.fused2_model_options)
                 gdev.update(boot.fused2_model_options(fused2_bits, lane))
+                # tables cached by --prepare-cache --schedule fused2: loaded (base fingerprint checked), not derived
+                f2_tables = boot.fused2_tables(croot / "data", fused2_bits)
+                if f2_tables is not None:
+                    gdev["fused2_weights_path"] = str(f2_tables)
+                    genv.setdefault("PGW_FACTORY_FUSED2_WEIGHTS_PATH", str(f2_tables))
+                result["fused2_tables"] = str(f2_tables) if f2_tables is not None else None
             gw, token = boot.start_gateway_party(croot, GATEWAY_PORT, user=cuser, log_dir=LOGS,
                                                  model_options={**boot.GATEWAY_MODEL_OPTIONS,
                                                                 "local_linears": local_linears, **spec,
@@ -381,7 +388,8 @@ def pair(run_id: str, ttl_s: int = 80 * 60, e2e: bool = False, local_linears: st
                                                # --gateway-env PGW_MODAL_REF_INT_THREADS=N: the plaintext
                                                # reference's exact integer products on N threads (same bits)
                                                ref_int_threads=int(genv.get("PGW_MODAL_REF_INT_THREADS") or 0)
-                                               or None, fused2_bits=fused2_bits)
+                                               or None, fused2_bits=fused2_bits,
+                                               fused2_tables=str(f2_tables) if f2_tables is not None else None)
                 if sustain_s and result["e2e"].get("sustain"):
                     sus = result["e2e"]["sustain"]
                     sus["factory"] = boot.factory_segments(LOGS / "gateway.log", sus["t0"], sus["t1"])
@@ -571,10 +579,32 @@ def prepare_cache(force: bool = False) -> dict:
             if d.is_dir() and (d / "meta.json").is_file():
                 paths["hemask"].mkdir(parents=True, exist_ok=True)
                 out[f"hint {d.name}"] = boot.copy_tree(d, paths["hemask"] / d.name, threads=16)
+    # launch.py --prepare-cache --schedule fused2: the public fused2 tables once (customer side, from the cached pack),
+    # so the run's gateway, factory and plaintext reference load one file instead of deriving them each
+    f2 = os.environ.get("PGW_MODAL_FUSED2_PREP", "").strip()
+    if f2:
+        dst = paths["fused2"] / boot.fused2_tables_name(int(f2))
+        if not dst.is_file():
+            import torch
+
+            from pgw.engine.fused2 import Fused2Weights, migration_multipliers
+            from pgw.modelpack import ModelPack
+
+            torch.set_num_threads(max(1, int(PREP_CPUS)))
+            t_f = time.time()
+            with ModelPack.open(paths["pack"], verify="fingerprint") as pk:
+                bits = int(f2)
+                w = Fused2Weights(pk, None, multipliers=migration_multipliers(pk, bits) if bits else None)
+                paths["fused2"].mkdir(parents=True, exist_ok=True)
+                tmp = dst.with_name(dst.name + ".partial")
+                w.save(tmp)
+                os.replace(tmp, dst)
+            out["fused2_tables"] = {"file": dst.name, "seconds": round(time.time() - t_f, 1),
+                                    "bytes": dst.stat().st_size}
     cache_volume.commit()
     out["seconds"] = round(time.time() - t0, 1)
     out["cache"] = {str(p.relative_to(CACHE_ROOT)): sum(f.stat().st_size for f in p.rglob("*") if f.is_file())
-                    for p in (paths["pack"], paths["hemask"]) if p.exists()}
+                    for p in (paths["pack"], paths["hemask"], paths["fused2"]) if p.exists()}
     return out
 
 

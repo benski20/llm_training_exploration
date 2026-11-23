@@ -32,10 +32,30 @@ use pyo3::prelude::*;
 use pyo3::types::{PyList, PyTuple};
 use std::time::{Duration, Instant};
 
+/// Cumulative ns of the fused2 driver's local work per trip kind (benchmarks; timing only):
+/// `[before the lane x3, after the lane x3, trips x3, unmask x3, checks x3, float x3]`, kinds = (first single,
+/// pair A: o + gate_up, pair B: down + next qkv; the last single counts as B).
+static F2_PHASE_NS: [std::sync::atomic::AtomicU64; 18] = [const { std::sync::atomic::AtomicU64::new(0) }; 18];
+
+fn f2_phase_add(i: usize, v: u64) {
+    F2_PHASE_NS[i].fetch_add(v, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// The fused2 driver's phase counters (see [`F2_PHASE_NS`]); `reset` zeroes them after reading.
+#[pyfunction]
+#[pyo3(signature = (reset = false))]
+fn f2_phase_ns(reset: bool) -> Vec<u64> {
+    F2_PHASE_NS
+        .iter()
+        .map(|a| if reset { a.swap(0, std::sync::atomic::Ordering::Relaxed) } else { a.load(std::sync::atomic::Ordering::Relaxed) })
+        .collect()
+}
+
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<Fused2Driver>()?;
     m.add_function(wrap_pyfunction!(f2_pairwise_sum, m)?)?;
     m.add_function(wrap_pyfunction!(f2_quantize, m)?)?;
+    m.add_function(pyo3::wrap_pyfunction!(f2_phase_ns, m)?)?;
     Ok(())
 }
 
@@ -325,15 +345,76 @@ fn residual_row(hq: &[i64], lin: &Lin, s: f64, out: &mut [f64]) {
     }
 }
 
-fn pack_into(vals: impl Iterator<Item = u64>, nb: usize, out: &mut [u8]) {
-    for (chunk, v) in out.chunks_exact_mut(nb).zip(vals) {
-        chunk.copy_from_slice(&v.to_le_bytes()[..nb]);
+/// `PGW_FUSED2_SPLIT` (read once; default 0 = off): split the wide element-wise stages of a one-row pair trip
+/// (unmask of `Z`, the stage-2 check's dot products, the normed gate/up and SiLU) into this many fixed element
+/// ranges on the persistent pool. Element-wise results are the same bits; the check's sums are exact mod p.
+fn split_cfg() -> usize {
+    static V: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    *V.get_or_init(|| {
+        std::env::var("PGW_FUSED2_SPLIT").ok().and_then(|v| v.trim().parse::<usize>().ok()).unwrap_or(0).min(64)
+    })
+}
+
+/// `PGW_FUSED2_SPLIT_MIN_ELEMS` (read once; default 8192): stages with fewer elements stay serial.
+fn split_min() -> usize {
+    static V: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    *V.get_or_init(|| {
+        std::env::var("PGW_FUSED2_SPLIT_MIN_ELEMS").ok().and_then(|v| v.trim().parse::<usize>().ok()).unwrap_or(8192).max(2)
+    })
+}
+
+/// Ranges for `len` elements (0 = serial: off, or fewer than `split_min()` elements).
+fn split_parts(len: usize) -> usize {
+    let c = split_cfg();
+    if c < 2 || len < split_min() {
+        0
+    } else {
+        c.min(len.div_ceil(64)).max(2)
     }
 }
 
+/// `[a, b)` of range `i` of `parts` over `len` (64-element aligned boundaries).
+fn range_of(len: usize, parts: usize, i: usize) -> (usize, usize) {
+    let per = len.div_ceil(parts).div_ceil(64) * 64;
+    ((i * per).min(len), ((i + 1) * per).min(len))
+}
+
+#[derive(Clone, Copy)]
+struct SendPtr<T>(*mut T);
+// SAFETY: used only for disjoint element ranges written by one task each while the owner waits.
+unsafe impl<T> Send for SendPtr<T> {}
+// SAFETY: as above.
+unsafe impl<T> Sync for SendPtr<T> {}
+impl<T> SendPtr<T> {
+    fn get(self) -> *mut T {
+        self.0
+    }
+}
+
+fn pack_into(vals: impl Iterator<Item = u64>, nb: usize, out: &mut [u8]) {
+    // the same bytes as `chunk.copy_from_slice(&v.to_le_bytes()[..nb])` per element, with one 8-byte store per
+    // element while 8 bytes fit (the spill into the next element is overwritten by it: elements go in order)
+    let cnt = out.len() / nb;
+    for (i, v) in vals.take(cnt).enumerate() {
+        let o = i * nb;
+        if o + 8 <= out.len() {
+            out[o..o + 8].copy_from_slice(&v.to_le_bytes());
+        } else {
+            out[o..o + nb].copy_from_slice(&v.to_le_bytes()[..nb]);
+        }
+    }
+}
+
+#[inline(always)]
 fn unpack_at(b: &[u8], nb: usize, i: usize) -> u64 {
+    let o = i * nb;
+    if o + 8 <= b.len() {
+        // one unaligned 8-byte load, the element's nb low bytes kept (same value as the byte copy below)
+        let w = u64::from_le_bytes(b[o..o + 8].try_into().expect("8 bytes"));
+        return if nb >= 8 { w } else { w & ((1u64 << (8 * nb)) - 1) };
+    }
     let mut w = [0u8; 8];
-    w[..nb].copy_from_slice(&b[i * nb..(i + 1) * nb]);
+    w[..nb].copy_from_slice(&b[o..o + nb]);
     u64::from_le_bytes(w)
 }
 
@@ -498,7 +579,30 @@ fn run_loop<T: Kv>(
         };
         let t1 = Instant::now();
         st.local_ns += ns(t1 - t0);
+        let kind = if pos == 0 { 0 } else if (pos - 1) % 2 == 0 { 1 } else { 2 };
+        f2_phase_add(kind, ns(t1 - t0));
+        f2_phase_add(6 + kind, 1);
+        if crate::lane::wait_prefetch::enabled() {
+            // read right after the reply (timing only): this trip's unmask masks and check vectors, the
+            // next trip's input masks
+            use crate::lane::wait_prefetch::add_slice;
+            add_slice(mk.wr_x);
+            if let Some(v) = mk.v {
+                add_slice(v);
+            }
+            if let Some(w) = mk.wv {
+                add_slice(w);
+            }
+            for c in [tc.c1.as_ref(), tc.c2.as_ref()].into_iter().flatten() {
+                add_slice(&c.u);
+                add_slice(&c.uw);
+            }
+            if let Some(nx) = masks.get(i + 1) {
+                add_slice(nx.r_x);
+            }
+        }
         let res = lane.ch.trip_raw(&hdr, &p.payload, &mut p.reply, lane.timeout);
+        crate::lane::wait_prefetch::clear();
         let t2 = Instant::now();
         st.remote_ns += ns(t2 - t1);
         match res {
@@ -517,6 +621,7 @@ fn run_loop<T: Kv>(
         st.rows += t as u64;
         st.bytes_up += body_len as u64;
         st.bytes_down += olen as u64;
+        let tu = Instant::now();
         // ---- unmask + checks (before any output is used) ----
         p.y.resize(t * m1, 0);
         let rb = &p.reply;
@@ -530,10 +635,28 @@ fn run_loop<T: Kv>(
                 }
             }
             p.z.resize(t * m2, 0);
-            for r in 0..t {
-                for j in 0..m2 {
-                    let e = r * m2 + j;
-                    p.z[e] = center(unpack_at(rb, nb, t * m1 + e).wrapping_sub(wv[e] as u64), k);
+            let parts = split_parts(t * m2);
+            if parts >= 2 {
+                // the same element-wise unmask in fixed element ranges on the pool (PGW_FUSED2_SPLIT)
+                let zp = SendPtr(p.z.as_mut_ptr());
+                let off = t * m1;
+                let ok = crate::prepare::pool::global().run(parts, &|i| {
+                    let (a, b) = range_of(t * m2, parts, i);
+                    for e in a..b {
+                        let v = center(unpack_at(rb, nb, off + e).wrapping_sub(wv[e] as u64), k);
+                        // SAFETY: element e is written by this task only; p.z outlives the run.
+                        unsafe { *zp.get().add(e) = v };
+                    }
+                });
+                if !ok {
+                    return Outcome::Overflow("fused2: internal error in an unmask task".into());
+                }
+            } else {
+                for r in 0..t {
+                    for j in 0..m2 {
+                        let e = r * m2 + j;
+                        p.z[e] = center(unpack_at(rb, nb, t * m1 + e).wrapping_sub(wv[e] as u64), k);
+                    }
                 }
             }
         } else {
@@ -541,6 +664,8 @@ fn run_loop<T: Kv>(
                 p.y[e] = center(unpack_at(rb, nb, e).wrapping_sub(mk.wr_x[e] as u64), k);
             }
         }
+        let tc0 = Instant::now();
+        f2_phase_add(9 + kind, ns(tc0 - tu));
         let c1 = tc.c1.as_ref().expect("configured");
         // stage 1 (pair: H - R == hmul * W1 x; single: Y == W1 x)
         let off = if pair { Some(&p.rq[..t * m1]) } else { None };
@@ -551,12 +676,18 @@ fn run_loop<T: Kv>(
         }
         if pair {
             let c2 = tc.c2.as_ref().expect("configured");
-            let s2 = crate::p61::check(&p.z[..t * m2], None, &c2.u, &p.y[..t * m1], &c2.uw, m2, m1, bound);
+            let s2 = if t == 1 && split_parts(m2) >= 2 {
+                crate::p61::check_split(&p.z[..m2], &c2.u, &p.y[..m1], &c2.uw, m2, m1, bound, split_parts(m2))
+            } else {
+                crate::p61::check(&p.z[..t * m2], None, &c2.u, &p.y[..t * m1], &c2.uw, m2, m1, bound)
+            };
             st.checks += 1;
             if s2 != 0 {
                 return Outcome::Check { stage: 2, code: s2 };
             }
         }
+        let tfl = Instant::now();
+        f2_phase_add(12 + kind, ns(tfl - tc0));
         // ---- the float work after the trip ----
         if pos == 0 {
             let qc = m1;
@@ -580,13 +711,45 @@ fn run_loop<T: Kv>(
             if (pos - 1) % 2 == 0 {
                 // trip A: gate_up (normed), then SiLU
                 p.gu.resize(t * m2, 0.0);
-                for r in 0..t {
-                    let rinv = rinv_row(&p.h[r * hidden..(r + 1) * hidden], cfg.eps, &mut tmp);
-                    normed_row(&p.z[r * m2..(r + 1) * m2], l2, svals[r], rinv, &mut p.gu[r * m2..(r + 1) * m2]);
-                }
                 let inter = cfg.inter;
                 p.act.resize(t * inter.max(cfg.nh * cfg.hd), 0.0);
-                silu_rows(&p.gu[..t * 2 * inter], &mut p.act[..t * inter], inter);
+                let parts = split_parts(t * m2);
+                if t == 1 && parts >= 2 && m2 == 2 * inter {
+                    // the same element-wise float work in fixed ranges on the pool (PGW_FUSED2_SPLIT)
+                    let rinv = rinv_row(&p.h[..hidden], cfg.eps, &mut tmp);
+                    let f = svals[0] * rinv;
+                    let (zs, gp, ap) = (&p.z[..m2], SendPtr(p.gu.as_mut_ptr()), SendPtr(p.act.as_mut_ptr()));
+                    let ok = crate::prepare::pool::global().run(parts, &|i| {
+                        let (a, b) = range_of(m2, parts, i);
+                        for j in a..b {
+                            let mut v = (zs[j] as f64 * l2.scale[j]) * f;
+                            if let Some(bb) = &l2.bias {
+                                v += bb[j];
+                            }
+                            // SAFETY: element j is written by this task only; p.gu outlives the run.
+                            unsafe { *gp.get().add(j) = v as f32 };
+                        }
+                    });
+                    let ok2 = ok && crate::prepare::pool::global().run(parts, &|i| {
+                        let (a, b) = range_of(inter, parts, i);
+                        if a < b {
+                            // SAFETY: the gate/up halves were fully written above (joined); this task
+                            // writes act[a..b] only.
+                            let gu = unsafe { std::slice::from_raw_parts(gp.get().cast_const(), m2) };
+                            let out = unsafe { std::slice::from_raw_parts_mut(ap.get().add(a), b - a) };
+                            crate::layer::silu_mul_row(&gu[a..b], &gu[inter + a..inter + b], out);
+                        }
+                    });
+                    if !ok2 {
+                        return Outcome::Overflow("fused2: internal error in a float task".into());
+                    }
+                } else {
+                    for r in 0..t {
+                        let rinv = rinv_row(&p.h[r * hidden..(r + 1) * hidden], cfg.eps, &mut tmp);
+                        normed_row(&p.z[r * m2..(r + 1) * m2], l2, svals[r], rinv, &mut p.gu[r * m2..(r + 1) * m2]);
+                    }
+                    silu_rows(&p.gu[..t * 2 * inter], &mut p.act[..t * inter], inter);
+                }
             } else {
                 // trip B: the next layer's qkv (normed), then its attention
                 p.qkv.resize(t * m2, 0.0);
@@ -598,7 +761,10 @@ fn run_loop<T: Kv>(
             }
         }
         p.pos = pos + 1;
-        st.local_ns += ns(Instant::now() - t2);
+        let te = Instant::now();
+        f2_phase_add(15 + kind, ns(te - tfl));
+        f2_phase_add(3 + kind, ns(te - t2));
+        st.local_ns += ns(te - t2);
     }
     wipe(&mut tmp);
     Outcome::Done
@@ -963,6 +1129,8 @@ impl Fused2Driver {
         let mut sampled: Vec<(usize, Vec<i64>, Vec<i64>)> = Vec::new();
         let mut recorded: Vec<(usize, Vec<u8>)> = Vec::new();
         let mut stats = Stats::default();
+        // the pool's workers stay warm for this call (PGW_POOL_ACTIVE_SPIN_US; timing only)
+        let _warm = crate::prepare::pool::Warm::new();
         let outcome = if let Some((k, v)) = kf.as_mut() {
             let (ks, vs) = (k.as_slice_mut()?, v.as_slice_mut()?);
             py.allow_threads(|| run_loop::<f32>(&view, pass, &mask_in, flags, &rid_v, end, &lane_in, hist, ks, vs, cs, ss,
@@ -1092,5 +1260,20 @@ mod tests {
         pack_into([0x01020304050607u64, (1u64 << 56) - 1].into_iter(), 7, &mut out);
         assert_eq!(unpack_at(&out, 7, 0), 0x01020304050607);
         assert_eq!(unpack_at(&out, 7, 1), (1u64 << 56) - 1);
+        // the 8-byte fast paths give the byte-copy reference's bytes and values (high bits dropped)
+        for nb in [5usize, 6, 7, 8] {
+            let vals: Vec<u64> = (0..37u64).map(|i| i.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ (i << 60)).collect();
+            let mut fast = vec![0u8; vals.len() * nb];
+            pack_into(vals.iter().copied(), nb, &mut fast);
+            let mut slow = vec![0u8; vals.len() * nb];
+            for (c, v) in slow.chunks_exact_mut(nb).zip(&vals) {
+                c.copy_from_slice(&v.to_le_bytes()[..nb]);
+            }
+            assert_eq!(fast, slow);
+            let keep = if nb == 8 { u64::MAX } else { (1u64 << (8 * nb)) - 1 };
+            for (i, v) in vals.iter().enumerate() {
+                assert_eq!(unpack_at(&fast, nb, i), v & keep);
+            }
+        }
     }
 }

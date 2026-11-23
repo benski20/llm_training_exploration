@@ -677,6 +677,144 @@ def minimal_lever_sets(shape: Shape, goal: float, base: Scenario = TODAY, candid
 
 
 # ----------------------------------------------------------------------------------------------------------------
+# Co-located budget from the measured 7B stack (2026-11-23): shm lane, native decode driver, masked head, p31
+# ----------------------------------------------------------------------------------------------------------------
+
+#: measured: fixed lane cost per trip over the shared-memory transport (7B 28 tok/s run on Modal, H100 provider,
+#: 32-core CPU-only gateway; with the device time below it reproduces the measured 15.7 ms of waiting per token).
+LANE_FIXED_MS_SHM = 0.09
+#: measured: H100 device time of the graphed K32 single trips, 0.186 ms per 7B layer of 233.0 MB of int8 weights
+#: (``benchmarks/results/fused2/pair_op_h100_2026-11-23.json``); scaled by weight bytes (conservative: larger
+#: matrices stream better).
+DEVICE_MS_PER_MB = 0.186 / 233.0
+#: measured: H100 ``planes`` pair op / the two K32 singles it replaces, 1 row (1.07-1.30 over the 7B items).
+PLANES_PAIR_RATIO = (1.07, 1.30)
+#: measured: 7B gateway work per decoded token on the 32-core Modal gateway (native decode driver, masked head,
+#: p31, native float ops): 10.8 ms over 113 trips.
+GW_7B_MS_PER_TOKEN = 10.8
+#: measured residual of the 7B run: 35.7 ms per streamed token (27.97 tok/s) minus 15.7 ms waiting and 10.8 ms
+#: gateway pass work: serving outside the passes (scheduler, sampling, detokenize, streaming).
+OTHER_7B_MS_PER_TOKEN = 35.7 - 15.7 - 10.8
+#: estimate: per-trip gather of output slices over 2 GPUs (output-row TP, one-shot P2P/NVLink flag gather).
+TP2_GATHER_MS = 0.010
+
+#: measured on the 4-vCPU dev box (2026-11-23, ``decode_cpu_bench.py --lane-proc --decrypt-ahead --masked-head --prime
+#: --float-ops native`` with ``PGW_DECODE_NATIVE=1``, and ``fused2_driver_cpu_bench.py --shm``; 2 layers at the preset's
+#: widths, stub provider in another process / thread): the native drivers' local work per trip (prepare + finish +
+#: float ops, every check), medians of interleaved runs on a shared box (spread about +-15%). ``calibration`` turns
+#: dev-box microseconds into the Modal gateway's: the 7B gateway work measured there per trip / "std_7b" here.
+DEVBOX_US: dict[str, float] = {
+    "std_7b": 110.0,  # standard decode driver, 7B widths, per layer trip (runs: 100.8-122.3)
+    "std_32b": 137.0,  # 32B widths, one core per trip (runs: 123-149; qkv 102, o 65, gate_up 214, down 205)
+    "std_32b_prefetch": 121.0,  # with PGW_LANE_WAIT_PREFETCH=1 (runs: 114-140)
+    "std_32b_split16": 80.0,  # extrapolated: kernels split over 16 warm pinned cores (kernel fit, cold floor 125 ->
+    #                           85.6 us at 3 cores; hot single-core floor 59 us) + float ops 23 us
+    "pair_32b_before_fix": 824.5,  # native fused2 driver, mean of the two pair trips, one core (per-element memcpy)
+    "pair_32b": 671.0,  # after the 8-byte pack/unpack (o+gate_up 839, down+qkv 503), one core
+    "pair_32b_split12": 363.0,  # extrapolated with PGW_FUSED2_SPLIT=12: o+gate_up 133 serial + 706/12 + joins,
+    #                             down+qkv unchanged 502 (its quantization of n = 27648 stays serial)
+    "head_32b": 300.0,  # masked head trip at 32B (152064 outputs; floor bench 270-450)
+}
+
+
+def colocated_calibration() -> float:
+    """Modal-gateway ms per dev-box ms: the 7B run's gateway work per trip over this box's 7B driver work per trip
+    (same bench and settings as the 32B numbers; it lumps the head, sampling and per-pass Python into the trips)."""
+    return (GW_7B_MS_PER_TOKEN / 113) / (DEVBOX_US["std_7b"] / 1e3)
+
+
+@dataclass(frozen=True)
+class CoLocated:
+    """One co-located configuration's per-token budget (1 decode row, short context)."""
+
+    name: str
+    shape: str = "qwen2.5-32b"
+    fused2: bool = False
+    pair_ratio: float = 1.0  # fused2 device time / the two K32 singles (measured 1.07-1.30, planes)
+    tp: int = 1
+    lane_fixed_ms: float = LANE_FIXED_MS_SHM
+    gw_trip_ms: float = 0.12  # gateway work per standard trip (or per fused2 pair trip)
+    gw_head_ms: float = 0.3  # gateway work of the masked head trip
+    other_ms: float = OTHER_7B_MS_PER_TOKEN
+    masked_head: bool = True
+
+
+def colocated_budget(c: CoLocated) -> dict[str, float]:
+    """ms per decoded token by component, and tok/s, for a co-located (shm lane) configuration."""
+    shape = SHAPES[c.shape]
+    lin = {k: n * m for k, n, m in shape.linears()}
+    layer_mb = sum(lin.values()) / MB
+    head_mb = shape.hidden * shape.vocab / MB
+    gather = TP2_GATHER_MS if c.tp > 1 else 0.0
+    if c.fused2:
+        layer_trips = 2 * shape.layers + 1  # first qkv single, L - 1 (o+gu, down+qkv) pairs, the last down
+        device = shape.layers * layer_mb * DEVICE_MS_PER_MB * c.pair_ratio / c.tp
+    else:
+        layer_trips = 4 * shape.layers
+        device = shape.layers * layer_mb * DEVICE_MS_PER_MB / c.tp
+    head_trips = 1 if c.masked_head else 0
+    trips = layer_trips + head_trips
+    device += head_trips * head_mb * DEVICE_MS_PER_MB / c.tp + trips * gather
+    lane = trips * c.lane_fixed_ms
+    gateway = layer_trips * c.gw_trip_ms + head_trips * c.gw_head_ms
+    # without the masked head the gateway streams the bf16 head per token (fused2 today): ~20 GB/s
+    head_local = 0.0 if c.masked_head else 1e3 * 2 * shape.hidden * shape.vocab / (20.0 * GB)
+    total = lane + device + gateway + head_local + c.other_ms
+    budget_40 = 40.0 - lane - device - head_local - c.other_ms
+    return {"trips": trips, "lane_ms": round(lane, 2), "device_ms": round(device, 2),
+            "gateway_ms": round(gateway, 2), "head_local_ms": round(head_local, 2), "other_ms": round(c.other_ms, 2),
+            "total_ms": round(total, 2), "tok_s": round(1e3 / total, 1),
+            "gateway_ms_per_trip_for_40ms": round(budget_40 / layer_trips, 4) if budget_40 > 0 else 0.0,
+            "bound": max((("lane", lane), ("device", device), ("gateway", gateway), ("head_local", head_local),
+                          ("other", c.other_ms)), key=lambda kv: kv[1])[0]}
+
+
+def validate_7b_colocated() -> dict[str, float]:
+    """The co-located model with the 7B run's measured gateway work: must give its 35.7 ms per token."""
+    per_trip = GW_7B_MS_PER_TOKEN / 113
+    r = colocated_budget(CoLocated("7b-measured", shape="qwen2.5-7b", gw_trip_ms=per_trip, gw_head_ms=per_trip))
+    return {"model_wait_ms": r["lane_ms"] + r["device_ms"], "measured_wait_ms": 15.7, "model_total_ms": r["total_ms"],
+            "measured_total_ms": 35.7, "model_tok_s": r["tok_s"], "measured_tok_s": 27.97}
+
+
+def colocated_32b_table(calib: float, devbox: dict[str, float]) -> list[dict[str, Any]]:
+    """The 32B budget rows: standard vs fused2, 1 vs 2 H100s, with the measured per-trip gateway work (dev-box
+    microseconds x ``calib``), the split extrapolated to a 32-48 core gateway, and the targets for 40 ms."""
+    us = {k: v * calib / 1e3 for k, v in devbox.items()}
+    head = us["head_32b"]
+    rows: list[CoLocated] = []
+    for tp in (1, 2):
+        rows.append(CoLocated(f"standard, {tp}x H100, gateway 1 core (measured)", tp=tp,
+                              gw_trip_ms=us["std_32b_prefetch"], gw_head_ms=head))
+        rows.append(CoLocated(f"standard, {tp}x H100, gateway split 16 (extrapolated)", tp=tp,
+                              gw_trip_ms=us["std_32b_split16"], gw_head_ms=head))
+    for tp in (1, 2):
+        for ratio in PLANES_PAIR_RATIO:
+            rows.append(CoLocated(f"fused2 {ratio}x, {tp}x H100, gateway 1 core (measured)", fused2=True,
+                                  pair_ratio=ratio, tp=tp, gw_trip_ms=us["pair_32b"], gw_head_ms=head))
+        rows.append(CoLocated(f"fused2 1.07x, {tp}x H100, gateway split 12 (extrapolated)", fused2=True,
+                              pair_ratio=1.07, tp=tp, gw_trip_ms=us["pair_32b_split12"], gw_head_ms=head))
+    # what 25 tok/s takes: the serving residual cut to 2 ms and the gateway at the per-trip target
+    for tp in (1, 2):
+        rows.append(CoLocated(f"target: standard, {tp}x H100, gateway 0.03 ms/trip, other 2 ms", tp=tp,
+                              gw_trip_ms=0.03, gw_head_ms=0.1, other_ms=2.0))
+        rows.append(CoLocated(f"target: fused2 1.07x, {tp}x H100, gateway 0.06 ms/pair, other 2 ms", fused2=True,
+                              pair_ratio=1.07, tp=tp, gw_trip_ms=0.06, gw_head_ms=0.1, other_ms=2.0))
+    return [{"config": c.name, "gw_ms_per_trip": round(c.gw_trip_ms, 4), **colocated_budget(c)} for c in rows]
+
+
+def _fmt_colocated(rows: list[dict[str, Any]]) -> str:
+    head = ("| config | trips | lane | device | gateway (per trip) | other | total ms | tok/s | bound | gateway/trip "
+            "for 40 ms |\n|---|---|---|---|---|---|---|---|---|---|")
+    lines = [head]
+    for r in rows:
+        lines.append(f"| {r['config']} | {r['trips']} | {r['lane_ms']} | {r['device_ms']} | {r['gateway_ms']} "
+                     f"({r['gw_ms_per_trip']}) | {r['other_ms']} | {r['total_ms']} | {r['tok_s']} | {r['bound']} | "
+                     f"{r['gateway_ms_per_trip_for_40ms']} |")
+    return "\n".join(lines)
+
+
+# ----------------------------------------------------------------------------------------------------------------
 # Report
 # ----------------------------------------------------------------------------------------------------------------
 
@@ -758,7 +896,20 @@ def main() -> None:
     ap.add_argument("--levers", default=None, help="comma list of LEVERS, or 'all', for one custom scenario")
     ap.add_argument("--goal", type=float, nargs="*", default=None, help="find minimal lever sets for these tok/s")
     ap.add_argument("--json", default=None)
+    ap.add_argument("--colocated", action="store_true",
+                    help="only the co-located 32B budget from the measured 7B stack (shm lane, native drivers)")
     a = ap.parse_args()
+    if a.colocated:
+        v = validate_7b_colocated()
+        cal = colocated_calibration()
+        rows = colocated_32b_table(cal, DEVBOX_US)
+        print("## co-located budget, Qwen2.5-32B (1 decode row, short context; ms per token)\n")
+        print(f"7B check: {json.dumps(v)}; dev-box -> Modal gateway calibration x{cal:.3f}\n")
+        print(_fmt_colocated(rows))
+        if a.json:
+            with open(a.json, "w") as fh:
+                json.dump({"validate_7b": v, "calibration": cal, "devbox_us": DEVBOX_US, "rows": rows}, fh, indent=1)
+        return
     models = a.model or list(SHAPES)
     if a.levers:
         names = list(LEVERS) if a.levers == "all" else a.levers.split(",")

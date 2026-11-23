@@ -127,7 +127,9 @@ def build_fused2_generators(settings: FactorySettings, packs: list[Any], *, work
                 raise ConfigError("fused2_weights_path holds weights of another pack")
         else:
             bits = int(settings.fused2_migrate_bits)
-            w = Fused2Weights(pack, None, multipliers=migration_multipliers(pack, bits) if bits else None)
+            # sigma=False: masks and check vectors use w8 and hmul only (no SVDs per factory worker)
+            w = Fused2Weights(pack, None, multipliers=migration_multipliers(pack, bits) if bits else None,
+                              sigma=False)
         for ring in settings.ring_names:
             fp = fused2_fingerprint(w, ring)
             he = None
