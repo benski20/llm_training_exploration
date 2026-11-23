@@ -58,6 +58,7 @@ __all__ = [
     "prime_output_half",
     "prime_precompute",
     "prime_soundness_bits",
+    "private_check_vectors_for",
     "soundness_bits",
 ]
 
@@ -162,6 +163,31 @@ def soundness_bits(params: RingParams, in_features: int, checks: int) -> float:
     """Lower bound on ``-log2(false accept probability)`` per call with range check + ``checks`` vectors."""
     h = params.k - math.ceil(math.log2(4 * max(1, params.output_bound(in_features))))
     return max(0, h) * checks
+
+
+#: Target soundness (bits) of the factory's private every-row self-check of products that come from an
+#: untrusted encrypted-mask provider (pks-v3, and the encrypted fused2 digit split): see
+#: :func:`private_check_vectors_for`.
+HE_SELF_CHECK_BITS = 40.0
+
+
+def private_check_vectors_for(params: RingParams, in_features: int, target_bits: float = HE_SELF_CHECK_BITS,
+                              minimum: int = 2) -> int:
+    """Private uniform ring check vectors needed so that a wrong ``W r`` row *chosen by an adversary* escapes
+    the factory self-check with probability at most ``2^-target_bits``.
+
+    One uniform vector over ``Z_{2^K}`` misses an error of 2-adic valuation ``v`` with probability
+    ``2^-(K - v)``, so an encrypted-mask provider can pick a high-valuation error (``2^(K-1)`` in one entry
+    passes two vectors with probability 1/4). Mask errors whose entries all exceed twice the genuine output
+    bound make the gateway's range check fail for every input (a denial of service, independent of the
+    data); every other wrong row has ``v <= log2(2 B)`` and is missed by one vector with probability at most
+    ``2^-h``, ``h = K - ceil(log2(4 B))`` (:func:`soundness_bits` with one vector). Hence
+    ``ceil(target_bits / h)`` vectors (at least ``minimum``). Refuses rings with ``h = 0``.
+    """
+    per = soundness_bits(params, in_features, 1)
+    if per <= 0:
+        raise ConfigError(f"ring {params.name} leaves no Freivalds margin at in_features={in_features}")
+    return max(int(minimum), math.ceil(float(target_bits) / per))
 
 
 # ---- prime-field check (opt-in, segment header ``check_field = "p31"``) ------------------------------

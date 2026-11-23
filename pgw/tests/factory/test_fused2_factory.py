@@ -302,3 +302,21 @@ def test_mask_service_cli_check_only_fused2(tiny_pack_dir: Path, f2w: Any) -> No
     assert r.exit_code == 0, r.output
     (rep,) = json.loads(r.output)
     assert rep["ok"] and rep["fingerprint"] == fused2_fingerprint(f2w, RING) and rep["check_field"] == "p61"
+
+
+def test_encrypted_fused2_checks_every_row_with_enough_vectors(f2w: Any) -> None:
+    """With an encrypted backend (an untrusted provider chooses its errors) the fused2 factory checks every row
+    (a sampled check lets a tampered row through) with private vectors for 40 bits (K56A12C53: 1 bit each)."""
+    from pgw.core.freivalds import private_check_vectors_for
+
+    class _He:
+        def matmul(self, key: str, r: torch.Tensor) -> torch.Tensor:  # pragma: no cover - not called
+            raise AssertionError
+
+    gen = Fused2MaskGenerator(f2w, RING, he=_He(), self_check_rows=2)
+    assert gen.self_check_rows == -1
+    lin = next(iter(f2w.linears()))
+    us, _usw = gen._private(lin.key)
+    assert us.shape[0] == private_check_vectors_for(gen.ring, lin.n) >= 2
+    plain = Fused2MaskGenerator(f2w, RING, self_check_rows=2)
+    assert plain.self_check_rows == 2 and plain._private(lin.key)[0].shape[0] == 2

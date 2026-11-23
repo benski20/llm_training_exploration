@@ -747,7 +747,8 @@ class MaskGenerator:
                 else:
                     uw = torch.zeros((0, spec.in_features), dtype=torch.int64)
                 if cu is None and self.self_check_rows:  # private check vectors, never stored
-                    v = SeedExpander(new_seed()).ring_uniform((2, spec.out_features), k, "v")
+                    v = SeedExpander(new_seed()).ring_uniform((self._private_vectors(spec), spec.out_features), k,
+                                                              "v")
                     cu, cw = _u64(v.t()), _u64(ring_vecmat(v, w, self.ring).t())
                     v.zero_()
                 stats.check_seconds += time.perf_counter() - t0
@@ -801,6 +802,17 @@ class MaskGenerator:
             if he0 is not None and isinstance(he_stats, dict):
                 stats.extra["he"] = {key: he_stats.get(key, 0) - v for key, v in he0.items()
                                      if isinstance(v, int | float)}
+
+    def _private_vectors(self, spec: LinearSpec) -> int:
+        """Private self-check vectors of a linear: 2, or, when the encrypted backend asks for a soundness
+        target against an adversarial provider (``remote.self_check_bits``; pks-v3, opt-in), enough uniform
+        ring vectors to reach it (:func:`pgw.core.freivalds.private_check_vectors_for`)."""
+        bits = getattr(self.remote, "self_check_bits", None) if self.remote is not None else None
+        if not bits:
+            return 2
+        from pgw.core.freivalds import private_check_vectors_for
+
+        return private_check_vectors_for(self.ring, spec.in_features, float(bits))
 
     def _self_check(self, lid: LinearId, r: torch.Tensor | None, wr: torch.Tensor, cu: np.ndarray, cw: np.ndarray,
                     *, stream: _gp.DeviceRingStream | None = None, row0: int = 0) -> int:

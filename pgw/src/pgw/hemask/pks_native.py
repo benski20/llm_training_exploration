@@ -104,9 +104,14 @@ class Customer:
         secrets: list[GroupSecret] = []
         beta = np.empty((groups, 4, RANK, NR), dtype=np.uint32)
         r = np.ascontiguousarray(r, dtype=np.int64)
+        ts: np.ndarray | None = None
         try:
             if self.nat is not None:
-                ts = np.stack([_ternary(self.nat, sx, NU, "pks-t") for sx in sxs])
+                ts = np.empty((groups, NU), dtype=np.int8)
+                for g, sx in enumerate(sxs):
+                    tg = _ternary(self.nat, sx, NU, "pks-t")
+                    ts[g] = tg
+                    tg.fill(0)
                 b = self.nat.encrypt(SeedExpander(a_seed).stream_key(pks.A_LABEL, linear), r, ts,
                                      [sx.stream_key("pks-e") for sx in sxs], self.threads)
                 for g, sx in enumerate(sxs):
@@ -132,6 +137,8 @@ class Customer:
         except BaseException:
             for s in secrets:
                 s.wipe()
+            if ts is not None:
+                ts.fill(0)
             raise
 
     def decrypt(self, hint: np.ndarray, y: bytes, secrets: list[GroupSecret]) -> np.ndarray:

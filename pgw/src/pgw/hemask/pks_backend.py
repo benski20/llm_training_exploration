@@ -269,9 +269,15 @@ class PKSMaskBackend:
 
     def __init__(self, pack: Any, ring: Any, store: PKSHintStore, remote: Callable[..., bytes], *,
                  groups_per_call: int = 4, threads: int | None = None, margin_bits: float = 1.0,
-                 skip_kinds: frozenset[str] | set[str] = frozenset()):
+                 skip_kinds: frozenset[str] | set[str] = frozenset(), self_check_bits: float | None = None):
         if int(ring.k) != 32:
             raise ConfigError(f"pks-v3 covers K32 mask rings only, not {ring.name}")
+        from pgw.core.freivalds import HE_SELF_CHECK_BITS
+
+        #: Soundness target of the factory's private every-row self-check against a provider that picks its
+        #: errors (read by :meth:`pgw.factory.MaskGenerator._private_vectors` and the encrypted fused2 factory):
+        #: two uniform ring vectors miss a ``2^31`` error in one entry with probability 1/4.
+        self.self_check_bits = float(HE_SELF_CHECK_BITS if self_check_bits is None else self_check_bits)
         self.params = PKSParams()
         self.ring = ring
         self.store = store
@@ -305,28 +311,39 @@ class PKSMaskBackend:
             raise ConfigError(f"{linear}: r must be (rows, {spec.in_features})")
         t_wall = time.perf_counter()
         hint = self.store.hint(linear)
-        parts = []
+        out = np.empty((rn.shape[0], spec.out_features), dtype=np.int64)  # the caller owns (and wipes) it
         step = D * self.groups_per_call
-        for r0 in range(0, rn.shape[0], step):
-            rc = np.ascontiguousarray(rn[r0:r0 + step])
-            t0 = time.perf_counter()
-            b, beta, secrets = self.customer.encrypt(self.store.a_seed, linear, rc)
-            ksk = pack_ksk(beta)
-            del beta
-            t1 = time.perf_counter()
-            try:
-                y = self.remote(linear, b, ksk)
-                t2 = time.perf_counter()
-                wr = self.customer.decrypt(hint, y, secrets)
-            finally:
-                for s in secrets:
-                    s.wipe()
-            t3 = time.perf_counter()
-            parts.append(wr)
-            self._add(encrypt_s=t1 - t0, remote_s=t2 - t1, decrypt_s=t3 - t2, groups=len(secrets), passes=1, jobs=1)
+        try:
+            for r0 in range(0, rn.shape[0], step):
+                rc = rn[r0:r0 + step]
+                if not rc.flags.c_contiguous:
+                    rc = np.ascontiguousarray(rc)
+                t0 = time.perf_counter()
+                b, beta, secrets = self.customer.encrypt(self.store.a_seed, linear, rc)
+                if rc.base is None:  # a contiguous copy of masks: wipe it
+                    rc.fill(0)
+                ksk = pack_ksk(beta)
+                del beta
+                t1 = time.perf_counter()
+                wr: np.ndarray | None = None
+                try:
+                    y = self.remote(linear, b, ksk)
+                    t2 = time.perf_counter()
+                    wr = self.customer.decrypt(hint, y, secrets)
+                    out[r0:r0 + wr.shape[0]] = wr  # W8 r mod 2^32 (secret): no other copy is kept
+                finally:
+                    for s in secrets:
+                        s.wipe()
+                    if wr is not None:
+                        wr.fill(0)
+                t3 = time.perf_counter()
+                self._add(encrypt_s=t1 - t0, remote_s=t2 - t1, decrypt_s=t3 - t2, groups=len(secrets), passes=1,
+                          jobs=1)
+        except BaseException:
+            out.fill(0)
+            raise
         self._add(wall_s=time.perf_counter() - t_wall)
-        out = np.concatenate(parts, axis=0) if len(parts) > 1 else parts[0]
-        return torch.from_numpy(out.astype(np.int64))
+        return torch.from_numpy(out)
 
     def _add(self, **kw: float) -> None:
         for k, v in kw.items():

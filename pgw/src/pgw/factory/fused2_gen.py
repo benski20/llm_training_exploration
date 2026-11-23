@@ -183,6 +183,16 @@ class Fused2MaskGenerator:
         dev = "cuda" if device == "auto" and torch.cuda.is_available() else ("cpu" if device == "auto" else device)
         self.device = torch.device(dev)
         self.backend = backend
+        #: Private self-check vectors per linear (``None``: 2). With an encrypted backend the products come
+        #: from an untrusted provider that can choose its errors: every row is checked (a sampled check lets a
+        #: tampered row through with the probability of not sampling it) with enough vectors for
+        #: :data:`pgw.core.freivalds.HE_SELF_CHECK_BITS` (pks-v3 adversarial review, finding F2).
+        self._priv_bits: float | None = None
+        if he is not None:
+            from pgw.core.freivalds import HE_SELF_CHECK_BITS
+
+            self_check_rows = -1
+            self._priv_bits = float(getattr(he, "self_check_bits", None) or HE_SELF_CHECK_BITS)
         self.self_check_rows = int(self_check_rows)
         self.chunk_rows = int(chunk_rows)
         if native_rng and not _NATIVE_RNG:
@@ -247,12 +257,18 @@ class Fused2MaskGenerator:
         return SeedExpander.ring_uniform_rows_with_key(rkey, n, self.ring.k, start, rows)
 
     def _private(self, key: str) -> tuple[np.ndarray, np.ndarray]:
-        """Private ring self-check vectors of a linear (2 x m uniform mod 2^K, never stored) and ``u_s W mod 2^K``."""
+        """Private ring self-check vectors of a linear (``c x m`` uniform mod 2^K, never stored; ``c = 2``, more
+        with an encrypted backend) and ``u_s W mod 2^K``."""
         hit = self._priv.get(key)
         if hit is None:
             lin = self.lins[key]
-            us = np.frombuffer(os.urandom(16 * lin.m), dtype=np.uint64).reshape(2, lin.m) & np.uint64(self.ring.mask)
-            acc = np.zeros((2, lin.n), dtype=np.uint64)
+            c = 2
+            if self._priv_bits is not None:
+                from pgw.core.freivalds import private_check_vectors_for
+
+                c = private_check_vectors_for(self.ring, lin.n, self._priv_bits)
+            us = np.frombuffer(os.urandom(8 * c * lin.m), dtype=np.uint64).reshape(c, lin.m) & np.uint64(self.ring.mask)
+            acc = np.zeros((c, lin.n), dtype=np.uint64)
             for r0 in range(0, lin.m, _REF_BLOCK):
                 r1 = min(lin.m, r0 + _REF_BLOCK)
                 acc += us[:, r0:r1] @ _w_u64(lin.w8, r0, r1)

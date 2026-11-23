@@ -447,3 +447,104 @@ def test_backend_in_real_factory_matches_local(tmp_path: Path) -> None:
     b = {(g.id.key, g.slot_start): g.wr.clone() for g in he.generate(seed, 300, checks=2, chunk_slots=300)}
     assert a.keys() == b.keys() and all(torch.equal(a[k], b[k]) for k in a)
     assert he.last_stats.self_checked_rows == 300
+
+
+# ---- adversarial review (research/reviews/pks-v3-adversarial-review.md): provider-chosen mask errors -------
+
+class _TamperingProvider(_LocalProvider):
+    """An active provider: adds ``shift`` to the first rounded ``c0`` value of every reply (row 0, slot 0 of
+    each request): the decrypted mask entry moves by exactly ``shift / 2^(36 - 32)`` mod 2^32."""
+
+    def __init__(self, pack: _Pack, shift: int):
+        super().__init__(pack)
+        self.shift = int(shift)
+
+    def __call__(self, body: bytes, rid: str, decode: Any) -> Any:
+        from pgw.hemask.wire import MaskgenResponse, MaskgenResult, encode_maskgen_response, unpack_bits
+
+        req = decode_maskgen_request(body, (1, 2, 3))
+        out = []
+        for it in req.items:
+            y = bytes(self.prov.run_item(self.fp, self.kern[it.linear], it, req.a_seed))
+            v = unpack_bits(y, len(y) * 8 // 36, 36).astype(np.uint64)
+            v[0] = (int(v[0]) + self.shift) % (1 << 36)
+            out.append(MaskgenResult(it.linear, it.cols, pack_bits(v, 36)))
+        return decode(encode_maskgen_response(MaskgenResponse(req.request_id, tuple(out), 3, (1, 2, 3))))
+
+
+def test_provider_can_shift_a_mask_entry_exactly(tmp_path: Path) -> None:
+    """The reply is additively malleable: the provider moves one mask entry by any chosen amount (here 2^31,
+    which two uniform ring check vectors miss with probability 1/4)."""
+    from pgw.core.freivalds import private_check_vectors_for
+    from pgw.core.ring import RingParams
+    from pgw.hemask.pks_backend import PKSHintStore, PKSMaskBackend, RemotePKS
+
+    pack = _Pack({"blk.0.q": (64, 48)})
+    store = PKSHintStore.open_or_build(tmp_path, pack)
+    ring = RingParams.from_name("K32A12C27")
+    remote = RemotePKS(_TamperingProvider(pack, 1 << 35), pack.fingerprint, {"blk.0.q": 64}, store.a_seed)
+    be = PKSMaskBackend(pack, ring, store, remote, groups_per_call=1)
+    r = np.random.default_rng(8).integers(0, 1 << 32, (256, 48), dtype=np.int64)
+    got = be.matmul("blk.0.q", torch.from_numpy(r)).numpy()
+    want = (r @ pack.w["blk.0.q"].astype(np.int64).T) & 0xFFFFFFFF
+    diff = (got - want) & 0xFFFFFFFF
+    assert diff[0, 0] == 1 << 31 and np.count_nonzero(diff) == 1
+    # an error 2^31 e_i passes a uniform vector v iff v_i is even: 2 vectors -> 1/4. The pks-v3 backend asks
+    # the factory for 40 bits against errors the gateway's range check does not reject for every input.
+    assert be.self_check_bits == 40.0
+    assert private_check_vectors_for(ring, 3584) == 14  # capped width: h = 32 - 29 = 3 bits per vector
+    # fused2 ring at a 72B width: uncapped bound 2047 * 127 * 2^15 < 2^35, h = 21 bits per vector
+    assert private_check_vectors_for(RingParams.from_name("K56A12C53"), 1 << 15) == 2
+
+
+class _LayerPack(_Pack):
+    """One decoder layer with real linear ids (what :class:`pgw.factory.MaskGenerator` needs)."""
+
+    def __init__(self) -> None:
+        super().__init__({"0.qkv": (64, 48), "0.o": (32, 48), "0.gate_up": (64, 48), "0.down": (32, 64)})
+
+    def linear_specs(self) -> list[Any]:  # type: ignore[override]
+        from pgw.core.types import LinearId, LinearSpec
+
+        return [LinearSpec(LinearId(0, k.split(".")[1]), *w.shape) for k, w in self.w.items()]
+
+    def check_ring(self, params: Any) -> None:
+        pass
+
+    def load_linear(self, lid: Any, device: str = "cpu") -> Any:
+        from types import SimpleNamespace
+
+        return SimpleNamespace(w8=torch.from_numpy(self.w[str(lid)]))
+
+
+@pytest.mark.parametrize(("shift", "caught"), [(0, False), (1 << 31, True), (1 << 35, True)])
+def test_factory_self_check_catches_provider_errors(tmp_path: Path, shift: int, caught: bool) -> None:
+    """The real factory with pks-v3: an honest provider gives the local segments; a mask error of 2^27 (inside
+    the K32A12C27 range, where the gateway's reaction would depend on the sign of the true output: it passes 2
+    private vectors with probability 2^-10) or 2^31 (1/4) is caught by the every-row self-check, which now uses
+    enough vectors for 40 bits (7 at these widths, 14 at capped widths)."""
+    from pgw.core.freivalds import private_check_vectors_for
+    from pgw.core.ring import RingParams
+    from pgw.factory import MaskGenerator
+    from pgw.hemask.pks_backend import PKSHintStore, PKSMaskBackend, RemotePKS
+
+    pack = _LayerPack()
+    ring = RingParams.from_name("K32A12C27")
+    store = PKSHintStore.open_or_build(tmp_path, pack)
+    out = {k: w.shape[0] for k, w in pack.w.items()}
+    remote = RemotePKS(_TamperingProvider(pack, shift), pack.fingerprint, out, store.a_seed)
+    be = PKSMaskBackend(pack, ring, store, remote, groups_per_call=1)
+    gen = MaskGenerator(pack, ring, device="cpu", remote=be)
+    for s in pack.linear_specs():
+        assert gen._private_vectors(s) == private_check_vectors_for(ring, s.in_features) >= 7
+    seed = bytes(range(1, 33))
+    if caught:
+        with pytest.raises(IntegrityError):
+            for _ in gen.generate(seed, 300, checks=2, chunk_slots=300):
+                pass
+        return
+    local = MaskGenerator(pack, ring, device="cpu")
+    a = {(g.id.key, g.slot_start): g.wr.clone() for g in local.generate(seed, 300, checks=2, chunk_slots=300)}
+    b = {(g.id.key, g.slot_start): g.wr.clone() for g in gen.generate(seed, 300, checks=2, chunk_slots=300)}
+    assert a.keys() == b.keys() and all(torch.equal(a[k], b[k]) for k in a)
+    assert gen.last_stats.self_checked_rows == 300 * 4
