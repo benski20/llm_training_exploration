@@ -1,12 +1,28 @@
 [package]
 name = "pgw-pks"
-version = "0.1.0"
-description = "Research prototype (pks-v3, not wired): customer-side kernels of the compact-hint encrypted mask scheme. Length-4096 negacyclic NTTs over 30-bit primes (lazy Montgomery), the reply decryption c0 + c1 t' mod q1 with rounding to W8 r mod 2^32, and the ring-LWE upload pad a t mod 2^56. No dependencies; benchmark binary `pks-bench`."
+version = "0.2.0"
+description = "Customer and provider kernels of the compact-hint encrypted mask scheme pks-v3 (Python extension `pgw_pks`): ring-LWE upload encryption, reply keys, packed key-switched reply decryption (reply ring 8192, two ~2^24 primes), and the provider's modulus switch + packing + hybrid key switch. AVX-512 / AVX2 / baseline copies of the same code picked at run time; multi-threaded with deterministic output. Bit-identical to the numpy reference pgw.hemask.pks."
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 publish = false
 
+[lib]
+name = "pgw_pks"
+crate-type = ["cdylib", "rlib"]
+
+[features]
+default = ["python"]
+# Python bindings. `cargo test -p pgw-pks --no-default-features` tests the kernels alone.
+python = ["dep:pyo3", "dep:numpy"]
+
+[dependencies]
+pyo3 = { version = "0.23", features = ["abi3-py312", "extension-module"], optional = true }
+numpy = { version = "0.23", optional = true }
+chacha20 = "0.9"
+zeroize = "1"
+
 [[bin]]
 name = "pks-bench"
 path = "src/bin/pks_bench.rs"
+required-features = []

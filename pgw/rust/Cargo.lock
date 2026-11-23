@@ -432,7 +432,13 @@ dependencies = [
 
 [[package]]
 name = "pgw-pks"
-version = "0.1.0"
+version = "0.2.0"
+dependencies = [
+ "chacha20",
+ "numpy",
+ "pyo3",
+ "zeroize",
+]
 
 [[package]]
 name = "polyval"

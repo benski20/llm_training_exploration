@@ -841,11 +841,17 @@ containers.
   store a seed and recompute `W r` on the gateway GPU when one exists ("self-factory" mode).
 - Speculative decoding and prefix caching on the gateway (fewer rounds per accepted token).
 - Formal write-up of the security argument and an external audit.
-- Compact-hint encrypted masks (`pks-v3`, research prototype `pgw.hemask.pks` + `rust/pgw-pks`, not wired, off):
-  the provider modulus-switches, packs 16 rows per ring element and key-switches its 7.9 reply to a fresh
-  degree-4096 (production: 8192) ring secret, so the customer's hint shrinks 16x (24.6 KB -> 1.5 KB per output
-  row) and decryption is one length-N NTT product per 16 rows and group. Needs a cryptographic review before any
-  wire change; see `research/plans/he-compact-hint-pks.md`.
+- Compact-hint encrypted masks (`pks-v3`): implemented, **opt-in, default off, pending external review**.
+  The provider modulus-switches its 7.9 reply to `q1 ~ 2^48`, packs 32 rows per element of the reply ring
+  `Z[Z]/(Z^8192+1)` and key-switches it (hybrid, `log2(q1 P) = 108`) to a fresh reply secret; the customer's hint
+  is 256 coefficients per output row (1.5 KB, 16x smaller) and decryption is one pointwise product and inverse NTT
+  per 32 rows and group. Upload: ring-LWE `n = 4096, q = 2^56` in the unchanged `(n, 256)` layout. Customer:
+  `PGW_FACTORY_HE_SCHEME=pks-v3` + `PGW_FACTORY_HE_PKS_ACK=pks-v3-unreviewed-n8192` (K32 rings only); provider:
+  `PGW_SERVICE_MASKGEN_V3=true` (maskgen wire `v: 3`, advertised in `vs`; v1/v2 unchanged). Masks are the same
+  `W8 r mod 2^32` and every factory check applies. Code: `pgw.hemask.pks` (reference), `pgw.hemask.pks_native`
+  / `rust/pgw-pks` (kernels), `pgw.hemask.pks_backend`, `pgw.service.pks_provider`; parameters, noise and
+  hint integrity: `research/plans/he-compact-hint-pks.md` section 7; review packet:
+  `research/reviews/pks-v3-review-packet.md`.
 
 ## 17. Amendments v1.1 (integration review; folded from INTERFACE_NOTES.md)
 

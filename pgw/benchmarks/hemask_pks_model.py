@@ -23,12 +23,13 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--today-dec-ns", type=float, default=39.0, help="today, hint planes on disk/RAM (decrypt=ntt)")
     ap.add_argument("--today-pre-dec-ns", type=float, default=16.4, help="today, hint in NTT form (2x RAM)")
-    ap.add_argument("--pks-dec-ns", type=float, default=8.8, help="pks-v3 decrypt16 kernel")
+    ap.add_argument("--pks-dec-ns", type=float, default=10.0, help="pks-v3 decrypt (rust/pgw-pks, 2026-11-23: 9.5-10.7)")
+    ap.add_argument("--pks-enc-ns", type=float, default=35.0, help="pks-v3 encryption incl. CBD (2026-11-23: 33-38)")
     ap.add_argument("--enc-ns", type=float, default=32.0, help="encryption per input and slot (same both)")
     ap.add_argument("--r-ns", type=float, default=5.8, help="r keystream per input and slot (same both)")
-    ap.add_argument("--ksk-ms", type=float, default=1.7, help="pks-v3 reply key per (linear, group)")
+    ap.add_argument("--ksk-ms", type=float, default=5.6, help="pks-v3 reply key per (linear, group), n = 8192")
     ap.add_argument("--rates", type=float, nargs="+", default=[50.0, 75.0, 90.0], help="slots/s")
-    ap.add_argument("--reply-ring", type=int, default=4096, help="4096 (prototype) or 8192 (production)")
+    ap.add_argument("--reply-ring", type=int, default=8192, help="8192 (production) or 4096 (rejected prototype)")
     a = ap.parse_args()
     ksk_bytes = 16 * a.reply_ring * 13.5  # 16 components, log2(q1 P) = 108 bits
     print("| model | sum m | sum n | linears | GEMM int8 MAC/slot | scheme | hint (customer) | up B/slot | down B/slot "
@@ -44,9 +45,7 @@ def main() -> None:
             ("today v2, hint planes", sm * 24576, sn * 6.625, sm * 4.375, sm * a.today_dec_ns / 1e6 + enc),
             ("today v2, NTT-form hint", sm * 49152, sn * 6.625, sm * 4.375, sm * a.today_pre_dec_ns / 1e6 + enc),
             ("pks-v3, compact hint", sm * 256 * 6, sn * 7 + lin * ksk_bytes / 256, sm * 4.5,
-             sm * a.pks_dec_ns / 1e6 + enc + lin * a.ksk_ms / 256),
-            ("pks-v3, hint streamed", 0, sn * 7 + lin * ksk_bytes / 256, sm * (4.5 + 6),
-             sm * a.pks_dec_ns / 1e6 + enc + lin * a.ksk_ms / 256),
+             sm * a.pks_dec_ns / 1e6 + sn * (a.pks_enc_ns + a.r_ns) / 1e6 + lin * a.ksk_ms / 256),
         ]
         for scheme, hint, up, down, ms in rows:
             cores = " | ".join(f"{ms * r / 1e3:.1f}" for r in a.rates)
