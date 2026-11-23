@@ -11,6 +11,14 @@ call (``PGW_DECODE_NATIVE_LAYERS`` layers per call, 0 = all): it takes the lease
 the Freivalds and noise-sampling decisions of each trip in trip order, generates the request ids, and
 afterwards books the statistics and hands the sampled values to the noise monitor's statistics.
 
+Noise statistics keep the per-trip path's order: a trip the monitor samples ends a driver call, so its
+statistics run before any later payload is built and the next trip's sampling draw comes after them (an alarm
+then blocks the very next payload, fail closed). Inline statistics (``PGW_NOISE_ASYNC_SAMPLED`` off) go
+further, as the per-trip path does: the sampled trip is handed back after its native prepare and its
+statistics run before its own payload leaves (the trip is then sent by the ordinary path, same request).
+With ``PGW_NOISE_ASYNC_SAMPLED=1`` the sampled trip stays on the native lane and its statistics are joined
+before the next payload. Cost: one more driver call per sampled trip (5 % of trips at the default rate).
+
 What the driver cannot do itself comes back at a trip boundary: a trip the lane did not serve (no native
 channel, a refusal, a broken connection) is sent here with the same request (payload bytes and id) on the
 ordinary fallback and finished by :meth:`MaskedBackend._finish_lease`, and the driver continues with its
@@ -197,6 +205,11 @@ class NativeDecode:
         noise = be.noise_monitor
         plan_call = getattr(noise, "plan_call", None) if noise is not None else None
         no_lease = None
+        inline_stats = noise is not None and not be.noise_async_sampled
+        hold = False  # the call's last trip is sampled and goes back to Python before its payload leaves
+        flags = bytearray()
+        left = self._left_flags
+        self._left_flags = {}
         for idx in range(first, end):
             lid, meta = self.lids[idx], self.metas[idx]
             lease = be._trip_lease_for(res, leases_map, lid, meta, t)
@@ -205,26 +218,39 @@ class NativeDecode:
                 end = idx
                 break
             leases.append(lease)
-        if no_lease is not None and end == first and inject is None:
-            return self._ordinary_trip(sess, no_lease)
-        flags = bytearray(end - first)
-        left = self._left_flags
-        self._left_flags = {}
-        for i, idx in enumerate(range(first, end)):  # the per-trip draws, in trip order (each trip's once)
+            # the per-trip draws, in trip order (each trip's once), drawn only up to the call's last trip
             f = left.pop(idx, None)
             if f is None:
                 check = be._should_check()
                 sampled = bool(plan_call()) if plan_call is not None else False
                 f = (1 if check else 0) | (2 if sampled else 0)
-                if check and not leases[i].field and be._defer_ok(self.lids[idx]):
+                if check and not lease.field and be._defer_ok(lid):
                     f |= 4
-            flags[i] = f
+            if f & 2 and inline_stats and idx > first:
+                # inline statistics: the sampled trip starts a call of its own (below), drawn once
+                left[idx] = f
+                leases.pop()
+                end = idx
+                break
+            flags.append(f)
+            if f & 2:
+                # a sampled trip ends the call, so its statistics run before any later payload is built
+                # and the next trip's sampling draw comes after them (the per-trip path's order). With
+                # noise_async_sampled they run beside the trip's own send and are joined before the next
+                # payload; inline, the driver hands the trip back after its prepare (no lane for it) and the
+                # statistics run before its payload leaves: an alarm stops that payload, as on the per-trip path
+                end = idx + 1
+                hold = inline_stats
+                break
+        self._left_flags = left  # draws of trips past this call's end (after a hand-back), for the next call
+        if no_lease is not None and end == first and inject is None:
+            return self._ordinary_trip(sess, no_lease)
         rids = os.urandom(16 * (end - first))
         client = be.client
         lane_got = None
         lane_arg = None
         drv_ch = getattr(client, "driver_channel", None)
-        if drv_ch is not None and end > first and getattr(client, "lane_eligible_for_driver", True):
+        if drv_ch is not None and end > first and not hold and getattr(client, "lane_eligible_for_driver", True):
             lane_got = drv_ch(be.fingerprint, be.ring.name, t, be.deadline_ms)
             if lane_got is not None:
                 ix = self._lane_index(lane_got[0])
@@ -274,7 +300,7 @@ class NativeDecode:
         if code == 1:
             # trips after the handed-back one keep their draws for the next call (drawn once, in trip order)
             j = int(drv.pos)
-            self._left_flags = {idx: flags[idx - first] for idx in range(j + 1, end)}
+            self._left_flags.update({idx: flags[idx - first] for idx in range(j + 1, end)})
             return self._handback(info, res, sess, t, end, first)
         lid = self.lids[int(drv.pos)] if int(drv.pos) < len(self.lids) else self.lids[-1]
         if code == 2:
@@ -383,6 +409,11 @@ class NativeDecode:
         prep.defer = bool(ticket.checked) and not _lease_field(res, lid) and be._defer_ok(lid)
         prep.reservations = (res,)
         client = be.client
+        noise = be.noise_monitor
+        if noise is not None and getattr(noise, "fail_closed", False) and getattr(noise, "alarmed", False):
+            prep.wipe()  # the trip's statistics (just inspected) alarmed: its payload never leaves
+            raise IntegrityError("outbound-noise monitor alarm: masked traffic blocked until an admin reset",
+                                 details={"reasons": list(noise.report().reasons[-4:])})
         t0 = time.perf_counter()
         try:
             if lane_status >= 0 and hasattr(client, "fallback_sync"):
