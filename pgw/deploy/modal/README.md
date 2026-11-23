@@ -1082,6 +1082,38 @@ provider than the 0.5B's whole float head costs the gateway, and the factory mak
 balance is the other way (the head is 11% of the mask bytes and 1.09 GB of bfloat16 per pass on a CPU-only gateway,
 about 60 ms per token measured on the H100 run); the H100 rerun with `--masked-head` is the measurement that counts.
 
+### fused2, 2 provider trips per layer: one exact 7B e2e (`fused2_e2e.py`, opt-in; prepared 2026-11-23, not run)
+
+A separate small app (`pgw-fused2-e2e`), not `launch.py`: one container, the provider's fused2 pair op on the GPU
+(`python -m pgw.engine.fused2_remote serve`: public `w8` + residual multipliers only, masked ring elements only, a
+0700-directory Unix socket) and the gateway on the CPU (`benchmarks/fused2_e2e.py`: builds the migrated fused2
+reference from the public checkpoint at start-up, makes its own masks with an in-process plain factory, masks
+every trip, range-checks and Freivalds-checks both stages over F_(2^61-1), greedy-decodes, then replays the first
+calls on the plain reference and requires bit-identical logits). Trips per token: `2L + 1` = 57 at 7B (today 113).
+
+```bash
+PGW_F2_MODEL=qwen2.5-7b-instruct PGW_F2_GPU=H100 modal run pgw/deploy/modal/fused2_e2e.py \
+    --tokens 32 --ring K56A12C53 --migrate-bits 8 --replay-calls 3
+```
+
+Defaults: 24 vCPU, 96 GiB, H100, 40-minute timeout. The image build (CPU, once) downloads the pinned 7B
+checkpoint (15 GB), packs it and builds the native kernels. Start-up in the container: folding + spectral norms +
+check vectors (CPU, about 3-6 min), masks for prompt + 32 slots (about 1-2 min), decode, replay of prefill + 2
+decode steps (CPU, a few minutes): about 10-15 minutes, $1.2-1.8 on an H100. Writes `fused2_e2e_result.json`
+locally (`exact`, `trips_per_token`, `bytes_per_token`, `trip_ms_p50/p90`, `provider_compute_ms_p50`,
+`trip_ms_sum_per_token`, `decode_tok_s`, `act_bits_hist`, `slots_per_token`, `factory_macs_per_slot`).
+
+What this run does **not** use (fused2 has no path there yet): the production gateway runtime and console, the mask
+store and the encrypted (HE/PKS) factory (K56 needs an HE modulus above 2^64; here the gateway makes its own masks
+from public weights, so the gateway holds the int8 weights: not weight-free), the binary trip lane and its UDS/shm
+transports (`PGW_LANE_SHM`, spin, zero-copy: the harness has its own framed Unix socket), `--trip-native` /
+`--decode-native` (per-linear native kernels, no pair op: the harness's per-trip gateway work is Python/numpy),
+`--prime-check` (p31 cannot hold fused2's bounds; fused2 checks over p61 in numpy limb arithmetic) and
+`--masked-head` (fused2 keeps the LM head on the gateway; folding it into the last trip is not prototyped). So
+read `trips_per_token` and `trip_ms_sum_per_token` against today's 113 trips, not `decode_tok_s` against the
+28 tok/s of the native path: on this harness the gateway's Python per-trip work (about 2 ms per trip at 0.5B on a
+loaded CPU core, more at 7B) dominates.
+
 ## Trip latency and the `--max-trip-ms` gate
 
 `--e2e` now also reports the gateway's **client-reported round-trip latency** (`trip_latency` in the

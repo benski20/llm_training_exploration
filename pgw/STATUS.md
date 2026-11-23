@@ -37,6 +37,27 @@ checks, sampled noise checks inline before the next payload):
   --gateway-env PGW_LANE_SPIN_AUTO_US=400 --gateway-env PGW_LANE_SHM=1 --gateway-env PGW_TRIP_DECRYPT_AHEAD=1
   --provider-env PGW_SERVICE_LANE_SHM=1 --provider-env PGW_SERVICE_LANE_ZERO_COPY=1 --provider-env
   PGW_SERVICE_LANE_OWN_LOCK=1` (plus the factory sizing env of the README's CPU-only 7B command).
+## Update 2026-11-23: fused2 (2 trips per layer) quality gap closed; exact e2e harness ready for one 7B run (opt-in)
+
+Diagnosis: the whole top-1 gap of fused2 (93.9% vs 96.9-97.1% for the int8 reference, 4k wikitext tokens) is the
+int8 rounding of the folded weights `W diag(g * sw1)` (with them in float fused2 reaches 97.2%), spread over all
+layers; the folded column scales spread 7x (up to 32x), so most columns get a 2.2x (up to 8x) coarser int8 grid.
+Fix: **residual-grid migration**: public per-channel integers `hmul` (pack time, from public weights only,
+`migration_multipliers`, 8 bits); the provider returns `H = R + hmul * (W1 x)` and the gateway keeps the residual
+on the finer grid `sw1 / hmul`, so the folded matrix sees near-uniform column scales. Exact, same trips, same
+elements and factory products, masks `r_R = v - hmul W1 r_x` (uniform), stage-1 check with `u * hmul`; costs ~8 bits
+in `H`/`Z`: ring **K56A12C53** (7 bytes per element). Qwen2.5-0.5B, engine, 4088 tokens: top-1 = float **96.8%**
+(int8 reference 97.1%, old fused2 94.1%), ppl 19.86 (int8 19.83, float 19.93), prompts 96.9% (= int8), every row
+at 12 activation bits. Qwen2.5-1.5B (simulator, 2044 tokens): 98.0% (int8 97.7%, old fused2 96.5%).
+Tests: migrated masked == plain bit for bit, tamper (H, consistent H, Z, Z without residual, a provider skipping
+the multipliers), socket path, prefill == lazy masks.
+
+E2E: `pgw.engine.fused2_remote` (the pair op as its own process on a 0600 Unix socket, CUDA ring products) +
+`benchmarks/fused2_e2e.py` + `deploy/modal/fused2_e2e.py` (one container; masks from a gateway-side plain factory;
+plain replay must match). Local 0.5B check: 49 trips/token, bit-identical, 1 slot per token (same elements as
+today), 3.4 MB per token at K56. It does not use the production runtime, store, HE factory, lane, native decode
+driver, p31 or the masked head (fused2 has no path there yet; list in `research/plans/fused2-two-trips-per-layer.md`
+section 8 and `deploy/modal/README.md`). Defaults off; the gateway still refuses `schedule = "fused2"`.
 
 ## Update 2026-11-23: decode driver keeps "alarm before the next payload"; few-row GEMV tuning (opt-in)
 

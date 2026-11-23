@@ -6,7 +6,13 @@ reference itself (no fake quantization):
 * ``float``: the HF checkpoint in float32 (transformers), the quality ceiling;
 * ``std:<ring>``: today's pinned int8 reference (standard 4-trip schedule, ``PlainBackend``);
 * ``f2:<ring>``: fused2 with norm gains folded into the *float* weights before int8 rounding (pack time);
-* ``f2i8:<ring>``: fused2 folded from the pack's int8 weights (no float checkpoint at pack time).
+* ``f2i8:<ring>``: fused2 folded from the pack's int8 weights (no float checkpoint at pack time);
+* ``f2m<b>+g<k>:<ring>``: the migrated split fold (:func:`pgw.engine.fused2.calibrate_fused2`, ``b``
+  migration bits, ``k`` top columns, calibrated on wikitext-2 test tokens far from the evaluated ones);
+* ``f2mig<b>:<ring>``: pure pack-time migration (:func:`pgw.engine.fused2.migration_multipliers`, ``b`` bits;
+  no calibration data, no gateway columns; needs K56C53 at ``b = 8``);
+* ``f2+g<k>:<ring>``: fused2 with the split fold (``k`` gateway columns per folded linear, int16 on the
+  gateway; ``Fused2Weights(gateway_columns=k)``).
 
 Metrics: wikitext-2 test perplexity (non-overlapping windows), top-1 agreement with float, and on fixed
 prompts the max ``|delta logprob|`` of the actual next token and over the whole vocabulary (L-inf). For
@@ -37,21 +43,21 @@ PROMPTS = [
 ]
 
 
-def hf_dir() -> Path:
-    snaps = sorted((Path.home() / ".cache/huggingface/hub/models--Qwen--Qwen2.5-0.5B-Instruct/snapshots").glob("*"))
+def hf_dir(name: str = "Qwen2.5-0.5B-Instruct") -> Path:
+    snaps = sorted((Path.home() / f".cache/huggingface/hub/models--Qwen--{name}/snapshots").glob("*"))
     if not snaps:
-        raise SystemExit("Qwen2.5-0.5B-Instruct is not in the local HF cache")
+        raise SystemExit(f"{name} is not in the local HF cache")
     return snaps[-1]
 
 
-def load_tokens(tok: Any, n: int) -> torch.Tensor:
+def load_tokens(tok: Any, n: int, offset: int = 0) -> torch.Tensor:
     import pyarrow.parquet as pq
     from huggingface_hub import hf_hub_download
 
     path = hf_hub_download("Salesforce/wikitext", "wikitext-2-raw-v1/test-00000-of-00001.parquet",
                            repo_type="dataset", local_files_only=True)
     text = "\n\n".join(pq.read_table(path).column("text").to_pylist())
-    return tok(text, return_tensors="pt").input_ids[0][:n]
+    return tok(text, return_tensors="pt").input_ids[0][offset : offset + n]
 
 
 def windows(ids: torch.Tensor, seq: int) -> list[torch.Tensor]:
@@ -63,18 +69,42 @@ def float_logits(model: Any, ids: torch.Tensor) -> torch.Tensor:
     return model(ids[None]).logits[0].float()
 
 
-def engine_runner(pack: Any, cfg: str, state: Any) -> tuple[Any, Any]:
+#: Bits of the gateway columns' integer weights (``--gateway-bits``).
+GATEWAY_BITS = 12
+
+
+def engine_runner(pack: Any, cfg: str, state: Any, calib: list[torch.Tensor] | None = None) -> tuple[Any, Any]:
     from pgw.core.ring import RingParams
     from pgw.engine.backends import PlainBackend
-    from pgw.engine.fused2 import Fused2PlainBackend, Fused2Weights, enable_fused2, hf_float_linears
+    from pgw.engine.fused2 import (
+        Fused2PlainBackend,
+        Fused2Weights,
+        calibrate_fused2,
+        enable_fused2,
+        hf_float_linears,
+        migration_multipliers,
+    )
     from pgw.engine.model import TransformerModel
 
     kind, ring_name = cfg.split(":")
     ring = RingParams.from_name(ring_name)
     if kind == "std":
         return TransformerModel(pack, PlainBackend(pack, ring)), None
-    fl = hf_float_linears(state, pack.arch) if kind == "f2" else None
-    w = Fused2Weights(pack, fl)
+    kind, _, gcols = kind.partition("+g")  # "f2+g8": split fold, 8 gateway columns per folded linear
+    if kind.startswith("f2mig"):  # "f2mig8": pure pack-time migration, 8 bits (no calibration, no gateway columns)
+        fl = hf_float_linears(state, pack.arch)
+        w = Fused2Weights(pack, fl, multipliers=migration_multipliers(pack, int(kind[5:] or 8)))
+    elif kind.startswith("f2m"):  # "f2m6+g4": migrated split fold, 6 migration bits, 4 top columns
+        assert calib is not None
+        fl = hf_float_linears(state, pack.arch)
+        cal = calibrate_fused2(pack, fl, calib, ring, bits=int(kind[3:] or 6), columns=int(gcols or 4),
+                               gateway_bits=GATEWAY_BITS)
+        print("calibration", cal["stats"], flush=True)
+        w = Fused2Weights(pack, fl, gateway_columns=cal["gateway_columns"], multipliers=cal["multipliers"],
+                          gateway_bits=cal["gateway_bits"])
+    else:
+        fl = hf_float_linears(state, pack.arch) if kind == "f2" else None
+        w = Fused2Weights(pack, fl, gateway_columns=int(gcols or 0))
     del fl
     model = TransformerModel(pack, Fused2PlainBackend(ring))
     sched = enable_fused2(model, w, ring)
@@ -99,11 +129,18 @@ def main() -> None:
     ap.add_argument("--tokens", type=int, default=4096)
     ap.add_argument("--seq", type=int, default=512)
     ap.add_argument("--json", default=None)
+    ap.add_argument("--calib-offset", type=int, default=150000,
+                    help="calibration text for f2m: wikitext-2 test tokens from here (far from the eval tokens)")
+    ap.add_argument("--calib-tokens", type=int, default=1024)
+    ap.add_argument("--gateway-bits", type=int, default=12, help="f2m: bits of the gateway columns' weights")
+    ap.add_argument("--model", default="Qwen2.5-0.5B-Instruct", help="a Qwen checkpoint in the local HF cache")
     ap.add_argument("--threads", type=int, default=0)
     ap.add_argument("--save-prompts", default=None, help="path prefix: keep each config's prompt logprobs")
     ap.add_argument("--pack", default=None, help="an on-disk pgw pack of the same checkpoint (less memory)")
     ap.add_argument("--ref", default=None, help="cache of the float reference (and the int8 prompt logprobs)")
     args = ap.parse_args()
+    global GATEWAY_BITS
+    GATEWAY_BITS = args.gateway_bits
     if args.threads:
         torch.set_num_threads(args.threads)
     from safetensors.torch import load_file
@@ -111,7 +148,7 @@ def main() -> None:
 
     from pgw.engine.pack import InMemoryPack, arch_config_from_hf
 
-    d = hf_dir()
+    d = hf_dir(args.model)
     tok = AutoTokenizer.from_pretrained(d)
     ids = load_tokens(tok, args.tokens)
     wins = windows(ids, args.seq)
@@ -151,7 +188,11 @@ def main() -> None:
     base_prompt: list[torch.Tensor] | None = ref.get("int8")
     for cfg in args.configs:
         t0 = time.time()
-        model, sched = engine_runner(pack, cfg, state)
+        calib = None
+        if cfg.startswith("f2m") and not cfg.startswith("f2mig"):
+            cids = load_tokens(tok, args.calib_tokens, args.calib_offset)
+            calib = [cids[i : i + args.seq] for i in range(0, len(cids), args.seq)]
+        model, sched = engine_runner(pack, cfg, state, calib)
         nll = cnt = agree = 0.0
         for w, rt in zip(wins, ref_top, strict=True):
             a, b, top = stats(engine_logits(model, w), w)
@@ -187,6 +228,7 @@ def main() -> None:
             r["act_bits_hist"] = {str(k): v for k, v in sorted(sched.bits_hist.items())}
             r["rows_below_A"] = 1 - sched.bits_hist.get(sched.ring.a, 0) / max(tot, 1)
             r["max_out_bits"] = getattr(model.backend, "max_bits", None)
+            r["gateway_cost"] = sched.w.gateway_cost()
         results[cfg] = r
         print(cfg, json.dumps(r), flush=True)
         del model, sched

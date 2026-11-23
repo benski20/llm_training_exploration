@@ -1,0 +1,152 @@
+{
+ "_setup": {
+  "model": "Qwen/Qwen2.5-0.5B-Instruct",
+  "data": "wikitext-2-raw test, first 4097 tokens, 8 non-overlapping windows of 512 (4088 predictions)",
+  "prompts": "6 fixed prompts (benchmarks/fused2_quality.py PROMPTS, 98 positions)",
+  "engine": "benchmarks/fused2_quality.py --tokens 4097 --seq 512 --pack <on-disk pgw pack> (the exact pinned references)",
+  "date": "2026-11-23",
+  "configs": {
+   "std:K32A12C27": "today's int8 reference (standard 4-trip schedule)",
+   "f2:K48A12C45": "fused2 as of 2026-11-22 (norm gains folded into the float weights before int8 rounding)",
+   "f2mig8:K56A12C53": "fused2 with residual-grid migration, 8 bits (migration_multipliers; pack time, public weights only)",
+   "f2m4+g4:K48A12C45": "calibrated migrated split fold (calibrate_fused2, 4 bits, 4 top columns, 12-bit gateway columns); 1022 tokens (2 windows of 512) only"
+  }
+ },
+ "float": {
+  "ppl": 19.931,
+  "tokens": 4088
+ },
+ "std:K32A12C27": {
+  "ppl": 19.833842005539328,
+  "top1_vs_float": 0.9708904109589042,
+  "prompt_max_dlogprob_next_vs_float": 2.448500216729312,
+  "prompt_max_dlogprob_vocab_vs_float": 6.553000269119227,
+  "prompt_top1_vs_float": 0.9693877551020408,
+  "seconds": 1280.6
+ },
+ "f2:K48A12C45": {
+  "ppl": 20.082631861622566,
+  "top1_vs_float": 0.9410469667318982,
+  "prompt_max_dlogprob_next_vs_float": 2.3011036506772937,
+  "prompt_max_dlogprob_vocab_vs_float": 6.747652794070994,
+  "prompt_top1_vs_float": 0.9489795918367347,
+  "seconds": 782.2449469566345,
+  "prompt_max_dlogprob_next_vs_int8": 1.395078449955232,
+  "prompt_top1_vs_int8": 0.9693877551020408,
+  "act_bits_hist": {
+   "12": 201312
+  },
+  "rows_below_A": 0.0,
+  "max_out_bits": {
+   "single": 22.44879008170262,
+   "H": 34.256152717002756,
+   "Z": 41.36045605280187
+  },
+  "gateway_cost": {
+   "columns": 0,
+   "weight_bytes": 0,
+   "macs_per_token": 0
+  }
+ },
+ "f2mig8:K56A12C53": {
+  "ppl": 19.855285979442804,
+  "top1_vs_float": 0.9677103718199609,
+  "prompt_max_dlogprob_next_vs_float": 2.205647525405145,
+  "prompt_max_dlogprob_vocab_vs_float": 6.671497375179584,
+  "prompt_top1_vs_float": 0.9693877551020408,
+  "seconds": 1031.9,
+  "act_bits_hist": {
+   "12": 201312
+  },
+  "rows_below_A": 0.0,
+  "max_out_bits": {
+   "single": 22.44879008170262,
+   "H": 41.487966826437166,
+   "Z": 48.60464477127139
+  },
+  "gateway_cost": {
+   "columns": 0,
+   "weight_bytes": 0,
+   "macs_per_token": 0
+  }
+ },
+ "f2m4+g4:K48A12C45 (1022 tokens; float ppl 17.0919 on that set)": {
+  "ppl": 16.968319361192492,
+  "top1_vs_float": 0.961839530332681,
+  "prompt_max_dlogprob_next_vs_float": 1.8095467965287089,
+  "prompt_max_dlogprob_vocab_vs_float": 6.142211963735129,
+  "prompt_top1_vs_float": 0.9795918367346939,
+  "seconds": 430.9,
+  "act_bits_hist": {
+   "11": 8,
+   "12": 53848
+  },
+  "rows_below_A": 0.00014854426619137495,
+  "max_out_bits": {
+   "single": 22.45036251414925,
+   "H": 33.91480783004742,
+   "Z": 41.38988598828039
+  },
+  "gateway_cost": {
+   "columns": 205,
+   "weight_bytes": 2324736,
+   "macs_per_token": 1162368
+  }
+ },
+ "simulator_4k": {
+  "_note": "float64 simulator of the same arithmetic (no adaptive activation bits), same 4088 predictions",
+  "std": {
+   "top1": 0.9692,
+   "ppl": 19.8331
+  },
+  "f2 (2026-11-22)": {
+   "top1": 0.9391,
+   "ppl": 20.0835,
+   "max_bits": {
+    "H": 34.26,
+    "Z": 41.36,
+    "Z_bound": 44.65
+   }
+  },
+  "f2, folded weights in float (ceiling)": {
+   "top1": 0.9719,
+   "ppl": 19.843
+  },
+  "mig8 (pure migration, 8 bits)": {
+   "top1": 0.9692,
+   "ppl": 19.8555,
+   "max_bits": {
+    "H": 41.49,
+    "Z": 48.6,
+    "Z_bound": 52.03
+   }
+  },
+  "split 4 cols + mig4 (calibrated)": {
+   "top1": 0.9667,
+   "ppl": 19.8545,
+   "max_bits": {
+    "H": 34.23,
+    "Z": 42.41,
+    "Z_bound": 45.36
+   }
+  },
+  "split 4 cols + mig6 (calibrated)": {
+   "top1": 0.9682,
+   "ppl": 19.8626,
+   "max_bits": {
+    "H": 34.49,
+    "Z": 43.61,
+    "Z_bound": 46.78
+   }
+  },
+  "split 4 cols + mig6, overflow at 1/4 max (calibrated)": {
+   "top1": 0.9699,
+   "ppl": 19.8605,
+   "max_bits": {
+    "H": 34.49,
+    "Z": 43.32,
+    "Z_bound": 46.21
+   }
+  }
+ }
+}
