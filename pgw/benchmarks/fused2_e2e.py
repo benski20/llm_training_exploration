@@ -133,6 +133,13 @@ def main() -> None:
     ap.add_argument("--replay-calls", type=int, default=0,
                     help="replay only the first N forward calls (prefill = 1; 0: all). Every trip is Freivalds-checked "
                     "against the exact integers anyway; the replay also covers the gateway's own float code")
+    ap.add_argument("--transport", choices=["socket", "lane", "lane-shm"], default="socket",
+                    help="socket: the harness pair op (eager digit GEMMs); lane / lane-shm: the production native trip "
+                    "lane with pair items and the graphed Triton pair op (pgw.service.fused2_lane), over the Unix "
+                    "socket or its shared-memory segment")
+    ap.add_argument("--masks", choices=["inproc", "segments"], default="inproc",
+                    help="segments: masks from a separate plain-factory process (pair-mask segments + check vectors); "
+                    "the gateway's model and backend then run on weight-free tables")
     ap.add_argument("--threads", type=int, default=0)
     ap.add_argument("--json", default=None)
     args = ap.parse_args()
@@ -171,26 +178,79 @@ def main() -> None:
     w.save(prov_file, provider_only=True)
     os.chmod(prov_file, 0o644)  # public weights; the provider's user reads them
     address = args.address or f"unix:{tmp / 'f2.sock'}"
-    cmd = [*args.provider_cmd_prefix.split(), sys.executable, "-m", "pgw.engine.fused2_remote", "serve",
-           "--weights", str(prov_file), "--k", str(ring.k), "--address", address, "--device", args.provider_device]
+    lane = args.transport.startswith("lane")
+    env = dict(os.environ)
+    ticket_file = tmp / "ticket.json"
+    if lane:
+        from pgw.service.fused2_lane import fused2_fingerprint
+
+        if args.transport == "lane-shm":
+            env["PGW_SERVICE_LANE_SHM"] = "1"
+        if args.provider_cmd_prefix:  # the provider runs as another user: allow this gateway's uid as the lane peer
+            env.setdefault("PGW_SERVICE_LANE_PEER_UIDS", str(os.getuid()))
+        cmd = [*args.provider_cmd_prefix.split(), sys.executable, "-m", "pgw.service.fused2_lane", "serve",
+               "--weights", str(prov_file), "--ring", ring.name, "--socket", address.removeprefix("unix:"),
+               "--ticket-file", str(ticket_file), "--device", args.provider_device]
+        lane_fp = fused2_fingerprint(w, ring)
+    else:
+        cmd = [*args.provider_cmd_prefix.split(), sys.executable, "-m", "pgw.engine.fused2_remote", "serve",
+               "--weights", str(prov_file), "--k", str(ring.k), "--address", address, "--device",
+               args.provider_device]
+        lane_fp = ""
     t0 = time.time()
-    prov = subprocess.Popen(cmd)  # noqa: S603
+    prov = subprocess.Popen(cmd, env=env)  # noqa: S603
     try:
-        dims = {lin.key: (lin.m, lin.n) for lin in w.linears()}
-        client = RemoteFused2Provider(address, ring.k, dims)
+        ticket: dict[str, Any] = {}
+        if lane:
+            from pgw.engine.fused2_lane import connect_uds
+
+            while not ticket_file.is_file():
+                if prov.poll() is not None:
+                    raise SystemExit(f"fused2 lane provider exited ({prov.returncode})")
+                time.sleep(0.5)
+            ticket = json.loads(ticket_file.read_text())
+            ticket_file.unlink()
+            if ticket["fingerprint"] != lane_fp:
+                raise SystemExit("fused2 lane: the provider serves another weight set")
+            client = connect_uds(ticket["socket"], bytes.fromhex(ticket["ticket"]), ticket["linears"], w, ring.k,
+                                 shm=args.transport == "lane-shm", max_rows=int(ticket["max_rows"]),
+                                 spin_us=int(os.environ.get("PGW_LANE_SPIN_US", "400")))
+            print(f"lane: graphs {ticket.get('graphs')}, provider start-up {ticket.get('startup_s')} s", flush=True)
+        else:
+            dims = {lin.key: (lin.m, lin.n) for lin in w.linears()}
+            client = RemoteFused2Provider(address, ring.k, dims)
         connect_s = time.time() - t0
-        src = Fused2MaskSource(w, ring)
         ids = tok(args.prompt, return_tensors="pt").input_ids[0]
         slots = int(ids.numel()) + args.tokens
-        t_chk = time.time()
-        for lin in w.linears():
-            src.check_vectors(lin)  # u W8 mod p of every linear (factory precompute), off the measured path
-        check_setup_s = time.time() - t_chk
-        prefill_s = src.prefill(slots)
+        gw_w = w
+        if args.masks == "segments":  # the factory is its own process; the gateway gets segments, no weights
+            from pgw.engine.fused2_masks import Fused2SegmentMasks, gateway_tables
+
+            full_file = tmp / "full_weights.pt"
+            w.save(full_file)
+            seg_dir = tmp / "segments"
+            t_chk = time.time()
+            subprocess.run([sys.executable, "-m", "pgw.engine.fused2_masks", "factory", "--weights", str(full_file),  # noqa: S603
+                            "--ring", ring.name, "--lane-fingerprint", lane_fp, "--rows", str(slots), "--out",
+                            str(seg_dir)], check=True)
+            gw_w = gateway_tables(w)
+            src = Fused2SegmentMasks(gw_w, ring, (seg_dir / "check.bin").read_bytes(), lane_fingerprint=lane_fp)
+            for f in sorted(seg_dir.glob("seg-*.bin")):
+                src.add_segment(f.read_bytes())
+                f.unlink()
+            (seg_dir / "check.bin").unlink()
+            check_setup_s = prefill_s = time.time() - t_chk
+        else:
+            src = Fused2MaskSource(w, ring)
+            t_chk = time.time()
+            for lin in w.linears():
+                src.check_vectors(lin)  # u W8 mod p of every linear (factory precompute), off the measured path
+            check_setup_s = time.time() - t_chk
+            prefill_s = src.prefill(slots)
         print(f"provider up in {connect_s:.1f}s; masks for {slots} rows (slots) in {prefill_s:.1f}s", flush=True)
         be = Fused2MaskedBackend(ring, client, src)
         model = TransformerModel(pack, be)
-        sched = enable_fused2(model, w, ring)
+        sched = enable_fused2(model, gw_w, ring)
         cache = model.new_cache(slots + 1)
         calls: list[torch.Tensor] = [ids]
         t_first = time.perf_counter()
@@ -224,7 +284,11 @@ def main() -> None:
             "trip_ms_p50": _pct(trip_ms, 0.5), "trip_ms_p90": _pct(trip_ms, 0.9),
             "provider_compute_ms_p50": _pct(comp_ms, 0.5),
             "trip_ms_sum_per_token": sum(trip_ms) / max(1, len(step_s)),
-            "checks": be.f2.checks, "all_checks_passed": True, "slots_used": slots, "slots_per_token": 1.0,
+            "transport": args.transport, "masks": args.masks, "lane_graphs": ticket.get("graphs"),
+            "lane_calls": getattr(client, "calls", None),
+            "checks": be.f2.checks, "all_checks_passed": True, "slots_used": slots,
+            "slots_per_token": (src.slots_used() - int(ids.numel())) / max(1, len(step_s))
+            if hasattr(src, "slots_used") else 1.0,
             "mask_prefill_s": prefill_s, "check_vectors_setup_s": check_setup_s,
             "mask_stock_hits": src.stock_hits, "mask_stock_misses": src.stock_misses,
             "factory_macs_per_slot": src.macs / max(1, slots),

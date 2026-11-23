@@ -321,6 +321,9 @@ class LaneManager:
         self._persistent: list[Any] = []  # pgw.service.persistent groups (opt-in)
         self.persistent_report: Any = None
         self.unavailable_reason: str | None = None
+        #: fused2 pair items (opt-in, :mod:`pgw.service.fused2_lane`): lane fingerprint -> entry, slot -> entry
+        self.fused2: dict[str, Any] = {}
+        self._f2slots: dict[int, Any] = {}
 
     # ---- lifecycle ---------------------------------------------------------------------------
     @classmethod
@@ -366,6 +369,7 @@ class LaneManager:
             return False
         self.loop = loop
         cap_ms = int(min(s.max_deadline_s or 120.0, 3600.0) * 1000)
+        self._load_fused2(s)
         use_graphs = _graphs_wanted() and self._any_cuda()
         from pgw.service.persistent import exec_mode
 
@@ -406,6 +410,8 @@ class LaneManager:
         )
         for m in self.state.registry.models():
             self._slot_for(m.fingerprint)
+        for fp in self.fused2:
+            self._slot_for(fp)
         self.state.handler.lane_admission = self.svc
         if use_persistent or (use_graphs and not _own_lock_wanted()):
             self._install_device_locks()
@@ -452,9 +458,27 @@ class LaneManager:
         self.svc = None
 
     # ---- tables and tickets ------------------------------------------------------------------
+    def _load_fused2(self, s: Any) -> None:
+        """fused2 pair items (opt-in): entries the app state already holds (``state.fused2``) or the environment
+        asks for (:func:`pgw.service.fused2_lane.load_fused2_entries`), each published as its own lane model."""
+        entries = getattr(self.state, "fused2", None)
+        if entries is None:
+            from pgw.service.fused2_lane import load_fused2_entries
+
+            entries = load_fused2_entries(self.state, max_rows=int(s.lane_max_rows))
+        self.fused2 = dict(entries or {})
+
     def _slot_for(self, fingerprint: str) -> int:
         slot = self._slots.get(fingerprint)
         if slot is not None:
+            return slot
+        f2 = self.fused2.get(fingerprint)
+        if f2 is not None:
+            slot = len(self._slots)
+            self.svc.set_model(slot, f2.table(), [(f2.ring.name, int(f2.ring.bytes_per_element))])
+            self._slots[fingerprint] = slot
+            self._tables[slot] = _Slot(fingerprint, f2.names(), [f2.ring])
+            self._f2slots[slot] = f2
             return slot
         m = self.state.registry.get(fingerprint)
         rings = [RingParams.from_name(r) for r in m.rings]
@@ -517,6 +541,14 @@ class LaneManager:
     def _py_execute(self, slot: int, linear: int, ring: int, rows: int, body: bytes, tenant: str,
                     remaining_s: float) -> bytes | int:
         """Runs on a lane connection thread (GIL held): the regular kernel path on the event loop."""
+        f2 = self._f2slots.get(slot)
+        if f2 is not None:  # fused2 pair item without a graph: the eager op, under the device's lane lock
+            try:
+                with self._f2_lock(f2):
+                    return f2.run(linear, rows, body)
+            except Exception as exc:
+                log.warning("fused2 lane call failed: %s", type(exc).__name__)
+                return int(LaneStatus.INTERNAL)
         loop = self.loop
         t = self._tables.get(slot)
         if loop is None or t is None or loop.is_closed():
@@ -566,6 +598,15 @@ class LaneManager:
                 return int(LaneStatus.DEADLINE_EXCEEDED)
             log.warning("lane call failed on the kernel path: %s", exc.code)
             return int(LaneStatus.INTERNAL)
+
+    def _f2_lock(self, f2: Any) -> Any:
+        """The lock a fused2 op's eager call holds: the same device lock(s) its graph replays hold on CUDA (the
+        op's device buffers are shared with its graphs), the entry's own lock on CPU."""
+        if f2.device.type == "cuda":  # pragma: no cover - GPU only
+            from pgw.service.gpu_exec import device_executor
+
+            return _capture_locks(self, device_executor(f2.device), f2.device)
+        return f2.lock
 
     # ---- metrics and revocation --------------------------------------------------------------
     async def _drain_loop(self) -> None:
@@ -626,10 +667,11 @@ class LaneManager:
     def _devices(self) -> set[str]:
         """Every device a served kernel uses (all shards of tensor-parallel kernels)."""
         return {str(d) for m in self.state.registry.models() for k in m.kernels.values()
-                for d in getattr(k, "devices", [k.device])}
+                for d in getattr(k, "devices", [k.device])} | {str(f2.device) for f2 in self.fused2.values()}
 
     def _any_cuda(self) -> bool:
-        return any(d.startswith("cuda") for d in self._devices())
+        return any(d.startswith("cuda") for d in self._devices()) or any(
+            f2.device.type == "cuda" for f2 in self.fused2.values())
 
     def _install_device_locks(self) -> None:  # pragma: no cover - GPU only
         """Make the lane and the Python path share one lock per device (one call per device)."""
@@ -734,6 +776,15 @@ def capture_lane_graphs(mgr: LaneManager, *, inject_mismatch: bool = False,
                 break
         if sharded and not rep.disabled:
             _capture_sharded(mgr, sharded, rows_list, rep, inject_mismatch)
+        for slot, f2 in mgr._f2slots.items():  # fused2 pair items (opt-in)
+            if rep.disabled:
+                break
+            if f2.device.type != "cuda":
+                rep.skipped["fused2_not_cuda"] = rep.skipped.get("fused2_not_cuda", 0) + len(f2.items)
+                continue
+            from pgw.service.fused2_lane import capture_fused2_graphs
+
+            capture_fused2_graphs(mgr, f2, slot, [r for r in rows_list if r <= f2.ops[0].max_rows], rep)
     except Exception as exc:  # pragma: no cover - GPU only
         rep.disabled = f"capture failed: {type(exc).__name__}: {str(exc)[:200]}"
     if rep.disabled:

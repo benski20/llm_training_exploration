@@ -12,6 +12,13 @@ Run (the lead's one 7B measurement; the image build downloads the checkpoint and
     PGW_F2_MODEL=qwen2.5-7b-instruct PGW_F2_GPU=H100 modal run pgw/deploy/modal/fused2_e2e.py \\
         --tokens 32 --ring K56A12C53 --migrate-bits 8
 
+Pair items on the production lane (graphed Triton pair op, shared-memory transport, masks from a separate
+plain-factory process, weight-free gateway tables; ``pgw.service.fused2_lane``, ``pgw.engine.fused2_masks``):
+
+    PGW_F2_MODEL=qwen2.5-7b-instruct PGW_F2_GPU=H100 modal run pgw/deploy/modal/fused2_e2e.py \
+        --tokens 32 --ring K56A12C53 --migrate-bits 8 --transport lane-shm --masks segments \
+        --lane-env PGW_SERVICE_LANE_SPIN_US=400,PGW_LANE_SPIN_US=400
+
 Cost: H100 about $4/h + 24 vCPU + 96 GiB; the run takes about 10-15 min (start-up: folding, spectral norms and
 the check vectors about 3-6 min on the CPU, masks for ~70 slots about 1-2 min, decode, then the plain replay
 about 2-4 min), so roughly $1.2-1.8. The function's timeout caps it at 40 min.
@@ -79,8 +86,15 @@ app = modal.App("pgw-fused2-e2e", image=image)
 @app.function(gpu=GPU, cpu=CPUS, memory=1024 * MEM_GIB, timeout=40 * 60, max_containers=1, retries=0)
 def run(tokens: int = 32, ring: str = "K56A12C53", migrate_bits: int = 8, columns: int = 0, gateway_bits: int = 12,
         threads: int = 0, provider_user: bool = False, replay: bool = True, replay_calls: int = 3,
-        auto_bits: bool = True) -> dict:
-    """Start the provider (GPU) and the gateway (CPU); returns the e2e result (JSON)."""
+        auto_bits: bool = True, transport: str = "socket", masks: str = "inproc", lane_env: str = "") -> dict:
+    """Start the provider (GPU) and the gateway (CPU); returns the e2e result (JSON).
+
+    ``transport``: ``socket`` (the 2026-11-23 harness pair op), ``lane`` / ``lane-shm`` (pair items on the production
+    native trip lane, graphed Triton pair op; ``pgw.service.fused2_lane``). ``masks``: ``inproc`` or ``segments``
+    (a separate plain-factory process writes pair-mask segments; the gateway runs on weight-free tables).
+    ``lane_env``: extra ``NAME=value`` pairs (comma-separated) for both processes, e.g.
+    ``PGW_SERVICE_LANE_SPIN_US=400,PGW_LANE_SPIN_US=400``.
+    """
     out = Path("/srv/f2_result.json")
     sock_dir = Path("/srv/f2prov")
     sock_dir.mkdir(parents=True, exist_ok=True)
@@ -95,10 +109,15 @@ def run(tokens: int = 32, ring: str = "K56A12C53", migrate_bits: int = 8, column
            "--provider-cmd-prefix", prefix, "--json", str(out)] + (["--auto-bits"] if auto_bits else [])
     if threads:
         cmd += ["--threads", str(threads)]
+    cmd += ["--transport", transport, "--masks", masks]
+    env = dict(os.environ)
+    for kv in filter(None, (p.strip() for p in lane_env.split(","))):
+        name, _, val = kv.partition("=")
+        env[name] = val
     if not replay:
         cmd.append("--no-replay")
     cmd += ["--replay-calls", str(replay_calls)]
-    proc = subprocess.run(cmd, check=False)  # noqa: S603
+    proc = subprocess.run(cmd, check=False, env=env)  # noqa: S603
     res = json.loads(out.read_text()) if out.is_file() else {}
     res["exit_code"] = proc.returncode
     res["gpu"] = GPU
@@ -109,8 +128,8 @@ def run(tokens: int = 32, ring: str = "K56A12C53", migrate_bits: int = 8, column
 @app.local_entrypoint()
 def main(tokens: int = 32, ring: str = "K56A12C53", migrate_bits: int = 8, columns: int = 0, gateway_bits: int = 12,
          threads: int = 0, provider_user: bool = False, replay: bool = True, replay_calls: int = 3,
-         auto_bits: bool = True) -> None:
+         auto_bits: bool = True, transport: str = "socket", masks: str = "inproc", lane_env: str = "") -> None:
     res = run.remote(tokens, ring, migrate_bits, columns, gateway_bits, threads, provider_user, replay, replay_calls,
-                     auto_bits)
+                     auto_bits, transport, masks, lane_env)
     print(json.dumps(res, indent=1))
     Path("fused2_e2e_result.json").write_text(json.dumps(res, indent=1))
