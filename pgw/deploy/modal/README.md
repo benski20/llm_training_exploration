@@ -1046,7 +1046,9 @@ The 7B 28 tok/s stack (shared-memory lane, native decode driver, masked head, p3
 `W r` and check vectors prefetched while the lane waits), the trip split over 12 warm, pinned pool workers
 (`PGW_TRIP_SPLIT`, `PGW_POOL_WORKERS=12`, `PGW_POOL_ACTIVE_SPIN_US=20000`: workers poll only while a decode call is
 active; `PGW_POOL_CPUS=4-15`: their own cores, so they do not share cores with the 4 factory workers and the
-service). Every knob is timing only (same bits; `tests/native/test_scale32_knobs.py`). Expected (model,
+service). Every knob is timing only (same bits; `tests/native/test_scale32_knobs.py`); the split was not
+shown to pay on the 4-vCPU dev box (oversubscribed there), so for an A/B drop `PGW_TRIP_SPLIT` / `PGW_FUSED2_SPLIT`
+and `PGW_POOL_ACTIVE_SPIN_US` from the command and compare `decode_native` per-trip times. Expected (model,
 `python benchmarks/scaling_model.py --colocated`): about 12-13 tok/s on one H100 (lane 23 ms + device 25 ms + gateway
 18-27 ms + 9 ms serving per token): the question this run answers is whether the per-trip gateway work at 32B widths
 is the measured-and-calibrated 0.07-0.11 ms and the lane stays at 0.09 ms per trip, not 25 tok/s.

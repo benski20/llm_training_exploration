@@ -40,7 +40,13 @@ item, then the memory-bound K56 unmask (8-byte mask words). On this 4-vCPU box t
 end (`PGW_TRIP_SPLIT` 137 -> 137-139 us; with 3 spinning workers the stub provider starves: 304 us): the workers,
 the driver thread, the spinning lane client and the provider share 4 vCPUs; the kernels alone scale 1.46x at 3 cores
 (`benchmarks/trip_split_scaling_bench.py`), the pooled finish does not (column split slower than one thread on this
-VM), and the down prepare does (79 -> 44 us at 4 cores).
+VM), and the down prepare does (79 -> 44 us at 4 cores). The fused2 split is inconclusive to adverse end to end here (o+gate_up
+after the reply: 760 -> 1500-2700 us with 2-3 spinning workers over shm, 768 -> 2413 us over UDS, but 1004 -> 673 us
+in a pair of runs under a load average of 14): that bench's provider is an in-process `LaneService` whose server and
+Python executor need the same 4 vCPUs, other jobs shared the box, and a fork-join stalls whenever one worker is
+preempted, so the driver thread waits; the split numbers above are
+therefore extrapolations from the per-phase single-core times (unmask, checks, float are element-wise or exact
+partial sums mod p), to be measured on a gateway with its own cores.
 
 **Built (opt-in, exact):**
 - Native pool (`rust/pgw-fast/src/prepare.rs`): `PGW_POOL_ACTIVE_SPIN_US` (workers keep polling while a decode driver
