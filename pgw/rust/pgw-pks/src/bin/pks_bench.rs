@@ -3,8 +3,12 @@
 //! `pks-bench decrypt <m> <groups> <threads> [isa]`: reply decryption of one linear with `m` outputs;
 //! `pks-bench encrypt <n> <groups> <threads> [isa]`: upload encryption (pad + CBD noise + message) of a
 //! linear with `n` inputs; `pks-bench ksk <reps>`: one reply key (per linear and group);
-//! `pks-bench keyswitch <m> <groups> <threads>`: the provider's CPU key switch. Prints JSON lines with
-//! wall and process-CPU ns per output (input) and slot.
+//! `pks-bench keyswitch <m> <groups> <threads>`: the provider's CPU key switch; per-kernel micro timings:
+//! `pks-bench ntt <reps> 1 1 [isa]` (16-lane NTTs), `pks-bench cbd <count> 1 1 [isa]` (noise sampler),
+//! `pks-bench encout <reps>` (AVX-512 upload output on L2-resident data; timing only, dummy constants).
+//! `isa`: auto, avx512ifma, avx512, avx2, scalar. Env: `PKS_REPS` (repetitions, best wall time reported),
+//! `PKS_PACKED=1` (36-bit replies read in place), `PKS_ROWS` (slots per group). Prints JSON lines with the
+//! best wall time and the process CPU averaged over the repetitions, in ns per output (input) and slot.
 
 use pgw_pks::arith::Isa;
 use pgw_pks::kernel::{self, DecItem, EncItem, KsItem, D, NR, NU, PACK, RANK};
@@ -27,14 +31,16 @@ impl Lcg {
 }
 
 fn time<F: FnMut()>(reps: usize, mut f: F) -> (f64, f64) {
-    let (mut best, mut best_cpu) = (f64::INFINITY, f64::INFINITY);
+    // best wall time; process CPU time (10 ms ticks) averaged over all repetitions
+    f();
+    let mut best = f64::INFINITY;
+    let c0 = cpu_s();
     for _ in 0..reps {
-        let (t0, c0) = (Instant::now(), cpu_s());
+        let t0 = Instant::now();
         f();
         best = best.min(t0.elapsed().as_secs_f64());
-        best_cpu = best_cpu.min(cpu_s() - c0);
     }
-    (best, best_cpu)
+    (best, (cpu_s() - c0) / reps as f64)
 }
 
 fn main() {
@@ -44,7 +50,7 @@ fn main() {
     let groups: usize = a.get(3).and_then(|s| s.parse().ok()).unwrap_or(4);
     let threads: usize = a.get(4).and_then(|s| s.parse().ok()).unwrap_or(1);
     let isa = Isa::parse(a.get(5).map(String::as_str).unwrap_or("auto")).expect("isa");
-    let reps = 3;
+    let reps: usize = std::env::var("PKS_REPS").ok().and_then(|v| v.parse().ok()).unwrap_or(3);
     let cx = kernel::ctx();
     let mut g = Lcg(42);
     let key = |g: &mut Lcg| -> [u8; 32] { std::array::from_fn(|_| g.next() as u8) };
@@ -114,6 +120,45 @@ fn main() {
                 isa.name(), s * 1e9 / per, c * 1e9 / per
             );
         }
-        _ => eprintln!("modes: decrypt | encrypt | ksk | keyswitch"),
+        "ntt" => {
+            // per-kernel micro timing (ns per coefficient-lane): inverse NTT (decrypt), forward NTT
+            let pr = &cx.qp[0];
+            let n = NR;
+            let h: Vec<u32> = (0..n * 16).map(|_| (g.next() % pr.p as u64) as u32).collect();
+            let t: Vec<u32> = (0..n).map(|_| (g.next() % pr.p as u64) as u32).collect();
+            let mut a = vec![0u32; n * 16];
+            let per = (n * 16) as f64;
+            let reps = size.clamp(1, 1000);
+            let (s0, _) = time(5, || kernel::ntt_bench(isa, pr, 0, &mut a, &h, &t, reps));
+            let (s1, _) = time(5, || kernel::ntt_bench(isa, pr, match isa { Isa::Avx512 | Isa::Avx512Ifma => 5, Isa::Avx2 => 9, _ => 1 }, &mut a, &h, &t, reps));
+                        let (s2, _) = time(5, || kernel::ntt_bench(isa, pr, 2, &mut a, &h, &t, reps));
+            let (s3, _) = time(5, || kernel::ntt_bench(isa, pr, match isa { Isa::Avx512 | Isa::Avx512Ifma => 7, Isa::Avx2 => 11, _ => 3 }, &mut a, &h, &t, reps));
+            let f = |s: f64| s * 1e9 / per / reps as f64;
+            println!("{{\"mode\":\"ntt\",\"inv_l_mul\":{:.3},\"inv_l_mul_fast\":{:.3},\"fwd_l\":{:.3},\"fwd_l_fast\":{:.3}}}", f(s0), f(s1), f(s2), f(s3));
+        }
+        #[cfg(target_arch = "x86_64")]
+        "encout" => {
+            // the upload CRT/output kernel alone on L2-resident data (one 16-block chunk, one group)
+            let e = [cx.ep[0].p, cx.ep[1].p, cx.ep[2].p];
+            let s16: Vec<u32> = (0..3 * NU * 16).map(|i| (g.next() % (2 * e[i / (NU * 16)] as u64)) as u32).collect();
+            let noise: Vec<i32> = (0..16 * RANK * D).map(|_| (g.next() % 43) as i32 - 21).collect();
+            let n = 256;
+            let r: Vec<i64> = (0..D * n).map(|_| g.next() as i64).collect();
+            let mut b = vec![0u64; n * D];
+            let kc = pgw_pks::simd::EncConsts { e, pn: [cx.ep[0].pn, cx.ep[1].pn, cx.ep[2].pn], inv01_m: 1, e0_m2: 1,
+                inv012_m: 1, p01: e[0] as u64 * e[1] as u64, emod: 12345 };
+            let reps = size.max(1);
+            let (s, _) = time(5, || for _ in 0..reps {
+                unsafe { pgw_pks::simd::enc_out(&kc, s16.as_ptr(), NU, 16, 0, D, n, r.as_ptr(), D, noise.as_ptr(), b.as_mut_ptr()) }
+            });
+            println!("{{\"mode\":\"encout\",\"ns_per_value\":{:.3}}}", s * 1e9 / (reps * NU * 16) as f64);
+        }
+        "cbd" => {
+            let mut out = vec![0i32; size];
+            let k = key(&mut g);
+            let (s, _) = time(5, || kernel::cbd(isa, &k, 0, &mut out));
+            println!("{{\"mode\":\"cbd\",\"isa\":\"{}\",\"ns_per_sample\":{:.3}}}", isa.name(), s * 1e9 / size as f64);
+        }
+        _ => eprintln!("modes: decrypt | encrypt | ksk | keyswitch | ntt | cbd"),
     }
 }

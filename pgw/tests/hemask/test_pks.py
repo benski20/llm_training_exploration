@@ -173,11 +173,83 @@ def test_native_isas_and_threads_identical(monkeypatch: pytest.MonkeyPatch) -> N
     hint = pn.keyswitch(hs, k_hat[None].astype(np.uint32))
     y = bytes(pack_bits(pn.keyswitch(hs, beta, matmul_mod64(w, b) & M56).reshape(-1), 36))
     th = np.stack([s.trhat for s in secrets])
-    outs = [nat.decrypt(hint, y, 36, th, [256], thr, isa) for isa in ("scalar", "avx2", "avx512") for thr in (1, 3)]
+    isas = ("scalar", "avx2", "avx512", "avx512ifma")
+    outs = [nat.decrypt(hint, y, 36, th, [256], thr, isa) for isa in isas for thr in (1, 3)]
     assert all(np.array_equal(o, outs[0]) for o in outs)
+    assert np.array_equal(outs[0].astype(np.int64), ((w.astype(np.int64) @ r.T) & 0xFFFFFFFF).T)
     ts = np.stack([s.t for s in secrets])
-    encs = [nat.encrypt(b"q" * 32, r, ts, [b"e" * 32], thr, isa) for isa in ("scalar", "avx512") for thr in (1, 2)]
+    encs = [nat.encrypt(b"q" * 32, r, ts, [b"e" * 32], thr, isa) for isa in isas for thr in (1, 2, 3)]
     assert all(np.array_equal(e, encs[0]) for e in encs)
+    kh = nat.KHat(k_hat.astype(np.uint32))
+    tr = secrets[0].t_reply.copy()
+    keys = [nat.reply_key(kh, ts[0], tr, b"x" * 32, isa) for isa in isas]
+    assert all(np.array_equal(k[0], keys[0][0]) and np.array_equal(k[1], keys[0][1]) for k in keys)
+
+
+@NATIVE
+@pytest.mark.parametrize("isa", ["scalar", "avx2", "avx512", "avx512ifma"])
+def test_native_partial_chunks_equal_reference(isa: str) -> None:
+    """Every ISA copy equals the numpy reference bit for bit at shapes with partial 16-block chunks (n = 400:
+    25 blocks; m = 640: 20 row blocks) and partial groups (rows 300 = 256 + 44)."""
+    nat = pn.native()
+    w, r = _case(640, 400, 300, 12)
+    a_seed, k_hat = b"A" * 32, pks.ks_a(b"K" * 32)
+    seeds = [bytes([7 + i]) * 32 for i in range(2)]
+    br, betar, sr = pn.Customer(k_hat, force_reference=True).encrypt(a_seed, "lx", r, seeds=seeds)
+    ts = np.stack([s.t for s in sr])
+    from pgw.core.prng import SeedExpander
+
+    sx = [SeedExpander(s) for s in seeds]
+    bn = nat.encrypt(SeedExpander(a_seed).stream_key(pks.A_LABEL, "lx"), r, ts, [x.stream_key("pks-e") for x in sx],
+                     3, isa)
+    assert np.array_equal(bn, br)
+    hs = _hs(w, a_seed, "lx")
+    hint = pks.compact_hint(hs, k_hat, PAR)
+    y = matmul_mod64(w, br) & M56
+    reply = np.stack([pks.provider_reply(y[:, g * 256:(g + 1) * 256], hs, betar[g].astype(np.uint64), PAR)
+                      for g in range(2)])
+    th = np.stack([s.trhat for s in sr]).astype(np.uint32)
+    got = nat.decrypt(hint, bytes(pack_bits(reply.reshape(-1), 36)), 36, th, [256, 44], 2, isa)
+    want = np.concatenate([pks.decrypt_pks(reply[g], hint, sr[g].t_reply.astype(np.int64), s.rows, PAR)
+                           for g, s in enumerate(sr)])
+    assert np.array_equal(got.astype(np.int64), want)
+    assert np.array_equal(want, ((w.astype(np.int64) @ r.T) & 0xFFFFFFFF).T)
+
+
+@NATIVE
+def test_native_upload_noise_is_reference_cbd21() -> None:
+    """The native upload's noise (bodies minus pad, with r = 0) is exactly the reference CBD(21) stream
+    ``pks-e`` and is distributed as Binomial(42, 1/2) - 21 (chi-square, moments)."""
+    from pgw.core.prng import SeedExpander
+    from pgw.hemask.lwe import _cbd
+
+    n, groups = 64, 4
+    r = np.zeros((groups * 256, n), dtype=np.int64)
+    seeds = [bytes([40 + i]) * 32 for i in range(groups)]
+    cust = pn.Customer(pks.ks_a(b"k" * 32))
+    b, _beta, secrets = cust.encrypt(b"a" * 32, "noise", r, seeds=seeds)
+    a_ring = pks.public_ring_rows(b"a" * 32, n, "noise")
+    noise = []
+    for g, s in enumerate(secrets):
+        pad = pks.negacyclic_mul_mod2(a_ring, s.t.astype(np.int64))
+        padv = pad.reshape(n // 16, 256, 16).transpose(0, 2, 1).reshape(n, 256)
+        d = (b[:, g * 256:(g + 1) * 256] - padv) & M56
+        e = np.where(d >= np.uint64(1 << 55), d.astype(np.int64) - (1 << 56), d.astype(np.int64))
+        assert np.array_equal(e, _cbd(SeedExpander(seeds[g]), (n, 256), 21, "pks-e"))
+        noise.append(e.reshape(-1))
+    e = np.concatenate(noise)
+    assert e.min() >= -21 and e.max() <= 21
+    from math import comb
+
+    pmf = np.array([comb(42, k) for k in range(43)], dtype=np.float64) / 2.0 ** 42
+    obs = np.bincount(e + 21, minlength=43).astype(np.float64)
+    exp = pmf * e.size
+    core = slice(11, 32)  # [-10, 10]; tails pooled
+    chi2 = (((obs[core] - exp[core]) ** 2) / exp[core]).sum()
+    tail_o, tail_e = obs.sum() - obs[core].sum(), exp.sum() - exp[core].sum()
+    chi2 += (tail_o - tail_e) ** 2 / tail_e
+    assert chi2 < 60.0  # 21 degrees of freedom: P(chi2 > 60) < 1e-5
+    assert abs(e.mean()) < 0.06 and abs(e.var() - 10.5) < 0.3
 
 
 def test_tampered_reply_changes_masks() -> None:

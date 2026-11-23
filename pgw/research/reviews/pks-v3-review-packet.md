@@ -92,4 +92,7 @@ factory with the in-process provider, segments bit-identical to local generation
 ## 8. Not covered / open
 
 External estimator run; side channels beyond branch-free arithmetic (ternary rejection sampling leaks only the
-count of rejected bytes); a check for provider-built hints; sharing one reply key across the linears of a group.
+count of rejected bytes); a check for provider-built hints; sharing one reply key across the linears of a group (analysed in the plan, section 7.8: covered for a passive
+provider only with a larger H2 sample count, not covered for an active one, not implemented). The customer kernels
+were retuned (plan 7.7: AVX-512 / IFMA / AVX2 copies) with outputs bit-identical to the reference; parameters,
+streams and the CBD(21) sampler are unchanged.
