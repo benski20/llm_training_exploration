@@ -12,6 +12,16 @@ side is what the gateway's decode path uses, in this process:
 * ``native-uds``: ``TripChannel.connect_service_uds`` against the Unix-domain-socket listener (no TLS);
 * ``py-uds``: :class:`pgw.wire.service_lane.ServiceLaneChannel` (the Python channel the gateway's UDS lane
   used before) against the UDS listener.
+* ``native-shm``: ``connect_service_uds`` + ``attach_shm()`` (opt-in shared-memory transport: the same frames
+  in a sealed memfd segment passed over the socket; the socket only as the doorbell) against a listener with
+  ``shm=True``.
+
+``--stub-us 44,40,191,79``: instead of the Python stub, the listener's native benchmark executor
+(``LaneService(bench_stub_us=...)``) busy-waits that long per linear (qkv, o, gate_up, down: the H100's
+measured 1-row graph times at 7B) and answers from its own buffer, so the client sees a realistic reply
+delay with no GIL on the service side. ``--zero-copy``: the listener's zero-copy replies;
+``--spin-auto-us N``: the client's adaptive spin capped at N us; ``--read-spin-us``: the listener's request
+spin (shm: 500 us when 0).
 
 The stream-lane baseline (TLS, msgpack, WebSocket, the Python service) is
 ``wire_overhead_bench.py --tls --sync stream``; the full lane through the real service app (Python
@@ -111,6 +121,12 @@ def _serve(args: argparse.Namespace) -> None:
     kw: dict[str, Any] = {"max_rows": 8, "executor": execute}
     if args.read_spin_us:
         kw["read_spin_us"] = int(args.read_spin_us)
+    if args.stub_us:
+        kw["bench_stub_us"] = [int(v) for v in args.stub_us.split(",")]
+    if args.zero_copy:
+        kw["zero_copy"] = True
+    if args.serve_shm:
+        kw["shm"] = True
     if args.serve == "tcp":
         kw.update(tls_addr="127.0.0.1:0", tls_cert_pem=(td / "server.pem").read_bytes(),
                   tls_key_pem=(td / "server.key").read_bytes())
@@ -138,7 +154,16 @@ def _serve(args: argparse.Namespace) -> None:
 
 
 # ---- client ------------------------------------------------------------------------------------------
-def _channel(mode: str, info: dict[str, Any], td: Path, timeout: float, spin_us: int) -> Any:
+def _channel(mode: str, info: dict[str, Any], td: Path, timeout: float, spin_us: int, spin_auto_us: int = 0) -> Any:
+    ch = _channel0(mode, info, td, timeout, spin_us)
+    if spin_auto_us and hasattr(ch, "set_spin_auto"):
+        ch.set_spin_auto(spin_auto_us)
+    if mode == "native-shm" and not ch.attach_shm():
+        raise SystemExit("the listener refused the shm transport")
+    return ch
+
+
+def _channel0(mode: str, info: dict[str, Any], td: Path, timeout: float, spin_us: int) -> Any:
     import pgw_fast as fast
 
     from pgw.wire.service_lane import ServiceLaneChannel
@@ -151,7 +176,7 @@ def _channel(mode: str, info: dict[str, Any], td: Path, timeout: float, spin_us:
         return fast.TripChannel.connect_service_tls("127.0.0.1", int(info["port"]), "127.0.0.1",
                                                     (td / "ca.pem").read_bytes(), ticket, timeout, 8, spin_us,
                                                     cert, key)
-    if mode == "native-uds":
+    if mode in ("native-uds", "native-shm"):
         return fast.TripChannel.connect_service_uds(info["socket"], ticket, timeout, 8, spin_us)
     if mode == "py-uds":
         return ServiceLaneChannel(info["socket"], ticket, timeout, 8)
@@ -168,12 +193,19 @@ def _one_run(args: argparse.Namespace, mode: str, rows: int) -> dict[str, Any]:
         if args.mtls and mode == "native-tls":
             _client_cert(td, td)
         serve = "tcp" if mode.endswith("tls") else "uds"
-        proc = subprocess.Popen([sys.executable, __file__, "--serve", serve, "--serve-dir", tds,  # noqa: S603
-                                 "--preset", args.preset, "--read-spin-us", str(args.read_spin_us)], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+        cmd = [sys.executable, __file__, "--serve", serve, "--serve-dir", tds, "--preset", args.preset,
+               "--read-spin-us", str(args.read_spin_us)]
+        if args.stub_us:
+            cmd += ["--stub-us", args.stub_us]
+        if args.zero_copy:
+            cmd.append("--zero-copy")
+        if mode == "native-shm":
+            cmd.append("--serve-shm")
+        proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)  # noqa: S603
         try:
             assert proc.stdout is not None
             info = json.loads(proc.stdout.readline())
-            ch = _channel(mode, info, td, 5.0, args.spin_us)
+            ch = _channel(mode, info, td, 5.0, args.spin_us, args.spin_auto_us)
             lins = _linears(args.preset)
             rng = np.random.default_rng(0)
             bodies = [rng.integers(0, 1 << 32, size=rows * n, dtype=np.uint64).astype("<u4").tobytes()
@@ -194,6 +226,8 @@ def _one_run(args: argparse.Namespace, mode: str, rows: int) -> dict[str, Any]:
 
             gap = args.gap_us * 1e-6
 
+            ovh: list[float] = []  # trip minus the service's compute_us (transport + waits)
+
             def run(n: int, lat: list[float] | None) -> None:
                 for i in range(n):
                     if gap:  # the gateway's work between two trips (busy, holding the GIL)
@@ -203,9 +237,10 @@ def _one_run(args: argparse.Namespace, mode: str, rows: int) -> dict[str, Any]:
                     li = i % len(lins)
                     rid = secrets.token_bytes(16)
                     t0 = time.perf_counter()
-                    st, _cu = ch.trip(0, li, rows, rid, 10_000, bodies[li], outs[li], 5.0)
+                    st, cu = ch.trip(0, li, rows, rid, 10_000, bodies[li], outs[li], 5.0)
                     if lat is not None:
                         lat.append((time.perf_counter() - t0) * 1e6)
+                        ovh.append(lat[-1] - cu)
                     if st != 0:
                         raise SystemExit(f"lane refused a trip (status {st})")
 
@@ -216,6 +251,7 @@ def _one_run(args: argparse.Namespace, mode: str, rows: int) -> dict[str, Any]:
             run(args.calls, lat)
             wall = time.perf_counter() - t0
             (c1, cf1), (s1, sf1) = _proc_stat(os.getpid()), _proc_stat(proc.pid)
+            cst = ch.stats() if hasattr(ch, "stats") else {}
             stop.set()
             for t in loaders:
                 t.join()
@@ -228,6 +264,11 @@ def _one_run(args: argparse.Namespace, mode: str, rows: int) -> dict[str, Any]:
             except subprocess.TimeoutExpired:
                 proc.kill()
     lat.sort()
+    if cst:  # the channel's counters cover warm-up and timed trips
+        n = max(1, cst["trips"])
+        cst = {"blocked_frac": round(cst["blocked"] / n, 3), "wait_us": round(cst["wait_us"] / n, 1),
+               "svc_queue_us": round(cst["queue_us"] / n, 1), "svc_compute_us": round(cst["compute_us"] / n, 1),
+               "spin_budget_us": round(cst["spin_us"] / n, 1)}
 
     def pct(p: float) -> float:
         return round(lat[min(len(lat) - 1, int(p * len(lat)))], 1)
@@ -238,7 +279,10 @@ def _one_run(args: argparse.Namespace, mode: str, rows: int) -> dict[str, Any]:
             "p99_us": pct(0.99), "mean_us": round(statistics.fmean(lat), 1),
             "wall_us_per_call": round(wall / len(lat) * 1e6, 1),
             "client_cpu_us_per_call": round((c1 - c0 + cf1 - cf0) / len(lat) * 1e6, 1),
-            "server_cpu_us_per_call": round((s1 - s0 + sf1 - sf0) / len(lat) * 1e6, 1)}
+            "server_cpu_us_per_call": round((s1 - s0 + sf1 - sf0) / len(lat) * 1e6, 1),
+            "stub_us": args.stub_us, "zero_copy": bool(args.zero_copy), "spin_auto_us": args.spin_auto_us,
+            "channel": cst, "overhead_p50_us": round(statistics.median(ovh), 1),
+            "overhead_mean_us": round(statistics.fmean(ovh), 1)}
 
 
 def main() -> None:
@@ -253,6 +297,10 @@ def main() -> None:
     ap.add_argument("--gap-us", type=float, default=0.0, help="client busy-waits this long between trips")
     ap.add_argument("--read-spin-us", type=int, default=0, help="server: poll the socket this long before blocking")
     ap.add_argument("--mtls", action="store_true", help="native-tls: present a client certificate bound to the ticket")
+    ap.add_argument("--stub-us", default="", help="native stub delays per linear, us (e.g. 44,40,191,79)")
+    ap.add_argument("--zero-copy", action="store_true", help="server: zero-copy replies")
+    ap.add_argument("--spin-auto-us", type=int, default=0, help="client: adaptive spin cap (0 = fixed --spin-us)")
+    ap.add_argument("--serve-shm", action="store_true", help=argparse.SUPPRESS)
     ap.add_argument("--serve", choices=["tcp", "uds"], help=argparse.SUPPRESS)
     ap.add_argument("--serve-dir", help=argparse.SUPPRESS)
     args = ap.parse_args()
@@ -275,7 +323,9 @@ def main() -> None:
             summary.setdefault(str(rows), {})[mode] = {
                 "p50_us": round(statistics.median(r["p50_us"] for r in sel), 1),
                 "mean_us": round(statistics.median(r["mean_us"] for r in sel), 1),
-                "p99_us": round(statistics.median(r["p99_us"] for r in sel), 1)}
+                "p99_us": round(statistics.median(r["p99_us"] for r in sel), 1),
+                "client_cpu_us": round(statistics.median(r["client_cpu_us_per_call"] for r in sel), 1),
+                "server_cpu_us": round(statistics.median(r["server_cpu_us_per_call"] for r in sel), 1)}
     print(json.dumps({"summary_median": summary, "repeat": args.repeat, "preset": args.preset,
                       "gil_load": args.gil_load, "spin_us": args.spin_us}))
 

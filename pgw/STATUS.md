@@ -86,6 +86,34 @@ Strict speculation with `spec_mask_rows` keeps its public `charge_to` schedule (
   window mode's stock check: a store that covers the stock but not every live request's max_tokens refuses new
   requests instead of risking mid-answer exhaustion; deployments with large max_tokens need correspondingly more
   stock, as up front). Not done: chunk handoff of the decrypted segment chunk between consecutive parts.
+## Update 2026-11-23: 1-row trip fixed cost: lane latency knobs, shared-memory lane transport (opt-in, CPU-tested)
+
+Toward <= ~0.15 ms all-in per 1-row trip at 7B (today about 0.46 ms, device 0.04-0.09 ms). All default off; same
+bytes, order, tickets, peer-uid check; what the provider sees is unchanged. Details, measurements and the Modal
+commands: `deploy/modal/README.md`, "1-row trip fixed cost".
+
+- Gateway (`rust/pgw-fast/src/lane.rs`, used by the native decode driver and the per-trip driver unchanged):
+  adaptive reply spin (`PGW_LANE_SPIN_AUTO_US`: per (linear, rows) learned reply time x 1.25 + 20 us, capped), UDS
+  spin polls by `recv(MSG_DONTWAIT)` (no `fcntl` per trip), `TripChannel.stats()` (spin hits, blocking waits,
+  wait/trip time, the service's `queue_us`/`compute_us`), `LaneComputeClient.channel_stats()`.
+- Provider (`rust/pgw-lane`): `queue_us` is now the device wait only (not the body read);
+  `PGW_SERVICE_LANE_ZERO_COPY` (reply written from the graph's pinned `h_out`, non-blocking under the device lock,
+  remainder after it); `PGW_SERVICE_LANE_OWN_LOCK` (lane graph replays never queue behind Python-path calls on the
+  device lock; captures hold both locks); `PGW_SERVICE_LANE_READ_SPIN_US` (existing) recommended for the e2e.
+- Shared-memory transport (`rust/pgw-lane/src/shm.rs`, `PGW_SERVICE_LANE_SHM` + `PGW_LANE_SHM`): a `shm` frame after
+  the ticket `open`; the service passes a sealed, path-less memfd over the authenticated socket (`SCM_RIGHTS`);
+  same headers and bodies in the segment, the socket as doorbell; the service copies and validates every frame
+  as on the socket. A start-up race (first request stored before the service read the sequence) was found by
+  the bench and fixed. **Not a win on this box** (floor 14.5 vs 12.3 us p50 for UDS); kept opt-in for the H100
+  micro-benchmark to decide (gVisor syscalls/wake-ups are where it could pay).
+- Local results (overloaded 4-vCPU box, medians): UDS transport floor 12.3 us p50; zero-copy 11.9; with H100-like
+  device times and 140 us of gateway work between trips the overhead p50 28.7 -> 21.1 us with the adaptive spin
+  (blocking waits 50 % -> 30 %); native decode driver `lane_us_per_trip` ~102 -> ~85 us. Spin-heavy variants
+  (server read spin, shm) lose in the mean here because the spinners are preempted (p99 2-2.6 ms).
+- New: `benchmarks/lane_gpu_trip_bench.py` (real lane trips on a GPU: variants x Python-path load x shared/own
+  lock, exactness checked); `lane_tls_bench.py --stub-us/--zero-copy/--spin-auto-us/native-shm`;
+  `decode_cpu_bench.py --spin-auto-us`; tests `tests/service/test_lane_shm.py`.
+- Not run on a GPU. Next: the H100 micro-benchmark (~$0.1), then the 7B e2e with the chosen flags.
 
 ## Update 2026-11-22: native UDS lane channel (opt-in), persistent GPU worker's first H100 run
 

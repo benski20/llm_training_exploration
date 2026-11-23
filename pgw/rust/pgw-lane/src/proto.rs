@@ -11,7 +11,7 @@
 //! request (48 B)                                reply (40 B)
 //!  0  [u8;4]  magic  b"PGWL"                     0  [u8;4]  magic  b"PGWR"
 //!  4  u16     version (1)                        4  u16     version (1)
-//!  6  u16     kind (1 open, 2 call)              6  u16     status (Status)
+//!  6  u16     kind (1 open, 2 call, 3 shm)       6  u16     status (Status)
 //!  8  [u8;16] request id (random; open: 0)       8  [u8;16] request id (echo)
 //! 24  u32     linear index                      24  u32     queue_us
 //! 28  u16     rows (1..=max_rows)               28  u32     compute_us
@@ -54,6 +54,11 @@ pub enum Kind {
     Open,
     /// One masked product.
     Call,
+    /// Opt-in (Unix domain socket only, after a successful open): move this connection's calls to a
+    /// shared-memory segment the service creates and passes back with `SCM_RIGHTS` ([`crate::shm`]).
+    /// All fields 0, no body. A service without it answers [`Status::Fallback`] (non-fatal) and the
+    /// connection stays on the socket.
+    Shm,
 }
 
 impl Kind {
@@ -61,6 +66,7 @@ impl Kind {
         match v {
             1 => Some(Kind::Open),
             2 => Some(Kind::Call),
+            3 => Some(Kind::Shm),
             _ => None,
         }
     }
@@ -69,6 +75,7 @@ impl Kind {
         match self {
             Kind::Open => 1,
             Kind::Call => 2,
+            Kind::Shm => 3,
         }
     }
 }
@@ -236,6 +243,11 @@ impl RequestHeader {
             }
             Kind::Call => {
                 if h.rows == 0 {
+                    return Err((Status::BadHeader, id));
+                }
+            }
+            Kind::Shm => {
+                if h.linear != 0 || h.rows != 0 || h.ring != 0 || h.deadline_ms != 0 || h.body_len != 0 {
                     return Err((Status::BadHeader, id));
                 }
             }

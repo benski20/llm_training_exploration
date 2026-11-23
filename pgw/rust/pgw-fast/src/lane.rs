@@ -206,9 +206,12 @@ mod chan {
     use pgw_lane::proto::{
         Kind as SvcKind, ReplyHeader as SvcReply, RequestHeader as SvcRequest, REPLY_HEADER_LEN as SVC_REPLY_LEN,
     };
+    use pgw_lane::shm::{self, Region};
     use pyo3::exceptions::{PyConnectionRefusedError, PyOSError};
     use rustls::pki_types::pem::PemObject;
     use rustls::pki_types::{CertificateDer, PrivateKeyDer, ServerName};
+    use std::os::fd::AsRawFd;
+    use std::sync::atomic::Ordering;
 
     // ---------------------------------------------------------------------------------------------
     // connection
@@ -276,6 +279,53 @@ mod chan {
                 Conn::Tls(s) => s.read(buf),
             }
         }
+    }
+
+    /// One non-blocking `recv` on a Unix stream socket (`MSG_DONTWAIT`): the socket itself stays in
+    /// blocking mode, so a spin-then-block wait costs no `fcntl` calls.
+    fn recv_dontwait(s: &UnixStream, buf: &mut [u8]) -> io::Result<usize> {
+        // SAFETY: valid socket, writable buffer of `buf.len()` bytes.
+        let n = unsafe { libc::recv(s.as_raw_fd(), buf.as_mut_ptr().cast(), buf.len(), libc::MSG_DONTWAIT) };
+        if n < 0 {
+            Err(io::Error::last_os_error())
+        } else {
+            Ok(n as usize)
+        }
+    }
+
+    /// Learned reply time of one (linear, rows) key, for the adaptive spin.
+    #[derive(Clone, Copy)]
+    struct Est {
+        linear: u32,
+        rows: u16,
+        ns: u64,
+    }
+
+    /// Counters of a channel (`TripChannel.stats()`); nothing about payloads.
+    #[derive(Clone, Copy, Default)]
+    pub struct ChanStats {
+        /// OK trips.
+        pub trips: u64,
+        /// Replies that arrived while spinning (no blocking wait).
+        pub spin_hits: u64,
+        /// Trips that fell back to a blocking wait (socket read or shm park).
+        pub blocked: u64,
+        /// Sum of request-sent to reply-header times, nanoseconds.
+        pub wait_ns: u64,
+        /// Sum of the whole trip (send to body read), nanoseconds.
+        pub trip_ns: u64,
+        /// Sum of the service's reported device-wait times (`queue_us`, service frames).
+        pub queue_us: u64,
+        /// Sum of the service's reported compute times (`compute_us`).
+        pub compute_us: u64,
+        /// Sum of the spin budgets used, nanoseconds.
+        pub spin_ns: u64,
+    }
+
+    /// Client end of a shm segment ([`pgw_lane::shm`]).
+    struct ShmClient {
+        reg: Region,
+        seq: u64,
     }
 
     fn write_all_vectored<W: Write>(w: &mut W, a: &[u8], b: &[u8]) -> io::Result<()> {
@@ -349,6 +399,11 @@ mod chan {
         read_to: Option<Duration>,
         write_to: Option<Duration>,
         spin: Duration,
+        /// Adaptive spin (opt-in, `set_spin_auto`): the cap; zero = the fixed `spin`.
+        spin_auto: Duration,
+        est: Vec<Est>,
+        stats: ChanStats,
+        shm: Option<ShmClient>,
         max_rows: u16,
         scratch: Vec<u8>,
     }
@@ -362,9 +417,130 @@ mod chan {
                 read_to: None,
                 write_to: None,
                 spin,
+                spin_auto: Duration::ZERO,
+                est: Vec::new(),
+                stats: ChanStats::default(),
+                shm: None,
                 max_rows: 0,
                 scratch: Vec::new(),
             }
+        }
+
+        /// Adaptive reply spin (opt-in): per (linear, rows) the channel learns the reply time (moving
+        /// average of request-sent to reply-header) and busy-polls for 1.25x that + 20 us, at least the
+        /// fixed spin and at most `cap` (zero turns it off). Waiting only: the bytes and their order are
+        /// unchanged.
+        pub fn set_spin_auto(&mut self, cap: Duration) {
+            self.spin_auto = cap.min(Duration::from_millis(100));
+        }
+
+        /// Counters so far.
+        pub fn stats(&self) -> ChanStats {
+            self.stats
+        }
+
+        /// `"uds"`, `"shm"` or `"tls"` (`"closed"` once closed).
+        pub fn transport(&self) -> &'static str {
+            match (&self.conn, &self.shm) {
+                (None, _) => "closed",
+                (Some(Conn::Uds(_)), Some(_)) => "shm",
+                (Some(Conn::Uds(_)), None) => "uds",
+                (Some(Conn::Tls(_)), _) => "tls",
+            }
+        }
+
+        fn spin_for(&self, linear: u32, rows: u16) -> Duration {
+            if self.spin_auto.is_zero() {
+                return self.spin;
+            }
+            match self.est.iter().find(|e| e.linear == linear && e.rows == rows) {
+                None => self.spin_auto.max(self.spin),
+                Some(e) => {
+                    let want = Duration::from_nanos(e.ns + e.ns / 4 + 20_000);
+                    want.clamp(self.spin.min(self.spin_auto), self.spin_auto.max(self.spin))
+                }
+            }
+        }
+
+        fn learn(&mut self, linear: u32, rows: u16, waited: Duration) {
+            if self.spin_auto.is_zero() {
+                return;
+            }
+            // a wait far beyond the cap (a stall, a parked peer) teaches no more than the cap
+            let ns = (waited.as_nanos() as u64).min(2 * self.spin_auto.as_nanos() as u64);
+            match self.est.iter_mut().find(|e| e.linear == linear && e.rows == rows) {
+                Some(e) => e.ns = e.ns - e.ns / 4 + ns / 4,
+                None => {
+                    if self.est.len() < 4096 {
+                        self.est.push(Est { linear, rows, ns });
+                    }
+                }
+            }
+        }
+
+        fn account(&mut self, spin: Duration, waited: Duration, total: Duration, blocked: bool, q: u32, c: u32) {
+            let st = &mut self.stats;
+            st.trips += 1;
+            if blocked {
+                st.blocked += 1;
+            } else {
+                st.spin_hits += 1;
+            }
+            st.wait_ns += waited.as_nanos() as u64;
+            st.trip_ns += total.as_nanos() as u64;
+            st.spin_ns += spin.as_nanos() as u64;
+            st.queue_us += u64::from(q);
+            st.compute_us += u64::from(c);
+        }
+
+        /// Move this service-lane UDS connection to a shared-memory segment (opt-in; [`pgw_lane::shm`]).
+        /// `Ok(false)`: the service does not offer it, the connection stays on the socket. Errors close
+        /// the channel.
+        pub fn attach_shm(&mut self, timeout: Duration) -> Result<bool, LaneError> {
+            if self.shm.is_some() {
+                return Ok(true);
+            }
+            if self.framing != Framing::Service || !matches!(self.conn, Some(Conn::Uds(_))) {
+                return Ok(false);
+            }
+            let res = (|| {
+                let hdr = SvcRequest {
+                    kind: SvcKind::Shm,
+                    request_id: [0; 16],
+                    linear: 0,
+                    rows: 0,
+                    ring: 0,
+                    deadline_ms: 0,
+                    body_len: 0,
+                }
+                .encode();
+                self.set_nb(false)?;
+                self.timeouts(Some(timeout), Some(timeout))?;
+                let Some(Conn::Uds(sock)) = self.conn.as_mut() else { return Err(LaneError::Closed) };
+                write_all_vectored(sock, &hdr, &[])?;
+                let mut rb = [0u8; SVC_REPLY_LEN];
+                let fd = shm::recv_with_fd(sock, &mut rb)?;
+                let r = SvcReply::parse(&rb).ok_or_else(|| LaneError::Protocol("not a lane shm reply".into()))?;
+                if r.body_len != 0 {
+                    return Err(LaneError::Protocol("lane shm reply with a body".into()));
+                }
+                match (r.status.code(), fd) {
+                    (0, Some(fd)) => {
+                        let reg = Region::attach(&fd).map_err(LaneError::Io)?;
+                        drop(fd); // the mapping stays
+                        let seq = reg.req_seq().load(Ordering::SeqCst);
+                        self.shm = Some(ShmClient { reg, seq });
+                        Ok(true)
+                    }
+                    (0, None) => Err(LaneError::Protocol("lane shm reply without a segment".into())),
+                    (c, _) if c == pgw_lane::proto::Status::Fallback.code() => Ok(false),
+                    (c, _) => Err(LaneError::Refused(map_service_status(c))),
+                }
+            })();
+            if res.is_err() {
+                self.close();
+            }
+            res
         }
 
         /// Open over a connected Unix domain socket and run the hello.
@@ -581,7 +757,7 @@ mod chan {
                 let conn = self.conn.as_mut().ok_or(LaneError::Closed)?;
                 conn.send(&hdr, &ticket[..], &mut self.scratch)?;
                 let mut rb = [0u8; SVC_REPLY_LEN];
-                self.read_hybrid(&mut rb, None, deadline)?;
+                let _ = self.read_hybrid(&mut rb, None, deadline)?;
                 let r = SvcReply::parse(&rb).ok_or_else(|| LaneError::Protocol("not a lane open reply".into()))?;
                 if r.body_len != 0 {
                     return Err(LaneError::Protocol("lane open reply with a body".into()));
@@ -628,14 +804,22 @@ mod chan {
             buf: &mut [u8],
             spin_until: Option<Instant>,
             deadline: Instant,
-        ) -> Result<(), LaneError> {
+        ) -> Result<bool, LaneError> {
             let mut pos = 0;
             let mut spin = spin_until;
+            let mut blocked = false;
             while pos < buf.len() {
                 if let Some(until) = spin {
-                    self.set_nb(true)?;
+                    let uds = matches!(self.conn, Some(Conn::Uds(_)));
+                    if !uds {
+                        self.set_nb(true)?;
+                    }
                     let conn = self.conn.as_mut().ok_or(LaneError::Closed)?;
-                    match conn.read(&mut buf[pos..]) {
+                    let got = match conn {
+                        Conn::Uds(s) => recv_dontwait(s, &mut buf[pos..]),
+                        c => c.read(&mut buf[pos..]),
+                    };
+                    match got {
                         Ok(0) => return Err(io::Error::from(io::ErrorKind::UnexpectedEof).into()),
                         Ok(n) => pos += n,
                         Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
@@ -649,6 +833,7 @@ mod chan {
                         Err(e) => return Err(e.into()),
                     }
                 } else {
+                    blocked = true;
                     self.set_nb(false)?;
                     let left = deadline.saturating_duration_since(Instant::now());
                     if left.is_zero() {
@@ -675,7 +860,7 @@ mod chan {
                     }
                 }
             }
-            Ok(())
+            Ok(blocked)
         }
 
         pub fn closed(&self) -> bool {
@@ -687,6 +872,7 @@ mod chan {
         }
 
         pub fn close(&mut self) {
+            self.shm = None;
             if let Some(c) = self.conn.take() {
                 match c {
                     Conn::Uds(s) => {
@@ -747,9 +933,12 @@ mod chan {
             self.timeouts(rto, wto)?;
             let conn = self.conn.as_mut().ok_or(LaneError::Closed)?;
             conn.send(&hdr, body, &mut self.scratch)?;
-            let spin_until = if self.spin.is_zero() { None } else { Some(Instant::now() + self.spin) };
+            let sent = Instant::now();
+            let spin = self.spin_for(u32::from(h.linear), h.rows);
+            let spin_until = if spin.is_zero() { None } else { Some(sent + spin) };
             let mut rh = [0u8; REPLY_LEN];
-            self.read_hybrid(&mut rh, spin_until, deadline)?;
+            let blocked = self.read_hybrid(&mut rh, spin_until, deadline)?;
+            let waited = sent.elapsed();
             let r = ReplyHeader::decode(&rh).map_err(LaneError::Protocol)?;
             if r.kind != KIND_TRIP_REPLY || r.request_id != h.request_id || r.linear != h.linear || r.rows != h.rows {
                 return Err(LaneError::Protocol("reply does not answer the request".into()));
@@ -760,10 +949,24 @@ mod chan {
             if r.body_len as usize != out.len() {
                 return Err(LaneError::Protocol("reply body has the wrong length".into()));
             }
-            let spin_left = spin_until.filter(|t| Instant::now() < *t);
+            let spin_left = self.body_spin(spin_until);
             self.read_hybrid(out, spin_left, deadline)?;
             self.set_nb(false)?;
+            self.learn(u32::from(h.linear), h.rows, waited);
+            self.account(spin, waited, start.elapsed(), blocked, 0, r.compute_us);
             Ok((status::OK, r.compute_us))
+        }
+
+        /// Spin deadline for a reply body whose header has arrived (the body follows in the same write):
+        /// what is left of the header's spin, and with the adaptive spin at least 50 us more.
+        fn body_spin(&self, spin_until: Option<Instant>) -> Option<Instant> {
+            let now = Instant::now();
+            let left = spin_until.filter(|t| now < *t);
+            if self.spin_auto.is_zero() {
+                return left;
+            }
+            let more = now + Duration::from_micros(50);
+            Some(left.map_or(more, |t| t.max(more)))
         }
 
         /// One service-lane (A1) call: the same public fields (request id, linear, rows, ring, deadline,
@@ -775,7 +978,8 @@ mod chan {
             out: &mut [u8],
             timeout: Duration,
         ) -> Result<(u8, u32), LaneError> {
-            let deadline = Instant::now() + timeout;
+            let start = Instant::now();
+            let deadline = start + timeout;
             let hdr = SvcRequest {
                 kind: SvcKind::Call,
                 request_id: h.request_id,
@@ -786,6 +990,9 @@ mod chan {
                 body_len: h.body_len,
             }
             .encode();
+            if self.shm.is_some() {
+                return self.trip_shm(h, &hdr, body, out, start, deadline);
+            }
             self.set_nb(false)?;
             let rto = self.read_to;
             let wto = Some(match self.write_to {
@@ -795,9 +1002,12 @@ mod chan {
             self.timeouts(rto, wto)?;
             let conn = self.conn.as_mut().ok_or(LaneError::Closed)?;
             conn.send(&hdr, body, &mut self.scratch)?;
-            let spin_until = if self.spin.is_zero() { None } else { Some(Instant::now() + self.spin) };
+            let sent = Instant::now();
+            let spin = self.spin_for(u32::from(h.linear), h.rows);
+            let spin_until = if spin.is_zero() { None } else { Some(sent + spin) };
             let mut rb = [0u8; SVC_REPLY_LEN];
-            self.read_hybrid(&mut rb, spin_until, deadline)?;
+            let blocked = self.read_hybrid(&mut rb, spin_until, deadline)?;
+            let waited = sent.elapsed();
             let r = SvcReply::parse(&rb).ok_or_else(|| LaneError::Protocol("not a lane reply".into()))?;
             if r.request_id != h.request_id {
                 return Err(LaneError::Protocol("reply does not answer the request".into()));
@@ -811,9 +1021,98 @@ mod chan {
             if r.body_len as usize != out.len() {
                 return Err(LaneError::Protocol("reply body has the wrong length".into()));
             }
-            let spin_left = spin_until.filter(|t| Instant::now() < *t);
+            let spin_left = self.body_spin(spin_until);
             self.read_hybrid(out, spin_left, deadline)?;
             self.set_nb(false)?;
+            self.learn(u32::from(h.linear), h.rows, waited);
+            self.account(spin, waited, start.elapsed(), blocked, r.queue_us, r.compute_us);
+            Ok((status::OK, r.compute_us))
+        }
+
+        /// One service-lane call through the shm segment: the same header and body bytes as on the
+        /// socket, written into the segment; the reply header and body read back from it.
+        fn trip_shm(
+            &mut self,
+            h: &RequestHeader,
+            hdr: &[u8],
+            body: &[u8],
+            out: &mut [u8],
+            start: Instant,
+            deadline: Instant,
+        ) -> Result<(u8, u32), LaneError> {
+            let spin = self.spin_for(u32::from(h.linear), h.rows);
+            let (Some(Conn::Uds(sock)), Some(sc)) = (self.conn.as_ref(), self.shm.as_mut()) else {
+                return Err(LaneError::Closed);
+            };
+            let reg = &sc.reg;
+            if body.len() > reg.req_cap() || out.len() > reg.rep_cap() {
+                return Err(LaneError::Protocol("call does not fit the shm segment".into()));
+            }
+            reg.write(reg.req_body(), body);
+            reg.write(shm::OFF_REQ_HDR, hdr);
+            sc.seq = sc.seq.wrapping_add(1);
+            let seq = sc.seq;
+            reg.req_seq().store(seq, Ordering::SeqCst);
+            if reg.srv_parked().load(Ordering::SeqCst) != 0 {
+                shm::ring(sock)?;
+            }
+            let sent = Instant::now();
+            let ready = || reg.rep_seq().load(Ordering::Acquire) == seq;
+            let mut blocked = false;
+            let spin_until = sent + spin;
+            let mut i: u32 = 0;
+            while !ready() {
+                i = i.wrapping_add(1);
+                if i % 32 == 0 && Instant::now() >= spin_until {
+                    // park: flag, re-check, block on the doorbell (bounded by the deadline)
+                    blocked = true;
+                    loop {
+                        if shm::park_or_ready(reg.cli_parked(), &ready) {
+                            break;
+                        }
+                        let left = deadline.saturating_duration_since(Instant::now());
+                        if left.is_zero() {
+                            reg.cli_parked().store(0, Ordering::SeqCst);
+                            return Err(io::Error::new(io::ErrorKind::TimedOut, "lane trip timed out").into());
+                        }
+                        sock.set_read_timeout(Some(left))?;
+                        let w = shm::wait_bell(sock);
+                        reg.cli_parked().store(0, Ordering::SeqCst);
+                        match w? {
+                            shm::Wake::Closed => return Err(io::Error::from(io::ErrorKind::UnexpectedEof).into()),
+                            shm::Wake::Rang | shm::Wake::Timeout => {}
+                        }
+                        if ready() {
+                            break;
+                        }
+                    }
+                    break;
+                }
+                std::hint::spin_loop();
+            }
+            let waited = sent.elapsed();
+            let mut rb = [0u8; SVC_REPLY_LEN];
+            reg.read(shm::OFF_REP_HDR, &mut rb);
+            let r = SvcReply::parse(&rb).ok_or_else(|| LaneError::Protocol("not a lane reply".into()))?;
+            if r.request_id != h.request_id {
+                return Err(LaneError::Protocol("reply does not answer the request".into()));
+            }
+            if r.status.code() != 0 {
+                if r.body_len != 0 {
+                    return Err(LaneError::Protocol("refusal with a body".into()));
+                }
+                return Ok((map_service_status(r.status.code()), r.compute_us));
+            }
+            if r.body_len as usize != out.len() {
+                return Err(LaneError::Protocol("reply body has the wrong length".into()));
+            }
+            reg.read(reg.rep_body(), out);
+            // the socket's read timeout was changed while parked: let `timeouts` re-arm it
+            if blocked {
+                self.read_to = None;
+            }
+            self.learn(u32::from(h.linear), h.rows, waited);
+            self.account(spin, waited, start.elapsed(), blocked, r.queue_us, r.compute_us);
             Ok((status::OK, r.compute_us))
         }
     }
@@ -1029,6 +1328,46 @@ mod chan {
         #[getter]
         fn max_rows(&self) -> u16 {
             self.max_rows
+        }
+
+        /// Adaptive reply spin (opt-in): learn each (linear, rows) reply time and busy-poll about that
+        /// long, at most `cap_us` (0 = back to the fixed `spin_us`). Waiting only; the bytes are unchanged.
+        fn set_spin_auto(&self, py: Python<'_>, cap_us: u64) {
+            py.allow_threads(|| {
+                self.inner.lock().unwrap_or_else(|p| p.into_inner()).set_spin_auto(Duration::from_micros(cap_us))
+            });
+        }
+
+        /// Move a service-lane UDS connection to a shared-memory segment the service passes over this
+        /// socket (opt-in; same header and body bytes). False: the service does not offer it (the
+        /// connection stays on the socket). Raises (and closes the channel) on a protocol or I/O error.
+        #[pyo3(signature = (timeout_s = 5.0))]
+        fn attach_shm(&self, py: Python<'_>, timeout_s: f64) -> PyResult<bool> {
+            let to = secs(timeout_s)?;
+            py.allow_threads(|| self.inner.lock().unwrap_or_else(|p| p.into_inner()).attach_shm(to)).map_err(to_py)
+        }
+
+        /// `"uds"`, `"shm"`, `"tls"` or `"closed"`.
+        #[getter]
+        fn transport(&self, py: Python<'_>) -> &'static str {
+            py.allow_threads(|| self.inner.lock().unwrap_or_else(|p| p.into_inner()).transport())
+        }
+
+        /// Counters of OK trips: `trips`, `spin_hits`, `blocked`, `wait_us` (request sent to reply header),
+        /// `trip_us` (whole trip), `queue_us` / `compute_us` (as the service reported them), `spin_us`
+        /// (budgets): sums in microseconds.
+        fn stats<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, pyo3::types::PyDict>> {
+            let st = py.allow_threads(|| self.inner.lock().unwrap_or_else(|p| p.into_inner()).stats());
+            let d = pyo3::types::PyDict::new(py);
+            d.set_item("trips", st.trips)?;
+            d.set_item("spin_hits", st.spin_hits)?;
+            d.set_item("blocked", st.blocked)?;
+            d.set_item("wait_us", st.wait_ns as f64 / 1e3)?;
+            d.set_item("trip_us", st.trip_ns as f64 / 1e3)?;
+            d.set_item("queue_us", st.queue_us)?;
+            d.set_item("compute_us", st.compute_us)?;
+            d.set_item("spin_us", st.spin_ns as f64 / 1e3)?;
+            Ok(d)
         }
     }
 

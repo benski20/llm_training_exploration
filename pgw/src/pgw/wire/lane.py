@@ -465,6 +465,12 @@ class LaneConfig(BaseModel):
                                 "False = the Python channel")
     spin_us: int = Field(50, ge=0, le=100_000, description="Native channel: busy-poll the reply this long "
                          "before blocking (0 = block at once)")
+    spin_auto_us: int = Field(0, ge=0, le=100_000, description="Native channel, opt-in adaptive spin: learn each "
+                              "(linear, rows) reply time and busy-poll about that long, at most this many us (0 = "
+                              "off: the fixed spin_us). Waiting only; the bytes are unchanged")
+    shm: bool = Field(False, description="Native service-lane UDS channel, opt-in: move each connection to a "
+                      "shared-memory segment the service passes over the authenticated socket (same headers and "
+                      "bodies; a service without it keeps the socket)")
     connect_timeout_s: float = Field(2.0, gt=0)
     trip_timeout_s: float | None = Field(None, gt=0, description="Per-trip budget (None = the request's "
                                          "deadline_ms, else the client's request_timeout_s). A lane call that "
@@ -544,6 +550,17 @@ def _service_host(base_url: str) -> str:
     return host
 
 
+def tune_channel(ch: Any, config: LaneConfig) -> Any:
+    """Apply the opt-in native-channel knobs of ``config`` to a freshly connected channel: the adaptive spin
+    (``spin_auto_us``) and, on a service-lane UDS channel, the shared-memory transport (``shm``; a service that
+    does not offer it keeps the socket). Raises (the channel closed) if moving to shm fails."""
+    if config.spin_auto_us and hasattr(ch, "set_spin_auto"):
+        ch.set_spin_auto(int(config.spin_auto_us))
+    if config.shm and hasattr(ch, "attach_shm"):
+        ch.attach_shm(float(config.connect_timeout_s))
+    return ch
+
+
 def open_channel(ticket: LaneTicket, secret: bytes | bytearray, client_config: Any, config: LaneConfig) -> Any:
     """Open one lane connection for ``ticket`` (native channel when available and usable).
 
@@ -561,7 +578,7 @@ def open_channel(ticket: LaneTicket, secret: bytes | bytearray, client_config: A
     if ticket.transport == "uds":
         assert ticket.path is not None
         if native is not None:
-            return native.connect_uds(ticket.path, secret, timeout, int(config.spin_us))
+            return tune_channel(native.connect_uds(ticket.path, secret, timeout, int(config.spin_us)), config)
         return PyTripChannel.connect_uds(ticket.path, secret, timeout)
     if ticket.transport != "tcp" or ticket.port is None:
         raise LaneProtocolError(f"unknown lane transport {ticket.transport!r}")
@@ -571,7 +588,8 @@ def open_channel(ticket: LaneTicket, secret: bytes | bytearray, client_config: A
     ca_file = getattr(client_config, "ca_file", None)
     if native is not None and ca_file is not None and getattr(client_config, "client_cert_file", None) is None:
         ca_pem = Path(ca_file).read_bytes()
-        return native.connect_tls(host, int(ticket.port), host, ca_pem, secret, timeout, int(config.spin_us))
+        return tune_channel(native.connect_tls(host, int(ticket.port), host, ca_pem, secret, timeout,
+                                               int(config.spin_us)), config)
     if config.native is True:
         raise ValueError("lane native TLS channel needs ca_file and no client certificate")
     from pgw.wire.client import build_ssl_context
@@ -620,6 +638,24 @@ class LaneComputeClient:
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self._client, name)
+
+    def channel_stats(self) -> dict[str, Any]:
+        """Sums of the idle native channels' counters (``TripChannel.stats()``: trips, spin hits, blocking
+        waits, wait / trip / service queue / service compute microseconds) and their transports."""
+        out: dict[str, Any] = {}
+        transports: dict[str, int] = {}
+        with self._cv:
+            chans = list(self._idle)
+        for ch in chans:
+            st = getattr(ch, "stats", None)
+            if st is None:
+                continue
+            for k, v in st().items():
+                out[k] = out.get(k, 0) + v
+            t = str(getattr(ch, "transport", "?"))
+            transports[t] = transports.get(t, 0) + 1
+        out["transports"] = transports
+        return out
 
     # ---------------------------------------------------------------- open / close
     @property

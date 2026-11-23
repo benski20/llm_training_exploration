@@ -26,8 +26,9 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use crate::admission::{Admission, Refusal};
-use crate::exec::{Call, Executor, ModelEntry};
+use crate::exec::{Call, Done, Executor, ModelEntry, ReplySink};
 use crate::proto::{Kind, ReplyHeader, RequestHeader, Status, MAX_ROWS, REQUEST_HEADER_LEN, TICKET_LEN};
+use crate::shm::{self, Region};
 use crate::stats::Stats;
 use crate::sync::{MutexExt, RwLockExt};
 use crate::tls::TlsIo;
@@ -67,6 +68,15 @@ pub struct ServerConfig {
     /// the reply; a blocking read then pays a scheduler wake-up (slow under gVisor). Costs one core
     /// per busy connection while it spins; changes nothing on the wire.
     pub read_spin: Duration,
+    /// Opt-in: OK replies of a Unix-domain-socket connection are written straight from the executor's
+    /// output buffer (CUDA graphs: the pinned `h_out`) with a non-blocking `writev` while the device
+    /// lock is held, instead of first being copied into a reply buffer; whatever the socket does not take
+    /// at once is copied and sent after the lock is released (a slow peer cannot hold the device). Same
+    /// bytes.
+    pub zero_copy: bool,
+    /// Opt-in: answer a connection's `shm` frame by moving its calls to a sealed shared-memory segment
+    /// ([`crate::shm`]); without it the frame gets `Fallback` and the connection stays on the socket.
+    pub shm: bool,
 }
 
 impl Default for ServerConfig {
@@ -82,6 +92,8 @@ impl Default for ServerConfig {
             stall_timeout: Duration::from_secs(30),
             poll: Duration::from_millis(100),
             read_spin: Duration::ZERO,
+            zero_copy: false,
+            shm: false,
         }
     }
 }
@@ -510,9 +522,346 @@ fn serve(acc: Accepted, sh: Arc<Shared>, cfg: ServerConfig) {
     s.close();
 }
 
+/// Where a connection's call bodies come from and its replies go: the socket, or (opt-in) a
+/// shared-memory segment ([`crate::shm`]). Same headers and bodies either way.
+trait Frames {
+    /// Read the call's body (`buf.len()` bytes, already checked against the tables).
+    fn body(&mut self, buf: &mut [u8], sh: &Shared, cfg: &ServerConfig) -> bool;
+    /// Write a reply (blocking).
+    fn reply(&mut self, h: &ReplyHeader, body: &[u8]) -> std::io::Result<()>;
+    /// True if [`Frames::reply_direct`] may be used (zero-copy replies from the executor's buffer).
+    fn direct(&self) -> bool;
+    /// Reply from inside the executor (the device lock may be held): never waits for the peer; what
+    /// cannot go out at once is kept for [`Frames::finish`].
+    fn reply_direct(&mut self, h: &ReplyHeader, body: &[u8]) -> std::io::Result<()>;
+    /// Complete a [`Frames::reply_direct`] (after the executor returned).
+    fn finish(&mut self) -> std::io::Result<()>;
+}
+
+/// The socket transport (`zero_copy`: replies are written straight from the executor's buffer with a
+/// non-blocking `writev`; a remainder the socket does not take at once is copied and sent after).
+struct SockFrames<'a> {
+    io: &'a mut Io,
+    zero_copy: bool,
+    pending: Vec<u8>,
+}
+
+impl Frames for SockFrames<'_> {
+    fn body(&mut self, buf: &mut [u8], sh: &Shared, cfg: &ServerConfig) -> bool {
+        read_full(self.io, buf, sh, false, cfg.stall_timeout).is_ok()
+    }
+
+    fn reply(&mut self, h: &ReplyHeader, body: &[u8]) -> std::io::Result<()> {
+        write_reply(self.io, h, body)
+    }
+
+    fn direct(&self) -> bool {
+        self.zero_copy && matches!(self.io, Io::Uds(_))
+    }
+
+    fn reply_direct(&mut self, h: &ReplyHeader, body: &[u8]) -> std::io::Result<()> {
+        let hb = h.encode();
+        self.pending.clear();
+        let Io::Uds(s) = &mut *self.io else {
+            self.pending.extend_from_slice(&hb);
+            self.pending.extend_from_slice(body);
+            return Ok(());
+        };
+        let total = hb.len() + body.len();
+        let mut sent = 0usize;
+        while sent < total {
+            let (a, b): (&[u8], &[u8]) =
+                if sent < hb.len() { (&hb[sent..], body) } else { (&body[sent - hb.len()..], &[]) };
+            let iov = [
+                libc::iovec { iov_base: a.as_ptr() as *mut libc::c_void, iov_len: a.len() },
+                libc::iovec { iov_base: b.as_ptr() as *mut libc::c_void, iov_len: b.len() },
+            ];
+            // SAFETY: zeroed msghdr pointing at two iovecs over live slices.
+            let mut msg: libc::msghdr = unsafe { std::mem::zeroed() };
+            msg.msg_iov = iov.as_ptr() as *mut libc::iovec;
+            msg.msg_iovlen = if b.is_empty() { 1 } else { 2 };
+            // SAFETY: valid socket and msghdr; never blocks (MSG_DONTWAIT).
+            let n = unsafe { libc::sendmsg(s.as_raw_fd(), &msg, libc::MSG_DONTWAIT | libc::MSG_NOSIGNAL) };
+            if n < 0 {
+                let e = std::io::Error::last_os_error();
+                match e.kind() {
+                    ErrorKind::Interrupted => continue,
+                    ErrorKind::WouldBlock => break,
+                    _ => return Err(e),
+                }
+            }
+            sent += n as usize;
+        }
+        if sent < hb.len() {
+            self.pending.extend_from_slice(&hb[sent..]);
+            self.pending.extend_from_slice(body);
+        } else if sent < total {
+            self.pending.extend_from_slice(&body[sent - hb.len()..]);
+        }
+        Ok(())
+    }
+
+    fn finish(&mut self) -> std::io::Result<()> {
+        if self.pending.is_empty() {
+            return Ok(());
+        }
+        let r = self.io.send(&self.pending, &[]);
+        self.pending.clear();
+        r
+    }
+}
+
+/// The shared-memory transport of one connection (after a `shm` frame).
+struct ShmFrames<'a> {
+    sock: &'a UnixStream,
+    reg: Region,
+    /// Sequence number of the request being served (echoed in `rep_seq`).
+    seq: u64,
+}
+
+impl ShmFrames<'_> {
+    fn publish(&mut self, h: &ReplyHeader, body: &[u8]) -> std::io::Result<()> {
+        if body.len() > self.reg.rep_cap() {
+            return Err(std::io::Error::new(ErrorKind::InvalidData, "reply exceeds the shm segment"));
+        }
+        self.reg.write(self.reg.rep_body(), body);
+        self.reg.write(shm::OFF_REP_HDR, &h.encode());
+        self.reg.rep_seq().store(self.seq, Ordering::SeqCst);
+        if self.reg.cli_parked().load(Ordering::SeqCst) != 0 {
+            shm::ring(self.sock)?;
+        }
+        Ok(())
+    }
+}
+
+impl Frames for ShmFrames<'_> {
+    fn body(&mut self, buf: &mut [u8], _sh: &Shared, _cfg: &ServerConfig) -> bool {
+        if buf.len() > self.reg.req_cap() {
+            return false;
+        }
+        self.reg.read(self.reg.req_body(), buf);
+        true
+    }
+
+    fn reply(&mut self, h: &ReplyHeader, body: &[u8]) -> std::io::Result<()> {
+        self.publish(h, body)
+    }
+
+    fn direct(&self) -> bool {
+        true
+    }
+
+    fn reply_direct(&mut self, h: &ReplyHeader, body: &[u8]) -> std::io::Result<()> {
+        self.publish(h, body)
+    }
+
+    fn finish(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+/// Per-connection scratch buffers.
+#[derive(Default)]
+struct Scratch {
+    body: Vec<u8>,
+    out: Vec<u8>,
+}
+
+/// The zero-copy reply sink handed to the executor: counts the call and replies from its buffer.
+struct Direct<'f, 's, F: Frames> {
+    f: &'f mut F,
+    sh: &'s Shared,
+    tenant: &'s str,
+    kind: &'s str,
+    id: [u8; 16],
+    rows: u64,
+    want_in: u64,
+    out_len: usize,
+    received: Instant,
+    err: Option<std::io::Error>,
+}
+
+impl<F: Frames> ReplySink for Direct<'_, '_, F> {
+    fn deliver(&mut self, d: Done, body: &[u8]) {
+        if body.len() != self.out_len {
+            // cannot happen with a well-formed executor; refuse rather than send a wrong length
+            self.sh.stats.request(self.tenant, Status::Internal.name(), self.received.elapsed().as_secs_f64());
+            if let Err(e) = self.f.reply_direct(&ReplyHeader::refusal(Status::Internal, self.id, 0), &[]) {
+                self.err = Some(e);
+            }
+            return;
+        }
+        let rh = ReplyHeader {
+            status: Status::Ok,
+            request_id: self.id,
+            queue_us: d.queue_us,
+            compute_us: d.compute_us,
+            retry_after_ms: 0,
+            body_len: self.out_len as u32,
+        };
+        // counted before the reply is written: a client that saw the reply sees the counters
+        let st = &self.sh.stats;
+        st.computed(
+            self.tenant,
+            self.kind,
+            d.backend,
+            self.rows,
+            self.want_in,
+            self.out_len as u64,
+            d.compute_us as f64 * 1e-6,
+        );
+        st.request(self.tenant, Status::Ok.name(), self.received.elapsed().as_secs_f64());
+        if let Err(e) = self.f.reply_direct(&rh, body) {
+            self.err = Some(e);
+        }
+    }
+}
+
+/// Validate and serve one parsed request header (`h`, read at `received`). False: close the connection.
+fn handle_call<F: Frames>(
+    f: &mut F,
+    sh: &Arc<Shared>,
+    cfg: &ServerConfig,
+    conn: &Conn,
+    h: RequestHeader,
+    received: Instant,
+    sc: &mut Scratch,
+) -> bool {
+    let id = h.request_id;
+    let fatal = |f: &mut F, st: Status| {
+        sh.stats.request(&conn.tenant, st.name(), received.elapsed().as_secs_f64());
+        let _ = f.reply(&ReplyHeader::refusal(st, id, 0), &[]);
+    };
+    if h.kind != Kind::Call {
+        fatal(f, Status::NotOpen);
+        return false;
+    }
+    if sh.generation(&conn.tenant) != conn.generation {
+        fatal(f, Status::Unauthenticated);
+        return false;
+    }
+    let (Some(lin), Some(ring)) = (conn.model.linears.get(h.linear as usize), conn.model.rings.get(h.ring as usize))
+    else {
+        fatal(f, Status::UnknownLinear);
+        return false;
+    };
+    if h.rows > MAX_ROWS {
+        fatal(f, Status::BadHeader);
+        return false;
+    }
+    let bpe = ring.bytes_per_element as u64;
+    let want_in = h.rows as u64 * lin.n as u64 * bpe;
+    if h.body_len as u64 != want_in {
+        fatal(f, Status::BadLength);
+        return false;
+    }
+    sc.body.resize(want_in as usize, 0);
+    if !f.body(&mut sc.body, sh, cfg) {
+        return false;
+    }
+    let out_len = (h.rows as u64 * lin.m as u64 * bpe) as usize;
+    let cap = cfg.deadline_cap_ms.max(1);
+    let ms = if h.deadline_ms == 0 { cap } else { h.deadline_ms.min(cap) };
+    let deadline = received + Duration::from_millis(ms as u64);
+    let mut direct_err: Option<std::io::Error> = None;
+    let reply = if h.rows > cfg.max_rows {
+        Err(Refusal::new(Status::Fallback))
+    } else {
+        match sh.admission.admit(&conn.tenant, h.rows as u64, true) {
+            Err(r) => Err(r),
+            Ok(()) => {
+                let admitted = Admitted { admission: &sh.admission, tenant: &conn.tenant };
+                let call = Call {
+                    tenant: &conn.tenant,
+                    model: conn.model_id,
+                    linear: h.linear,
+                    ring: h.ring,
+                    rows: h.rows,
+                    body: &sc.body,
+                    out_len,
+                    received,
+                    deadline,
+                };
+                sc.out.clear();
+                let ex = sh.executor.pread().clone();
+                let r = match ex {
+                    Some(ex) if f.direct() => {
+                        let mut sink = Direct {
+                            f: &mut *f,
+                            sh,
+                            tenant: &conn.tenant,
+                            kind: &lin.kind,
+                            id,
+                            rows: h.rows as u64,
+                            want_in,
+                            out_len,
+                            received,
+                            err: None,
+                        };
+                        let r = ex.execute_to(&call, &mut sc.out, &mut sink);
+                        direct_err = sink.err.take();
+                        r
+                    }
+                    Some(ex) => ex.execute(&call, &mut sc.out).map(|d| (d, false)),
+                    None => Err(Refusal::new(Status::Fallback)),
+                };
+                drop(admitted);
+                match r {
+                    Ok((_, true)) => {
+                        // replied from the executor's buffer; send what the socket did not take at once
+                        return direct_err.is_none() && f.finish().is_ok();
+                    }
+                    Ok((d, false)) if sc.out.len() == out_len => Ok(d),
+                    Ok(_) => Err(Refusal::new(Status::Internal)),
+                    Err(e) => Err(e),
+                }
+            }
+        }
+    };
+    match reply {
+        Ok(d) => {
+            let rh = ReplyHeader {
+                status: Status::Ok,
+                request_id: id,
+                queue_us: d.queue_us,
+                compute_us: d.compute_us,
+                retry_after_ms: 0,
+                body_len: out_len as u32,
+            };
+            // counted before the reply is written: a client that saw the reply sees the counters
+            sh.stats.computed(
+                &conn.tenant,
+                &lin.kind,
+                d.backend,
+                h.rows as u64,
+                want_in,
+                out_len as u64,
+                d.compute_us as f64 * 1e-6,
+            );
+            sh.stats.request(&conn.tenant, Status::Ok.name(), received.elapsed().as_secs_f64());
+            f.reply(&rh, &sc.out).is_ok()
+        }
+        Err(r) => {
+            sh.stats.request(&conn.tenant, r.status.name(), received.elapsed().as_secs_f64());
+            f.reply(&ReplyHeader::refusal(r.status, id, r.retry_after_ms), &[]).is_ok() && !r.status.is_fatal()
+        }
+    }
+}
+
+/// Body capacities of a connection's shm segment: the largest request and reply of its model's tables
+/// at [`MAX_ROWS`] rows.
+fn shm_caps(model: &ModelEntry) -> Option<(usize, usize)> {
+    let bpe = model.rings.iter().map(|r| r.bytes_per_element as u64).max()?;
+    let n = model.linears.iter().map(|l| l.n as u64).max()?;
+    let m = model.linears.iter().map(|l| l.m as u64).max()?;
+    let req = MAX_ROWS as u64 * n * bpe;
+    let rep = MAX_ROWS as u64 * m * bpe;
+    (req > 0 && rep > 0 && req <= shm::MAX_CAP as u64 && rep <= shm::MAX_CAP as u64)
+        .then_some((req as usize, rep as usize))
+}
+
 fn serve_calls(s: &mut Io, sh: &Arc<Shared>, cfg: &ServerConfig, conn: Conn) {
-    let mut body: Vec<u8> = Vec::new();
-    let mut out: Vec<u8> = Vec::new();
+    let mut sc = Scratch::default();
     let mut hb = [0u8; REQUEST_HEADER_LEN];
     loop {
         if !cfg.read_spin.is_zero() {
@@ -530,107 +879,94 @@ fn serve_calls(s: &mut Io, sh: &Arc<Shared>, cfg: &ServerConfig, conn: Conn) {
                 return;
             }
         };
-        let id = h.request_id;
-        let fatal = |s: &mut Io, st: Status| {
-            sh.stats.request(&conn.tenant, st.name(), received.elapsed().as_secs_f64());
-            let _ = refuse(s, st, id, 0);
-        };
-        if h.kind != Kind::Call {
-            fatal(s, Status::NotOpen);
-            return;
-        }
-        if sh.generation(&conn.tenant) != conn.generation {
-            fatal(s, Status::Unauthenticated);
-            return;
-        }
-        let (Some(lin), Some(ring)) =
-            (conn.model.linears.get(h.linear as usize), conn.model.rings.get(h.ring as usize))
-        else {
-            fatal(s, Status::UnknownLinear);
-            return;
-        };
-        if h.rows > MAX_ROWS {
-            fatal(s, Status::BadHeader);
-            return;
-        }
-        let bpe = ring.bytes_per_element as u64;
-        let want_in = h.rows as u64 * lin.n as u64 * bpe;
-        if h.body_len as u64 != want_in {
-            fatal(s, Status::BadLength);
-            return;
-        }
-        body.resize(want_in as usize, 0);
-        if read_full(s, &mut body, sh, false, cfg.stall_timeout).is_err() {
-            return;
-        }
-        let out_len = (h.rows as u64 * lin.m as u64 * bpe) as usize;
-        let cap = cfg.deadline_cap_ms.max(1);
-        let ms = if h.deadline_ms == 0 { cap } else { h.deadline_ms.min(cap) };
-        let deadline = received + Duration::from_millis(ms as u64);
-        let reply = if h.rows > cfg.max_rows {
-            Err(Refusal::new(Status::Fallback))
-        } else {
-            match sh.admission.admit(&conn.tenant, h.rows as u64, true) {
-                Err(r) => Err(r),
-                Ok(()) => {
-                    let admitted = Admitted { admission: &sh.admission, tenant: &conn.tenant };
-                    let call = Call {
-                        tenant: &conn.tenant,
-                        model: conn.model_id,
-                        linear: h.linear,
-                        ring: h.ring,
-                        rows: h.rows,
-                        body: &body,
-                        out_len,
-                        received,
-                        deadline,
-                    };
-                    out.clear();
-                    let ex = sh.executor.pread().clone();
-                    let r = match ex {
-                        Some(ex) => ex.execute(&call, &mut out),
-                        None => Err(Refusal::new(Status::Fallback)),
-                    };
-                    drop(admitted);
-                    match r {
-                        Ok(d) if out.len() == out_len => Ok(d),
-                        Ok(_) => Err(Refusal::new(Status::Internal)),
-                        Err(e) => Err(e),
+        if h.kind == Kind::Shm {
+            let attached = match (&*s, cfg.shm, shm_caps(&conn.model)) {
+                (Io::Uds(u), true, Some((req, rep))) => match Region::create(req, rep) {
+                    Ok((fd, reg)) => {
+                        let ok = ReplyHeader::refusal(Status::Ok, h.request_id, 0).encode();
+                        if shm::send_with_fd(u, &ok, fd.as_raw_fd()).is_err() {
+                            return;
+                        }
+                        drop(fd); // the peer holds its own descriptor; our mapping stays
+                        Some(reg)
                     }
+                    Err(_) => None,
+                },
+                _ => None,
+            };
+            match attached {
+                Some(reg) => {
+                    if let Io::Uds(u) = &*s {
+                        serve_shm(u, reg, sh, cfg, &conn, &mut sc);
+                    }
+                    return;
                 }
+                None => {
+                    // not offered here (or not possible): the connection stays on the socket
+                    if refuse(s, Status::Fallback, h.request_id, 0).is_err() {
+                        return;
+                    }
+                    continue;
+                }
+            }
+        }
+        let mut f = SockFrames { io: &mut *s, zero_copy: cfg.zero_copy, pending: Vec::new() };
+        if !handle_call(&mut f, sh, cfg, &conn, h, received, &mut sc) {
+            return;
+        }
+    }
+}
+
+/// Calls of a connection moved to a shm segment: spin on the request sequence for the read spin
+/// (500 us when that is 0), then park on the socket until the doorbell, a close or shutdown.
+fn serve_shm(sock: &UnixStream, reg: Region, sh: &Arc<Shared>, cfg: &ServerConfig, conn: &Conn, sc: &mut Scratch) {
+    let spin = if cfg.read_spin.is_zero() { Duration::from_micros(500) } else { cfg.read_spin };
+    let mut f = ShmFrames { sock, reg, seq: 0 };
+    // the segment is fresh (all zero): the first request is seq 1, possibly stored before we get here
+    let mut last = 0u64;
+    loop {
+        let t0 = Instant::now();
+        let mut i: u32 = 0;
+        let cur = loop {
+            let c = f.reg.req_seq().load(Ordering::Acquire);
+            if c != last {
+                break Some(c);
+            }
+            i = i.wrapping_add(1);
+            if i % 64 == 0 && (t0.elapsed() >= spin || sh.shutdown.load(Ordering::Relaxed)) {
+                break None;
+            }
+            std::hint::spin_loop();
+        };
+        let Some(cur) = cur else {
+            if sh.shutdown.load(Ordering::SeqCst) {
+                return;
+            }
+            if shm::park_or_ready(f.reg.srv_parked(), || f.reg.req_seq().load(Ordering::SeqCst) != last) {
+                continue;
+            }
+            let w = shm::wait_bell(sock);
+            f.reg.srv_parked().store(0, Ordering::SeqCst);
+            match w {
+                Ok(shm::Wake::Rang) | Ok(shm::Wake::Timeout) => continue,
+                Ok(shm::Wake::Closed) | Err(_) => return,
             }
         };
-        match reply {
-            Ok(d) => {
-                let rh = ReplyHeader {
-                    status: Status::Ok,
-                    request_id: id,
-                    queue_us: d.queue_us,
-                    compute_us: d.compute_us,
-                    retry_after_ms: 0,
-                    body_len: out_len as u32,
-                };
-                // counted before the reply is written: a client that saw the reply sees the counters
-                sh.stats.computed(
-                    &conn.tenant,
-                    &lin.kind,
-                    d.backend,
-                    h.rows as u64,
-                    want_in,
-                    out_len as u64,
-                    d.compute_us as f64 * 1e-6,
-                );
-                sh.stats.request(&conn.tenant, Status::Ok.name(), received.elapsed().as_secs_f64());
-                if write_reply(s, &rh, &out).is_err() {
-                    return;
-                }
+        last = cur;
+        f.seq = cur;
+        let mut hb = [0u8; REQUEST_HEADER_LEN];
+        f.reg.read(shm::OFF_REQ_HDR, &mut hb); // one private copy, validated below
+        let received = Instant::now();
+        let h = match RequestHeader::parse(&hb) {
+            Ok(h) => h,
+            Err((st, id)) => {
+                sh.stats.request(&conn.tenant, st.name(), 0.0);
+                let _ = f.reply(&ReplyHeader::refusal(st, id, 0), &[]);
+                return;
             }
-            Err(r) => {
-                sh.stats.request(&conn.tenant, r.status.name(), received.elapsed().as_secs_f64());
-                if refuse(s, r.status, id, r.retry_after_ms).is_err() || r.status.is_fatal() {
-                    return;
-                }
-            }
+        };
+        if !handle_call(&mut f, sh, cfg, conn, h, received, sc) {
+            return;
         }
     }
 }

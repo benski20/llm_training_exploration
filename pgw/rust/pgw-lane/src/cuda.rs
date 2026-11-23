@@ -21,7 +21,7 @@ use std::sync::{Arc, Mutex, OnceLock, RwLock};
 use std::time::{Duration, Instant};
 
 use crate::admission::Refusal;
-use crate::exec::{micros, Call, DeviceGuard, DeviceLock, Done, Executor};
+use crate::exec::{micros, Call, DeviceGuard, DeviceLock, Done, Executor, ReplySink};
 use crate::proto::Status;
 use crate::sync::{MutexExt, RwLockExt};
 
@@ -363,6 +363,20 @@ impl GraphExecutor {
         out: &mut Vec<u8>,
         deadline: Option<Instant>,
     ) -> Result<(u32, u32), Refusal> {
+        self.run_key_into(key, body, Dest::Vec(out), deadline)
+    }
+
+    /// [`Self::run_key`] with the reply either copied into a `Vec` or handed to a sink straight from
+    /// the pinned output buffer while the device lock is still held (zero copy: the next launch, which
+    /// overwrites `h_out`, needs that lock). Returns `(queue_us, compute_us)`: device-lock wait, then
+    /// input copy + launch + wait + output copy (or hand-off).
+    fn run_key_into(
+        &self,
+        key: (u32, u32, u16, u16),
+        body: &[u8],
+        dest: Dest<'_>,
+        deadline: Option<Instant>,
+    ) -> Result<(u32, u32), Refusal> {
         let received = Instant::now();
         let g = match self.graphs.pread().get(&key) {
             Some(g) => g.clone(),
@@ -373,6 +387,10 @@ impl GraphExecutor {
         }
         let d = driver().map_err(|_| Refusal::new(Status::Fallback))?;
         if !g.shards.is_empty() {
+            let out = match dest {
+                Dest::Vec(v) => v,
+                Dest::Sink(..) => return Err(Refusal::new(Status::Fallback)), // callers only sink unsharded
+            };
             return self.run_sharded(d, &g, key.3 as usize, body, out, deadline, received);
         }
         let lock = self.device_lock(g.device);
@@ -387,15 +405,33 @@ impl GraphExecutor {
             self.disable(&e);
             return Err(Refusal::new(Status::Internal));
         }
-        out.clear();
-        out.reserve(g.out_len);
-        // SAFETY: h_out holds out_len bytes written by the finished graph; `out` has the capacity.
-        unsafe {
-            std::ptr::copy_nonoverlapping(g.h_out as *const u8, out.as_mut_ptr(), g.out_len);
-            out.set_len(g.out_len);
+        match dest {
+            Dest::Vec(out) => {
+                out.clear();
+                out.reserve(g.out_len);
+                // SAFETY: h_out holds out_len bytes written by the finished graph; `out` has the capacity.
+                unsafe {
+                    std::ptr::copy_nonoverlapping(g.h_out as *const u8, out.as_mut_ptr(), g.out_len);
+                    out.set_len(g.out_len);
+                }
+                Ok((micros(received, t_start), micros(t_start, Instant::now())))
+            }
+            Dest::Sink(f) => {
+                let (q, c) = (micros(received, t_start), micros(t_start, Instant::now()));
+                // SAFETY: h_out holds out_len bytes written by the finished graph; nothing else touches it
+                // until the device lock (held until this function returns) is released.
+                let y = unsafe { std::slice::from_raw_parts(g.h_out as *const u8, g.out_len) };
+                f(q, c, y);
+                Ok((q, c))
+            }
         }
-        Ok((micros(received, t_start), micros(t_start, Instant::now())))
     }
+}
+
+/// Where [`GraphExecutor::run_key_into`] puts the reply.
+enum Dest<'a> {
+    Vec(&'a mut Vec<u8>),
+    Sink(&'a mut dyn FnMut(u32, u32, &[u8])),
 }
 
 /// Registration check of a tensor-parallel graph: shards on distinct devices tile each reply row.
@@ -498,17 +534,39 @@ impl Executor for GraphExecutor {
             return Err(Refusal::new(Status::Fallback));
         }
         let key = (call.model, call.linear, call.ring, call.rows);
-        let (_, compute_us) = self.run_key(key, call.body, out, Some(call.deadline))?;
+        let (queue_us, compute_us) = self.run_key(key, call.body, out, Some(call.deadline))?;
         if out.len() != call.out_len {
             out.clear();
             self.disable("graph output length differs from the call's");
             return Err(Refusal::new(Status::Internal));
         }
-        Ok(Done {
-            queue_us: micros(call.received, Instant::now()).saturating_sub(compute_us),
-            compute_us,
-            backend: "lane_cuda_graph",
-        })
+        Ok(Done { queue_us, compute_us, backend: "lane_cuda_graph" })
+    }
+
+    fn execute_to(
+        &self,
+        call: &Call<'_>,
+        out: &mut Vec<u8>,
+        sink: &mut dyn ReplySink,
+    ) -> Result<(Done, bool), Refusal> {
+        if !self.enabled.load(Ordering::Relaxed) {
+            return Err(Refusal::new(Status::Fallback));
+        }
+        let key = (call.model, call.linear, call.ring, call.rows);
+        let copy = match self.graphs.pread().get(&key) {
+            Some(g) => !g.shards.is_empty() || g.out_len != call.out_len,
+            None => return Err(Refusal::new(Status::Fallback)),
+        };
+        if copy {
+            return self.execute(call, out).map(|d| (d, false));
+        }
+        let mut delivered = false;
+        let mut f = |q: u32, c: u32, y: &[u8]| {
+            delivered = true;
+            sink.deliver(Done { queue_us: q, compute_us: c, backend: "lane_cuda_graph" }, y);
+        };
+        let (queue_us, compute_us) = self.run_key_into(key, call.body, Dest::Sink(&mut f), Some(call.deadline))?;
+        Ok((Done { queue_us, compute_us, backend: "lane_cuda_graph" }, delivered))
     }
 }
 

@@ -61,7 +61,8 @@ pub struct Call<'a> {
 /// Timing of an executed call.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Done {
-    /// Receipt to compute start (device lock wait), microseconds.
+    /// Wait for the device (the device lock, or a coalesced batch) before compute starts,
+    /// microseconds. Reading the request body is not part of it (that is the wire's).
     pub queue_us: u32,
     /// Compute, microseconds.
     pub compute_us: u32,
@@ -69,10 +70,33 @@ pub struct Done {
     pub backend: &'static str,
 }
 
+/// Takes an OK reply straight from an executor's own buffer (zero copy; opt-in, see
+/// [`Executor::execute_to`]). Called at most once per call, possibly while the executor holds the
+/// device lock, so it must not block on the peer: it writes what goes out without waiting and keeps
+/// the rest to finish after the executor returns.
+pub trait ReplySink {
+    /// The call succeeded with `done`; `body` is the reply (`call.out_len` bytes). An error is kept by
+    /// the sink (the connection is dropped after the executor returns).
+    fn deliver(&mut self, done: Done, body: &[u8]);
+}
+
 /// Executes calls. `out` is empty on entry and must hold exactly `call.out_len` bytes on success.
 pub trait Executor: Send + Sync {
     /// Run one call.
     fn execute(&self, call: &Call<'_>, out: &mut Vec<u8>) -> Result<Done, Refusal>;
+
+    /// Like [`Executor::execute`], but the executor may hand an OK reply to `sink` from its own buffer
+    /// instead of copying it into `out`. Returns `(done, delivered)`: with `delivered` the reply went
+    /// to `sink` (and `out` is unused), else it is in `out` as with `execute`. The bytes are the same
+    /// either way. The default copies (`execute`).
+    fn execute_to(
+        &self,
+        call: &Call<'_>,
+        out: &mut Vec<u8>,
+        _sink: &mut dyn ReplySink,
+    ) -> Result<(Done, bool), Refusal> {
+        self.execute(call, out).map(|d| (d, false))
+    }
 }
 
 /// Saturating microseconds between two instants.
@@ -100,6 +124,26 @@ impl Executor for Chain {
         }
         match &self.secondary {
             Some(s) => s.execute(call, out),
+            None => Err(Refusal::new(Status::Fallback)),
+        }
+    }
+
+    fn execute_to(
+        &self,
+        call: &Call<'_>,
+        out: &mut Vec<u8>,
+        sink: &mut dyn ReplySink,
+    ) -> Result<(Done, bool), Refusal> {
+        // A `Fallback` refusal is given before anything is computed or delivered, so passing the call on
+        // cannot deliver twice.
+        if let Some(p) = &self.primary {
+            match p.execute_to(call, out, sink) {
+                Err(r) if r.status == Status::Fallback => out.clear(),
+                other => return other,
+            }
+        }
+        match &self.secondary {
+            Some(s) => s.execute_to(call, out, sink),
             None => Err(Refusal::new(Status::Fallback)),
         }
     }

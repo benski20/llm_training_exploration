@@ -308,18 +308,14 @@ impl PersistentExecutor {
 
 impl Executor for PersistentExecutor {
     fn execute(&self, call: &Call<'_>, out: &mut Vec<u8>) -> Result<Done, Refusal> {
-        let (_, compute_us) =
+        let (queue_us, compute_us) =
             self.run_key((call.model, call.linear, call.ring), call.rows, call.body, out, Some(call.deadline))?;
         if out.len() != call.out_len {
             out.clear();
             self.disable("persistent output length differs from the call's");
             return Err(Refusal::new(Status::Internal));
         }
-        Ok(Done {
-            queue_us: micros(call.received, Instant::now()).saturating_sub(compute_us),
-            compute_us,
-            backend: "lane_persistent",
-        })
+        Ok(Done { queue_us, compute_us, backend: "lane_persistent" })
     }
 }
 
