@@ -52,6 +52,7 @@ plain factory (:class:`Fused2MaskSource`) and whose provider is the in-process :
 from __future__ import annotations
 
 import dataclasses
+import logging
 import math
 import os
 import threading
@@ -1169,11 +1170,18 @@ class Fused2MaskedBackend(LinearBackend):
     fused2 = True
 
     def __init__(self, ring: RingParams, provider: Any, masks: Fused2MaskSource | None = None, *,
-                 weights: Fused2Weights | None = None):
+                 weights: Fused2Weights | None = None, noise_monitor: Any = None,
+                 on_integrity_failure: Any = None):
         if not ring.cap or ring.cap + 1 >= 61:
             raise ConfigError("fused2 needs a capped ring with 2^(C+1) < 2^61 - 1")
         self.ring = ring
         self.provider = provider
+        #: Optional :class:`pgw.observability.OutboundNoiseMonitor` (the gateway's): every trip's ``x_hat``
+        #: passes its every-call checks (duplicate rows) and sampled statistics before it leaves; the native
+        #: driver (:mod:`pgw.engine.fused2_native`) uses the same monitor. Observes only; never changes a value.
+        self.noise_monitor = noise_monitor
+        #: ``fn(error)`` called on a failed range / Freivalds check (the gateway trips its circuit breaker).
+        self.on_integrity_failure = on_integrity_failure
         #: The default mask source (in-process / segment file source; or None: every call's session is a
         #: mask-store reservation of fused2 pair-mask segments, :mod:`pgw.engine.fused2_store`).
         self.masks = masks
@@ -1214,6 +1222,19 @@ class Fused2MaskedBackend(LinearBackend):
             hit = self._store.pop(id(session), None)
         if hit is not None:
             hit[1].wipe()
+
+    def sync_trip_ok(self, rows: int) -> bool:
+        """The engine's ``sync_decode`` probe: a small pass runs wholly on the plaintext thread (where the native
+        fused2 driver may take it) when the provider is a synchronous lane channel."""
+        return hasattr(self.provider, "ch") and 0 < int(rows) <= int(getattr(self.provider, "max_rows", 0) or 0)
+
+    def release_session_checks(self, session: Any) -> None:
+        """The engine's / gateway's end-of-session hook (:class:`pgw.engine.backends.MaskedBackend` name):
+        :meth:`release`, and the native driver's copies of a closed session's check vectors."""
+        self.release(session)
+        nd = getattr(self, "native_decode", None)
+        if nd is not None and getattr(session, "closed", False):
+            nd.wipe_checks()
 
     def _verify(self, lin: F2Linear, xq: torch.Tensor, yq: torch.Tensor, offset: torch.Tensor | None = None,
                 ch: Any = None, masks: Any = None) -> None:
@@ -1273,6 +1294,9 @@ class Fused2MaskedBackend(LinearBackend):
         mask = (1 << k) - 1
         try:
             x_hat = (t.x + m.r_x) & mask
+            noise = self.noise_monitor
+            if noise is not None:  # duplicate rows (mask reuse) and sampled uniformity, before the payload leaves
+                noise.guard(x_hat, t.x)
             bpe = k // 8
             self.f2.trips += 1
             self.f2.rows += int(t.x.shape[0])
@@ -1303,7 +1327,20 @@ class Fused2MaskedBackend(LinearBackend):
         if not isinstance(trip, Fused2Trip):
             raise ConfigError("Fused2MaskedBackend takes fused2 calls only")
         self.stats.add(calls=1, rows=int(call.x.shape[0]))
-        return self._one(trip, self.masks_for(call.session))
+        try:
+            return self._one(trip, self.masks_for(call.session))
+        except IntegrityError as exc:
+            self.integrity_failed(exc)
+            raise
+
+    def integrity_failed(self, exc: BaseException) -> None:
+        """Report a failed check to :attr:`on_integrity_failure` (never masks the original error)."""
+        fn = self.on_integrity_failure
+        if fn is not None:
+            try:
+                fn(exc)
+            except Exception:  # pragma: no cover - defensive
+                logging.getLogger(__name__).exception("fused2 integrity-failure callback failed")
 
     def forward_many(self, calls: Sequence[LinearCall]) -> list[torch.Tensor]:
         return [self.forward(c) for c in calls]

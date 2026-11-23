@@ -241,6 +241,58 @@ def load_fused2_entries(state: Any, *, device: str | torch.device | None = None,
     return out
 
 
+#: Opt-in: serve encrypted maskgen (v1/v2/v3) for the fused2 linears of every lane entry under its lane fingerprint.
+ENV_MASKGEN = "PGW_SERVICE_FUSED2_MASKGEN"
+
+
+class Fused2MaskgenModel:
+    """The fused2 linears of a lane entry as a maskgen model (``linear_dims`` / ``kernel``), for the customer's
+    encrypted fused2 factory (:mod:`pgw.factory.fused2_he`: K56 masks as digits on the existing schemes).
+
+    Linear names are the file-safe fused2 keys (``"3.gate_up-f2"``); each kernel is an ordinary
+    :class:`pgw.service.kernels.ComputeKernel` over the entry's public int8 weight (the same matrix the pair op
+    holds), built on first use. The provider computes exactly what a standard maskgen request asks
+    (``W8 b mod 2^64`` on MLWE ciphertexts / the pks-v3 item): the requests carry ciphertexts only."""
+
+    def __init__(self, entry: Fused2LaneEntry):
+        self.fingerprint = entry.fingerprint
+        self.device = entry.device
+        self._w: dict[str, torch.Tensor] = {}
+        for it, op in zip(entry.items, entry.ops, strict=True):
+            self._w[it.k1.replace("/", "-")] = op.w1
+            if it.k2 is not None:
+                self._w[it.k2.replace("/", "-")] = op.w2  # type: ignore[assignment]
+        self._kern: dict[str, Any] = {}
+        self._lock = threading.Lock()
+
+    @property
+    def linear_dims(self) -> dict[str, tuple[int, int]]:
+        return {k: (int(w.shape[0]), int(w.shape[1])) for k, w in self._w.items()}
+
+    def kernel(self, linear: str) -> Any:
+        from types import SimpleNamespace
+
+        from pgw.service.kernels import ComputeKernel
+
+        with self._lock:
+            k = self._kern.get(linear)
+            if k is None:
+                w = self._w.get(linear)
+                if w is None:
+                    raise ProtocolError(f"unknown fused2 linear {linear!r}")
+                spec = SimpleNamespace(id=SimpleNamespace(key=linear, kind=SimpleNamespace(value="f2")),
+                                       out_features=int(w.shape[0]), in_features=int(w.shape[1]))
+                k = self._kern[linear] = ComputeKernel(spec, w.cpu(), device=str(self.device))  # type: ignore[arg-type]
+            return k
+
+
+def fused2_maskgen_models(entries: dict[str, Fused2LaneEntry]) -> dict[str, Fused2MaskgenModel]:
+    """``{lane fingerprint: Fused2MaskgenModel}`` when ``PGW_SERVICE_FUSED2_MASKGEN`` is on (else empty)."""
+    if os.environ.get(ENV_MASKGEN, "0").strip().lower() not in ("1", "true", "yes", "on"):
+        return {}
+    return {fp: Fused2MaskgenModel(e) for fp, e in entries.items()}
+
+
 def capture_fused2_graphs(mgr: Any, entry: Fused2LaneEntry, slot: int, rows_list: list[int], rep: Any
                           ) -> None:  # pragma: no cover - GPU only
     """Per (item, rows) one CUDA graph ``[H2D, unpack, gemv, epilogue, (gemv, epilogue), D2H]`` registered with

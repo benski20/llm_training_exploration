@@ -62,8 +62,10 @@ def open_packs(settings: FactorySettings) -> list[Any]:
     from pgw.modelpack import ModelPack
 
     packs = []
+    # fused2 folds the norm gains into its weights: it needs the pack's plain tensors too
+    comps = None if getattr(settings, "schedule", "standard") == "fused2" else ("linears",)
     for p in settings.all_pack_paths:
-        pack: Any = ModelPack.open(p, verify="full", components=("linears",))
+        pack: Any = ModelPack.open(p, verify="full", components=comps)
         if getattr(settings, "masked_head", False):
             from pgw.engine.masked_head import MaskedHeadPack
 
@@ -80,7 +82,12 @@ def build_generators(settings: FactorySettings, packs: list[Any], throttle: Thro
     """One :class:`MaskGenerator` per ``(pack, ring)``. Rings a pack cannot decode are rejected.
 
     ``worker_index``/``workers``: position in a :mod:`pgw.factory.fleet` (which compute service of
-    ``he_service_urls`` this worker starts on)."""
+    ``he_service_urls`` this worker starts on).
+
+    ``schedule = "fused2"``: one :class:`pgw.factory.fused2_gen.Fused2MaskGenerator` per ``(pack, ring)`` instead
+    (fused2 pair-mask segments under the fused2 lane fingerprint), see :func:`build_fused2_generators`."""
+    if getattr(settings, "schedule", "standard") == "fused2":
+        return build_fused2_generators(settings, packs, worker_index=worker_index, workers=workers)
     gens: dict[tuple[str, str], MaskGenerator] = {}
     for pack in packs:
         for ring in settings.ring_names:
@@ -99,6 +106,54 @@ def build_generators(settings: FactorySettings, packs: list[Any], throttle: Thro
         from pgw.factory.mask_service import prepare_mask_service
 
         prepare_mask_service(settings, gens)
+    return gens
+
+
+def build_fused2_generators(settings: FactorySettings, packs: list[Any], *, worker_index: int = 0,
+                            workers: int = 1) -> dict[tuple[str, str], Any]:
+    """fused2 generators (opt-in): the public fused2 weights of each pack (derived like the gateway's and the
+    service's, ``fused2_migrate_bits``, or ``fused2_weights_path``), keyed by ``(fused2 lane fingerprint, ring)``.
+    Plain CPU / GPU products, or with ``he_service_url`` the encrypted factory by digit decomposition
+    (:mod:`pgw.factory.fused2_he`). ``mask_service``: the bit-exact start-up check before the first segment."""
+    from pgw.engine.fused2 import Fused2Weights, migration_multipliers
+    from pgw.factory.fused2_gen import Fused2MaskGenerator
+    from pgw.service.fused2_lane import fused2_fingerprint
+
+    gens: dict[tuple[str, str], Any] = {}
+    for pack in packs:
+        if settings.fused2_weights_path is not None:
+            w = Fused2Weights.load(settings.fused2_weights_path)
+            if str(w.fingerprint) != str(pack.fingerprint):
+                raise ConfigError("fused2_weights_path holds weights of another pack")
+        else:
+            bits = int(settings.fused2_migrate_bits)
+            w = Fused2Weights(pack, None, multipliers=migration_multipliers(pack, bits) if bits else None)
+        for ring in settings.ring_names:
+            fp = fused2_fingerprint(w, ring)
+            he = None
+            if settings.he_urls:
+                from pgw.core.ring import RingParams
+                from pgw.factory.fused2_he import build_fused2_he
+
+                he = build_fused2_he(settings, w, fp, RingParams.from_name(ring).k, worker_index=worker_index,
+                                     workers=workers)
+            dev = "cpu" if he is not None else settings.device
+            g = Fused2MaskGenerator(w, ring, device=dev, backend=settings.backend if he is None else "auto",
+                                    lane_fingerprint=fp, he=he, pack=pack,
+                                    self_check_rows=settings.self_check_rows or 2,
+                                    chunk_rows=int(settings.chunk_slots or 64))
+            if g.key in gens:
+                raise ConfigError(f"duplicate pack/ring {pack.name}/{ring}")
+            gens[g.key] = g
+            log.info("factory: fused2 masks for %s (lane %s, %s, %s)", pack.short_fingerprint, fp[:12], ring,
+                     "encrypted digit split" if he is not None else g.device)
+    if settings.mask_service:
+        from pgw.factory.mask_service import prepare_mask_service
+
+        prepare_mask_service(settings, gens)
+    else:
+        for g in gens.values():
+            g.startup_check(rows=2, linears=8)  # products and p61 words vs independent references, once
     return gens
 
 

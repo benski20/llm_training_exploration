@@ -243,7 +243,13 @@ class Fused2NativeDecode:
                     self.record.extend((int(p), bytes(b)) for p, b in recorded)
                 self._sampled(sampled)
                 if code != _DONE:
-                    self._raise(code, info)
+                    try:
+                        self._raise(code, info)
+                    except IntegrityError as exc:
+                        report = getattr(be, "integrity_failed", None)
+                        if report is not None:
+                            report(exc)
+                        raise
             h_out = torch.empty((t, int(model.arch.hidden_size)), dtype=torch.float32)
             drv.end(h_out.numpy())
             ok = True
@@ -314,6 +320,7 @@ def enable_fused2_native(model: Any) -> Fused2NativeDecode:
         raise ConfigError("the native fused2 driver needs the fused2 schedule")
     nd = Fused2NativeDecode(model, sched, model.backend)
     sched.native_decode = nd
+    model.backend.native_decode = nd  # the backend's release_session_checks also wipes the driver's copies
     return nd
 
 

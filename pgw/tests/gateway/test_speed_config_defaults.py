@@ -71,8 +71,11 @@ def test_every_new_gateway_field_is_gated_until_built() -> None:
 
 def test_gateway_speed_fields_validate_once_built(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(gw_config, "PENDING_SPEED_SETTINGS", {})
-    m = masked(**GATEWAY_ON, spec_lookup=3)
+    # schedule = "fused2" has its own requirements (no speculation, prefix cache, masked head; a K56 ring):
+    # tests/gateway/test_fused2_gateway.py
+    m = masked(**{**GATEWAY_ON, "schedule": "standard"}, spec_lookup=3)
     assert m.spec_rows == 4 and m.lane == "auto"
+    assert masked(schedule="fused2", ring="K56A12C53", float_ops="native", lane="auto").schedule == "fused2"
     assert masked(spec_rows=4, spec_strict_passes=True, spec_lookup=3).spec_strict_passes
     with pytest.raises(ValidationError, match="spec_strict_passes needs spec_rows"):
         masked(spec_strict_passes=True)

@@ -61,9 +61,7 @@ _MIN_ADMIN_TOKEN_LEN = 16
 #: work package that builds it. A value other than the field's default (today's behaviour) is refused
 #: while the field is listed, so a configuration can never ask for a mode (e.g. strict-pass
 #: speculation) that silently does not happen. The implementing package removes its entry.
-PENDING_SPEED_SETTINGS: dict[str, str] = {
-    "schedule": "WP-B4 (fused2 schedule)",
-}
+PENDING_SPEED_SETTINGS: dict[str, str] = {}
 
 
 def _refuse_pending_speed_settings(cfg: BaseModel, pending: dict[str, str], where: str = "") -> None:
@@ -373,7 +371,32 @@ class GatewayModelConfig(BaseModel):
     )
     schedule: Literal["standard", "fused2"] = Field(
         "standard", description="Masked linear schedule per layer: 'standard' (default, 4 round trips: qkv, o, "
-        "gate_up, down); 'fused2' = two composite round trips (a new reference, gated on a 7B quality check)",
+        "gate_up, down); 'fused2' (opt-in) = two composite provider trips per layer (pair items: o + residual "
+        "-> gate_up, down + residual -> next qkv; research/plans/fused2-two-trips-per-layer.md). fused2 is its own "
+        "pinned reference (the 'plain' dev mode with this setting is its plaintext reference): masked logits equal "
+        "it bit for bit. The provider sees uniformly masked ring elements of public shapes only, every output of "
+        "both stages is range- and Freivalds-checked (F_p, p = 2^61 - 1, every trip), and the masks come from "
+        "the mask store's fused2 pair-mask segments (schedule 'fused2', the factory's fused2 generator) under the "
+        "fused2 lane fingerprint. Needs: a capped K56 ring (e.g. K56A12C53), float_ops = 'native', lane = 'auto' "
+        "/ 'required' (UDS, optionally the shared-memory transport via PGW_LANE_SHM=1) or 'tls', the service "
+        "serving the fused2 lane entry of this pack (PGW_SERVICE_FUSED2_FROM_PACK=<fused2_migrate_bits> or "
+        "PGW_SERVICE_FUSED2_WEIGHTS), freivalds_rate = 1, head_mode = 'gateway' (the masked head is not "
+        "combined with fused2 yet), no speculation, local linears, prefix cache or chunked prefill",
+    )
+    fused2_migrate_bits: int = Field(
+        8, ge=0, le=8, description="schedule = 'fused2': residual-grid migration bits of the public fused2 weights "
+        "derived from the verified pack at start-up (pgw.engine.fused2.migration_multipliers; 0 = the unmigrated "
+        "fold). Must equal the service's PGW_SERVICE_FUSED2_FROM_PACK (the lane fingerprint binds every weight; a "
+        "mismatch is refused at connect)",
+    )
+    fused2_weights_path: Path | None = Field(
+        None, description="schedule = 'fused2': a Fused2Weights.save() file (full public weights, e.g. a calibrated "
+        "split-free fold) instead of deriving them from the pack; its base fingerprint must be the pack's",
+    )
+    fused2_decode_native: Literal["auto", "on", "off"] = Field(
+        "auto", description="schedule = 'fused2': the native fused2 decode driver (pgw_fast.Fused2Driver: a whole "
+        "single-sequence pass of <= 8 rows in one GIL-free call, bit-identical to the Python path). 'auto' = when "
+        "the extension has it; 'on' = refuse to start without it; 'off' = the Python path",
     )
     prefix_cache: Literal["off", "conversation"] = Field(
         "off", description="Exact KV-cache reuse across chat turns (SPEC 9.4b): 'off' (default); 'conversation' = "
@@ -487,6 +510,8 @@ class GatewayModelConfig(BaseModel):
         if self.prefill_chunk_rows and not self.float_ops.startswith("native"):
             raise ValueError(f"model {self.name!r}: prefill_chunk_rows needs a native float_ops (only there are "
                              "chunked rows bit-identical to one pass)")
+        if self.schedule == "fused2":
+            self._check_fused2()
         if self.prefix_cache != "off":
             # reused K/V rows are bit-identical to recomputed ones only on the row-invariant native float path
             # (fixed-order per-row kernels) with exact integer linears; torch's float kernels and the float
@@ -497,6 +522,34 @@ class GatewayModelConfig(BaseModel):
             if self.device.split(":", 1)[0].strip().lower() != "cpu":
                 raise ValueError(f"model {self.name!r}: prefix_cache needs device = 'cpu'")
         return self
+
+    def _check_fused2(self) -> None:
+        """``schedule = 'fused2'``: the settings the fused2 path is built and verified for (exact, p61 checks)."""
+        where = f"model {self.name!r}: schedule = 'fused2'"
+        if self.mode == "float":
+            raise ValueError(f"{where} needs masked (or the plain dev) mode")
+        rp = RingParams.from_name(self.ring)
+        if rp.k != 56 or not rp.cap or rp.cap + 1 >= 61:
+            raise ValueError(f"{where} needs a capped K56 ring with 2^(C+1) < 2^61 - 1 (p61 checks), e.g. K56A12C53; "
+                             f"got {rp.name}")
+        if self.float_ops != "native":
+            raise ValueError(f"{where} needs float_ops = 'native' (the pinned float path its native driver "
+                             "reproduces)")
+        if self.mode == "masked" and self.lane not in ("auto", "required", "tls"):
+            raise ValueError(f"{where} needs lane = 'auto', 'required' or 'tls' (pair items ride the trip lane only)")
+        if self.freivalds_rate != 1.0:
+            raise ValueError(f"{where} checks every trip (both stages): freivalds_rate must be 1.0")
+        if self.head_mode != "gateway":
+            raise ValueError(f"{where} runs the head on the gateway (head_mode = 'provider_int8' is not combined with "
+                             "fused2 yet)")
+        if self.speculates or self.spec_rows is not None or self.spec_strict_passes:
+            raise ValueError(f"{where} does not speculate (no spec_lookup / draft / spec_rows)")
+        if self.local_linears != "off":
+            raise ValueError(f"{where} sends every trip to the provider (local_linears = 'off')")
+        if self.prefix_cache != "off" or self.prefill_chunk_rows:
+            raise ValueError(f"{where} does not combine with prefix_cache or prefill_chunk_rows yet")
+        if self.device.split(":", 1)[0].strip().lower() != "cpu":
+            raise ValueError(f"{where} needs device = 'cpu'")
 
     @property
     def speculates(self) -> bool:
@@ -898,6 +951,18 @@ class GatewaySettings(PGWSettings):
                     f"model {m.name!r}: mode {m.mode!r} is for development only (set allow_dev_modes)",
                     details={"model": m.name, "mode": m.mode},
                 )
+            if m.schedule == "fused2" and m.mode == "masked":
+                if self.mask_ring.enabled:
+                    raise ConfigError(f"model {m.name!r}: schedule = 'fused2' takes its pair masks from the disk mask "
+                                      "store only (the in-memory mask ring has no fused2 segments): unset "
+                                      "mask_ring.enabled", details={"model": m.name})
+                from pgw.maskstore.fused2 import fused2_soundness_bits
+
+                bits = fused2_soundness_bits(RingParams.from_name(m.ring), 1)
+                if bits < self.min_soundness_bits:
+                    raise ConfigError(f"model {m.name!r}: the fused2 p61 check gives {bits:.1f} bits per check vector "
+                                      f"and stage, below min_soundness_bits = {self.min_soundness_bits}",
+                                      details={"model": m.name})
             if m.mode == "masked":
                 if m.fingerprint is None and not self.allow_dev_modes:
                     raise ConfigError(

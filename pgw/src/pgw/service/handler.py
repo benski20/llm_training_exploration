@@ -418,7 +418,9 @@ class ServiceHandler:
 
         ident: TenantIdentity | None = identity if isinstance(identity, TenantIdentity) else None
         tenant = ident.tenant_id if ident is not None else "anonymous"
-        model = self.registry.get(request.fingerprint)
+        # fused2 lane entries (opt-in, PGW_SERVICE_FUSED2_MASKGEN): the same maskgen items over their public linears
+        f2 = (getattr(self, "fused2_maskgen", None) or {}).get(request.fingerprint)
+        model = f2 if f2 is not None else self.registry.get(request.fingerprint)
         dims = model.linear_dims
         for it in request.items:
             if it.linear not in dims:

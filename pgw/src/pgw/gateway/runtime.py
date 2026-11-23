@@ -548,6 +548,14 @@ class ModelRuntime:
         self._prepared: tuple[Any, ChatTokenizer] | None = None
         #: Conversation KV-prefix reuse (``prefix_cache = "conversation"``; gateway RAM only, SPEC 9.4b).
         self.prefix_cache: ConversationPrefixCache | None = None
+        #: ``schedule = "fused2"`` (opt-in): the full public fused2 weights until the engine is built (then the
+        #: weight-free tables only), the fused2 lane provider, and public bookkeeping for the admin status.
+        self.fused2 = config.schedule == "fused2"
+        self._f2_weights: Any = None
+        self._f2_tables: Any = None
+        self._f2_provider: Any = None
+        self._f2_tcp_ports: set[int] | None = None
+        self.fused2_info: dict[str, Any] = {}
 
     # ---- lifecycle ----------------------------------------------------------------------------
     def _open_pack(self) -> Any:
@@ -634,7 +642,10 @@ class ModelRuntime:
         # The compute stream connects only to service_url, which is on the egress allowlist (checked above).
         client = ComputeClient(cc, transport=guard, on_attempt=self._on_service_attempt,
                                stream_with_transport=real_network)
-        if c.lane == "off":
+        if c.lane == "off" or self.fused2:  # fused2: pair items on its own lane channel (_open_fused2_lane)
+            if self.fused2 and c.lane == "tls":
+                host = origin_of(c.service_url)[1]
+                self._f2_tcp_ports = {p for (scheme, h, p) in allowed if scheme == "https" and h == host}
             return client
         if c.lane == "stream":
             from pgw.wire.sync_stream import build_sync_stream_client
@@ -736,7 +747,12 @@ class ModelRuntime:
                 self._fail(exc)
                 raise
             try:
-                if self.config.head_mode == "provider_int8":
+                if self.fused2:
+                    # fused2: public weights derived from the verified pack, the lane fingerprint they bind (store
+                    # inventory key, lane model); the base fingerprint is the pack's (the service must serve it)
+                    self.base_fingerprint = pack.fingerprint
+                    await asyncio.to_thread(self._prepare_fused2, pack)
+                elif self.config.head_mode == "provider_int8":
                     # the masked LM head (opt-in): the pack plus its int8 head as one more masked linear, under
                     # the fingerprint derived here from the verified pack (the service must serve exactly that);
                     # the float head is never loaded
@@ -744,9 +760,10 @@ class ModelRuntime:
 
                     self.base_fingerprint = pack.fingerprint
                     pack = MaskedHeadPack(pack, float_head=False)
-                if hasattr(pack, "check_ring"):
+                if hasattr(pack, "check_ring") and not self.fused2:
                     pack.check_ring(self.ring)
-                self.fingerprint = pack.fingerprint
+                if not self.fused2:
+                    self.fingerprint = pack.fingerprint
                 tokenizer = await asyncio.to_thread(ChatTokenizer.from_pack, pack)
                 ctx = int(pack.arch.max_position_embeddings)
                 self.max_context = min(ctx, self.config.max_context) if self.config.max_context else ctx
@@ -806,7 +823,10 @@ class ModelRuntime:
         client = self._build_client()
         self.connect_attempts += 1
         try:
-            models = await client.connect(self.fingerprint, self.ring.name)
+            if self.fused2:  # the base pack must be served; the fused2 lane model is checked by its ticket
+                models = await client.connect(self.base_fingerprint, None)
+            else:
+                models = await client.connect(self.fingerprint, self.ring.name)
         except PGWError:
             await _aclose(client)
             raise
@@ -820,6 +840,9 @@ class ModelRuntime:
         """``lane`` = auto/required: ask the service for a trip-lane ticket now (start-up, not on the first
         token). ``required`` refuses to start without one (the model stays ``connecting`` and retries)."""
         lane = self.config.lane
+        if self.fused2:
+            await self._open_fused2_lane(client)
+            return
         if lane == "stream":  # blocking stream lane: opens its connection on the first synchronous trip
             self.lane_state = "stream" if getattr(client, "sync_stream", False) is True else "off"
             return
@@ -839,6 +862,38 @@ class ModelRuntime:
                                           "gateway (service lane = 'uds' on this host, or lane_uds_dir)")
         else:
             log.info("model %s: no trip lane from the service; using the stream channel", self.name)
+
+    async def _open_fused2_lane(self, client: Any) -> None:
+        """fused2: a lane ticket for the fused2 lane fingerprint and the native channel to it (no fallback: pair
+        items ride the lane only). A service serving other weights is a permanent error; a missing lane is
+        retried in the background (the model stays ``connecting``)."""
+        from pgw.gateway.fused2 import connect_fused2_lane, open_fused2_ticket
+
+        c = self.config
+        transports = ("tcp",) if c.lane == "tls" else ("uds",)
+        try:
+            ticket = await open_fused2_ticket(client, self.fingerprint, self.ring, self._f2_weights,
+                                              transports=transports)
+            prov = await asyncio.to_thread(
+                connect_fused2_lane, ticket, self._f2_weights, self.ring, client_config=client.config,
+                base_url=c.service_url or "", uds_dir=str(c.lane_uds_dir) if c.lane_uds_dir is not None else None,
+                tcp_ports=self._f2_tcp_ports, timeout_s=c.service_timeout_s)
+        except ConfigError:
+            await _aclose(client)
+            raise
+        except BaseException as exc:
+            await _aclose(client)
+            self.lane_state = "unavailable"
+            if isinstance(exc, ServiceUnavailableError):
+                raise
+            raise ServiceUnavailableError(f"schedule = 'fused2' needs the service's fused2 lane entry and trip lane "
+                                          f"({getattr(exc, 'message', None) or type(exc).__name__})") from exc
+        self._f2_provider = prov
+        self.lane_state = "open"
+        transport = "tcp" if c.lane == "tls" else ("shm" if getattr(prov.ch, "transport", "") == "shm" else "uds")
+        self.fused2_info.update({"lane_transport": transport, "lane_max_rows": int(prov.max_rows)})
+        log.info("model %s: fused2 lane open (%s, %d items, up to %d rows per trip)", self.name, transport,
+                 len(ticket["linears"]), prov.max_rows)
 
     async def _connect_loop(self) -> None:
         """Background reconnect with exponential back-off until connected or permanently failed."""
@@ -900,6 +955,9 @@ class ModelRuntime:
             self.noise_monitor = self._build_noise_monitor()
             self.client = _InstrumentedClient(client, self.metrics, self.name, self.breaker)
             self._retries_seen = 0
+            if self.fused2:
+                await self._finish_fused2_masked(pack, tokenizer)
+                return
             self.backend = MaskedBackend(
                 pack, None, self.client, self.ring, self.fingerprint,
                 freivalds_rate=self.config.freivalds_rate,
@@ -930,10 +988,51 @@ class ModelRuntime:
                 await _aclose(client)
             raise
 
+    async def _finish_fused2_masked(self, pack: Any, tokenizer: ChatTokenizer) -> None:
+        """fused2: :class:`pgw.engine.fused2.Fused2MaskedBackend` over the lane provider, masks from the store's
+        fused2 pair-mask segments (per request), the gateway's noise monitor on every outbound payload."""
+        from pgw.engine.fused2 import Fused2MaskedBackend
+
+        self.backend = Fused2MaskedBackend(self.ring, self._f2_provider, None, weights=self._f2_tables,
+                                           noise_monitor=self.noise_monitor,
+                                           on_integrity_failure=self._on_integrity_failure)
+        await asyncio.to_thread(self._require_mask_linears)
+        avail = await asyncio.to_thread(self._available_slots)
+        if avail == 0:
+            log.warning("no fused2 mask slots available for model %s (%s %s): run the factory with schedule = "
+                        "'fused2'", self.name, short_fingerprint(self.fingerprint), self.ring.name)
+        yfile = os.environ.get(factory_yield.ENV_FILE)
+        if yfile and getattr(self, "_factory_yield", None) is None:
+            self._factory_yield = factory_yield.YieldWriter(yfile, self._available_slots).start()
+        await asyncio.to_thread(self._check_mask_cache_budget)
+        self._finish_engine(pack, tokenizer)
+
+    def _prepare_fused2(self, pack: Any) -> None:
+        """fused2 start-up (worker thread): public weights from the verified pack, the lane fingerprint they bind
+        (the store inventory key and the lane model), and the weight-free tables the engine uses."""
+        from pgw.engine.fused2_masks import gateway_tables
+        from pgw.gateway.fused2 import load_fused2_weights
+        from pgw.service.fused2_lane import fused2_fingerprint
+
+        w = load_fused2_weights(pack, self.config)
+        self.fingerprint = fused2_fingerprint(w, self.ring)
+        self._f2_weights = w
+        self._f2_tables = gateway_tables(w)
+        c = self.config
+        self.fused2_info = {"lane_fingerprint": self.fingerprint, "base_fingerprint": pack.fingerprint,
+                            "ring": self.ring.name, "trips_per_token": 2 * int(w.num_layers) + 1,
+                            "weights": (str(c.fused2_weights_path) if c.fused2_weights_path is not None
+                                        else f"derived from the pack (migration {c.fused2_migrate_bits} bits)"),
+                            "migrated": bool(getattr(w, "migrated", False))}
+
     def mask_linears_needed(self) -> list[str]:
         """Linears this model's reservations must cover: every linear it may send to the service. A kind
         is left out only when the backend computes it locally on every step (a local kind with
         ``local_max_rows`` set still goes to the service for large steps). Public configuration only."""
+        if self.fused2:  # every fused2 linear, in pass order (the segment header order)
+            from pgw.engine.fused2_store import fused2_reservation_keys
+
+            return fused2_reservation_keys(self._f2_tables)
         be = self.backend
         specs = list(be.pack.linear_specs())
         is_local = getattr(be, "local_linear", None)
@@ -952,7 +1051,7 @@ class ModelRuntime:
             return
         needed = self.mask_linears_needed()
         retired = fn(self.fingerprint, self.ring, needed)
-        total = len(list(self.backend.pack.linear_specs()))
+        total = len(needed) if self.fused2 else len(list(self.backend.pack.linear_specs()))
         log.info("model %s: reservations need masks for %d of %d linears%s", self.name, len(needed), total,
                  f"; retired {retired} segment(s) lacking some of them" if retired else "")
 
@@ -1020,7 +1119,13 @@ class ModelRuntime:
         log.info("model %s: weight norms ready in %.1f s", self.name, time.perf_counter() - t0)
 
     def _finish_local(self, pack: Any, tokenizer: ChatTokenizer) -> None:
-        if self.mode == "plain":
+        if self.mode == "plain" and self.fused2:  # the fused2 plaintext reference (exact integers, full weights)
+            from pgw.engine.fused2 import Fused2PlainBackend
+
+            log.warning("model %s runs in DEV mode 'plain' (local fused2 reference, no compute service)", self.name)
+            self.backend = Fused2PlainBackend(self.ring)
+            self._f2_tables = self._f2_weights
+        elif self.mode == "plain":
             log.warning("model %s runs in DEV mode 'plain' (local compute, no compute service)", self.name)
             self.backend = PlainBackend(pack, self.ring, device=self.config.device)
         else:
@@ -1068,6 +1173,8 @@ class ModelRuntime:
             self.model.set_float_ops(c.float_ops)
         if c.prefill_chunk_rows is not None:  # an explicit setting wins over PGW_PREFILL_CHUNK_ROWS
             self.model.prefill_chunk_rows = int(c.prefill_chunk_rows)
+        if self.fused2:
+            self._enable_fused2_engine()
         env_set = os.environ.get("PGW_FLOAT_THREADS", "").strip() != "" and "float_threads" not in c.model_fields_set
         if (c.float_threads is not None and not env_set
                 and getattr(getattr(self.model, "device", None), "type", "cpu") == "cpu"):
@@ -1107,6 +1214,39 @@ class ModelRuntime:
                 max_entries=c.prefix_cache_max_entries)
         self.tokenizer = tokenizer
         self.pack = pack
+
+    def _enable_fused2_engine(self) -> None:
+        """Install the fused2 schedule (and, masked, the native decode driver per ``fused2_decode_native``). The
+        full weights are dropped here: the engine holds the weight-free tables (the plain dev mode: the full
+        weights, its reference products need them)."""
+        from pgw.engine.fused2 import enable_fused2
+        from pgw.engine.model import NativeFloatOps
+
+        c = self.config
+        if self.model is None:
+            raise ConfigError("fused2: no engine")
+        if not isinstance(self.model.float_ops, NativeFloatOps):
+            self.model.set_float_ops("native")
+        enable_fused2(self.model, self._f2_tables, self.ring)
+        native = False
+        if self.mode == "masked" and c.fused2_decode_native != "off":
+            from pgw.core.native import fast
+
+            if fast is not None and hasattr(fast, "Fused2Driver"):
+                from pgw.engine.fused2_native import enable_fused2_native
+
+                try:
+                    enable_fused2_native(self.model)
+                    native = True
+                except ConfigError as exc:
+                    if c.fused2_decode_native == "on":
+                        raise
+                    log.warning("model %s: native fused2 driver unavailable (%s); Python fused2 path", self.name,
+                                exc.message)
+            elif c.fused2_decode_native == "on":
+                raise ConfigError(f"model {self.name!r}: fused2_decode_native = 'on' but pgw_fast has no Fused2Driver")
+        self.fused2_info["native_decode"] = native
+        self._f2_weights = None  # the full public weights (int8 matrices) are not kept on the gateway
 
     def _load_draft_head(self) -> Any:
         """The target-feature draft head (``draft_backend = 'feature_head'``): plaintext, local to the gateway;
@@ -1241,6 +1381,13 @@ class ModelRuntime:
             backend_close = getattr(self.backend, "close", None)
             if callable(backend_close):  # stops the mask prefetch thread
                 backend_close()
+            if self._f2_provider is not None:  # fused2 lane channel; the native driver's check-vector copies
+                nd = getattr(self.backend, "native_decode", None)
+                if nd is not None:
+                    nd.wipe_checks()
+                with contextlib.suppress(Exception):
+                    self._f2_provider.close()
+                self._f2_provider = None
             if self.client is not None:
                 await _aclose(self.client)
                 self.client = None
@@ -1487,14 +1634,16 @@ class ModelRuntime:
                     "max_tokens, or retry when the mask factory has added more (the Masks page shows the stock)",
                     details={"needed": need, "available": avail, "promised": held, "model": self.name},
                 )
-            res = await _reserve_shielded(self.mask_store, self.fingerprint, self.ring, first, rid)
+            res = await _reserve_shielded(self.mask_store, self.fingerprint, self.ring, first, rid,
+                                          **self._reserve_kw())
             store, fp, ring = self.mask_store, self.fingerprint, self.ring
-            reserve_ext = getattr(store, "reserve_extension", None)
+            reserve_ext = None if self.fused2 else getattr(store, "reserve_extension", None)
+            kw = self._reserve_kw()
 
             def extend(slots: int) -> Any:  # a background (ahead) thread, or the backend's worker thread
                 if reserve_ext is not None:
                     return reserve_ext(fp, ring, slots, session_id=rid)
-                return store.reserve(fp, ring, slots, session_id=rid)
+                return store.reserve(fp, ring, slots, session_id=rid, **kw)
 
             w = WindowedReservation(res, extend, cap=entitled, window=chunk, ahead=True, public=public, chunked=True)
             self.mask_ledger.add(w)
@@ -1532,21 +1681,27 @@ class ModelRuntime:
                     "mask factory has added more (the Masks page shows the stock)",
                     details={"needed": need, "available": avail, "model": self.name},
                 )
-        res = await _reserve_shielded(self.mask_store, self.fingerprint, self.ring, first, rid)
+        res = await _reserve_shielded(self.mask_store, self.fingerprint, self.ring, first, rid, **self._reserve_kw())
         if first >= cap:
             return res, first
         store, fp, ring = self.mask_store, self.fingerprint, self.ring
         # Tiered source: an extension fails fast instead of waiting for the factory (it runs inside a
         # batch step; a wait there would stall every session of the batch).
-        reserve_ext = getattr(store, "reserve_extension", None)
+        reserve_ext = None if self.fused2 else getattr(store, "reserve_extension", None)
+        kw = self._reserve_kw()
 
         def extend(slots: int) -> Any:  # runs in the backend's worker thread
             if reserve_ext is not None:
                 return reserve_ext(fp, ring, slots, session_id=rid)
-            return store.reserve(fp, ring, slots, session_id=rid)
+            return store.reserve(fp, ring, slots, session_id=rid, **kw)
 
         return WindowedReservation(res, extend, cap=cap, window=window, ahead=reserve_ext is not None,
                                    public=public), first
+
+    def _reserve_kw(self) -> dict[str, Any]:
+        """Extra ``store.reserve`` arguments: fused2 reservations take fused2 pair-mask segments only (a
+        mismatched segment is refused, fail closed)."""
+        return {"schedule": "fused2"} if self.fused2 else {}
 
     async def generate(self, prompt_ids: Sequence[int], params: SamplingParams) -> GenerationResult:
         """Admit, run and close (convenience)."""
@@ -1653,6 +1808,24 @@ class ModelRuntime:
             out["stream_lane_stats"] = {k: v for k, v in vars(sstats).items() if isinstance(v, int | float | str)}
         return out
 
+    def _fused2_status(self) -> dict[str, Any]:
+        """fused2: public configuration and counters (no payloads, no mask material)."""
+        out = dict(self.fused2_info)
+        be = self.backend
+        f2 = getattr(be, "f2", None)
+        if f2 is not None:
+            out["counters"] = {"trips": f2.trips, "rows": f2.rows, "bytes_up": f2.bytes_up,
+                               "bytes_down": f2.bytes_down, "checks": f2.checks}
+        nd = getattr(be, "native_decode", None)
+        if nd is not None:
+            out["native_passes"] = int(nd.totals[0])
+            out["native_trips"] = int(nd.totals[2])
+        prov = self._f2_provider
+        if prov is not None:
+            out["lane_calls"] = int(getattr(prov, "calls", 0))
+        out["check"] = "p61 range + Freivalds, both stages, every trip"
+        return out
+
     def status(self) -> dict[str, Any]:
         """Admin status: fingerprint, ring, mask inventory, sessions, service health."""
         ok, reason = self.ready()
@@ -1668,6 +1841,7 @@ class ModelRuntime:
             "fingerprint": self.fingerprint,
             "fingerprint_short": short_fingerprint(self.fingerprint) if self.fingerprint else None,
             "head_mode": self.config.head_mode,
+            "schedule": self.config.schedule,
             "ring": self.ring.name,
             "max_context": self.max_context,
             "sessions": self.admission.status(),
@@ -1680,6 +1854,8 @@ class ModelRuntime:
             out["masked_head"] = {"linear": (f"{self.model.num_layers}.lm_head" if self.model is not None else None),
                                   "base_fingerprint": bfp,
                                   "base_fingerprint_short": short_fingerprint(bfp) if bfp else None}
+        if self.fused2:
+            out["fused2"] = self._fused2_status()
         if self.mode == "masked":
             out["service"] = dict(self.service_info)
             out["speed"] = self._speed_status()
@@ -1712,10 +1888,11 @@ class ModelRuntime:
         return out
 
 
-async def _reserve_shielded(store: Any, fingerprint: str, ring: RingParams, slots: int, rid: str) -> Any:
+async def _reserve_shielded(store: Any, fingerprint: str, ring: RingParams, slots: int, rid: str,
+                            **kw: Any) -> Any:
     """``store.reserve`` in a worker thread; if the caller is cancelled meanwhile, the reservation that
     the thread still completes is closed (its slots burned) instead of leaking until GC."""
-    fut = asyncio.ensure_future(asyncio.to_thread(store.reserve, fingerprint, ring, slots, session_id=rid))
+    fut = asyncio.ensure_future(asyncio.to_thread(store.reserve, fingerprint, ring, slots, session_id=rid, **kw))
     try:
         return await asyncio.shield(fut)
     except asyncio.CancelledError:

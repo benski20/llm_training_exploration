@@ -158,11 +158,15 @@ class Fused2MaskGenerator:
         self_check_rows: Rows per chunk verified with private ring vectors before writing (``-1``: all rows;
             ``0`` is refused: a wrong mask would silently corrupt outputs only the gateway's checks would see).
         chunk_rows: Rows per GEMM batch (throughput only).
+        he: Optional :class:`pgw.factory.fused2_he.DigitSplitProducts`: the products ``W r mod 2^K`` come from the
+            existing encrypted factory (mlwe v2 / pks-v3) as independent uniform digits recombined exactly (no
+            local GEMM); every guard below still runs on the recombined products.
+        pack: The pack the weights were derived from (status only).
     """
 
     def __init__(self, weights: Any, ring: RingParams | str, *, device: str = "cpu", backend: str = "auto",
                  lane_fingerprint: str | None = None, self_check_rows: int = 2, chunk_rows: int = 64,
-                 native_rng: bool | None = None):
+                 native_rng: bool | None = None, he: Any = None, pack: Any = None):
         self.w = weights
         self.ring = ring if isinstance(ring, RingParams) else RingParams.from_name(ring)
         if self.ring.k % 8 or not self.ring.cap or self.ring.cap + 1 >= 61:
@@ -185,6 +189,10 @@ class Fused2MaskGenerator:
             raise ConfigError("native_rng=True but pgw_fast.mask_rows_with_key is not available")
         self.native_rng = _NATIVE_RNG if native_rng is None else bool(native_rng)
         self.lins = {lin.key: lin for lin in weights.linears()}
+        self.he = he
+        self.pack = pack
+        if he is not None and self.device.type != "cpu":
+            raise ConfigError("the encrypted (digit-split) fused2 factory runs on the CPU ")
         self.specs = fused2_specs(weights)
         self._pw: dict[str, PreparedWeight] = {}
         self._priv: dict[str, tuple[np.ndarray, np.ndarray]] = {}  # private ring self-check vectors per linear
@@ -220,7 +228,9 @@ class Fused2MaskGenerator:
         return pw
 
     def products(self, key: str, r: torch.Tensor) -> torch.Tensor:
-        """``W r mod 2^K`` (int64 ``(t, m)`` on the CPU) on the generator's device."""
+        """``W r mod 2^K`` (int64 ``(t, m)`` on the CPU) on the generator's device (or the encrypted factory)."""
+        if self.he is not None:
+            return self.he.matmul(key, r)
         pw = self._prepared(key)
         x = r.to(self.device, non_blocking=True) if self.device.type != "cpu" else r
         y = pw.matmul(x, self.ring.k)
@@ -281,15 +291,35 @@ class Fused2MaskGenerator:
         return out
 
     # ---- segments ---------------------------------------------------------------------------------------
-    def generate_into_store(self, store: Any, slots: int, *, checks: int = 1, seed: bytes | None = None,
+    def tokens_per_second(self) -> float:
+        """Slots per second of the last segment (the ``pgw factory generate`` report)."""
+        return self.last_stats.slots_per_second
+
+    def segment_bytes(self, slots: int) -> int:
+        """Disk bytes of a ``slots``-slot segment (ring products; the p61 words are small)."""
+        return int(slots) * self.bytes_per_slot
+
+    def generate_into_store(self, store: Any, slots: int, *, checks: int | None = 1, seed: bytes | None = None,
                             store_chunk_slots: int | None = None, factory_id: str = "fused2",
-                            linears: Sequence[str] | None = None) -> str:
+                            linears: Sequence[str] | None = None, chunk_slots: int | None = None,
+                            throttle: Any = None, store_chunk_bytes: int | None = None, **_ignored: Any) -> str:
         """Generate one fresh-seeded fused2 segment of ``slots`` slots into ``store``; returns its id.
 
         ``store`` is anything with :meth:`pgw.maskstore.MaskStore.writer` (a store or an export sink). On any
         error the partial segment is aborted, never committed. ``seed``: tests only (production: a fresh
         ``os.urandom`` seed per segment). ``linears``: tests only (write a subset; the header lists them all).
+        The scheduler's arguments (:class:`pgw.factory.scheduler.FactoryScheduler`): ``chunk_slots`` (rows per
+        product batch), ``throttle`` (rate limit / duty cycle / stop, accounted per chunk in slot-equivalents),
+        ``store_chunk_bytes`` (encrypted chunk size).
         """
+        if checks is None:
+            checks = 1
+        if chunk_slots is not None and int(chunk_slots) < 1:
+            raise ConfigError("chunk_slots must be >= 1")
+        chunk_rows = int(chunk_slots) if chunk_slots is not None else self.chunk_rows
+        if store_chunk_slots is None and store_chunk_bytes is not None:
+            store_chunk_slots = self.store_chunk_slots(int(store_chunk_bytes))
+        total_mn = max(1, self.macs_per_slot)
         if checks < 1 or checks > 8:
             raise ConfigError("checks must be in [1, 8]")
         if fused2_soundness_bits(self.ring, checks) <= 0:
@@ -316,8 +346,10 @@ class Fused2MaskGenerator:
                     st.uw_seconds += time.perf_counter() - t1
                     rkey = bytearray(exp.stream_key("r", s.id))
                     try:
-                        for a in range(0, int(slots), self.chunk_rows):
-                            rows = min(self.chunk_rows, int(slots) - a)
+                        for a in range(0, int(slots), chunk_rows):
+                            rows = min(chunk_rows, int(slots) - a)
+                            if throttle is not None:
+                                throttle.check()
                             t1 = time.perf_counter()
                             r = self._rows(rkey, s.in_features, a, rows)
                             t2 = time.perf_counter()
@@ -334,6 +366,8 @@ class Fused2MaskGenerator:
                             st.check_seconds += t4 - t3
                             st.write_seconds += t5 - t4
                             st.macs += rows * s.in_features * s.out_features
+                            if throttle is not None:
+                                throttle.account(t5 - t1, rows * s.in_features * s.out_features / total_mn)
                     finally:
                         rkey[:] = bytes(len(rkey))
                         uw.zero_()
@@ -350,7 +384,11 @@ class Fused2MaskGenerator:
                 self._scrub()
             st.seconds = time.perf_counter() - t0
             st.segment_id = seg_id
-            st.backend = next(iter(self._pw.values())).resolved_backend if self._pw else ""
+            st.backend = (self.he.resolved_backend if self.he is not None else
+                          next(iter(self._pw.values())).resolved_backend if self._pw else "")
+            if self.he is not None:
+                st.extra["he"] = dict(self.he.stats)
+                st.extra["he_backend"] = dict(getattr(self.he.backend, "stats", {}) or {})
             self.last_stats = st
         log.info("fused2 segment %s: %d slots in %.2f s (%.1f slots/s, %s/%s)", seg_id, slots, st.seconds,
                  st.slots_per_second, self.device, st.backend)

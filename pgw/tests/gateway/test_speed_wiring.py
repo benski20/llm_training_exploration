@@ -771,15 +771,14 @@ def test_cpu_only_strict_speculation_config_is_accepted() -> None:
 
 
 def test_phase_a_settings_are_no_longer_pending() -> None:
-    assert set(gw_config.PENDING_SPEED_SETTINGS) == {"schedule"}
+    assert set(gw_config.PENDING_SPEED_SETTINGS) == set()  # schedule = "fused2" landed (test_fused2_gateway.py)
     c = _cfg(lane="auto", lane_uds_dir=Path("/run/pgw"), lane_pool_wait_s=0.02, local_linears="auto",
              local_rtt_ms=12.5, spec_lookup=3, spec_rows=2, spec_strict_passes=True, float_threads=1)
     assert c.lane == "auto" and c.spec_rows == 2 and c.float_threads == 1
     assert _cfg(float_ops="native").float_ops == "native"
     assert _cfg(float_ops="native", prefix_cache="conversation").prefix_cache == "conversation"  # SPEC 9.4b
-    for name, value in (("schedule", "fused2"),):
-        with pytest.raises(ValidationError, match="not available in this build"):
-            _cfg(**{name: value})
+    with pytest.raises(ValidationError, match="K56"):  # fused2 is built, with its own requirements
+        _cfg(schedule="fused2")
     # the masked LM head is built (opt-in): masked or plain mode, never the float dev mode
     assert _cfg(head_mode="provider_int8").head_mode == "provider_int8"
     assert _cfg().head_mode == "gateway"

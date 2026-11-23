@@ -131,6 +131,24 @@ class FactorySettings(PGWSettings):
         "it retires it (burned, never reused) and the factory must produce full segments again (unset this). "
         "Not supported with in-memory mask rings (their layout is fixed). Default: every linear",
     )
+    schedule: Literal["standard", "fused2"] = Field(
+        "standard", description="Masks for the gateway's linear schedule: 'standard' (default: one entry per pack "
+        "linear) or 'fused2' (opt-in, for gateways with schedule = 'fused2'): fused2 pair-mask segments "
+        "(pgw.factory.fused2_gen.Fused2MaskGenerator: one entry per fused2 linear, p61 check words, schedule "
+        "'fused2' headers) under the fused2 lane fingerprint, for every pack and ring (rings must be capped, K a "
+        "multiple of 8, e.g. K56A12C53). The public fused2 weights are derived from each pack like the gateway's "
+        "and the service's (fused2_migrate_bits) or loaded from fused2_weights_path. Encrypted mode (he_service_url) "
+        "computes each product as independent uniform digits on the existing HE schemes (mlwe v2 at K40 with "
+        "14-bit digits, or pks-v3 at K32 with 8-bit digits) recombined exactly mod 2^K",
+    )
+    fused2_migrate_bits: int = Field(
+        8, ge=0, le=8, description="schedule = 'fused2': residual-grid migration bits (must match the gateway's "
+        "fused2_migrate_bits and the service's PGW_SERVICE_FUSED2_FROM_PACK; the lane fingerprint binds them)",
+    )
+    fused2_weights_path: Path | None = Field(
+        None, description="schedule = 'fused2': a Fused2Weights.save() file (provider-only is enough) instead of "
+        "deriving the weights from the pack (one pack only)",
+    )
     # ---- GPU mask service (pgw.factory.mask_service; customer-cloud deployment, opt-in) ----------
     mask_service: bool = Field(
         False, description="Run as the customer-cloud GPU mask service (deploy/customer-cloud): the plain W8 r "
@@ -317,9 +335,22 @@ class FactorySettings(PGWSettings):
             if self.he_pks_ack.strip() != PKS_V3_ACK:
                 raise ValueError("he_scheme='pks-v3' has not had its external cryptographic review; set "
                                  f"he_pks_ack={PKS_V3_ACK!r} to opt in (research/reviews/pks-v3-review-packet.md)")
-            bad = [r for r in self.ring_names if not r.upper().startswith("K32")]
+            # fused2: the K56 masks are recombined from K32 products of 8-bit digits (the HE ring stays K32)
+            bad = [r for r in self.ring_names if not r.upper().startswith("K32")] if self.schedule != "fused2" else []
             if bad:
                 raise ValueError(f"he_scheme='pks-v3' covers K32 mask rings only, not {bad}")
+        if self.schedule == "fused2":
+            for r in self.ring_names:
+                rp = RingParams.from_name(r)
+                if rp.k % 8 or not rp.cap or rp.cap + 1 >= 61 or rp.k > 56:
+                    raise ValueError(f"schedule='fused2' needs capped rings with K a multiple of 8 (<= 56) and "
+                                     f"2^(C+1) < 2^61 - 1, e.g. K56A12C53; not {r}")
+            if self.masked_head or self.skip_kinds:
+                raise ValueError("schedule='fused2' makes every fused2 linear (no masked_head, no skip_linear_kinds)")
+            if self.check_field != "ring":
+                raise ValueError("schedule='fused2' segments carry p61 check words (leave check_field = 'ring')")
+            if self.fused2_weights_path is not None and len(self.all_pack_paths) > 1:
+                raise ValueError("fused2_weights_path serves one pack only")
         return self
 
     @property

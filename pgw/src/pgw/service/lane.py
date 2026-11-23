@@ -467,6 +467,11 @@ class LaneManager:
 
             entries = load_fused2_entries(self.state, max_rows=int(s.lane_max_rows))
         self.fused2 = dict(entries or {})
+        from pgw.service.fused2_lane import fused2_maskgen_models
+
+        f2m = fused2_maskgen_models(self.fused2)  # opt-in (PGW_SERVICE_FUSED2_MASKGEN): encrypted fused2 factory
+        if f2m:
+            self.state.handler.fused2_maskgen = f2m
 
     def _slot_for(self, fingerprint: str) -> int:
         slot = self._slots.get(fingerprint)

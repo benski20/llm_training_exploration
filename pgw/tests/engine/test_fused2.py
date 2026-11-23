@@ -224,9 +224,9 @@ def test_defaults_off(pack: InMemoryPack) -> None:
         enable_fused2(m, Fused2Weights(pack), RINGS[0])  # the backend does not take fused2 calls
     with pytest.raises(ConfigError):
         Fused2MaskedBackend(RingParams(48, 12), None, None)  # type: ignore[arg-type]  # uncapped ring refused
-    from pgw.gateway.config import PENDING_SPEED_SETTINGS
+    from pgw.gateway.config import GatewayModelConfig
 
-    assert "schedule" in PENDING_SPEED_SETTINGS  # the gateway still refuses schedule="fused2"
+    assert GatewayModelConfig.model_fields["schedule"].default == "standard"  # the gateway's fused2 is opt-in
 
 
 def test_fold_from_float_weights(pack: InMemoryPack, tiny_hf_dir: Any) -> None:

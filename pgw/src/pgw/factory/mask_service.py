@@ -345,6 +345,18 @@ def prepare_mask_service(settings: Any, gens: dict[Any, Any]) -> dict[Any, MaskS
                 f"mask_service found no GPU (device {gen.device}); set mask_service_allow_cpu=true to run the "
                 "same path on the CPU (slow; small models only) or use the CPU factory")
         gen.scrub_device = True
+        if getattr(settings, "schedule", "standard") == "fused2":  # pgw.factory.fused2_gen: its own reference check
+            t0 = time.perf_counter()
+            rep = gen.startup_check(rows=settings.mask_service_check_rows,
+                                    linears=settings.mask_service_check_linears)
+            reports[key] = gen.mask_service_check = MaskServiceCheck(
+                ok=bool(rep["ok"]), fingerprint=gen.fingerprint, ring=gen.ring.name, check_field="p61",
+                device=str(gen.device), backend=str(gen.backend), gpu_prng=False, slots=0, chunk_slots=gen.chunk_rows,
+                checks=1, linears_checked=list(rep["linears_checked"]),
+                rows_per_linear=settings.mask_service_check_rows,
+                wr_elements_compared=int(rep["wr_elements_compared"]),
+                uw_elements_compared=int(rep["uw_elements_compared"]), generate_seconds=time.perf_counter() - t0)
+            continue
         reports[key] = gen.mask_service_check = startup_check(
             gen, rows=settings.mask_service_check_rows, linears=settings.mask_service_check_linears,
             chunk_slots=settings.chunk_slots)
