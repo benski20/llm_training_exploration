@@ -622,7 +622,21 @@ def require_cached_setup(model: str, restore: dict[str, Any], mask_source: str |
 #: side chose; no secret, see deploy/modal/README.md "Gateway cache").
 def cache_paths(cache_root: Path, model: str) -> dict[str, Path]:
     base = Path(cache_root) / model
-    return {"pack": base / "pack", "hemask": base / "hemask"}
+    return {"pack": base / "pack", "hemask": base / "hemask", "fused2": base / "fused2"}
+
+
+def fused2_tables_name(migrate_bits: int) -> str:
+    """File name of the cached public fused2 tables (``Fused2Weights.save``, full: scales, norms, ``sigma``)."""
+    return f"fused2-m{int(migrate_bits)}.pt"
+
+
+def fused2_tables(data_dir: Path, migrate_bits: int) -> Path | None:
+    """The restored fused2 tables in the gateway's data directory (``restore_cache``), or None. The gateway
+    (``fused2_weights_path``: base fingerprint checked), its factory and the e2e's plaintext reference load this one
+    file instead of deriving the tables each (at 32B widths the derivation's dense SVDs for ``sigma`` take about 27 s
+    per ``o`` / ``down`` on 4 vCPUs: about an hour per party single-threaded, beyond any short run's TTL)."""
+    f = Path(data_dir) / "fused2" / fused2_tables_name(migrate_bits)
+    return f if f.is_file() else None
 
 
 def copy_tree(src: Path, dst: Path, threads: int = 8) -> dict[str, Any]:
@@ -665,6 +679,8 @@ def restore_cache(cache_root: Path, model: str, data_dir: Path) -> dict[str, Any
     for d in hints:
         (data_dir / "hemask").mkdir(parents=True, exist_ok=True)
         rep[f"hint {d.name}"] = copy_tree(d, data_dir / "hemask" / d.name)
+    if paths["fused2"].is_dir() and any(paths["fused2"].glob("fused2-m*.pt")):  # public fused2 tables
+        rep["fused2"] = copy_tree(paths["fused2"], data_dir / "fused2")
     return rep
 
 

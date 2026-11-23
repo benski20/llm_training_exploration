@@ -1129,7 +1129,10 @@ def main(argv: list[str] | None = None) -> None:
                      ("PGW_MODAL_PROVIDER_CPUS", f"{args.provider_cpus:g}" if args.provider_cpus
                       else os.environ.get("PGW_MODAL_PROVIDER_CPUS")),
                      ("PGW_MODAL_GATEWAY_MEM_GIB", str(args.gateway_mem_gib) if args.gateway_mem_gib else None),
-                     ("PGW_MODAL_PROVIDER_MEM_GIB", str(args.provider_mem_gib) if args.provider_mem_gib else None)):
+                     ("PGW_MODAL_PROVIDER_MEM_GIB", str(args.provider_mem_gib) if args.provider_mem_gib else None),
+                     # --prepare-cache --schedule fused2: prepare_cache also derives the public fused2 tables once
+                     ("PGW_MODAL_FUSED2_PREP", str(int(args.fused2_migrate_bits))
+                      if getattr(args, "schedule", "standard") == "fused2" and args.gateway_cache else None)):
         if val:
             os.environ[var] = val
         else:

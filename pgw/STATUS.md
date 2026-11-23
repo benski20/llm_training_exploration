@@ -15,6 +15,103 @@ SLA pilot. Three reasons:
 2. The HSM, KMS and TPM integrations have never run against real hardware or cloud services.
 3. There has been no external security audit.
 
+## Update 2026-11-23: Qwen2.5-32B at 25 tok/s? Per-trip gateway CPU at 32B widths, the co-located budget, 32B commands
+
+Goal checked: about 25 tok/s (<= 40 ms per token) streamed for Qwen2.5-32B with a CPU-only gateway that holds no
+weights, exact and private. Everything here is local (4-vCPU dev box, shared with other jobs; no Modal, no Kaggle).
+Every new knob is off by default and changes no bits.
+
+**Measured: gateway work per trip at 32B widths** (the native drivers' own counters, 2 layers at the preset's widths,
+stub provider in another process; medians of interleaved runs, spread about +-15% on this box):
+
+| path | dev box, 1 core | what it is | calibrated to the Modal gateway (x0.87) |
+|---|---|---|---|
+| standard decode driver, 7B widths | 110 us | qkv/o/gate_up/down prepare + finish + float ops | 0.096 ms (the 7B run's measured per-trip gateway work, by construction) |
+| standard decode driver, 32B | 137 us (qkv 102, o 65, gate_up 214, down 205) | same | **0.119 ms** |
+| + `PGW_LANE_WAIT_PREFETCH=1` | 121 us | `W r` rows and check vectors prefetched while the lane waits | **0.105 ms** |
+| + trip split, extrapolated to 16 warm pinned cores | ~80 us | kernel-level fit (cold floor 125 -> 85.6 us at 3 cores, hot floor 59 us) | ~0.07 ms |
+| native fused2 driver, 32B, mean pair trip | 824 -> **671 us** after this update's 8-byte pack/unpack (o+gate_up 839, down+qkv 503) | quantize, mask, 7-byte pack, unmask, both p61 checks, float ops | **0.58 ms** |
+| + `PGW_FUSED2_SPLIT=12`, extrapolated | ~363 us (o+gate_up 133 serial + 706/12; down+qkv's quantization of n = 27648 stays serial) | | ~0.32 ms |
+
+Target "<= ~0.12 ms per standard trip": **met on one core** (0.105-0.119 ms calibrated). Target "<= ~0.2 ms per fused2
+pair trip": **not met** (0.58 ms on one core, ~0.32 ms extrapolated with the split): the down+qkv pair's serial
+quantization (float64 passes with numpy's pairwise sums over 27648 inputs, a division per H element) is the next
+item, then the memory-bound K56 unmask (8-byte mask words). On this 4-vCPU box the split itself does not pay end to
+end (`PGW_TRIP_SPLIT` 137 -> 137-139 us; with 3 spinning workers the stub provider starves: 304 us): the workers,
+the driver thread, the spinning lane client and the provider share 4 vCPUs; the kernels alone scale 1.46x at 3 cores
+(`benchmarks/trip_split_scaling_bench.py`), the pooled finish does not (column split slower than one thread on this
+VM), and the down prepare does (79 -> 44 us at 4 cores).
+
+**Built (opt-in, exact):**
+- Native pool (`rust/pgw-fast/src/prepare.rs`): `PGW_POOL_ACTIVE_SPIN_US` (workers keep polling while a decode driver
+  call is active, `pool::Warm` guard held by both native drivers for each call; outside a pass the ordinary 50 us spin
+  then sleep, so the factory keeps its cores), `PGW_POOL_WORKERS` may now raise the pool above 7 (up to 47 and the
+  CPU count - 1), `PGW_POOL_CPUS=4-15` pins worker `i` to the list's `i`-th CPU.
+- Lane wait prefetch (`PGW_LANE_WAIT_PREFETCH=1`, `lane::wait_prefetch`): after the request is sent and before the
+  reply is awaited, the lane issues prefetch hints for what the driver reads next (standard: this trip's `W r` rows
+  and `u`, the next trip's `uw`; fused2: `W1 r_x`, `v`, `W2' v`, both stages' check vectors, the next trip's `r_x`).
+  Hints only (never fault, never write).
+- fused2 driver: `PGW_FUSED2_SPLIT=c` (+ `PGW_FUSED2_SPLIT_MIN_ELEMS`, default 8192): the unmask of `Z`, the stage-2
+  check (`p61::check_split`: range check + dot products in fixed ranges, canonical partial sums mod p, the same
+  verdict) and the normed gate/up + SiLU of one-row pair trips in fixed element ranges on the pool; 8-byte
+  pack/unpack of the 7-byte K56 words (same bytes; the per-element `memcpy` was 60% of the unmask).
+- Phase counters for benchmarks: `pgw_fast.decode_phase_ns()` (standard driver: prepare / finish / float per linear
+  kind), `pgw_fast.f2_phase_ns()` (fused2: before / after the lane, unmask / checks / float per trip kind); reported
+  by `decode_cpu_bench.py` and the new `benchmarks/fused2_driver_cpu_bench.py` (native fused2 driver over a native
+  `LaneService`, UDS or shm, zero weights, every check passing) and `benchmarks/trip_split_scaling_bench.py`.
+- fused2 tables without SVDs where they are not read: `Fused2Weights(..., sigma=False)` for the provider's lane entry
+  and the factory (one dense SVD per `o` / `down` for `sigma` took 27 s each at 32B widths here: about an hour per
+  party single-threaded); the lane fingerprint, the pair op and the masks use `w8` / `hmul` only.
+- Launcher: `--prepare-cache --schedule fused2` also derives the full fused2 tables once into the gateway cache
+  (`<model>/fused2/fused2-m<bits>.pt`, `PGW_MODAL_FUSED2_PREP`); the run restores them and the gateway
+  (`fused2_weights_path`, now an allowed wizard preset: base fingerprint checked, the lane fingerprint binds `w8` /
+  `hmul`), the factory (`PGW_FACTORY_FUSED2_WEIGHTS_PATH`) and the e2e's plaintext reference load the same file (one
+  `sigma`, the same bits everywhere).
+
+**The 32B budget** (`python benchmarks/scaling_model.py --colocated`; 1 decode row, short context; lane 0.09 ms per
+trip and device time scaled by weight bytes from the measured 7B run, which the model reproduces: 15.8 vs 15.7 ms of
+waiting, 35.8 vs 35.7 ms per token; serving outside the passes 9.2 ms, the 7B run's residual; planes pair op 1.07-1.30x
+the two K32 singles, measured on an H100; TP gather 0.01 ms per trip, estimate):
+
+| configuration (trips) | lane | device | gateway | other | ms/token | tok/s | bound |
+|---|---|---|---|---|---|---|---|
+| standard, 1 H100, gateway 1 core (257) | 23.1 | 25.5 | 27.2 | 9.2 | 85.0 | 11.8 | gateway |
+| standard, 1 H100, gateway split 16 (extrap.) | 23.1 | 25.5 | 18.1 | 9.2 | 75.9 | 13.2 | device |
+| standard, 2 H100 TP, gateway 1 core | 23.1 | 15.3 | 27.2 | 9.2 | 74.8 | 13.4 | gateway |
+| standard, 2 H100 TP, gateway split 16 (extrap.) | 23.1 | 15.3 | 18.1 | 9.2 | 65.7 | 15.2 | lane |
+| fused2 1.07-1.3x, 1 H100, gateway 1 core (130) | 11.7 | 27.3-33.0 | 75.5 | 9.2 | 124-129 | 7.7-8.1 | gateway |
+| fused2 1.07x, 1 H100, split 12 (extrap.) | 11.7 | 27.3 | 41.0 | 9.2 | 89.1 | 11.2 | gateway |
+| fused2 1.07x, 2 H100 TP, split 12 (extrap.) | 11.7 | 14.9 | 41.0 | 9.2 | 76.8 | 13.0 | gateway |
+| target: fused2 1.07x, 2 H100, 0.06 ms/pair, other 2 ms | 11.7 | 14.9 | 7.8 | 2.0 | **36.5** | **27.4** | device |
+| target: standard, 2 H100, 0.03 ms/trip, other 2 ms | 23.1 | 15.3 | 7.8 | 2.0 | 48.3 | 20.7 | lane |
+
+(fused2 counts 130 trips: 2L + 1 plus the masked head as one K32 trip, which fused2 does not combine with yet; without
+it the gateway streams the 1.56 GB bfloat16 head, +50-80 ms per token.)
+
+Reading: with today's measured components 32B co-located is **11-15 tok/s**. No single component reaches 25: lane +
+device alone are 38-49 ms on the standard path, so 25 tok/s needs **fused2 (lane 11.7 ms) + 2 H100s (device ~15 ms)**
+or a device time per byte much better than the 7B scaling (the 7B singles reach 1.25 TB/s; at 2.5 TB/s one H100's
+32B device time is 12.5 ms), **plus** (1) gateway work <= ~0.06-0.09 ms per pair trip (5-10x below one core today,
+3.5-5x below the extrapolated split: split the pair quantization, 4-byte mask words where K allows, more cores),
+(2) the serving residual from 9.2 to ~2 ms per token (outside the forward pass: scheduler, sampling over 152k logits,
+streaming; not yet profiled), (3) fused2 combined with the masked head. The bound today is the gateway on fused2 and
+lane + device on the standard path.
+
+**32B co-located commands** (README "Qwen2.5-32B with the full fast stack"; both `--dry-run` tested; nothing run):
+standard full stack, TTL 20 min, $7.70/h, **$1.8-2.6** expected ($2.57 cap); fused2 with the planes op, the plain
+customer-side fused2 factory and cached fused2 tables, TTL 30 min, $8.08/h, **$2.7-3.8** expected ($4.04 cap), after a
+one-time `--prepare-cache --schedule fused2` (tables, ~$0.3-0.45). Readiness checks: H100 memory with fused2 (K32
+kernels + pair-op weights, ~63 of 80 GB), provider host RAM for its derivation (`--provider-mem-gib 96`), the masked
+head's hint extension at start (est. 2-4 min, CPU), `PGW_MODAL_CACHE_SAVE=0` (the extension's hard-linked base files
+would be copied into the cache, 114 GB), pinned split workers on CPUs 4-15 apart from the factory.
+
+Tests: `tests/native/test_scale32_knobs.py` (decode driver with prefetch + warm pool + pinned workers + split at a low
+threshold, fused2 driver with the split + prefetch: the existing bit-for-bit and tamper suites in fresh processes),
+cargo `p61::split_check_equals_check`, `decode_f2::center_and_pack` (8-byte paths == byte copies), pool CPU-list
+parsing and warm guard, `tests/benchmarks/test_scaling_model.py` (the co-located model reproduces the 7B run; trip
+counts; TP), `tests/deploy` (fused2 tables cache restore, `PGW_MODAL_FUSED2_PREP` in the deploy env). Engine, fused2,
+decode-native, factory, gateway, deploy suites: 108 + 407 passed.
+
 ## Update 2026-11-23: fused2 in the gateway service, the factory scheduler and the HE factory (opt-in)
 
 - **Gateway service** (`schedule = "fused2"`, no longer pending; `pgw.gateway.fused2`, `ModelRuntime`): public fused2

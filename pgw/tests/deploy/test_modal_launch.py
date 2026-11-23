@@ -921,3 +921,5 @@ def test_schedule_fused2_flag_and_dry_run(monkeypatch: pytest.MonkeyPatch, capsy
     assert "dry run: nothing deployed or started" in out
     plan = json.loads(out[out.index("{"):out.rindex("}") + 1])
     assert plan["schedule"] == "fused2" and plan["run"]["provider_env"]["PGW_SERVICE_FUSED2_FROM_PACK"] == "8"
+    # the schedule's deploy env: --prepare-cache's prepare_cache also derives the public fused2 tables once
+    assert plan["deploy_env"]["PGW_MODAL_FUSED2_PREP"] == "8"

@@ -225,7 +225,8 @@ def wait_idle(base_url: str, admin_token: str, model: str, *, quiet_s: float = 3
 def plaintext_reference(pack_path: str, ring: str, messages: list[dict[str, str]], max_tokens: int,
                         float_threads: int | None = None, float_ops: str | None = None,
                         int_threads: int | None = None,
-                        masked_head: bool = False, fused2_bits: int | None = None) -> dict[str, Any]:
+                        masked_head: bool = False, fused2_bits: int | None = None,
+                        fused2_tables: str | None = None) -> dict[str, Any]:
     """Greedy generation on the same pack with the plaintext reference backend (in this process).
 
     ``float_threads``: the pinned float formulation (``launch.py --float-threads``): the reference's torch float
@@ -263,7 +264,8 @@ def plaintext_reference(pack_path: str, ring: str, messages: list[dict[str, str]
         backends.exact_int_matmul = threaded
         try:
             return plaintext_reference(pack_path, ring, messages, max_tokens, float_threads=float_threads,
-                                       float_ops=float_ops, masked_head=masked_head, fused2_bits=fused2_bits)
+                                       float_ops=float_ops, masked_head=masked_head, fused2_bits=fused2_bits,
+                                       fused2_tables=fused2_tables)
         finally:
             backends.exact_int_matmul = orig
 
@@ -272,7 +274,8 @@ def plaintext_reference(pack_path: str, ring: str, messages: list[dict[str, str]
         torch.set_num_threads(int(float_threads))
         try:
             return plaintext_reference(pack_path, ring, messages, max_tokens, float_ops=float_ops,
-                                       masked_head=masked_head, fused2_bits=fused2_bits)
+                                       masked_head=masked_head, fused2_bits=fused2_bits,
+                                       fused2_tables=fused2_tables)
         finally:
             torch.set_num_threads(prev)
 
@@ -293,8 +296,13 @@ def plaintext_reference(pack_path: str, ring: str, messages: list[dict[str, str]
                 from pgw.engine.fused2 import Fused2PlainBackend, Fused2Weights, enable_fused2, migration_multipliers
 
                 rp = RingParams.from_name(ring)
-                w = Fused2Weights(pack, None, multipliers=migration_multipliers(pack, int(fused2_bits))
-                                  if fused2_bits else None)
+                if fused2_tables:  # the same cached tables the gateway loaded (--prepare-cache --schedule fused2)
+                    w = Fused2Weights.load(fused2_tables)
+                    if str(w.fingerprint) != str(base.fingerprint):
+                        raise RuntimeError("fused2 tables of another pack")
+                else:
+                    w = Fused2Weights(pack, None, multipliers=migration_multipliers(pack, int(fused2_bits))
+                                      if fused2_bits else None)
                 model = TransformerModel(pack, Fused2PlainBackend(rp))
                 model.set_float_ops("native")
                 enable_fused2(model, w, rp)
