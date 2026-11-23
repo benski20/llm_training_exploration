@@ -47,6 +47,8 @@ from pgw.core.errors import ShapeError
 __all__ = [
     "PairConfig",
     "PairOp",
+    "digit_planes",
+    "gemm_planes",
     "gemv64",
     "pair_config",
     "pair_reference",
@@ -58,8 +60,15 @@ log = logging.getLogger(__name__)
 
 #: Largest tile inner size of the ``dot`` variant (keeps each tile's int32 digit product exact).
 _DOT_MAX_BLOCK_N = 1 << 16
+#: Largest split length of the ``planes`` variant: its int32 accumulator holds ``sum_k W d`` over a whole split,
+#: ``|.| <= 128 * 128 * n_per_split``, exact while ``n_per_split <= (2^31 - 1) // 2^14``.
+PLANES_MAX_SPLIT_N = ((1 << 31) - 1) // (1 << 14)
+#: Most rows of the ``planes`` variant (8 digit columns per row, ``8 * rows_pow2 <= 128``).
+PLANES_MAX_ROWS = 16
+VARIANTS = ("sum", "dot", "planes")
 #: ``PGW_SERVICE_FUSED2_VARIANT``: ``auto`` (default; ``dot`` for >= 2 rows on devices with int8 tensor cores,
-#: ``sum`` for one row), ``sum`` or ``dot`` everywhere.
+#: ``sum`` for one row), ``sum``, ``dot`` or ``planes`` everywhere (``planes``: opt-in, the digit-plane
+#: tensor-core GEMV with the fused unpack / epilogue, :func:`gemm_planes`).
 ENV_VARIANT = "PGW_SERVICE_FUSED2_VARIANT"
 
 
@@ -75,7 +84,8 @@ def _kernels(interpret: bool) -> dict[str, Any]:
     from pgw.core import _ring64_kernel as k
 
     return {name: triton.jit(getattr(k, name)) for name in
-            ("unpack_kernel", "gemv64_sum_kernel", "gemv64_dot_kernel", "epilogue_kernel")}
+            ("unpack_kernel", "gemv64_sum_kernel", "gemv64_dot_kernel", "epilogue_kernel", "unpack_planes_kernel",
+             "gemm_planes_kernel")}
 
 
 def _kern(name: str) -> Any:
@@ -101,11 +111,17 @@ class PairConfig:
         b = 1
         while b < rows:
             b *= 2
-        return max(16, b) if self.variant == "dot" else b
+        if self.variant == "dot":
+            return max(16, b)
+        if self.variant == "planes":  # 8 digit columns per row; tl.dot needs >= 16 columns
+            return max(2, b)
+        return b
 
     def validate(self) -> None:
-        if self.variant not in ("sum", "dot"):
+        if self.variant not in VARIANTS:
             raise ShapeError(f"ring64: unknown variant {self.variant!r}")
+        if self.variant == "planes" and (self.block_m < 16 or self.block_n < 16):
+            raise ShapeError("ring64: the planes variant needs block sizes >= 16")
         for v in (self.block_m, self.block_n):
             if v < 1 or v & (v - 1):
                 raise ShapeError("ring64: tile sizes must be powers of two")
@@ -117,7 +133,7 @@ class PairConfig:
 
 def _variant_for(rows: int, device: torch.device) -> str:
     v = os.environ.get(ENV_VARIANT, "auto").strip().lower()
-    if v in ("sum", "dot"):
+    if v in VARIANTS:
         return v
     if device.type == "cuda" and rows >= 2 and torch.cuda.get_device_capability(device)[0] >= 8:
         return "dot"
@@ -130,6 +146,8 @@ def pair_config(rows: int, m: int, n: int, device: torch.device, variant: str | 
     Aims at about four programs per SM (memory-bound: every weight byte is streamed once per call).
     """
     variant = variant or _variant_for(rows, device)
+    if variant == "planes":
+        return _planes_config(rows, m, n, device)
     if variant == "dot":
         bm, bn, warps = 32, 128, 4
     else:
@@ -141,8 +159,23 @@ def pair_config(rows: int, m: int, n: int, device: torch.device, variant: str | 
     return PairConfig(bm, bn, split, warps, variant)
 
 
+def _planes_config(rows: int, m: int, n: int, device: torch.device) -> PairConfig:
+    """``planes`` heuristic: 64-row weight tiles (one Hopper warpgroup MMA), 256-byte K steps, split-K until about
+    two programs per SM stream weights (memory-bound GEMV), splits no shorter than 4 K steps."""
+    bm = 64 if rows <= 4 else 128
+    bk = 256
+    sms = _sm_count(int(device.index or 0)) if device.type == "cuda" else 4
+    progs_m = -(-m // bm)
+    want = max(1, -(-2 * sms // progs_m))
+    split = max(1, min(want, -(-n // (4 * bk)), 64))
+    split = max(split, -(-n // PLANES_MAX_SPLIT_N))
+    return PairConfig(bm, bk, split, 4, "planes")
+
+
 def _per_split(n: int, cfg: PairConfig) -> tuple[int, int]:
     per = -(-(-(-n // cfg.split)) // cfg.block_n) * cfg.block_n
+    if cfg.variant == "planes" and per > PLANES_MAX_SPLIT_N:  # keep the int32 accumulator exact
+        per = (PLANES_MAX_SPLIT_N // cfg.block_n) * cfg.block_n
     return per, -(-n // per)
 
 
@@ -181,6 +214,59 @@ def gemv64(x: torch.Tensor, w: torch.Tensor, cfg: PairConfig, part: torch.Tensor
     return part[:splits]
 
 
+def digit_planes(x: torch.Tensor, rp: int | None = None) -> torch.Tensor:
+    """Host-side digit planes of int64 ``x (b, n)`` (tests): int8 ``(8 rp, n)``, row ``r * 8 + i`` = digit ``i`` of
+    row ``r`` (balanced, ``[-128, 127]``, ``x == sum_i d_i 256^i mod 2^64``); rows ``>= b`` zero."""
+    b, n = (int(s) for s in x.shape)
+    rp = rp or PairConfig(variant="planes").block_r(b)
+    v = x.cpu().numpy().astype(np.int64).view(np.uint64).copy()
+    out = np.zeros((rp, 8, n), dtype=np.int8)
+    for i in range(8):
+        d = ((v & np.uint64(0xFF)).astype(np.int64) ^ 0x80) - 0x80
+        out[:b, i] = d.astype(np.int8)
+        v = (v - d.astype(np.uint64)) >> np.uint64(8)
+    return torch.from_numpy(out.reshape(rp * 8, n))
+
+
+def gemm_planes(planes: torch.Tensor, rows: int, w: torch.Tensor, cfg: PairConfig, part: torch.Tensor | None = None
+                ) -> torch.Tensor:
+    """Split-K partials ``part[s] = x W^T mod 2^64`` of the ``planes`` variant (``planes``: int8 ``(>= 8 rp, n)`` digit
+    planes of the ``rows`` input rows, :func:`digit_planes`; ``w`` int8 ``(m, n)``).
+    Returns int64 ``(splits, rows, m)``.
+    """
+    cfg.validate()
+    if cfg.variant != "planes" or planes.dtype != torch.int8 or w.dtype != torch.int8 or planes.shape[1] != w.shape[1]:
+        raise ShapeError("gemm_planes needs int8 digit planes (8 rp, n) and int8 w (m, n) with a planes config")
+    n, m = int(w.shape[1]), int(w.shape[0])
+    rp = cfg.block_r(rows)
+    if rp > PLANES_MAX_ROWS or int(planes.shape[0]) < 8 * rp:
+        raise ShapeError("gemm_planes: too many rows / too few digit planes")
+    per, splits = _per_split(n, cfg)
+    if part is None:
+        part = torch.empty((splits, rows, m), dtype=torch.int64, device=w.device)
+    _launch_planes(planes, rows, w, cfg, per, splits, part=part)
+    return part[:splits]
+
+
+def _launch_planes(planes: torch.Tensor, rows: int, w: torch.Tensor, cfg: PairConfig, per: int, splits: int, *,
+                   part: torch.Tensor | None = None, out_u8: torch.Tensor | None = None, k: int = 64,
+                   r: torch.Tensor | None = None, hmul: torch.Tensor | None = None,
+                   hp: torch.Tensor | None = None) -> None:
+    n, m = int(w.shape[1]), int(w.shape[0])
+    fused = part is None
+    if fused and splits != 1:
+        raise ShapeError("ring64: the fused planes epilogue needs one split")
+    dummy = w
+    grid = (-(-m // cfg.block_m), splits)
+    _kern("gemm_planes_kernel")[grid](
+        w, planes, dummy if part is None else part, dummy if r is None else r, dummy if hmul is None else hmul,
+        dummy if hp is None else hp, dummy if out_u8 is None else out_u8,
+        rows, n, m, per, w.stride(0), planes.stride(0), rows * m,
+        RP=cfg.block_r(rows), BLOCK_M=cfg.block_m, BLOCK_K=cfg.block_n,
+        FUSED=fused, HAS_R=r is not None, HAS_HMUL=hmul is not None, STORE_PLANES=hp is not None, BPE=k // 8,
+        num_warps=cfg.num_warps)
+
+
 def unpack64(src: torch.Tensor, dst: torch.Tensor, bpe: int) -> torch.Tensor:
     """Unpack ``dst.numel()`` little-endian ``bpe``-byte elements of uint8 ``src`` into int64 ``dst``."""
     numel = int(dst.numel())
@@ -191,7 +277,8 @@ def unpack64(src: torch.Tensor, dst: torch.Tensor, bpe: int) -> torch.Tensor:
 
 
 def _epilogue(part: torch.Tensor, splits: int, b: int, m: int, k: int, out_u8: torch.Tensor, *,
-              r: torch.Tensor | None = None, hmul: torch.Tensor | None = None, h: torch.Tensor | None = None) -> None:
+              r: torch.Tensor | None = None, hmul: torch.Tensor | None = None, h: torch.Tensor | None = None,
+              hp: torch.Tensor | None = None) -> None:
     numel = b * m
     if not numel:
         return
@@ -200,7 +287,9 @@ def _epilogue(part: torch.Tensor, splits: int, b: int, m: int, k: int, out_u8: t
     _kern("epilogue_kernel")[(-(-numel // blk),)](
         part, splits, numel, m,
         dummy if r is None else r, dummy if hmul is None else hmul, dummy if h is None else h, out_u8,
-        HAS_R=r is not None, HAS_HMUL=hmul is not None, STORE_H=h is not None, BPE=k // 8, BLOCK=blk)
+        dummy if hp is None else hp,
+        HAS_R=r is not None, HAS_HMUL=hmul is not None, STORE_H=h is not None, BPE=k // 8, BLOCK=blk,
+        STORE_PLANES=hp is not None)
 
 
 def pair_reference(k: int, w1: torch.Tensor, x: torch.Tensor, w2: torch.Tensor | None = None,
@@ -273,6 +362,7 @@ class PairOp:
         s2 = max((c[1].split for c in (self.config(rr) for rr in range(1, r + 1)) if c[1] is not None), default=1)
         self.d_p1 = torch.zeros((s1 * r * self.m1,), dtype=torch.int64, device=dev)
         self.d_p2 = torch.zeros((s2 * r * max(1, self.m2),), dtype=torch.int64, device=dev)
+        self._planes_bufs: tuple[torch.Tensor, torch.Tensor | None] | None = None
 
     @property
     def pair(self) -> bool:
@@ -295,6 +385,8 @@ class PairOp:
     def set_config(self, rows: int, c1: PairConfig, c2: PairConfig | None) -> None:
         """Pin the launch configuration of ``rows`` (before :meth:`capture`; grows the partial buffers)."""
         c1.validate()
+        if c2 is not None and (c1.variant == "planes") != (c2.variant == "planes"):
+            raise ShapeError("ring64: the planes variant serves both stages of a pair or neither")
         need1 = _per_split(self.n1, c1)[1] * rows * self.m1
         if need1 > self.d_p1.numel():
             self.d_p1 = torch.zeros(need1, dtype=torch.int64, device=self.device)
@@ -305,9 +397,54 @@ class PairOp:
                 self.d_p2 = torch.zeros(need2, dtype=torch.int64, device=self.device)
         self._cfg[rows] = (c1, c2)
 
+    def _planes(self) -> tuple[torch.Tensor, torch.Tensor | None]:
+        """Digit-plane buffers of the ``planes`` variant (zeroed once; allocated on first use, i.e. in the
+        warm-up before a capture): int8 ``(8 rp_max, n1)`` for ``x`` and ``(8 rp_max, m1)`` for ``H``."""
+        if self._planes_bufs is None:
+            rp = PairConfig(variant="planes").block_r(self.max_rows)
+            if rp > PLANES_MAX_ROWS:
+                raise ShapeError(f"ring64: the planes variant serves at most {PLANES_MAX_ROWS} rows")
+            xp = torch.zeros((8 * rp, self.n1), dtype=torch.int8, device=self.device)
+            hp = torch.zeros((8 * rp, self.m1), dtype=torch.int8, device=self.device) if self.pair else None
+            self._planes_bufs = (xp, hp)
+        return self._planes_bufs
+
+    def _compute_planes(self, rows: int, c1: PairConfig, c2: PairConfig | None) -> None:
+        """``planes`` variant: fused unpack to digit planes (+ int64 ``R``), one tensor-core GEMV per stage with
+        its epilogue fused when unsplit (else a partial + epilogue launch); stage 1 writes ``H`` as stage 2's
+        digit planes. 3-5 kernels per pair."""
+        xp, hp = self._planes()
+        nx, total = rows * self.n1, rows * self.in_elems
+        blk = 1024
+        _kern("unpack_planes_kernel")[(-(-total // blk),)](self.d_in, xp, self.d_x, nx, self.n1, total,
+                                                         BPE=self.bpe, BLOCK=blk)
+        r = self.d_x[: rows * self.m1] if self.pair else None
+        hp1 = hp if self.pair else None
+        per1, sp1 = _per_split(self.n1, c1)
+        if sp1 == 1:
+            _launch_planes(xp, rows, self.w1, c1, per1, 1, out_u8=self.d_out, k=self.k, r=r, hmul=self.hmul, hp=hp1)
+        else:
+            p1 = self.d_p1[: sp1 * rows * self.m1].view(sp1, rows, self.m1)
+            _launch_planes(xp, rows, self.w1, c1, per1, sp1, part=p1)
+            _epilogue(p1, sp1, rows, self.m1, self.k, self.d_out, r=r, hmul=self.hmul, hp=hp1)
+        if not self.pair:
+            return
+        assert self.w2 is not None and c2 is not None and hp is not None
+        out2 = self.d_out[rows * self.m1 * self.bpe:]
+        per2, sp2 = _per_split(self.m1, c2)
+        if sp2 == 1:
+            _launch_planes(hp, rows, self.w2, c2, per2, 1, out_u8=out2, k=self.k)
+        else:
+            p2 = self.d_p2[: sp2 * rows * self.m2].view(sp2, rows, self.m2)
+            _launch_planes(hp, rows, self.w2, c2, per2, sp2, part=p2)
+            _epilogue(p2, sp2, rows, self.m2, self.k, out2)
+
     def _compute(self, rows: int) -> None:
         """Device part of one call on ``d_in[:in_bytes(rows)]`` -> ``d_out[:out_bytes(rows)]``."""
         c1, c2 = self.config(rows)
+        if c1.variant == "planes":
+            self._compute_planes(rows, c1, c2)
+            return
         x_all = self.d_x[: rows * self.in_elems]
         unpack64(self.d_in, x_all, self.bpe)
         x = x_all[: rows * self.n1].view(rows, self.n1)
@@ -387,13 +524,13 @@ def check_op(op: PairOp, rows: int, *, seed: int = 0, extreme: bool = False) -> 
 
 
 def self_check(device: torch.device | str, *, k: int = 56, rows: tuple[int, ...] = (1, 2, 3, 8),
-               variants: tuple[str, ...] = ("sum", "dot")) -> list[str]:
+               variants: tuple[str, ...] = VARIANTS) -> list[str]:
     """Compare every variant on small random and extreme pairs with the Python-int reference; list failures."""
     dev = torch.device(device)
     gen = torch.Generator().manual_seed(20261123)
     fails: list[str] = []
     for variant in variants:
-        if variant == "dot" and dev.type == "cuda" and torch.cuda.get_device_capability(dev)[0] < 8:
+        if variant in ("dot", "planes") and dev.type == "cuda" and torch.cuda.get_device_capability(dev)[0] < 8:
             continue
         for m1, n1, m2 in ((24, 40, 33), (64, 300, 96)):
             w1 = torch.randint(-128, 128, (m1, n1), generator=gen, dtype=torch.int64).to(torch.int8)
@@ -403,10 +540,17 @@ def self_check(device: torch.device | str, *, k: int = 56, rows: tuple[int, ...]
             w2[-1].fill_(-128)
             for op in (PairOp(k, w1, w2, hm, device=dev, max_rows=max(rows), variant=variant),
                        PairOp(k, w1, device=dev, max_rows=max(rows), variant=variant)):
-                # small splits too: several partials per output
                 for rr in rows:
                     for case in range(2):
                         why = check_op(op, rr, seed=rr * 7 + case, extreme=case == 1)
                         if why:
                             fails.append(f"{variant}: {why}")
+                # small tiles and splits too: several partials per output, the unfused epilogue
+                small = PairConfig(16, 16, 3, 4, variant)
+                rr = rows[-1]
+                op.set_config(rr, small, small if op.pair else None)
+                for case in range(2):
+                    why = check_op(op, rr, seed=rr * 11 + case, extreme=case == 1)
+                    if why:
+                        fails.append(f"{variant} (split): {why}")
     return fails

@@ -79,10 +79,15 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--k", type=int, default=56)
     ap.add_argument("--tiny", action="store_true", help="tiny shapes (CPU / interpreter smoke run)")
     ap.add_argument("--no-sweep", action="store_true", help="heuristic configurations only")
+    ap.add_argument("--variants", default="planes,sum",
+                    help="variants to time (the first is the headline; 'sum' is the 2026-11-23 baseline)")
+    ap.add_argument("--budget-s", type=float, default=0.0,
+                    help="stop sweeping non-heuristic configurations after this many seconds (0: no limit)")
+    ap.add_argument("--prototype-timing", action="store_true", help="also time the prototype's eager pair")
     args = ap.parse_args(argv)
 
     from pgw.core.packing import pack_ring
-    from pgw.core.ring64 import PairConfig, PairOp, _rand_ring, pair_config, self_check
+    from pgw.core.ring64 import PairConfig, PairOp, _per_split, _rand_ring, pair_config, self_check
     from pgw.core.ringmm import PreparedWeight
 
     cuda = torch.cuda.is_available()
@@ -96,7 +101,8 @@ def main(argv: list[str] | None = None) -> int:
     out: dict[str, Any] = {"device": torch.cuda.get_device_name(0) if cuda else "cpu", "k": k, "shapes": shapes,
                            "torch": torch.__version__}
     t0 = time.perf_counter()
-    fails = self_check(dev, k=k, rows=(1, 2, 8) if cuda else (1, 2))
+    variants = [v for v in args.variants.split(",") if v]
+    fails = self_check(dev, k=k, rows=(1, 2, 8) if cuda else (1, 2), variants=tuple(variants))
     out["self_check"] = {"failures": fails, "s": round(time.perf_counter() - t0, 1)}
     print(f"self-check: {'ok' if not fails else fails[:3]} ({out['self_check']['s']} s)", flush=True)
     if fails:
@@ -127,24 +133,36 @@ def main(argv: list[str] | None = None) -> int:
             body = pack_ring(x, k) + (pack_ring(r, k) if r is not None else b"")
             want = _prototype_pair(k, pw1, pw2, hm, x.to(dev), None if r is None else r.to(dev))
             ent: dict[str, Any] = {"exact": op.run(rows, body) == want}
-            ent["prototype_eager_ms"] = round(_time(lambda: _prototype_pair(k, pw1, pw2, hm, x.to(dev),
-                                                                            None if r is None else r.to(dev)),
-                                                    max(3, args.reps // 5), sync), 4)
-            cands: list[tuple[PairConfig, PairConfig | None]] = [op.config(rows)]
+            if args.prototype_timing:
+                ent["prototype_eager_ms"] = round(_time(lambda: _prototype_pair(k, pw1, pw2, hm, x.to(dev),
+                                                                                None if r is None else r.to(dev)),
+                                                        max(3, args.reps // 5), sync), 4)
+            # heuristic of every requested variant first, then (budget permitting) a small sweep per variant
+            cands: list[tuple[PairConfig, PairConfig | None]] = []
+            for v in variants:
+                c1 = pair_config(rows, op.m1, op.n1, dev, v)
+                c2 = pair_config(rows, op.m2, op.m1, dev, v) if op.pair else None
+                cands.append((c1, c2))
+            n_heur = len(cands)
             if cuda and not args.no_sweep:
-                variants = ["sum", "dot"] if rows <= 2 else ["dot", "sum"]
                 for v in variants:
-                    for bm, bn in ((16, 256), (32, 128), (64, 128)) if v == "dot" else ((16, 256), (8, 512), (32, 128)):
-                        c1 = pair_config(rows, op.m1, op.n1, dev, v)
-                        c1 = PairConfig(bm, bn, c1.split, c1.num_warps, v)
-                        c2 = None
-                        if op.pair:
-                            c2 = pair_config(rows, op.m2, op.m1, dev, v)
-                            c2 = PairConfig(bm, bn, c2.split, c2.num_warps, v)
-                        if (c1, c2) not in cands:
-                            cands.append((c1, c2))
+                    if v == "planes":
+                        tiles = [(64, 256, 4, 2.0), (64, 128, 4, 1.0), (128, 256, 8, 1.0), (64, 512, 4, 1.0),
+                                 (64, 256, 4, 0.5), (128, 128, 4, 2.0), (64, 256, 8, 1.0)]
+                    else:
+                        tiles = [(16, 256, 4, 1.0), (8, 512, 4, 1.0), (32, 128, 4, 1.0)]
+                    for bm, bn, warps, f in tiles:
+                        def mk(m_: int, n_: int, bm: int = bm, bn: int = bn, warps: int = warps, f: float = f,
+                               v: str = v) -> PairConfig:
+                            base = pair_config(rows, m_, n_, dev, v)
+                            return PairConfig(bm, bn, max(1, round(base.split * f)), warps, v)
+                        c = (mk(op.m1, op.n1), mk(op.m2, op.m1) if op.pair else None)
+                        if c not in cands:
+                            cands.append(c)
             timings = []
-            for c1, c2 in cands:
+            for ci, (c1, c2) in enumerate(cands):
+                if ci >= n_heur and args.budget_s and time.perf_counter() - t0 > args.budget_s:
+                    break
                 try:
                     op.set_config(rows, c1, c2)
                     if op.run(rows, body) != want:
@@ -158,18 +176,22 @@ def main(argv: list[str] | None = None) -> int:
                     else:
                         ms = _time(lambda b=body: op.run(rows, b), args.reps, sync)
                         ok = True
-                    timings.append({"cfg": [str(c1), str(c2)], "ms": round(ms, 4), "exact": ok})
+                    splits = [_per_split(op.n1, c1)[1], None if c2 is None else _per_split(op.m1, c2)[1]]
+                    timings.append({"cfg": [str(c1), str(c2)], "splits": splits, "ms": round(ms, 4), "exact": ok})
                 except Exception as exc:  # a configuration that does not compile on this device
                     timings.append({"cfg": [str(c1), str(c2)], "error": f"{type(exc).__name__}: {str(exc)[:160]}"})
             good = [t for t in timings if t.get("exact") and "ms" in t]
             ent["graph_ms_best"] = min((t["ms"] for t in good), default=None)
-            ent["graph_ms_heuristic"] = timings[0].get("ms")
+            ent["graph_ms_heuristic"] = {v: timings[i].get("ms") for i, v in enumerate(variants) if i < len(timings)}
+            for v in variants:
+                vt = [t["ms"] for t in good if f"variant='{v}'" in t["cfg"][0]]
+                ent[f"graph_ms_best_{v}"] = min(vt) if vt else None
             ent["best_cfg"] = min(good, key=lambda t: t["ms"])["cfg"] if good else None
             ent["configs"] = timings
             ent["exact"] = ent["exact"] and all(t.get("exact", True) for t in timings)
             res[name][str(rows)] = ent
             print(f"{name} rows={rows}: exact={ent['exact']} graph best {ent['graph_ms_best']} ms "
-                  f"(heuristic {ent['graph_ms_heuristic']}), prototype eager {ent['prototype_eager_ms']} ms", flush=True)
+                  f"(heuristic {ent['graph_ms_heuristic']}, {len(timings)} configs)", flush=True)
         del op, pw1, pw2
     out["pair"] = res
     if cuda:  # today's graphed single-linear K32 trip, same copies (the lane's [H2D, GEMV, D2H] graph)
@@ -180,7 +202,7 @@ def main(argv: list[str] | None = None) -> int:
             for name, w in W.items():
                 m, n = w.shape
                 base[name] = {}
-                for rows in (1, 8) if 8 in rows_list else (1,):
+                for rows in sorted({1, max(rows_list)}):
                     hin = torch.zeros((rows, n), dtype=torch.int32, pin_memory=True)
                     hout = torch.zeros((rows, m), dtype=torch.int32, pin_memory=True)
                     xin = torch.zeros((rows, n), dtype=torch.int32, device=dev)
@@ -200,17 +222,23 @@ def main(argv: list[str] | None = None) -> int:
                         body()
                     base[name][str(rows)] = round(_time(g.replay, args.reps, sync), 4)
         out["k32_single_graph_ms"] = base
-        if base:
-            one = {n: v["1"] for n, v in base.items()}
-            out["summary_1row"] = {
-                "o+gate_up pair / (o + gate_up singles)": (res["o+gate_up"]["1"]["graph_ms_best"] or 0)
-                / (one["o"] + one["gate_up"]),
-                "down+qkv pair / (down + qkv singles)": (res["down+qkv"]["1"]["graph_ms_best"] or 0)
-                / (one["down"] + one["qkv"]),
-                "per-token provider compute fused2 (28 layers, ms)": 28 * ((res["o+gate_up"]["1"]["graph_ms_best"] or 0)
-                                                                         + (res["down+qkv"]["1"]["graph_ms_best"] or 0)),
-                "per-token provider compute standard K32 (28 layers, ms)": 28 * sum(one.values()),
-            }
+        summ: dict[str, Any] = {}
+        for rk in sorted({1, max(rows_list)}):
+            if not base or str(rk) not in res["o+gate_up"]:
+                continue
+            one = {n: v[str(rk)] for n, v in base.items()}
+            for v in [*variants, "best"]:
+                key = "graph_ms_best" if v == "best" else f"graph_ms_best_{v}"
+                a, b = res["o+gate_up"][str(rk)].get(key), res["down+qkv"][str(rk)].get(key)
+                if a is None or b is None:
+                    continue
+                summ[f"{rk} rows, {v}"] = {
+                    "o+gate_up pair / (o + gate_up singles)": round(a / (one["o"] + one["gate_up"]), 3),
+                    "down+qkv pair / (down + qkv singles)": round(b / (one["down"] + one["qkv"]), 3),
+                    "per-token provider compute fused2 (28 layers, ms)": round(28 * (a + b), 3),
+                    "per-token provider compute standard K32 (28 layers, ms)": round(28 * sum(one.values()), 3),
+                }
+        out["summary"] = summ
     out["wall_s"] = round(time.perf_counter() - t0, 1)
     print(json.dumps({k2: v for k2, v in out.items() if k2 != "pair"}, indent=1))
     if args.json:

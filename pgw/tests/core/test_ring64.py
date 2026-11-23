@@ -12,8 +12,20 @@ import torch
 
 pytest.importorskip("triton")
 
-from pgw.core.packing import pack_ring  # noqa: E402
-from pgw.core.ring64 import PairConfig, PairOp, check_op, gemv64, pair_reference, self_check  # noqa: E402
+from pgw.core.packing import pack_ring
+from pgw.core.ring64 import (
+    PLANES_MAX_SPLIT_N,
+    PairConfig,
+    PairOp,
+    _per_split,
+    _rand_ring,
+    check_op,
+    digit_planes,
+    gemm_planes,
+    gemv64,
+    pair_reference,
+    self_check,
+)
 
 DEV = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -25,7 +37,7 @@ def _w(gen: torch.Generator, m: int, n: int) -> torch.Tensor:
     return w
 
 
-@pytest.mark.parametrize("variant", ["sum", "dot"])
+@pytest.mark.parametrize("variant", ["sum", "dot", "planes"])
 @pytest.mark.parametrize("k", [56, 64, 32, 48])
 def test_pair_op_exact(variant: str, k: int) -> None:
     gen = torch.Generator().manual_seed(k)
@@ -73,3 +85,43 @@ def test_rejects_bad_shapes() -> None:
 
 def test_self_check_passes() -> None:
     assert self_check(DEV, rows=(1, 3)) == []
+
+
+def test_planes_gemv_exact_all_rows_and_splits() -> None:
+    """The digit-plane tensor-core GEMV: one int8 dot per tile over 8 balanced digit planes per row, int32 over a
+    whole split, recombined in uint64 == the Python-int product mod 2^64, for 1..16 rows, any tile and split."""
+    import numpy as np
+
+    gen = torch.Generator().manual_seed(11)
+    w = _w(gen, 80, 333).to(DEV)
+    rng = np.random.default_rng(1)
+    for rows in (1, 2, 3, 5, 8, 16):
+        x = _rand_ring(rng, (rows, 333), 64)
+        if rows == 1:
+            x[:] = -1  # all digits -1 / carries everywhere
+        want, _ = pair_reference(64, w.cpu(), x)
+        for cfg in (PairConfig(16, 16, 1, 4, "planes"), PairConfig(32, 64, 4, 4, "planes"),
+                    PairConfig(64, 256, 2, 4, "planes")):
+            p = gemm_planes(digit_planes(x).to(DEV), rows, w, cfg)
+            assert torch.equal(p.sum(dim=0).cpu(), want), (rows, cfg)
+
+
+def test_planes_split_bound_keeps_int32_exact() -> None:
+    # 128 * 128 * n_per_split must stay below 2^31 for every split, whatever split the caller asks for
+    assert 128 * 128 * PLANES_MAX_SPLIT_N < 1 << 31
+    per, splits = _per_split(300_000, PairConfig(64, 256, 1, 4, "planes"))
+    assert per <= PLANES_MAX_SPLIT_N and per * splits >= 300_000
+    assert _per_split(300_000, PairConfig(64, 256, 1, 4, "sum"))[1] == 1  # the uint64 variants have no such limit
+
+
+def test_planes_pair_mixed_rows_reuse_buffers() -> None:
+    """One op serving 8, then 1, 3 rows (stale digit planes of padded rows must never reach an output)."""
+    gen = torch.Generator().manual_seed(3)
+    w1, w2 = _w(gen, 40, 72), _w(gen, 90, 40)
+    hm = torch.randint(1, 1 << 8, (40,), generator=gen, dtype=torch.int64)
+    op = PairOp(56, w1, w2, hm, device=DEV, max_rows=8, variant="planes")
+    op.set_config(3, PairConfig(16, 32, 2, 4, "planes"), PairConfig(32, 16, 1, 4, "planes"))
+    for rows, extreme in ((8, True), (1, False), (3, False), (8, False), (2, True)):
+        assert check_op(op, rows, seed=rows + 100, extreme=extreme) is None
+    with pytest.raises(Exception):
+        op.set_config(1, PairConfig(16, 16, 1, 4, "planes"), PairConfig(16, 16, 1, 4, "sum"))
