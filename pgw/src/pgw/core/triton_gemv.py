@@ -98,6 +98,8 @@ __all__ = [
     "stream_config",
     "table_to_json",
     "triton_available",
+    "tune_rows",
+    "tuned_config",
 ]
 
 log = logging.getLogger(__name__)
@@ -114,6 +116,10 @@ MULTIROW_MAX_ROWS = 8
 #: self-check. ``off``: never (the previous behaviour).
 MULTIROW_MODES = ("auto", "on", "off")
 ENV_MULTIROW = "PGW_SERVICE_TRITON_GEMV_MULTIROW"
+#: ``PGW_SERVICE_TRITON_GEMV_TUNE_ROWS=1`` (default off): before the lane captures its 2..8-row CUDA graphs, time
+#: few-row launch configurations per (rows, linear shape) on the device and keep the fastest exact one
+#: (:func:`tune_rows`). One-row calls are never affected.
+ENV_TUNE_ROWS = "PGW_SERVICE_TRITON_GEMV_TUNE_ROWS"
 ENV_TABLE = "PGW_SERVICE_TRITON_GEMV_TABLE"
 
 
@@ -269,6 +275,9 @@ _RULES: dict[str, tuple[TableRule, ...]] = {}
 _MULTIROW: dict[str, int] = {}
 #: rules added at run time (:func:`configure`, a JSON table), keyed by device name; tried first
 _EXTRA_TABLES: dict[str, tuple[TableRule, ...]] = {}
+#: few-row configurations picked by :func:`tune_rows` per device key: ``(rows, m, nw) -> config`` (exact shape;
+#: every one passed the exactness check on the device first). Tried before everything else, rows >= 2 only.
+_TUNED: dict[str, dict[tuple[int, int, int], GemvConfig]] = {}
 _SETTINGS: dict[str, Any] = {}
 
 
@@ -415,6 +424,12 @@ def gemv_config(b: int, m: int, nw: int, device: torch.device | None = None) -> 
     programs, at most 8 splits). Heuristic tuned on a T4 with the 7B shapes.
     """
     key = _key(device) if device is not None else None
+    if key is not None and b >= 2:
+        tuned = _TUNED.get(key)
+        if tuned:
+            hit = tuned.get((b, m, nw))
+            if hit is not None:
+                return hit
     if key is not None:
         for rule in _RULES.get(key, ()):
             # a stream rule for several rows applies only where the stream variant is on for them
@@ -891,6 +906,155 @@ def _reset(device: torch.device | str) -> None:
     """Forget the self-check verdict of ``device`` (tests)."""
     key = _key(device)
     with _GUARD:
-        for d in (_SELF_CHECK, _RULES, _MULTIROW):
+        for d in (_SELF_CHECK, _RULES, _MULTIROW, _TUNED):
             d.pop(key, None)
         _NO_DOT.discard(key)
+
+
+# ---- few-row launch tuning (PGW_SERVICE_TRITON_GEMV_TUNE_ROWS, opt-in) ---------------------------------------
+def tune_rows_wanted() -> bool:
+    """``PGW_SERVICE_TRITON_GEMV_TUNE_ROWS`` (default off)."""
+    return os.environ.get(ENV_TUNE_ROWS, "0").strip().lower() in ("1", "true", "yes", "on")
+
+
+def row_candidates(b: int, m: int, nw: int, device: torch.device | None = None) -> list[GemvConfig]:
+    """Launch configurations :func:`tune_rows` times for ``b`` (2..8) rows: the untuned choice of
+    :func:`gemv_config` first (the baseline), then memory-bound ``stream`` tiles (each weight byte loaded once
+    for all ``b`` rows; 1024-2048-element tiles at 4 warps, one at 8 warps), each with the heuristic split-K
+    and with twice it (wide outputs on many SMs want fewer, longer programs; deep ones more)."""
+    if not 2 <= b <= MULTIROW_MAX_ROWS:
+        raise ShapeError(f"tune_rows serves 2..{MULTIROW_MAX_ROWS} rows, got {b}")
+    out: list[GemvConfig] = []
+    with _GUARD:
+        saved = _TUNED.pop(_key(device), None) if device is not None else None
+    try:
+        out.append(gemv_config(b, m, nw, device))
+    finally:
+        if saved is not None:
+            with _GUARD:
+                _TUNED[_key(device)] = saved  # type: ignore[arg-type]
+    tiles = [(16, 128, 4), (32, 64, 4), (8, 256, 4), (16, 256, 8)] + ([(16, 64, 4)] if b > 2 else [])
+    for bm, bn, warps in tiles:
+        sp = _split(m, nw, bm, device)
+        for split in dict.fromkeys((sp, min(8, 2 * sp))):
+            cfg = GemvConfig(b, bm, bn, split, warps, stream=True)
+            if cfg not in out:
+                out.append(cfg)
+    return out
+
+
+def graph_time_ms(fn: Callable[[], object], device: torch.device, reps: int = 20, rounds: int = 3) -> float:
+    """Device time of one ``fn()`` (CUDA): ``reps`` launches captured in one CUDA graph, replayed ``rounds``
+    times between events, best round / ``reps``. Unlike back-to-back eager launches this is not bounded by
+    the host's launch rate (a Triton launch from Python costs tens of microseconds)."""  # pragma: no cover - GPU
+    with torch.cuda.device(device):
+        stream = torch.cuda.Stream(device)
+        stream.wait_stream(torch.cuda.current_stream(device))
+        with torch.cuda.stream(stream):
+            fn()
+            fn()
+        stream.synchronize()
+        g = torch.cuda.CUDAGraph()
+        with torch.cuda.graph(g, stream=stream, capture_error_mode="thread_local"):
+            for _ in range(reps):
+                fn()
+        best = float("inf")
+        for _ in range(rounds):
+            a = torch.cuda.Event(enable_timing=True)
+            e = torch.cuda.Event(enable_timing=True)
+            a.record(stream)
+            g.replay()
+            e.record(stream)
+            e.synchronize()
+            best = min(best, float(a.elapsed_time(e)) / reps)
+        del g
+        return best
+
+
+def _default_timer(device: torch.device) -> Callable[[int, int, int, GemvConfig], float]:  # pragma: no cover - GPU
+    gen = torch.Generator(device=device).manual_seed(0x7E57)
+    ws: dict[tuple[int, int], torch.Tensor] = {}
+
+    def timer(b: int, m: int, nw: int, cfg: GemvConfig) -> float:
+        w = ws.get((m, nw))
+        if w is None:
+            w = ws[(m, nw)] = torch.randint(-128, 128, (m, nw), dtype=torch.int8, device=device, generator=gen)
+        x = torch.randint(-(1 << 31), 1 << 31, (b, nw), dtype=torch.int32, device=device, generator=gen)
+        y = torch.empty((b, m), dtype=torch.int32, device=device)
+        return graph_time_ms(lambda: ring_gemv(x, w, 32, n=nw, m=m, out=y, config=cfg), device)
+
+    return timer
+
+
+def tune_rows(device: torch.device | str, shapes: Iterable[tuple[int, int]], rows: Iterable[int], *,
+              timer: Callable[[int, int, int, GemvConfig], float] | None = None,
+              margin: float = GATE_MARGIN) -> dict[tuple[int, int, int], dict[str, Any]]:
+    """Pick the launch configuration of the fused kernel for each ``rows`` in 2..8 and each ``(m, nw)`` of
+    ``shapes`` (output features, padded weight columns) on ``device`` by device time, and use it from then on
+    (:func:`gemv_config`; so CUDA graphs captured afterwards replay it). Exactness first: every candidate
+    (:func:`row_candidates`) must pass :func:`check_configs` against the digit-GEMM path on the device (random
+    and all-extreme operands, edge tiles, split-K atomics); a failing one is never timed. A stream candidate
+    replaces the baseline only if it is faster by ``margin``. Any error leaves that ``(rows, shape)`` on the
+    baseline. Needs :func:`self_check` to have passed on ``device``. ``timer(b, m, nw, config) -> ms``
+    (tests); default CUDA-graph device time on public random data. Returns what it measured per
+    ``(rows, m, nw)``: ``{"baseline": .., "chosen": .., "ms": {config: ms}, "failed": [..]}``.
+
+    The choice depends only on public shapes and timings of public random data, never on traffic; every
+    variant computes the same bits (wrapping u32 arithmetic), so outputs are unchanged.
+    """
+    dev = torch.device(device)
+    key = _key(dev)
+    if not _SELF_CHECK.get(key, False):
+        raise ShapeError(f"tune_rows: the fused kernel has not passed its self-check on {key}")
+    if timer is None:
+        timer = _default_timer(dev)
+    report: dict[tuple[int, int, int], dict[str, Any]] = {}
+    good: dict[GemvConfig, bool] = {}
+    for b in sorted({int(r) for r in rows if 2 <= int(r) <= MULTIROW_MAX_ROWS}):
+        if b > max_rows(dev):
+            continue
+        for m, nw in dict.fromkeys((int(a), int(c)) for a, c in shapes):
+            ent: dict[str, Any] = {"ms": {}, "failed": []}
+            report[(b, m, nw)] = ent
+            try:
+                cands = row_candidates(b, m, nw, dev)
+                base = cands[0]
+                ent["baseline"] = str(base)
+                times: dict[GemvConfig, float] = {}
+                for cfg in cands:
+                    ok = good.get(cfg)
+                    if ok is None:
+                        try:
+                            ok = not check_configs(dev, [(b, cfg, None)], quick=True)
+                        except Exception:
+                            ok = False
+                        good[cfg] = ok
+                    if not ok:
+                        ent["failed"].append(str(cfg))
+                        continue
+                    try:
+                        times[cfg] = float(timer(b, m, nw, cfg))
+                    except Exception as exc:
+                        ent["failed"].append(f"{cfg}: {type(exc).__name__}")
+                        continue
+                    ent["ms"][str(cfg)] = round(times[cfg], 5)
+                if base not in times:
+                    continue  # never replace a baseline we could not time
+                best = min(times, key=lambda c: times[c])
+                if best != base and times[best] * margin <= times[base]:
+                    with _GUARD:
+                        _TUNED.setdefault(key, {})[(b, m, nw)] = best
+                    ent["chosen"] = str(best)
+                else:
+                    ent["chosen"] = str(base)
+            except Exception as exc:
+                ent["error"] = f"{type(exc).__name__}: {str(exc)[:200]}"
+    log.info("fused ring GEMV few-row tuning on %s: %s", key,
+             "; ".join(f"b={b} m={m} nw={nw}: {e.get('chosen')} ({e['ms'].get(e.get('chosen', ''), '?')} ms vs "
+                       f"baseline {e['ms'].get(e.get('baseline', ''), '?')} ms)" for (b, m, nw), e in report.items()))
+    return report
+
+
+def tuned_config(device: torch.device | str, b: int, m: int, nw: int) -> GemvConfig | None:
+    """The configuration :func:`tune_rows` picked for ``(b, m, nw)`` on ``device`` (``None``: untuned)."""
+    return _TUNED.get(_key(device), {}).get((int(b), int(m), int(nw)))

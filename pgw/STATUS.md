@@ -15,6 +15,34 @@ SLA pilot. Three reasons:
 2. The HSM, KMS and TPM integrations have never run against real hardware or cloud services.
 3. There has been no external security audit.
 
+## Update 2026-11-23: decode driver keeps "alarm before the next payload"; few-row GEMV tuning (opt-in)
+
+- **Native decode driver, noise statistics** (`PGW_DECODE_NATIVE`, still opt-in): sampled noise statistics came back
+  once per driver call, so an alarm could surface after the rest of the pass's payloads had left. Now a sampled trip
+  ends the driver call and the sampling draws are made one trip at a time (the per-trip path's order: the next trip's
+  draw comes after the sampled trip's statistics). With `PGW_NOISE_ASYNC_SAMPLED=1` the sampled trip stays on the
+  native lane and its statistics are joined before the next payload; with inline statistics (default) the driver
+  hands the sampled trip back after its native prepare, the statistics run, and only then does its payload leave
+  (ordinary path, same request id and bytes): the per-trip path's "before this payload". Same payloads, draws and
+  statistics as without the driver (existing tests); new `test_sampled_alarm_stops_the_next_payload` (local client
+  and native lane, sync and async: the driver stops traffic at exactly the payload count the per-trip path does;
+  the previous code failed 6 of its 8 cases). Cost: one more driver call per sampled trip (5 % of trips), plus in
+  inline mode that trip's send on the Python path; on this loaded 4-vCPU box (0.5B, 8 layers, `--lane-proc`,
+  best of 3 runs) wall ms/token old/new: sync 19.2/20.8, async 21.5/20.9 (run-to-run spread 19-31 ms). Use
+  `PGW_NOISE_ASYNC_SAMPLED=1` with the driver for the cheaper of the two.
+- **Few-row GEMV tuning** (`PGW_SERVICE_TRITON_GEMV_TUNE_ROWS=1`, default off; `triton_gemv.tune_rows`): before the
+  lane captures its 2..8-row CUDA graphs, each (rows, linear shape) times the untuned choice (on an H100 the
+  16-row-padded tensor-core `dot` variant: 2-row graph trips were 168 us vs 89 us for 1 row, gate_up 389 vs 191 us)
+  against memory-bound `stream` tiles (each weight byte loaded once for all rows) by CUDA-graph device time, after
+  each candidate passed the exactness check against the digit-GEMM path on the device; a candidate replaces the
+  baseline only if 3 % faster. The graphs then capture the pick and pass their own byte-equality self-check as
+  before. One-row calls are never touched. Same bits (wrapping u32 arithmetic in every variant). CPU-tested in the
+  Triton interpreter (`tests/core/test_triton_gemv.py -k tune`); **not yet run on a GPU**. H100 check (~1.5 min,
+  under $0.15): `PGW_MODAL_APP_SUFFIX=-mr modal run deploy/modal/gpu_bench.py --target h100_c4 --timeout-min 5
+  --cmd "python benchmarks/provider_scale_bench.py --presets 7b --tp 1 --rows 1,2,4 --iters 200 --modes graph
+  --tune-rows --json /tmp/ps.json"` (`graph_report.tuning` has each shape's baseline and chosen device ms; the
+  graph trip means use the picks; `device_us` is the graph-timed kernel alone).
+
 ## Update 2026-11-22: native UDS lane channel (opt-in), persistent GPU worker's first H100 run
 
 Toward the 7B CPU-only-gateway target (25 tok/s, <= ~0.35 ms per trip all-in; provider wait per trip today ~0.38 ms).

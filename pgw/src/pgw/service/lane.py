@@ -259,6 +259,8 @@ class GraphReport:
     skipped: dict[str, int] = field(default_factory=dict)
     disabled: str | None = None
     seconds: float = 0.0
+    #: ``PGW_SERVICE_TRITON_GEMV_TUNE_ROWS``: the few-row launch tuning per device (``triton_gemv.tune_rows``)
+    tuning: dict[str, Any] = field(default_factory=dict)
 
 
 class LaneManager:
@@ -705,7 +707,7 @@ def capture_lane_graphs(mgr: LaneManager, *, inject_mismatch: bool = False,
 
 def _capture_device(mgr: LaneManager, device: torch.device, entries: list[tuple[int, int, int, Any, RingParams]],
                     rows_list: list[int], rep: GraphReport, inject_mismatch: bool) -> None:  # pragma: no cover - GPU
-    from pgw.core.triton_gemv import max_rows, ring_gemv
+    from pgw.core.triton_gemv import max_rows, ring_gemv, tune_rows, tune_rows_wanted
     from pgw.service.gpu_exec import device_executor, trip_stream
 
     ex = device_executor(device)
@@ -718,6 +720,23 @@ def _capture_device(mgr: LaneManager, device: torch.device, entries: list[tuple[
             return
     n_max = max(int(k.in_features) for *_, k, _ in entries)
     m_max = max(int(k.out_features) for *_, k, _ in entries)
+    multi = [r for r in rows_list if r >= 2]
+    if multi and tune_rows_wanted():
+        # 2..8-row calls: pick the fastest exact launch configuration per (rows, shape) before the graphs
+        # capture it (one-row calls keep theirs); public shapes and random data only
+        shapes = sorted({(int(k.out_features), int(k._pw._w_dev.shape[1])) for *_, k, _ in entries})
+        t_tune = time.perf_counter()
+        try:
+            with ex.lock:
+                got = tune_rows(device, shapes, multi)
+            rep.tuning[str(device)] = {"s": round(time.perf_counter() - t_tune, 1),
+                                       "picks": {f"{b}x{m}x{nw}": {"chosen": e.get("chosen"),
+                                                                   "baseline": e.get("baseline"), "ms": e.get("ms"),
+                                                                   "failed": e.get("failed"), "error": e.get("error")}
+                                                 for (b, m, nw), e in got.items()}}
+        except Exception as exc:  # the untuned configurations serve: same bits
+            rep.tuning[str(device)] = {"error": f"{type(exc).__name__}: {str(exc)[:200]}"}
+            log.warning("few-row GEMV tuning failed on %s (%s); untuned launch configurations", device, exc)
     with torch.cuda.device(device):
         stream = trip_stream(device)  # PGW_SERVICE_TRIP_STREAM_PRIORITY=high: above maskgen's streams
         pool = torch.cuda.graph_pool_handle()

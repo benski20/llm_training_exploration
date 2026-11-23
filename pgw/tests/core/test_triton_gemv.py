@@ -365,3 +365,71 @@ def test_self_check_skips_tensor_core_variant_before_sm80(monkeypatch: pytest.Mo
     finally:
         tg._reset(dev)
     assert tg._dot_unsupported("cpu") is None
+
+
+# ---- few-row launch tuning (PGW_SERVICE_TRITON_GEMV_TUNE_ROWS, opt-in) ---------------------------------------
+def test_tune_rows_default_off(monkeypatch: pytest.MonkeyPatch) -> None:
+    import pgw.core.triton_gemv as tg
+
+    monkeypatch.delenv(tg.ENV_TUNE_ROWS, raising=False)
+    assert not tg.tune_rows_wanted()
+    monkeypatch.setenv(tg.ENV_TUNE_ROWS, "1")
+    assert tg.tune_rows_wanted()
+
+
+@needs_triton
+@pytest.mark.parametrize("winner", ["stream", "baseline", "failing"])
+def test_tune_rows_picks_the_fastest_exact_config(interp: None, monkeypatch: pytest.MonkeyPatch,
+                                                  winner: str) -> None:
+    """The tuner times only candidates that passed the exactness check, keeps the baseline unless a candidate
+    beats it, applies its pick to later default launches of that (rows, shape) only (one row and other shapes
+    untouched), and the tuned launch is bit-identical to the reference."""
+    import pgw.core.triton_gemv as tg
+
+    dev = torch.device("cpu")
+    b, m, nw = 2, 40, 300
+    tg._reset(dev)
+    tg._SELF_CHECK[tg._key(dev)] = True  # the device self-check (slow in the interpreter) is not under test
+    try:
+        one_row = tg.gemv_config(1, m, nw, dev)
+        cands = tg.row_candidates(b, m, nw, dev)
+        assert cands[0] == tg.gemv_config(b, m, nw, dev) and all(c.stream for c in cands[1:])
+        fast = cands[2]
+        timed: list[GemvConfig] = []
+        if winner == "failing":  # the would-be winner fails its exactness check: never timed, never picked
+            real = tg.check_configs
+            monkeypatch.setattr(tg, "check_configs", lambda d, entries, quick=False: (
+                ["bad"] if any(c == fast for _, c, _ in entries) else real(d, entries, quick=quick)))
+
+        def timer(bb: int, mm: int, nn: int, cfg: GemvConfig) -> float:
+            timed.append(cfg)
+            if winner == "baseline":
+                return 1.0 if cfg == cands[0] else 2.0
+            return 0.5 if cfg == fast else 1.0
+
+        rep = tg.tune_rows(dev, [(m, nw)], [1, b], timer=timer)
+        assert set(rep) == {(b, m, nw)}  # one-row calls are never tuned
+        ent = rep[(b, m, nw)]
+        got = tg.tuned_config(dev, b, m, nw)
+        if winner == "stream":
+            assert got == fast and ent["chosen"] == str(fast)
+            assert tg.gemv_config(b, m, nw, dev) == fast
+        else:
+            assert got is None and ent["chosen"] == str(cands[0])
+            if winner == "failing":
+                assert fast not in timed and str(fast) in ent["failed"]
+        assert set(timed) <= set(cands)
+        assert tg.gemv_config(1, m, nw, dev) == one_row
+        assert tg.tuned_config(dev, 3, m, nw) is None and tg.tuned_config(dev, b, m, nw + 1) is None
+        x, w = _rand(b, m, nw, 32, 11)
+        np.testing.assert_array_equal(_gemv64(x, w, 32), ringmm_reference(x, w, 32))
+    finally:
+        tg._reset(dev)
+
+
+def test_tune_rows_needs_the_self_check() -> None:
+    import pgw.core.triton_gemv as tg
+
+    tg._reset("meta")
+    with pytest.raises(ShapeError):
+        tg.tune_rows("meta", [(64, 128)], [2], timer=lambda *a: 1.0)
