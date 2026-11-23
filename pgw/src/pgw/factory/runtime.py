@@ -132,6 +132,8 @@ def build_he_backend(settings: FactorySettings, pack: Any, ring: str, *, worker_
     if settings.he_client_cert_file is not None and settings.he_client_key_file is not None:
         watch_client_cert(settings.he_client_cert_file, settings.he_client_key_file)
     hint_root = settings.he_hint_dir or Path(settings.state_dir or ".") / "hemask"
+    if getattr(settings, "he_scheme", "mlwe") == "pks-v3":
+        return _build_pks_backend(settings, pack, ring, clients, Path(hint_root))
     from pgw.hemask.lwe import HEParams
 
     q_bits = HEParams(k=RingParams.from_name(ring).k, rank=settings.he_rank).q
@@ -156,6 +158,24 @@ def build_he_backend(settings: FactorySettings, pack: Any, ring: str, *, worker_
                          max_inflight=settings.he_max_inflight, encrypt=settings.he_encrypt,
                          pipeline_depth=settings.he_pipeline_depth, decrypt=settings.he_decrypt,
                          hint_ntt_bytes=int(settings.he_hint_ntt_gb * 1e9))
+
+
+def _build_pks_backend(settings: FactorySettings, pack: Any, ring: str, clients: list[Any], hint_root: Path) -> Any:
+    """The pks-v3 backend (opt-in, acknowledged in the settings validator): compact hint built locally on first
+    use from the pack and customer-chosen seeds, wire v3 to one compute service."""
+    from pgw.core.ring import RingParams
+    from pgw.hemask.pks_backend import PKSHintStore, PKSMaskBackend, RemotePKS, linear_keys
+
+    if len(clients) != 1:
+        raise ConfigError("he_scheme='pks-v3' supports one compute service (he_service_url)")
+    skip = frozenset(settings.skip_kinds)
+    store = PKSHintStore.open_or_build(hint_root, pack, only=linear_keys(pack, skip))
+    out = {s.id.key: s.out_features for s in pack.linear_specs()}
+    remote = RemotePKS.http(clients[0], pack.fingerprint, out, store.a_seed, timeout_s=settings.he_timeout_s)
+    log.info("factory: encrypted mask generation for %s via %s (scheme pks-v3, compact hint %.2f GB)",
+             pack.short_fingerprint, settings.he_urls[0], store.nbytes / 1e9)
+    return PKSMaskBackend(pack, RingParams.from_name(ring), store, remote, groups_per_call=settings.he_groups_per_call,
+                          skip_kinds=skip)
 
 
 def build_bulk_client(settings: FactorySettings, token: Any = None) -> Any:

@@ -97,13 +97,20 @@ def _maskgen_concurrency_default(settings: Any = None) -> int:
 
 
 def _maskgen_versions_default() -> tuple[int, ...]:
-    """Maskgen wire versions served: v1 always; v2 unless ``PGW_SERVICE_MASKGEN_V2`` is false."""
+    """Maskgen wire versions served: v1 always; v2 unless ``PGW_SERVICE_MASKGEN_V2`` is false; v3 (scheme
+    pks-v3, :mod:`pgw.service.pks_provider`) only when ``PGW_SERVICE_MASKGEN_V3`` is true (default false)."""
+    out = [1]
     raw = os.environ.get("PGW_SERVICE_MASKGEN_V2", "").strip().lower()
-    if raw in ("0", "false", "no", "off"):
-        return (1,)
-    if raw and raw not in ("1", "true", "yes", "on"):
+    if raw and raw not in ("1", "true", "yes", "on", "0", "false", "no", "off"):
         log.warning("ignoring PGW_SERVICE_MASKGEN_V2=%r (not a boolean)", raw)
-    return (1, 2)
+    if raw not in ("0", "false", "no", "off"):
+        out.append(2)
+    raw3 = os.environ.get("PGW_SERVICE_MASKGEN_V3", "").strip().lower()
+    if raw3 in ("1", "true", "yes", "on"):
+        out.append(3)
+    elif raw3 and raw3 not in ("0", "false", "no", "off"):
+        log.warning("ignoring PGW_SERVICE_MASKGEN_V3=%r (not a boolean)", raw3)
+    return tuple(out)
 
 
 def _maskgen_item_v2(kern: Any, it: Any) -> bytes | bytearray:
@@ -278,8 +285,9 @@ class ServiceHandler:
         self._maskgen_dev_slots: dict[str, asyncio.Semaphore] = {}
         if maskgen_versions is None:
             maskgen_versions = _maskgen_versions_default()
-        if 1 not in maskgen_versions or not set(maskgen_versions) <= {1, 2}:
-            raise ValueError(f"maskgen_versions must contain 1 and only 1 or 2, got {maskgen_versions!r}")
+        if 1 not in maskgen_versions or not set(maskgen_versions) <= {1, 2, 3}:
+            raise ValueError(f"maskgen_versions must contain 1 and only 1, 2 or 3, got {maskgen_versions!r}")
+        self._pks: Any = None  # pgw.service.pks_provider.PKSProvider, built on the first v3 request
         self.maskgen_versions: tuple[int, ...] = tuple(sorted(set(maskgen_versions)))
         self.group_min_rows = max(0, int(group_min_rows)) if group_min_rows is not None else _group_min_rows_default()
         #: requests answered by :meth:`compute_inline` (the stream channel's frame lane)
@@ -424,7 +432,15 @@ class ServiceHandler:
         self._idle.clear()
         try:
             # Items run concurrently (each under its device's slots), replies keep request order.
-            ys = await asyncio.gather(*(self._maskgen_in_slot(model.kernel(it.linear), it) for it in request.items))
+            if request.version == 3:
+                pv = self._pks_provider()
+                fp = str(request.fingerprint)
+                ys = await asyncio.gather(*(self._maskgen_in_slot(
+                    model.kernel(it.linear), it,
+                    lambda kern, item, *_: pv.run_item(fp, kern, item, request.a_seed)) for it in request.items))
+            else:
+                ys = await asyncio.gather(*(self._maskgen_in_slot(model.kernel(it.linear), it)
+                                            for it in request.items))
             out = [MaskgenResult(it.linear, it.cols, y) for it, y in zip(request.items, ys, strict=True)]
             return MaskgenResponse(request.request_id, tuple(out))
         finally:
@@ -432,7 +448,18 @@ class ServiceHandler:
             if self.inflight == 0:
                 self._idle.set()
 
-    async def _maskgen_in_slot(self, kern: Any, it: Any) -> bytes | bytearray:
+    def _pks_provider(self) -> Any:
+        if 3 not in self.maskgen_versions:  # decode already refuses; defence in depth
+            from pgw.core.errors import VersionMismatchError
+
+            raise VersionMismatchError("maskgen v3 is not served", details={"versions": list(self.maskgen_versions)})
+        if getattr(self, "_pks", None) is None:
+            from pgw.service.pks_provider import PKSProvider
+
+            self._pks = PKSProvider()
+        return self._pks
+
+    async def _maskgen_in_slot(self, kern: Any, it: Any, fn: Any = None) -> bytes | bytearray:
         """Run one maskgen item in a worker thread under :attr:`_maskgen_slots`.
 
         The slot is released when the thread finishes, not when the awaiting request goes away:
@@ -442,7 +469,10 @@ class ServiceHandler:
         slots = self._maskgen_slots_for(kern)
         await slots.acquire()
         try:
-            fut = asyncio.ensure_future(asyncio.to_thread(_maskgen_item, kern, it, *self._maskgen_extra(kern)))
+            if fn is None:
+                fut = asyncio.ensure_future(asyncio.to_thread(_maskgen_item, kern, it, *self._maskgen_extra(kern)))
+            else:
+                fut = asyncio.ensure_future(asyncio.to_thread(fn, kern, it))
         except BaseException:
             slots.release()
             raise

@@ -168,6 +168,16 @@ class FactorySettings(PGWSettings):
         "profile's acknowledgement string (rank 12: pgw.hemask.mlwe_ring.R12_ACK). See "
         "research/plans/he-structured-encryption.md",
     )
+    he_scheme: Literal["mlwe", "pks-v3"] = Field(
+        "mlwe", description="Encrypted mask scheme: 'mlwe' (default: SPEC 7.9, wire v1/v2, hint W8.A of 4096 "
+        "coefficients per output row) or 'pks-v3' (compact hint of 256 coefficients per row, packed key-switched "
+        "replies, wire v3: research/plans/he-compact-hint-pks.md; needs a K32 ring, a service with "
+        "PGW_SERVICE_MASKGEN_V3=true and he_pks_ack until the external review signs off)",
+    )
+    he_pks_ack: str = Field(
+        "", description="Opt in to the unreviewed pks-v3 scheme: must equal pgw.hemask.pks.PKS_V3_ACK "
+        "('pks-v3-unreviewed-n8192') while research/reviews/pks-v3-review-packet.md is open",
+    )
     he_encrypt: Literal["dense", "ntt_pre", "ntt_dev", "gpu_ntt"] = Field(
         "dense", description="Gateway encryption product: 'dense' (byte-plane GEMM on the int8 engine), 'ntt_pre' "
         "(public matrix kept in NTT form, pgw.hemask.mlwe_ring; same ciphertexts bit for bit, ~10x+ fewer CPU "
@@ -301,6 +311,15 @@ class FactorySettings(PGWSettings):
             check_rank(self.he_rank, self.he_params_ack)
         except ConfigError as exc:
             raise ValueError(str(exc)) from exc
+        if self.he_scheme == "pks-v3":
+            from pgw.hemask.pks import PKS_V3_ACK
+
+            if self.he_pks_ack.strip() != PKS_V3_ACK:
+                raise ValueError("he_scheme='pks-v3' has not had its external cryptographic review; set "
+                                 f"he_pks_ack={PKS_V3_ACK!r} to opt in (research/reviews/pks-v3-review-packet.md)")
+            bad = [r for r in self.ring_names if not r.upper().startswith("K32")]
+            if bad:
+                raise ValueError(f"he_scheme='pks-v3' covers K32 mask rings only, not {bad}")
         return self
 
     @property

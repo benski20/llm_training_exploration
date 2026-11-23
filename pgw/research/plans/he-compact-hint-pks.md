@@ -184,3 +184,96 @@ of an H100. Provider memory: `A~` per (model, A seed), 34 GB (7B) to 169 GB (72B
    (d) tuned customer kernels in `pgw-pks` (AVX-512 IFMA or hand-written u32 Montgomery, batched pad, 42-bit CBD
    sampler) with Python bindings; (e) factory/hint-build integration and the every-row check unchanged; (f) A/B on
    one co-located 7B run (exactness bit-identical to v1 masks is automatic: same `W8 r`), then 72B sizing.
+
+## 7. Production version (2026-11-23): parameters, noise, hint integrity, integration
+
+Status: implemented opt-in, default off, **pending the external review** (`research/reviews/pks-v3-review-packet.md`).
+Customer: `PGW_FACTORY_HE_SCHEME=pks-v3` and `PGW_FACTORY_HE_PKS_ACK=pks-v3-unreviewed-n8192` (`pks.PKS_V3_ACK`;
+refused without it, and for non-K32 rings). Provider: `PGW_SERVICE_MASKGEN_V3=true` (default false; v1/v2 served as
+before). Changes against sections 3-6: reply ring n = 8192 (32 rows per ciphertext), all reply primes `= 1 mod 16384`,
+per-linear upload seeds, `k` sampled from 128-bit words, hint stored in NTT form (same 6 bytes per coefficient).
+
+### 7.1 Parameters
+
+| object | ring | modulus | secret | noise | samples per secret |
+|---|---|---|---|---|---|
+| upload `B_C = a_C t + e + 2^24 M` | `Z[Y]/(Y^4096+1)` | `2^56` | uniform ternary, fresh per (linear, group) | CBD(21), sd 3.24 | `n/16` ring samples (<= 1848 at n = 29568) |
+| reply key `beta_l = k_l t' + e_l + P iota(t_l)` | `Z[Z]/(Z^8192+1)` | `q1 P`, `log2 = 107.98` | uniform ternary, fresh per (linear, group) | CBD(21) | 16 ring samples |
+
+Primes: `q1 = 16760833 * 16580609` (2^47.98), `P = 1073692673 * 1073643521` (2^60.0), all `= 1 mod 16384`.
+
+Lattice estimates (`pgw.hemask.mlwe_ring.core_svp_beta`: primal uSVP, 2016 estimate, Bai-Galbraith embedding;
+`0.292 beta` classical / `0.265 beta` quantum core-SVP):
+
+| instance | HE-standard 128-bit max log q (ternary) | ours | beta | core-SVP classical / quantum |
+|---|---|---|---|---|
+| upload, n = 4096, q = 2^56 | 109 (classical), 101 (quantum) | 56 | 818 | 239 / 217 |
+| reply key, n = 8192, q = 2^108 | 218 (classical), 202 (quantum) | 108 | 860 | 251 / 228 |
+| (prototype reply key, n = 4096, q = 2^108: rejected) | 109 / 101 | 108 | 332 | 97 / 88 |
+
+Both instances are well inside the HomomorphicEncryption.org table (standard parameters, no custom set).
+**External estimator run still needed** (offline here): `LWE.estimate(LWE.Parameters(n=8192, q=2**108,
+Xs=ND.UniformMod(3), Xe=ND.CenteredBinomial(21)))` and `n=4096, q=2**56` with the same distributions, including
+hybrid/dual attacks; the sample counts above are far below what the estimators assume available.
+
+### 7.2 Noise (`PKSParams.noise_terms`; units of `1 mod q1`; budget `q1 / 2^33 = 2^14.98`)
+
+Worst case of SPEC 7.9 (all-127 rows at the widest 72B input, `||w|| = 127 sqrt(29568) = 21838`), tail 24 sigma for
+Gaussian-like terms and Hoeffding at t = 24 (`2 exp(-288) = 2^-414`) for sums of independent roundings:
+
+| term | bound | log2 |
+|---|---|---|
+| `W8 e` (upload noise, scaled by `q1/2^56`) | `24 * 3.24 * ||w|| * 2^-8.02` | 12.68 |
+| mod switch of `H s` (4096 roundings x ternary) | `24 * 0.5 * 64` | 9.58 |
+| ModDown of `c1` times `t'` (8192 roundings x ternary) | `24 * 0.5 * 90.5` | 10.08 |
+| key switch `sum_l A~_l e_l / P` (16 x 8192 terms, `|A~| <= q1/2`, `|e| <= 21`) | | 4.46 |
+| reply rounding to 36 bits + re-rounding | `q1 / 2^37 + 0.5` | 10.98 |
+| mod switch of `y`, ModDown of `c0` | 0.5 + 0.5 | 0 |
+| **total** | | **13.35** (margin 1.63 bits) |
+
+The factory refuses to start (`PKSParams.check_noise`, margin 1 bit) for any linear whose stored row norm fails;
+Qwen2.5-0.5B's worst linear (q/k/v/o) is 2^12.08 (margin 2.9 bits). A decryption failure gives a wrong row, which the
+every-row self-check rejects (the segment fails; no wrong mask is stored). Tested exact: all-127 / -127 rows at
+n = 3584, 18944, 8192, 29568 (`PGW_PKS_REAL_SHAPES=1`).
+
+### 7.3 Failure modes
+
+* decryption failure (bound exceeded): wrong `W8 r` rows -> factory self-check -> `IntegrityError`, segment dropped;
+* provider deviation (wrong `y` or `c0`): same; the provider learns at most "this segment failed";
+* malformed wire: reply-key residues `>= p`, sizes and versions are refused (`ProtocolError` / `version_mismatch`);
+* service without v3: the customer gets a `ConfigError` (no silent fallback: its ciphertexts are pks-v3).
+
+### 7.4 Hint integrity
+
+The hint `c1` must be fixed before any reply secret `t'` exists, or a malicious hint could make failures depend on
+`t'` (selective failure). Procedure (implemented, `PKSHintStore.build`): the **customer** draws `a_seed` and
+`ks_seed` itself, computes `H = W8 A mod 2^56` from its own pack (rows streamed in blocks of 1024, never stored),
+`hs = round(H q1 / 2^56) mod q1`, and `c1 = ModDown(sum_l A~_l k_l)` with the same kernel the provider uses; no
+provider input is involved. Each hint file's SHA-256 is recorded at build and verified on every open (a modified
+store is refused). A provider-built hint is not accepted (an algebraic check of one stays open, section 5). The
+provider derives its own `hs` from the customer's public `a_seed` with its own GEMM and caches it.
+
+### 7.5 Kernels and measurements (shared 4-vCPU Xeon @ 2.3 GHz, AVX-512, load 6-12; process CPU, single thread)
+
+`rust/pgw-pks` (extension `pgw_pks`, `rust/tools/build_pks.py`): AVX-512 / AVX2 / baseline copies of the same code
+(`multiversion!`, run-time dispatch, `PGW_PKS_ISA`), multi-threaded over blocks with disjoint outputs (identical
+results for every ISA and thread count, tested); secrets and secret-dependent scratch are wiped; reductions are
+branch-free (`min`), the centred CRT uses a mask, ternary sampling rejects bytes >= 252 (the rejection pattern is
+independent of the kept values), CBD by popcount. Every kernel equals the numpy reference bit for bit (tested).
+
+| kernel | measured |
+|---|---|
+| decrypt, per output-slot (36-bit reply read in place) | 9.5-10.7 ns (NTT part 4.8-6 ns, combine ~4.5 ns) |
+| encrypt (pad + CBD + message, `a` regenerated once per call of 4 groups), per input-slot | 33-38 ns |
+| reply key, per (linear, group) | 5.4-5.8 ms |
+
+The 4-5 ns decrypt target is **not reached** on this host: the remaining cost is the 32x16 transpose in the combine
+and L2-bound inverse-NTT passes (5 of 13 stages). Next steps: radix-4 global stages and an in-register transpose; for
+encryption a 42-bit CBD sampler (21 + 21 bits instead of 64) and `a` cached in NTT form (3 KB per input).
+
+### 7.6 Not done
+
+External estimator run and the review; GPU timing of the provider path (the torch path is exact on CPU tensors and is
+self-tested before use on CUDA; no GPU run was made); one compute service per factory (no sharding); the reply key is
+sent per (linear, group) (sharing `t` across the linears of a group, with the per-linear `a` seeds already in place,
+would send it once per group; that needs a provider-side key cache).

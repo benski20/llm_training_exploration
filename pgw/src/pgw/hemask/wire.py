@@ -29,6 +29,20 @@ bit-packed at ``yb`` bits (:func:`pack_y_v2`). That is ``n·cols·bb/8`` bytes u
 customer has switched its own ciphertext down (:mod:`pgw.hemask.client`). The provider needs no
 other parameter.
 
+**v3** (scheme ``pks-v3``, :mod:`pgw.hemask.pks`; served only with ``PGW_SERVICE_MASKGEN_V3=true``, used only
+by a customer that opted into the scheme) carries ring-LWE uploads and one reply key per 256-slot group, and
+returns packed key-switched replies::
+
+    {"v": 3, "type": "maskgen", "id": str, "fp": str, "vs": [int]?, "aseed": bin(32),
+     "items": [{"linear": str, "cols": int, "b": bin, "ksk": bin}]}
+
+``b`` is ``(n, cols)`` bit-packed at 56 bits (the upload modulus), ``ksk`` the ``cols/256`` reply keys, each
+the NTT-domain residues ``(4 primes, 16, 8192)`` bit-packed per prime at 24, 24, 30 and 30 bits (1.77 MB per
+group). ``aseed`` is the customer's public seed of the upload ring elements (the provider derives the
+per-linear hint ``W8 A`` from it once and caches it). The reply ``{"v": 3, "type": "maskgen_result", ...}``
+holds, per item, the ``(cols/256, m/32, 8192)`` rounded ``c0`` values bit-packed at 36 bits:
+``m·cols·36/8`` bytes, the v2 size at ``yb = 36``.
+
 ``vs`` lists the maskgen versions the sender speaks. A client advertises it on its requests and a
 server on its replies. Both are optional keys that v1-only peers ignore. A client sends v2 only
 after a reply has advertised 2, and it falls back to v1 when a v2 request is refused. A server
@@ -53,6 +67,7 @@ __all__ = [
     "MASKGEN_PATH",
     "MASKGEN_VERSIONS",
     "MAX_GROUPS_PER_ITEM",
+    "V3_KSK_BYTES",
     "MaskgenItem",
     "MaskgenRequest",
     "MaskgenResponse",
@@ -78,7 +93,13 @@ MAX_GROUPS_PER_ITEM = 16
 _MAX_ITEMS = 64
 _VERSION = 1
 #: Maskgen message versions this code speaks (a server may serve fewer, see ``vs``).
-MASKGEN_VERSIONS: tuple[int, ...] = (1, 2)
+MASKGEN_VERSIONS: tuple[int, ...] = (1, 2, 3)
+#: v3 (pks-v3) widths: 56-bit uploads, 36-bit replies, reply-key residues per prime.
+V3_B_BITS = 56
+V3_Y_BITS = 36
+V3_KSK_BITS = (24, 24, 30, 30)
+#: Bytes of one group's reply key on the wire (16 x 8192 coefficients per prime).
+V3_KSK_BYTES = 16 * 8192 * sum(V3_KSK_BITS) // 8
 #: Smallest v2 width (``8 <= yb <= bb <= 64``).
 V2_MIN_BITS = 8
 #: Smallest v2 upload width the provider accepts. The provider unpacks ``b`` into ``uint64``, so a
@@ -101,10 +122,16 @@ class MaskgenItem:
     b_bits: int = 0
     #: v2 only (0 in v1): bits per returned element (``round(Y / 2^(b_bits - y_bits))``, bit-packed).
     y_bits: int = 0
+    #: v3 only: the bit-packed reply keys of the item's groups (``b_bits`` 56, ``y_bits`` 36).
+    ksk: bytes | bytearray | None = None
+
+    @property
+    def v3(self) -> bool:
+        return self.ksk is not None
 
     @property
     def v2(self) -> bool:
-        return self.b_bits > 0
+        return self.b_bits > 0 and self.ksk is None
 
     @property
     def y_bytes_per_element(self) -> int:
@@ -118,11 +145,11 @@ class MaskgenItem:
 
     def b_nbytes(self, n: int) -> int:
         """Expected ``len(b)`` for a linear with ``n`` inputs (either version)."""
-        return n * self.cols * self.b_bits // 8 if self.v2 else self.b_bytes_per_element * n * self.cols
+        return n * self.cols * self.b_bits // 8 if self.b_bits else self.b_bytes_per_element * n * self.cols
 
     def y_nbytes(self, m: int) -> int:
         """Expected ``len(y)`` of the reply for a linear with ``m`` outputs (either version)."""
-        return m * self.cols * self.y_bits // 8 if self.v2 else self.y_bytes_per_element * m * self.cols
+        return m * self.cols * self.y_bits // 8 if self.b_bits else self.y_bytes_per_element * m * self.cols
 
 
 @dataclass(frozen=True)
@@ -134,10 +161,12 @@ class MaskgenRequest:
     version: int = 1
     #: Versions the sender speaks (``vs``; empty: not advertised).
     versions: tuple[int, ...] = ()
+    #: v3 only: the customer's public upload seed (32 bytes).
+    a_seed: bytes = b""
 
     @property
     def payload_bytes(self) -> int:
-        return sum(len(it.b) for it in self.items)
+        return sum(len(it.b) + len(it.ksk or b"") for it in self.items)
 
 
 @dataclass(frozen=True)
@@ -208,7 +237,13 @@ def _vs(versions: tuple[int, ...]) -> dict[str, Any]:
 
 
 def encode_maskgen_request(req: MaskgenRequest) -> bytes:
-    if req.version == 2:
+    extra: dict[str, Any] = {}
+    if req.version == 3:
+        if not all(it.v3 for it in req.items) or len(req.a_seed) != 32:
+            raise ValueError("every item of a v3 maskgen request needs ksk, and the request a 32-byte a_seed")
+        items = [{"linear": it.linear, "cols": it.cols, "b": it.b, "ksk": it.ksk} for it in req.items]
+        extra = {"aseed": bytes(req.a_seed)}
+    elif req.version == 2:
         if not all(it.v2 for it in req.items):
             raise ValueError("every item of a v2 maskgen request needs b_bits and y_bits")
         items = [{"linear": it.linear, "cols": it.cols, "bb": it.b_bits, "yb": it.y_bits, "b": it.b}
@@ -222,7 +257,7 @@ def encode_maskgen_request(req: MaskgenRequest) -> bytes:
         raise ValueError(f"unknown maskgen version {req.version}")
     return bytes(msgpack.packb({
         "v": req.version, "type": "maskgen", "id": req.request_id, "fp": req.fingerprint, **_vs(req.versions),
-        "items": items,
+        **extra, "items": items,
     }, use_bin_type=True))
 
 
@@ -251,18 +286,35 @@ def _decode_item_v2(i: int, it: dict[str, Any]) -> MaskgenItem:
     return MaskgenItem(_str(it.get("linear"), "linear", 64), cols, it["b"], 0, 64, int(bb), int(yb))
 
 
+def _decode_item_v3(i: int, it: dict[str, Any]) -> MaskgenItem:
+    cols = _check_cols(it.get("cols"), f"items[{i}]")
+    ksk = it.get("ksk")
+    if not isinstance(ksk, bytes) or len(ksk) != (cols // DEGREE) * V3_KSK_BYTES:
+        raise ProtocolError(f"maskgen: items[{i}].ksk must hold {cols // DEGREE} reply keys of {V3_KSK_BYTES} bytes")
+    if len(it["b"]) == 0 or len(it["b"]) % (cols * V3_B_BITS // 8):
+        raise ProtocolError(f"maskgen: items[{i}].b length is not a multiple of cols*56/8")
+    return MaskgenItem(_str(it.get("linear"), "linear", 64), cols, it["b"], 0, 64, V3_B_BITS, V3_Y_BITS, ksk)
+
+
 def decode_maskgen_request(data: bytes | bytearray | memoryview,
-                           versions: tuple[int, ...] = MASKGEN_VERSIONS) -> MaskgenRequest:
-    """Decode a maskgen request of any version in ``versions`` (others: ``version_mismatch``)."""
+                           versions: tuple[int, ...] = (1, 2)) -> MaskgenRequest:
+    """Decode a maskgen request of any version in ``versions`` (others: ``version_mismatch``). v3 is only
+    accepted when the caller lists it (the service serves it behind ``PGW_SERVICE_MASKGEN_V3``)."""
     obj = _load(data, "maskgen", versions)
     v = int(obj["v"])
     items = []
+    a_seed = b""
+    if v == 3:
+        a_seed = obj.get("aseed")
+        if not isinstance(a_seed, bytes) or len(a_seed) != 32:
+            raise ProtocolError("maskgen v3: aseed must be 32 bytes")
     for i, it in enumerate(obj["items"]):
         if not isinstance(it, dict) or not isinstance(it.get("b"), bytes):
             raise ProtocolError(f"maskgen: items[{i}] must be a map with binary 'b'")
-        items.append(_decode_item_v2(i, it) if v == 2 else _decode_item_v1(i, it))
+        items.append(_decode_item_v3(i, it) if v == 3 else _decode_item_v2(i, it) if v == 2
+                     else _decode_item_v1(i, it))
     return MaskgenRequest(_str(obj.get("id"), "id"), _str(obj.get("fp"), "fp"), tuple(items), v,
-                          _versions(obj.get("vs")))
+                          _versions(obj.get("vs")), a_seed)
 
 
 def encode_maskgen_response(resp: MaskgenResponse) -> bytes:

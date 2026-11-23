@@ -1,15 +1,15 @@
-//! Customer CPU of pks-v3 at real shapes: `pks-bench decrypt <m> <groups> <threads>` times the reply
-//! decryption of one linear with `m` output rows for `groups` 256-slot groups (random hint, secret and
-//! reply: the cost does not depend on the values); `pks-bench pad <n> <groups> <threads>` times the
-//! ring-LWE upload pad of a linear with `n` inputs. Prints ns per output (input) and slot.
+//! Customer CPU of pks-v3 at real shapes (random data: the cost does not depend on the values).
+//!
+//! `pks-bench decrypt <m> <groups> <threads> [isa]`: reply decryption of one linear with `m` outputs;
+//! `pks-bench encrypt <n> <groups> <threads> [isa]`: upload encryption (pad + CBD noise + message) of a
+//! linear with `n` inputs; `pks-bench ksk <reps>`: one reply key (per linear and group);
+//! `pks-bench keyswitch <m> <groups> <threads>`: the provider's CPU key switch. Prints JSON lines with
+//! wall and process-CPU ns per output (input) and slot.
 
-use pgw_pks::{
-    decrypt_block, decrypt_block16, hint_form, pad_block, pad_ctx, reply_ctx, secret_hat, LANES, N, ROWS, SLOTS,
-};
+use pgw_pks::arith::Isa;
+use pgw_pks::kernel::{self, DecItem, EncItem, KsItem, D, NR, NU, PACK, RANK};
 use std::time::Instant;
 
-/// Process CPU seconds (all threads; utime + stime from /proc/self/stat, 100 Hz ticks). On a shared,
-/// oversubscribed host this is the meaningful cost (wall time includes waiting for a core).
 fn cpu_s() -> f64 {
     let s = std::fs::read_to_string("/proc/self/stat").unwrap_or_default();
     let rest = s.rsplit(')').next().unwrap_or("");
@@ -26,170 +26,94 @@ impl Lcg {
     }
 }
 
+fn time<F: FnMut()>(reps: usize, mut f: F) -> (f64, f64) {
+    let (mut best, mut best_cpu) = (f64::INFINITY, f64::INFINITY);
+    for _ in 0..reps {
+        let (t0, c0) = (Instant::now(), cpu_s());
+        f();
+        best = best.min(t0.elapsed().as_secs_f64());
+        best_cpu = best_cpu.min(cpu_s() - c0);
+    }
+    (best, best_cpu)
+}
+
 fn main() {
     let a: Vec<String> = std::env::args().collect();
     let mode = a.get(1).map(String::as_str).unwrap_or("decrypt");
-    let rows: usize = a.get(2).and_then(|s| s.parse().ok()).unwrap_or(4096);
-    let groups: usize = a.get(3).and_then(|s| s.parse().ok()).unwrap_or(2);
+    let size: usize = a.get(2).and_then(|s| s.parse().ok()).unwrap_or(4096);
+    let groups: usize = a.get(3).and_then(|s| s.parse().ok()).unwrap_or(4);
     let threads: usize = a.get(4).and_then(|s| s.parse().ok()).unwrap_or(1);
-    let reps: usize = a.get(5).and_then(|s| s.parse().ok()).unwrap_or(3);
-    let blocks = rows / ROWS;
+    let isa = Isa::parse(a.get(5).map(String::as_str).unwrap_or("auto")).expect("isa");
+    let reps = 3;
+    let cx = kernel::ctx();
     let mut g = Lcg(42);
-    let tern: Vec<i8> = (0..N).map(|_| (g.next() % 3) as i8 - 1).collect();
+    let key = |g: &mut Lcg| -> [u8; 32] { std::array::from_fn(|_| g.next() as u8) };
     match mode {
         "decrypt" => {
-            let ctx = reply_ctx();
-            let hint: Vec<Vec<Vec<u32>>> = (0..2)
-                .map(|i| {
-                    let pr = &ctx.pr[i];
-                    (0..blocks)
-                        .map(|_| hint_form(pr, &(0..N).map(|_| (g.next() % pr.p as u64) as u32).collect::<Vec<_>>()))
-                        .collect()
-                })
-                .collect();
-            let th: Vec<Vec<u32>> = (0..2).map(|i| secret_hat(&ctx.pr[i], &tern)).collect();
-            let replies: Vec<Vec<u64>> =
-                (0..groups).map(|_| (0..blocks * N).map(|_| g.next() & ((1 << 36) - 1)).collect()).collect();
-            let mut best = f64::INFINITY;
-            let mut best_cpu = f64::INFINITY;
-            for _ in 0..reps {
-                let t0 = Instant::now();
-                let c0 = cpu_s();
-                std::thread::scope(|s| {
-                    for th_i in 0..threads {
-                        let (hint, th, replies) = (&hint, &th, &replies);
-                        s.spawn(move || {
-                            let mut out = vec![0u32; SLOTS * ROWS];
-                            let mut scratch = vec![0u32; 2 * N];
-                            for b in (th_i..blocks).step_by(threads) {
-                                for rep in replies.iter() {
-                                    decrypt_block(
-                                        ctx,
-                                        [&hint[0][b], &hint[1][b]],
-                                        [&th[0], &th[1]],
-                                        &rep[b * N..(b + 1) * N],
-                                        36,
-                                        SLOTS,
-                                        ROWS,
-                                        0,
-                                        &mut out,
-                                        &mut scratch,
-                                    );
-                                }
-                            }
-                            std::hint::black_box(&out);
-                        });
-                    }
-                });
-                best = best.min(t0.elapsed().as_secs_f64());
-                best_cpu = best_cpu.min(cpu_s() - c0);
-            }
-            let per = best * 1e9 / (rows * groups * SLOTS) as f64;
+            let nb = size / PACK;
+            let hint: Vec<u8> = (0..nb * 2 * NR * 3).map(|i| (g.next() as u8) & if i % 3 == 2 { 0x7f } else { 0xff }).collect();
+            let trhat: Vec<u32> = (0..groups * 2 * NR).map(|i| (g.next() % cx.qp[(i / NR) % 2].p as u64) as u32).collect();
+            let c0r: Vec<u64> = (0..groups * nb * NR).map(|_| g.next() & ((1 << 36) - 1)).collect();
+            let rows = vec![std::env::var("PKS_ROWS").ok().and_then(|v| v.parse().ok()).unwrap_or(D); groups];
+            let r0 = rows[0];
+            let mut out = vec![0u32; groups * r0 * size];
+            let packed: Vec<u8> = (0..c0r.len() * 36 / 8).map(|_| g.next() as u8).collect();
+            let c0 = if std::env::var("PKS_PACKED").is_ok() { kernel::C0::Packed36 { data: &packed, count: c0r.len() } } else { kernel::C0::Words(&c0r) };
+            let it = DecItem { hint: &hint, m: size, c0r: c0, yb: 36, trhat: &trhat, rows: &rows };
+            let (s, c) = time(reps, || {
+                let mut rest = out.as_mut_slice();
+                let mut outs: Vec<&mut [u32]> = Vec::new();
+                for _ in 0..groups {
+                    let (a, b) = std::mem::take(&mut rest).split_at_mut(r0 * size);
+                    outs.push(a);
+                    rest = b;
+                }
+                kernel::decrypt_item(isa, &it, &mut outs, threads).unwrap();
+            });
+            let per = (size * groups * D) as f64;
             println!(
-                "{{\"mode\":\"decrypt\",\"m\":{rows},\"groups\":{groups},\"threads\":{threads},\"s\":{best:.4},\"ns_per_output_slot\":{per:.3},\"cpu_ns_per_output_slot\":{:.3}}}",
-                best_cpu * 1e9 / (rows * groups * SLOTS) as f64
+                "{{\"mode\":\"decrypt\",\"isa\":\"{}\",\"m\":{size},\"groups\":{groups},\"threads\":{threads},\"ns_per_output_slot\":{:.3},\"cpu_ns_per_output_slot\":{:.3}}}",
+                isa.name(), s * 1e9 / per, c * 1e9 / per
             );
         }
-        "decrypt16" => {
-            let ctx = reply_ctx();
-            let nb16 = blocks / LANES;
-            let hint: Vec<Vec<Vec<u32>>> = (0..2)
-                .map(|i| {
-                    let pr = &ctx.pr[i];
-                    (0..nb16).map(|_| (0..N * LANES).map(|_| (g.next() % pr.p as u64) as u32).collect()).collect()
-                })
-                .collect();
-            let th: Vec<Vec<u32>> = (0..2).map(|i| secret_hat(&ctx.pr[i], &tern)).collect();
-            let replies: Vec<Vec<u64>> =
-                (0..groups).map(|_| (0..nb16 * N * LANES).map(|_| g.next() & ((1 << 36) - 1)).collect()).collect();
-            let m = LANES * ROWS;
-            let mut best = f64::INFINITY;
-            let mut best_cpu = f64::INFINITY;
-            for _ in 0..reps {
-                let t0 = Instant::now();
-                let c0 = cpu_s();
-                std::thread::scope(|s| {
-                    for th_i in 0..threads {
-                        let (hint, th, replies) = (&hint, &th, &replies);
-                        s.spawn(move || {
-                            let mut out = vec![0u32; SLOTS * m];
-                            let mut scratch = vec![0u32; 2 * N * LANES];
-                            for b in (th_i..nb16).step_by(threads) {
-                                for rep in replies.iter() {
-                                    decrypt_block16(
-                                        ctx,
-                                        [&hint[0][b], &hint[1][b]],
-                                        [&th[0], &th[1]],
-                                        &rep[b * N * LANES..(b + 1) * N * LANES],
-                                        36,
-                                        SLOTS,
-                                        m,
-                                        0,
-                                        &mut out,
-                                        &mut scratch,
-                                    );
-                                }
-                            }
-                            std::hint::black_box(&out);
-                        });
-                    }
-                });
-                best = best.min(t0.elapsed().as_secs_f64());
-                best_cpu = best_cpu.min(cpu_s() - c0);
-            }
-            let rows = nb16 * LANES * ROWS;
-            let per = best * 1e9 / (rows * groups * SLOTS) as f64;
+        "encrypt" => {
+            let rows = groups * D;
+            let r: Vec<i64> = (0..rows * size).map(|_| (g.next() & 0xFFFF_FFFF) as i64).collect();
+            let t: Vec<i8> = (0..groups * NU).map(|_| (g.next() % 3) as i8 - 1).collect();
+            let ek: Vec<[u8; 32]> = (0..groups).map(|_| key(&mut g)).collect();
+            let it = EncItem { a_key: key(&mut g), n: size, r: &r, rows, t: &t, e_keys: &ek };
+            let mut b = vec![0u64; size * groups * D];
+            let (s, c) = time(reps, || kernel::encrypt_item(isa, &it, &mut b, threads).unwrap());
+            let per = (size * groups * D) as f64;
             println!(
-                "{{\"mode\":\"decrypt16\",\"m\":{rows},\"groups\":{groups},\"threads\":{threads},\"s\":{best:.4},\"ns_per_output_slot\":{per:.3},\"cpu_ns_per_output_slot\":{:.3}}}",
-                best_cpu * 1e9 / (rows * groups * SLOTS) as f64
+                "{{\"mode\":\"encrypt\",\"isa\":\"{}\",\"n\":{size},\"groups\":{groups},\"threads\":{threads},\"ns_per_input_slot\":{:.3},\"cpu_ns_per_input_slot\":{:.3}}}",
+                isa.name(), s * 1e9 / per, c * 1e9 / per
             );
         }
-        "pad" => {
-            let ctx = pad_ctx();
-            let ah: Vec<Vec<Vec<u32>>> = (0..3)
-                .map(|i| {
-                    let pr = &ctx.pr[i];
-                    (0..blocks)
-                        .map(|_| hint_form(pr, &(0..N).map(|_| (g.next() % pr.p as u64) as u32).collect::<Vec<_>>()))
-                        .collect()
-                })
-                .collect();
-            let th: Vec<Vec<u32>> = (0..3).map(|i| secret_hat(&ctx.pr[i], &tern)).collect();
-            let mut best = f64::INFINITY;
-            let mut best_cpu = f64::INFINITY;
-            for _ in 0..reps {
-                let t0 = Instant::now();
-                let c0 = cpu_s();
-                std::thread::scope(|s| {
-                    for th_i in 0..threads {
-                        let (ah, th) = (&ah, &th);
-                        s.spawn(move || {
-                            let mut out = vec![0u64; N];
-                            let mut scratch = vec![0u32; 3 * N];
-                            for b in (th_i..blocks).step_by(threads) {
-                                for _ in 0..groups {
-                                    pad_block(
-                                        ctx,
-                                        [&ah[0][b], &ah[1][b], &ah[2][b]],
-                                        [&th[0], &th[1], &th[2]],
-                                        &mut out,
-                                        &mut scratch,
-                                    );
-                                }
-                            }
-                            std::hint::black_box(&out);
-                        });
-                    }
-                });
-                best = best.min(t0.elapsed().as_secs_f64());
-                best_cpu = best_cpu.min(cpu_s() - c0);
-            }
-            let per = best * 1e9 / (rows * groups * SLOTS) as f64;
+        "ksk" => {
+            let k_hat: Vec<u32> = (0..4 * RANK * NR).map(|i| (g.next() % cx.qp[i / (RANK * NR)].p as u64) as u32).collect();
+            let km = kernel::k_mont(&k_hat).unwrap();
+            let t: Vec<i8> = (0..NU).map(|_| (g.next() % 3) as i8 - 1).collect();
+            let tr: Vec<i8> = (0..NR).map(|_| (g.next() % 3) as i8 - 1).collect();
+            let ek = key(&mut g);
+            let mut beta = vec![0u32; 4 * RANK * NR];
+            let mut trhat = vec![0u32; 2 * NR];
+            let (s, c) = time(size.clamp(1, 20), || kernel::reply_key(isa, &km, &t, &tr, &ek, &mut beta, &mut trhat).unwrap());
+            println!("{{\"mode\":\"ksk\",\"isa\":\"{}\",\"ms\":{:.3},\"cpu_ms\":{:.3}}}", isa.name(), s * 1e3, c * 1e3);
+        }
+        "keyswitch" => {
+            let hs: Vec<u64> = (0..size * NU).map(|_| g.next() % cx.q1).collect();
+            let ops: Vec<u32> = (0..groups * 4 * RANK * NR).map(|i| (g.next() % cx.qp[(i / (RANK * NR)) % 4].p as u64) as u32).collect();
+            let y: Vec<u64> = (0..size * groups * D).map(|_| g.next() & ((1 << 56) - 1)).collect();
+            let mut out = vec![0u64; groups * (size / PACK) * NR];
+            let it = KsItem { hs: &hs, m: size, ops: &ops, groups, y: Some(&y), yb: 36 };
+            let (s, c) = time(1, || kernel::keyswitch(isa, &it, &mut out, threads).unwrap());
+            let per = (size * groups * D) as f64;
             println!(
-                "{{\"mode\":\"pad\",\"n\":{rows},\"groups\":{groups},\"threads\":{threads},\"s\":{best:.4},\"ns_per_input_slot\":{per:.3},\"cpu_ns_per_input_slot\":{:.3}}}",
-                best_cpu * 1e9 / (rows * groups * SLOTS) as f64
+                "{{\"mode\":\"keyswitch\",\"isa\":\"{}\",\"m\":{size},\"groups\":{groups},\"threads\":{threads},\"ns_per_output_slot\":{:.3},\"cpu_ns_per_output_slot\":{:.3}}}",
+                isa.name(), s * 1e9 / per, c * 1e9 / per
             );
         }
-        _ => eprintln!("usage: pks-bench decrypt|pad <rows> <groups> <threads> [reps]"),
+        _ => eprintln!("modes: decrypt | encrypt | ksk | keyswitch"),
     }
 }
