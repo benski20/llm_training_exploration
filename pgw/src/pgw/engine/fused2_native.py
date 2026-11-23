@@ -10,7 +10,10 @@ here from the backend's mask source at the start of the pass: one row of every t
 use), the same payload bytes on the same lane items, the same range + ``F_p`` Freivalds checks of both stages
 before any output is used, the same native attention / SiLU kernels.
 
-Python's part per pass: take the masks (``Fused2MaskSource`` / ``Fused2SegmentMasks``), draw the noise monitor's
+Python's part per pass: take the masks (``Fused2MaskSource`` / ``Fused2SegmentMasks``, or the session's mask-store
+reservation of fused2 pair-mask segments via :class:`pgw.engine.fused2_store.Fused2StoreMasks`: then a pass runs
+natively only when every trip's rows fit the current segment extent, and the driver's check vectors are installed
+from the extent the rows came from whenever its segment changes), draw the noise monitor's
 sampling decisions in trip order (a backend without a monitor samples nothing), call the driver, book the
 statistics, run a sampled trip's statistics before the next call builds a payload, wipe the masks. Failures raise
 what the Python path raises (``IntegrityError`` for a failed check, ``RingOverflowError``, ``ProtocolError`` for
@@ -68,11 +71,17 @@ class Fused2NativeDecode:
         self.model, self.sched, self.backend = model, schedule, backend
         L = int(model.num_layers)
         self.layers = L
+        self.keys = [lin.key for lin in w.linears()]
         self.drv = fast.Fused2Driver(int(model.arch.hidden_size), int(model.num_heads), int(model.num_kv_heads),
                                      int(model.head_dim), int(model.split_gate_up[0]), float(model.scale),
                                      float(model.eps), int(ops.attn_threads), int(ops.attn_block), bool(ops.kv_bf16),
                                      L, int(ring.k), int(ring.a), int(ring.cap))
         prov = backend.provider
+        #: Store sessions only: check vectors come with each pass's masks (per segment), not once here.
+        static = backend.masks is not None and not getattr(backend.masks, "partial", False)
+        #: ``(trip index, stage)`` -> token of the check vectors installed in the driver (store masks).
+        self._tokens: dict[tuple[int, int], Any] = {}
+        self._store_checks = False
         #: ``(l1, l2)`` per trip, ``l2`` None for a single (the masks' and the lane items' trip plan).
         self.plan: list[tuple[Any, Any]] = [(w.qkv[0], None)]
         for i in range(L):
@@ -84,15 +93,17 @@ class Fused2NativeDecode:
             self.drv.set_linear(idx, 1, l1.n, l1.m, _f64(l1.scale), _f64(l1.bias), _f64(l1.grid),
                                 None if l1.hmul is None else np.ascontiguousarray(l1.hmul.numpy().astype(np.int64)),
                                 float(l1.wnorm), float(l1.sigma), item)
-            c1 = backend.masks.check_vectors(l1)
-            self.drv.set_checks(idx, 1, np.ascontiguousarray(c1.u, dtype=np.int64),
-                                np.ascontiguousarray(c1.uw, dtype=np.int64))
+            if static:
+                c1 = backend.masks.check_vectors(l1)
+                self.drv.set_checks(idx, 1, np.ascontiguousarray(c1.u, dtype=np.int64),
+                                    np.ascontiguousarray(c1.uw, dtype=np.int64))
             if l2 is not None:
                 self.drv.set_linear(idx, 2, l2.n, l2.m, _f64(l2.scale), _f64(l2.bias), None, None, float(l2.wnorm),
                                     float(l2.sigma), item)
-                c2 = backend.masks.check_vectors(l2)
-                self.drv.set_checks(idx, 2, np.ascontiguousarray(c2.u, dtype=np.int64),
-                                    np.ascontiguousarray(c2.uw, dtype=np.int64))
+                if static:
+                    c2 = backend.masks.check_vectors(l2)
+                    self.drv.set_checks(idx, 2, np.ascontiguousarray(c2.u, dtype=np.int64),
+                                        np.ascontiguousarray(c2.uw, dtype=np.int64))
         noise = getattr(backend, "noise_monitor", None)
         self.dup_hist = None
         if noise is not None and hasattr(noise, "native_dup_history") and hasattr(noise, "packed_dup_params"):
@@ -121,10 +132,17 @@ class Fused2NativeDecode:
         if int(getattr(st.seqs[0], "serial_tail", 0) or 0) > 0:
             return False
         cache = st.caches[0]
-        return (cache.dtype == torch.bfloat16) == bool(self.model.float_ops.kv_bf16)
+        if (cache.dtype == torch.bfloat16) != bool(self.model.float_ops.kv_bf16):
+            return False
+        sessions = getattr(st, "sessions", None)
+        src = self.backend.masks_for(sessions[0] if sessions else None)
+        fits = getattr(src, "pass_fits", None)
+        # store masks: the whole pass must come from one segment extent per linear (one set of check vectors
+        # per trip); otherwise the ordinary path runs it in row pieces
+        return fits is None or bool(fits(self.keys, t))
 
     # ---- one pass -------------------------------------------------------------------------------------
-    def _masks(self, t: int) -> list[Any]:
+    def _masks(self, t: int, src: Any) -> list[Any]:
         from pgw.engine.fused2 import Fused2Trip
 
         cap = int(self.sched.ring.cap)
@@ -133,12 +151,43 @@ class Fused2NativeDecode:
         try:
             for l1, l2 in self.plan:
                 kind = "single" if l2 is None else "pair"
-                out.append(self.backend.masks.take(Fused2Trip(kind, l1, dummy, cap, l2, None)))
+                m = src.take(Fused2Trip(kind, l1, dummy, cap, l2, None))
+                out.append(m)
+                if int(m.r_x.shape[0]) != t:  # store masks: eligible() saw the pass fit one extent
+                    raise IntegrityError("fused2 native pass: mask rows cross a segment extent")
+            if getattr(src, "partial", False):
+                self._install_checks(out)
+                self._store_checks = True
+            elif self._store_checks:  # the driver's vectors are a store segment's (or zeroed): never mix
+                raise ConfigError("the native fused2 driver serves store sessions only once one was seen")
         except BaseException:
             for m in out:
                 m.wipe()
             raise
         return out
+
+    def _install_checks(self, masks: list[Any]) -> None:
+        """Store masks: install each trip's check vectors (of the segment its rows came from) when they changed."""
+        for idx, m in enumerate(masks):
+            for stage, ch in ((1, m.c1), (2, m.c2)):
+                if ch is None:
+                    if stage == 1 or self.plan[idx][1] is not None:
+                        raise IntegrityError("fused2 native pass: store masks without check vectors")
+                    continue
+                token = getattr(ch, "token", None)  # (segment id, linear, "p61"): same token, same vectors
+                if token is None or self._tokens.get((idx, stage), (None,))[0] != token:
+                    self.drv.set_checks(idx, stage, np.ascontiguousarray(ch.u, dtype=np.int64),
+                                        np.ascontiguousarray(ch.uw, dtype=np.int64))
+                    self._tokens[(idx, stage)] = (token, int(ch.u.shape[0]), int(ch.u.shape[1]), int(ch.uw.shape[1]))
+
+    def wipe_checks(self) -> None:
+        """Overwrite the driver's copies of store check vectors with zeros (the next pass installs fresh ones;
+        a pass never runs on zero vectors: tokens are cleared, so every trip's vectors are installed again)."""
+        if not self._tokens:
+            return
+        for (idx, stage), (_tok, c, m, n) in list(self._tokens.items()):
+            self.drv.set_checks(idx, stage, np.zeros((c, m), dtype=np.int64), np.zeros((c, n), dtype=np.int64))
+        self._tokens.clear()
 
     def run(self, st: Any) -> None:
         """Every decoder layer of the pass; writes ``st.hs`` (the float32 residual, as the Python schedule)."""
@@ -158,7 +207,9 @@ class Fused2NativeDecode:
         prov = be.provider
         drv = self.drv
         hn = h.detach().numpy() if h.is_contiguous() else np.ascontiguousarray(h.detach().numpy())
-        masks = self._masks(t)
+        sessions = getattr(st, "sessions", None)
+        src = be.masks_for(sessions[0] if sessions else None)
+        masks = self._masks(t, src)
         arrs: list[tuple[Any, ...]] = []
         for m in masks:
             arrs.append(tuple(None if x is None else x.numpy() for x in (m.r_x, m.wr_x, m.v, m.wv)))
@@ -201,6 +252,8 @@ class Fused2NativeDecode:
                 drv.abort()
             for m in masks:
                 m.wipe()
+            if getattr(src, "closed", False):  # the session's reservation closed: drop its check vectors too
+                self.wipe_checks()
         self.totals[0] += 1
         st.hs = [h_out]
 

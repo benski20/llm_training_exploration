@@ -24,6 +24,10 @@ carries (:meth:`pgw.core.prng.SeedExpander.ring_uniform_rows_with_key`): the sam
 segment is as secret as the masks (keys included); it is used once (cursors only move forward, consumed rows are
 wiped). One slot = one row of every trip key = one token row of one pass (the same elements as today's slot, at
 ``K/8`` bytes each).
+
+This file format is the harness's. The production path is the encrypted mask store (``schedule = "fused2"``
+segments, :mod:`pgw.maskstore.format`) filled by :mod:`pgw.factory.fused2_gen` and read through store reservations
+(:mod:`pgw.engine.fused2_store`).
 """
 
 from __future__ import annotations

@@ -24,6 +24,22 @@ Mask derivation (shared with the factory and gateway)::
     r[slot, :]  = SeedExpander(seed).ring_uniform_rows(n, K, slot, 1, "r", linear_id)
     u           = SeedExpander(seed).ring_uniform((checks, m), K, "u", linear_id)
     u (p31)     = u64le(stream("u-p31", linear_id)) mod (2^31 - 1)      # check_field = "p31"
+
+fused2 pair-mask segments (``schedule = "fused2"``, opt-in; research/plans/fused2-two-trips-per-layer.md
+section 11). The same file layout over the fused2 linears of a lane weight set (``fingerprint`` = the fused2
+lane fingerprint, which binds every public ``w8`` and ``hmul``; ``ring`` = e.g. ``K56A12C53``), in pass order
+``0.qkv/f2, 0.o, 0.gate_up/f2, 0.down, 1.qkv/f2, ...``. Each entry is one *single-stage* product: for a trip's
+first linear (``o``, ``down``, layer 0's ``qkv/f2``) ``r`` is the trip's ``r_x`` and ``W r`` is ``W1 r_x``; for a
+pair's second linear (``gate_up/f2``, ``(l+1).qkv/f2``) ``r`` is the uniform ``v`` and ``W r`` is ``W2' v``. The
+gateway masks the residual with ``r_R = v - hmul * (W1 r_x)``, so no other correction is stored. One slot = one
+row of every entry (one token row of one pass). Check vectors: ``check_field = "p61"`` (mandatory with the
+schedule), one or more vectors over ``F_p``, ``p = 2^61 - 1``; ``uW`` holds ``(u * hmul) W mod p`` (``hmul``
+the linear's public multipliers, 1 without) as **8-byte** little-endian words below ``p`` (not ring
+elements)::
+
+    u (p61)     = u64le(stream("u-p61", linear_id)) mod (2^61 - 1)      # check_field = "p61"
+
+Readers that do not know ``schedule`` (or ``p61``) refuse the header (``extra = "forbid"``).
 """
 
 from __future__ import annotations
@@ -53,10 +69,12 @@ from pgw.core.types import LinearId
 __all__ = [
     "DEFAULT_CHUNK_BYTES",
     "DEK_BYTES",
+    "FUSED2_SCHEDULE",
     "GCM_TAG_BYTES",
     "MAX_CHUNK_BYTES",
     "MAX_HEADER_BYTES",
     "NONCE_PREFIX_BYTES",
+    "P61",
     "SEGMENT_MAGIC",
     "SEGMENT_SUFFIX",
     "SEGMENT_VERSION",
@@ -70,6 +88,7 @@ __all__ = [
     "chunk_cache_bytes",
     "chunk_nonce",
     "encode_header",
+    "is_fused2_key",
     "read_header",
     "seed_hash",
 ]
@@ -102,6 +121,13 @@ def chunk_cache_bytes(chunk_slots: int, out_features: Sequence[int], ring: RingP
 #: Upper bound on header size (a 200-layer model header is a few tens of KB).
 MAX_HEADER_BYTES = 16 << 20
 _PREAMBLE = len(SEGMENT_MAGIC) + 4
+#: ``SegmentHeader.schedule`` of fused2 pair-mask segments (2 provider trips per layer).
+FUSED2_SCHEDULE = "fused2"
+#: Mersenne prime of the fused2 Freivalds field (``check_field = "p61"``).
+P61 = (1 << 61) - 1
+#: Bytes per stored ``uW`` word with ``check_field = "p61"`` (values below ``2^61`` do not fit K56 elements).
+P61_WORD_BYTES = 8
+_FUSED2_KEY_RE = re.compile(r"^(0|[1-9][0-9]{0,5})\.(qkv/f2|o|gate_up/f2|down)$")
 _SEG_ID_RE = re.compile(r"^[0-9a-f]{32}$")
 _HEX8_RE = re.compile(r"^[0-9a-f]{8}$")
 
@@ -117,10 +143,17 @@ class SegmentLinear(BaseModel):
     @field_validator("id")
     @classmethod
     def _valid_id(cls, v: str) -> str:
+        if isinstance(v, str) and _FUSED2_KEY_RE.match(v):  # a fused2 linear (the header checks the schedule)
+            return v
         try:
             return LinearId.parse(v).key
         except ConfigError as exc:
             raise ValueError(str(exc)) from exc
+
+
+def is_fused2_key(key: str) -> bool:
+    """Whether ``key`` names a fused2 linear (``"3.o"``, ``"3.gate_up/f2"``, ``"4.qkv/f2"``, ``"3.down"``)."""
+    return bool(_FUSED2_KEY_RE.match(key))
 
 
 class SegmentHeader(BaseModel):
@@ -150,6 +183,13 @@ class SegmentHeader(BaseModel):
         description="Freivalds check format: unset = the ring check over Z_2^K (format 1); 'p31' = one or more "
         "vectors over F_p, p = 2^31 - 1, on the unmasked values (SPEC 5.1). Omitted from the JSON when unset, "
         "so older headers keep their exact bytes; readers that do not know the field refuse the header",
+    )
+    schedule: str | None = Field(
+        None,
+        description="Mask schedule: unset = one entry per standard linear (format 1); 'fused2' = pair-mask "
+        "segments of the fused2 schedule (2 trips per layer, check_field 'p61'; module docstring). Omitted from "
+        "the JSON when unset, so older headers keep their exact bytes; readers that do not know the field "
+        "refuse the header",
     )
 
     @field_validator("version")
@@ -192,14 +232,37 @@ class SegmentHeader(BaseModel):
     @field_validator("check_field")
     @classmethod
     def _check_field(cls, v: str | None) -> str | None:
-        if v is not None and v != "p31":
-            raise ValueError(f"unknown check_field {v!r} (known: p31)")
+        if v is not None and v not in ("p31", "p61"):
+            raise ValueError(f"unknown check_field {v!r} (known: p31, p61)")
+        return v
+
+    @field_validator("schedule")
+    @classmethod
+    def _schedule(cls, v: str | None) -> str | None:
+        if v is not None and v != FUSED2_SCHEDULE:
+            raise ValueError(f"unknown schedule {v!r} (known: {FUSED2_SCHEDULE})")
         return v
 
     @model_validator(mode="after")
     def _p31_ring(self) -> SegmentHeader:
-        if self.check_field is not None and RingParams.from_name(self.ring).k != 32:
-            raise ValueError("check_field 'p31' needs a K32 ring")
+        rp = RingParams.from_name(self.ring)
+        if self.schedule is None:
+            if self.check_field == "p61":
+                raise ValueError("check_field 'p61' belongs to the fused2 schedule")
+            if self.check_field is not None and rp.k != 32:
+                raise ValueError("check_field 'p31' needs a K32 ring")
+            for lin in self.linears:
+                if not _is_standard_id(lin.id):
+                    raise ValueError(f"linear {lin.id!r} is a fused2 linear; the header has no fused2 schedule")
+            return self
+        # fused2 pair-mask segment: p61 checks, a capped ring with 2^(C+1) < p (sound p61 check), fused2 linears
+        if self.check_field != "p61" or self.checks < 1:
+            raise ValueError("schedule 'fused2' needs check_field 'p61' and checks >= 1")
+        if rp.k % 8 or not rp.cap or rp.cap + 1 >= 61:
+            raise ValueError("schedule 'fused2' needs a capped ring, K a multiple of 8, 2^(C+1) < 2^61 - 1")
+        for lin in self.linears:
+            if not _FUSED2_KEY_RE.match(lin.id):
+                raise ValueError(f"linear {lin.id!r} is not a fused2 linear")
         return self
 
     @field_validator("nonce_prefix")
@@ -249,7 +312,17 @@ def encode_header(header: SegmentHeader) -> bytes:
         data.pop("destination", None)
     if data.get("check_field") is None:
         data.pop("check_field", None)
+    if data.get("schedule") is None:
+        data.pop("schedule", None)
     return canonical_json(data)
+
+
+def _is_standard_id(key: str) -> bool:
+    try:
+        LinearId.parse(key)
+    except ConfigError:
+        return False
+    return True
 
 
 def chunk_nonce(nonce_prefix: bytes, index: int) -> bytes:
@@ -290,7 +363,10 @@ class SegmentLayout:
         self.bpe = self.ring.bytes_per_element
         self.data_start = _PREAMBLE + header_len
         self.chunks_per_linear = -(-header.slots // header.chunk_slots)
-        self.secrets_len = SEED_BYTES + sum(header.checks * lin.in_features * self.bpe for lin in header.linears)
+        #: Bytes per stored ``uW`` word: ring elements, or 8-byte words below ``p`` (``check_field = "p61"``).
+        self.check_bpe = P61_WORD_BYTES if header.check_field == "p61" else self.bpe
+        self.secrets_len = SEED_BYTES + sum(header.checks * lin.in_features * self.check_bpe
+                                            for lin in header.linears)
         # cumulative ciphertext offsets per linear
         self._linear_base: list[int] = []
         off = self.data_start + self.secrets_len + GCM_TAG_BYTES
@@ -336,7 +412,7 @@ class SegmentLayout:
         out: list[memoryview] = []
         off = SEED_BYTES
         for lin in self.header.linears:
-            n = self.header.checks * lin.in_features * self.bpe
+            n = self.header.checks * lin.in_features * self.check_bpe
             out.append(mv[off : off + n])
             off += n
         return seed, out

@@ -953,6 +953,10 @@ class TripMasks:
     wr_x: torch.Tensor  # (T, m1) = W1 r_x mod 2^K (factory)
     v: torch.Tensor | None = None  # (T, m1) uniform (pair)
     wv: torch.Tensor | None = None  # (T, m2) = W2 v mod 2^K (factory)
+    #: Check vectors of the segment the rows came from (store masks; None: the source's static vectors).
+    #: Owned by the mask source (not wiped with the rows).
+    c1: Any = None
+    c2: Any = None
 
     def wipe(self) -> None:
         for t in (self.r_x, self.wr_x, self.v, self.wv):
@@ -1164,19 +1168,62 @@ class Fused2MaskedBackend(LinearBackend):
 
     fused2 = True
 
-    def __init__(self, ring: RingParams, provider: Any, masks: Fused2MaskSource):
+    def __init__(self, ring: RingParams, provider: Any, masks: Fused2MaskSource | None = None, *,
+                 weights: Fused2Weights | None = None):
         if not ring.cap or ring.cap + 1 >= 61:
             raise ConfigError("fused2 needs a capped ring with 2^(C+1) < 2^61 - 1")
         self.ring = ring
         self.provider = provider
+        #: The default mask source (in-process / segment file source; or None: every call's session is a
+        #: mask-store reservation of fused2 pair-mask segments, :mod:`pgw.engine.fused2_store`).
         self.masks = masks
+        #: The public fused2 tables (needed for store sessions: keys and shapes; never ``w8``).
+        self.weights = weights if weights is not None else getattr(masks, "w", None)
         self.stats = BackendStats()
         self.f2 = _F2Stats()
+        self._store_lock = threading.Lock()
+        #: id(session) -> (session, Fused2StoreMasks) of the store sessions seen (dropped once closed)
+        self._store: dict[int, tuple[Any, Any]] = {}
 
-    def _verify(self, lin: F2Linear, xq: torch.Tensor, yq: torch.Tensor, offset: torch.Tensor | None = None) -> None:
+    def masks_for(self, session: Any) -> Any:
+        """The mask source of a call: a store session's :class:`pgw.engine.fused2_store.Fused2StoreMasks`, else
+        the backend's default source."""
+        from pgw.engine.fused2_store import Fused2StoreMasks, is_store_session
+
+        if is_store_session(session):
+            with self._store_lock:
+                hit = self._store.get(id(session))
+                if hit is not None and hit[0] is session:
+                    return hit[1]
+                for sid, (sess, src) in list(self._store.items()):  # sweep closed sessions: wipe their copies
+                    if getattr(sess, "closed", False):
+                        src.wipe()
+                        del self._store[sid]
+                if self.weights is None:
+                    raise ConfigError("fused2 store masks need the backend's weights (Fused2MaskedBackend(weights=))")
+                src = Fused2StoreMasks(session, self.weights, self.ring)
+                self._store[id(session)] = (session, src)
+                return src
+        if self.masks is None:
+            raise ConfigError("fused2 call without a mask source (no store session and no default source)")
+        return self.masks
+
+    def release(self, session: Any) -> None:
+        """Forget a store session (wipes this backend's copies of its check vectors)."""
+        with self._store_lock:
+            hit = self._store.pop(id(session), None)
+        if hit is not None:
+            hit[1].wipe()
+
+    def _verify(self, lin: F2Linear, xq: torch.Tensor, yq: torch.Tensor, offset: torch.Tensor | None = None,
+                ch: Any = None, masks: Any = None) -> None:
         """Range check ``|yq| <= 2^C`` and ``u . (yq - offset) == (u W8) . xq (mod p)`` for every row."""
         bound = 1 << self.ring.cap
-        ch = self.masks.check_vectors(lin)
+        if ch is None:
+            src = masks if masks is not None else self.masks
+            if src is None:
+                raise ConfigError(f"fused2 {lin.key}: no check vectors (no mask source)")
+            ch = src.check_vectors(lin)
         nat = _native_p61()
         if nat is not None and yq.numel():  # the same predicate in Rust (pgw_fast.p61_check), GIL released
             c = np.ascontiguousarray
@@ -1198,12 +1245,32 @@ class Fused2MaskedBackend(LinearBackend):
         if not np.array_equal(lhs, rhs):
             raise IntegrityError(f"fused2 {lin.key}: Freivalds check failed")
 
-    def _one(self, t: Fused2Trip) -> torch.Tensor:
-        k = self.ring.k
-        mask = (1 << k) - 1
+    def _one(self, t: Fused2Trip, src: Any = None) -> torch.Tensor:
+        src = self.masks if src is None else src
         if int(t.x.abs().max()) > (1 << self.ring.cap) if t.x.numel() else False:
             raise RingOverflowError("fused2 input out of range")
-        m = self.masks.take(t)
+        if not getattr(src, "partial", False):
+            return self._masked(t, src.take(t), src)
+        # store masks: a take never crosses a segment extent, so the trip may run in row pieces (rows are
+        # independent; every piece is masked, checked and its masks wiped like a whole trip)
+        rows = int(t.x.shape[0])
+        if rows == 0:  # nothing to mask (no row is taken)
+            return torch.zeros((0, t.out_features), dtype=torch.int64)
+        outs: list[torch.Tensor] = []
+        a = 0
+        while a < rows:
+            sub = t if a == 0 else Fused2Trip(t.kind, t.l1, t.x[a:], t.cap, t.l2, None if t.r is None else t.r[a:])
+            m = src.take(sub)
+            n = int(m.r_x.shape[0])
+            if n < rows - a:
+                sub = Fused2Trip(t.kind, t.l1, t.x[a:a + n], t.cap, t.l2, None if t.r is None else t.r[a:a + n])
+            outs.append(self._masked(sub, m, src))
+            a += n
+        return outs[0] if len(outs) == 1 else torch.cat(outs, dim=0)
+
+    def _masked(self, t: Fused2Trip, m: TripMasks, src: Any) -> torch.Tensor:
+        k = self.ring.k
+        mask = (1 << k) - 1
         try:
             x_hat = (t.x + m.r_x) & mask
             bpe = k // 8
@@ -1214,7 +1281,7 @@ class Fused2MaskedBackend(LinearBackend):
                 y_hat = self.provider.single(t.l1.key, x_hat)
                 self.f2.bytes_down += y_hat.numel() * bpe
                 y = _center(y_hat - m.wr_x, k)
-                self._verify(t.l1, t.x, y)
+                self._verify(t.l1, t.x, y, ch=m.c1, masks=src)
                 return y
             assert t.r is not None and t.l2 is not None and m.v is not None and m.wv is not None
             wr = m.wr_x if t.l1.hmul is None else (m.wr_x * t.l1.hmul) & mask
@@ -1224,9 +1291,9 @@ class Fused2MaskedBackend(LinearBackend):
             h_hat, z_hat = self.provider.pair(t.l1.key, t.l2.key, r_hat, x_hat)
             self.f2.bytes_down += (h_hat.numel() + z_hat.numel()) * bpe
             h = _center(h_hat - m.v, k)
-            self._verify(t.l1, t.x, h, offset=t.r)  # stage 1: H - R == hmul * W1 x
+            self._verify(t.l1, t.x, h, offset=t.r, ch=m.c1, masks=src)  # stage 1: H - R == hmul * W1 x
             z = _center(z_hat - m.wv, k)
-            self._verify(t.l2, h, z)  # stage 2: Z == W2' H (H verified)
+            self._verify(t.l2, h, z, ch=m.c2, masks=src)  # stage 2: Z == W2' H (H verified)
             return torch.cat([h, z], dim=1)
         finally:
             m.wipe()
@@ -1236,7 +1303,7 @@ class Fused2MaskedBackend(LinearBackend):
         if not isinstance(trip, Fused2Trip):
             raise ConfigError("Fused2MaskedBackend takes fused2 calls only")
         self.stats.add(calls=1, rows=int(call.x.shape[0]))
-        return self._one(trip)
+        return self._one(trip, self.masks_for(call.session))
 
     def forward_many(self, calls: Sequence[LinearCall]) -> list[torch.Tensor]:
         return [self.forward(c) for c in calls]

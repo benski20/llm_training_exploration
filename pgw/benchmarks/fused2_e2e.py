@@ -137,9 +137,11 @@ def main() -> None:
                     help="socket: the harness pair op (eager digit GEMMs); lane / lane-shm: the production native trip "
                     "lane with pair items and the graphed Triton pair op (pgw.service.fused2_lane), over the Unix "
                     "socket or its shared-memory segment")
-    ap.add_argument("--masks", choices=["inproc", "segments"], default="inproc",
+    ap.add_argument("--masks", choices=["inproc", "segments", "store"], default="inproc",
                     help="segments: masks from a separate plain-factory process (pair-mask segments + check vectors); "
-                    "the gateway's model and backend then run on weight-free tables")
+                    "store: the production path, the fused2 factory process (pgw.factory.fused2_gen) writes encrypted "
+                    "fused2 segments into a mask store and the gateway takes its rows from an incremental "
+                    "reservation; with either, the gateway's model and backend run on weight-free tables")
     ap.add_argument("--threads", type=int, default=0)
     ap.add_argument("--json", default=None)
     args = ap.parse_args()
@@ -223,7 +225,31 @@ def main() -> None:
         ids = tok(args.prompt, return_tensors="pt").input_ids[0]
         slots = int(ids.numel()) + args.tokens
         gw_w = w
-        if args.masks == "segments":  # the factory is its own process; the gateway gets segments, no weights
+        session = None
+        store = None
+        if args.masks == "store":  # production path: encrypted store, factory process, incremental reservation
+            from pgw.engine.fused2_masks import gateway_tables
+            from pgw.engine.fused2_store import open_fused2_session
+            from pgw.maskstore import FileKeyProvider, MaskStore, MaskStoreSettings
+            from pgw.service.fused2_lane import fused2_fingerprint
+
+            full_file = tmp / "full_weights.pt"
+            w.save(full_file)
+            store_root, kek = tmp / "store", tmp / "kek.bin"
+            FileKeyProvider(kek, create=True)
+            t_chk = time.time()
+            subprocess.run([sys.executable, "-m", "pgw.factory.fused2_gen", "generate", "--weights", str(full_file),  # noqa: S603
+                            "--ring", ring.name, "--store-root", str(store_root), "--key-file", str(kek),
+                            "--slots", str(slots + 16), "--device", "auto"], check=True)
+            full_file.unlink()
+            gw_w = gateway_tables(w)
+            store = MaskStore(MaskStoreSettings(root=str(store_root), counter="file", counter_file=tmp / "counter",
+                                                low_water_slots=0), FileKeyProvider(kek))
+            fp = lane_fp or fused2_fingerprint(w, ring)
+            session = open_fused2_session(store, fp, ring, gw_w, int(ids.numel()), cap=slots, chunk=16)
+            src = None
+            check_setup_s = prefill_s = time.time() - t_chk
+        elif args.masks == "segments":  # the factory is its own process; the gateway gets segments, no weights
             from pgw.engine.fused2_masks import Fused2SegmentMasks, gateway_tables
 
             full_file = tmp / "full_weights.pt"
@@ -248,13 +274,15 @@ def main() -> None:
             check_setup_s = time.time() - t_chk
             prefill_s = src.prefill(slots)
         print(f"provider up in {connect_s:.1f}s; masks for {slots} rows (slots) in {prefill_s:.1f}s", flush=True)
-        be = Fused2MaskedBackend(ring, client, src)
+        be = Fused2MaskedBackend(ring, client, src, weights=gw_w)
         model = TransformerModel(pack, be)
         sched = enable_fused2(model, gw_w, ring)
+        if session is not None:
+            src = be.masks_for(session)
         cache = model.new_cache(slots + 1)
         calls: list[torch.Tensor] = [ids]
         t_first = time.perf_counter()
-        logits = [model.forward(ids, cache)]
+        logits = [model.forward(ids, cache, session=session)]
         ttft = time.perf_counter() - t_first
         trips0, bytes0 = be.f2.trips, client.bytes_up + client.bytes_down
         n_trip_ms0 = len(client.trip_ms)
@@ -266,7 +294,7 @@ def main() -> None:
             x = torch.tensor([nxt])
             calls.append(x)
             t1 = time.perf_counter()
-            logits.append(model.forward(x, cache))
+            logits.append(model.forward(x, cache, session=session))
             step_s.append(time.perf_counter() - t1)
         dec_trips = be.f2.trips - trips0
         dec_bytes = client.bytes_up + client.bytes_down - bytes0
@@ -290,11 +318,17 @@ def main() -> None:
             "slots_per_token": (src.slots_used() - int(ids.numel())) / max(1, len(step_s))
             if hasattr(src, "slots_used") else 1.0,
             "mask_prefill_s": prefill_s, "check_vectors_setup_s": check_setup_s,
-            "mask_stock_hits": src.stock_hits, "mask_stock_misses": src.stock_misses,
+            "mask_stock_hits": getattr(src, "stock_hits", None),
+            "mask_stock_misses": getattr(src, "stock_misses", None),
             "factory_macs_per_slot": src.macs / max(1, slots),
             "act_bits_hist": {str(k): v for k, v in sorted(sched.bits_hist.items())},
         }
         client.close()
+        if session is not None:
+            session.close()  # unused rows burned
+            res["mask_store_extensions"] = session.extensions
+        if store is not None:
+            store.close()
         print(json.dumps(res, indent=1), flush=True)
         if args.json:  # the decode result first (a replay that runs out of time keeps it)
             Path(args.json).write_text(json.dumps(res, indent=1))

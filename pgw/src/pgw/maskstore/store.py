@@ -66,6 +66,7 @@ from pgw.maskstore.counters import (
 )
 from pgw.maskstore.format import (
     DEK_BYTES,
+    FUSED2_SCHEDULE,
     MAX_CHUNK_BYTES,
     NONCE_PREFIX_BYTES,
     SEGMENT_SUFFIX,
@@ -442,9 +443,11 @@ class MaskReservation:
         # linear at its own header index (_Extent.li).
         lin0 = {lin.id: lin for lin in h0.linears}
         common = set(lin0)
+        #: Mask schedule of the segments (``None``: standard; ``"fused2"``: pair-mask segments).
+        self.schedule: str | None = h0.schedule
         for e in self._extents[1:]:
             h = e.seg.header
-            if h.fingerprint != h0.fingerprint or h.ring != h0.ring:
+            if h.fingerprint != h0.fingerprint or h.ring != h0.ring or h.schedule != h0.schedule:
                 raise MaskStoreError("segments of one reservation disagree on model, ring or linears")
             hl = {lin.id: lin for lin in h.linears}
             if any(hl[k] != lin0[k] for k in common & set(hl)):
@@ -1197,6 +1200,15 @@ class MaskReservation:
             seed, uw_views = ex.secrets()
 
             def build() -> tuple[torch.Tensor, torch.Tensor]:
+                if field == "p61":  # fused2 pair-mask segment: 8-byte words below 2^61 - 1
+                    from pgw.maskstore.fused2 import p61_check_vectors, unpack_p61
+
+                    try:
+                        uw61 = unpack_p61(uw_views[li], (checks, lin.in_features), f"{key} uW")
+                    except MaskStoreError as exc:
+                        raise MaskStoreError(f"segment {h.segment_id}: {exc.message}",
+                                             details={"segment_id": h.segment_id, "linear": key}) from None
+                    return p61_check_vectors(seed, checks, lin.out_features, key), uw61
                 uw = unpack_ring(uw_views[li], (checks, lin.in_features), self.ring)
                 if field is None:
                     u = SeedExpander(seed).ring_uniform((checks, lin.out_features), self.ring.k, "u", key)
@@ -1211,7 +1223,11 @@ class MaskReservation:
 
             skey = (h.fingerprint, h.ring, ex.ext.segment_id, ex.seed_id(), key, str(checks), field or "ring")
             token: tuple[str, ...] = (ex.ext.segment_id, key)
-            if field is not None:
+            if field == "p61":
+                from pgw.maskstore.fused2 import P61_TAG
+
+                token = (ex.ext.segment_id, key, P61_TAG)
+            elif field is not None:
                 from pgw.core.freivalds import PRIME_TAG
 
                 token = (ex.ext.segment_id, key, PRIME_TAG)
@@ -1662,6 +1678,19 @@ class SegmentWriter:
         if t.numel() and (int(t.min()) < 0 or int(t.max()) > self.ring.mask):
             raise ShapeError(f"{what} has values outside the canonical ring range [0, 2^{self.ring.k})")
 
+    def _pack_p61(self, key: str, lin: SegmentLinear, uw: torch.Tensor) -> bytes:
+        from pgw.maskstore.fused2 import pack_p61
+
+        if not isinstance(uw, torch.Tensor) or uw.dtype != torch.int64:
+            raise ShapeError(f"uW of {key} must be an int64 tensor")
+        if tuple(uw.shape) != (self.header.checks, lin.in_features):
+            raise ShapeError(f"uW of {key} has shape {tuple(uw.shape)}, expected "
+                             f"{(self.header.checks, lin.in_features)}")
+        try:
+            return pack_p61(uw, (self.header.checks, lin.in_features), f"uW of {key}")
+        except MaskStoreError as exc:
+            raise ShapeError(exc.message) from None
+
     def write_linear(self, lid: LinearId | str, wr: torch.Tensor, uw: torch.Tensor) -> None:
         """Encrypt and append ``W r`` rows (may be called in slot chunks, in order) and ``uW``.
 
@@ -1701,8 +1730,11 @@ class SegmentWriter:
             return
         self._check_tensor(wr.cpu(), (rows, lin.out_features), f"W r of {key}")
         uw_c = uw.cpu()
-        self._check_tensor(uw_c, (self.header.checks, lin.in_features), f"uW of {key}")
-        packed_uw = pack_ring(uw_c, self.ring)
+        if self.header.check_field == "p61":  # fused2: 8-byte words below 2^61 - 1 (not ring elements)
+            packed_uw = self._pack_p61(key, lin, uw_c)
+        else:
+            self._check_tensor(uw_c, (self.header.checks, lin.in_features), f"uW of {key}")
+            packed_uw = pack_ring(uw_c, self.ring)
         prev = self._uw.get(key)
         if prev is None:
             self._uw[key] = packed_uw
@@ -1741,9 +1773,12 @@ class SegmentWriter:
             if tuple(uw.shape) != uw_shape:
                 raise ShapeError(f"{uw_what} has shape {tuple(uw.shape)}, expected {uw_shape}")
             uw_np = uw.detach().cpu().numpy()
-            if uw_np.size and (int(uw_np.min()) < 0 or int(uw_np.max()) > self.ring.mask):
-                raise ShapeError(f"{uw_what} has values outside the canonical ring range [0, 2^{k})")
-            packed_uw = pack_ring(uw_np, self.ring)
+            if self.header.check_field == "p61":  # fused2: 8-byte words below 2^61 - 1 (not ring elements)
+                packed_uw = self._pack_p61(key, lin, uw)
+            else:
+                if uw_np.size and (int(uw_np.min()) < 0 or int(uw_np.max()) > self.ring.mask):
+                    raise ShapeError(f"{uw_what} has values outside the canonical ring range [0, 2^{k})")
+                packed_uw = pack_ring(uw_np, self.ring)
             prev = self._uw.get(key)
             if prev is not None and not hmac.compare_digest(prev, packed_uw):
                 raise MaskStoreError(f"uW of {key} changed between chunks")
@@ -2551,6 +2586,7 @@ class MaskStore:
         factory_id: str = "local",
         destination: str | None = None,
         check_field: str | None = None,
+        schedule: str | None = None,
     ) -> SegmentWriter:
         """Start writing a new segment.
 
@@ -2570,8 +2606,15 @@ class MaskStore:
                 exports, SPEC 7.7); recorded in the signed header and enforced by ``import_segment``.
             check_field: Freivalds check format (SPEC 5.1): ``None`` = the ring check (default);
                 ``"p31"`` = the prime-field check (``uW`` holds ``u W mod (2^31 - 1)``; K32 rings only).
+            schedule: ``None`` (standard linears) or ``"fused2"``: a fused2 pair-mask segment (``specs`` are the
+                fused2 linears in pass order with string ids, ``fingerprint`` the fused2 lane fingerprint,
+                ``check_field = "p61"``, ``uW`` holds ``(u * hmul) W mod (2^61 - 1)``; format module docstring).
         """
         validate_fingerprint(fingerprint)
+        if schedule is not None and (schedule != FUSED2_SCHEDULE or check_field != "p61" or checks < 1):
+            raise ConfigError("schedule='fused2' needs check_field='p61' and checks >= 1")
+        if schedule is None and check_field == "p61":
+            raise ConfigError("check_field='p61' belongs to schedule='fused2'")
         rp = ring_from_setting(ring)
         if not specs:
             raise ConfigError("a segment needs at least one linear")
@@ -2593,7 +2636,7 @@ class MaskStore:
             )
         if not 0 <= checks <= 8:
             raise ConfigError("checks must be in [0, 8]")
-        if check_field is not None:
+        if check_field is not None and schedule is None:
             from pgw.core.freivalds import field_modulus
 
             if field_modulus(check_field) is None or rp.k != 32 or checks < 1:
@@ -2602,8 +2645,9 @@ class MaskStore:
             seed = os.urandom(SEED_BYTES)
         if not isinstance(seed, bytes | bytearray) or len(seed) != SEED_BYTES:
             raise ConfigError(f"seed must be exactly {SEED_BYTES} bytes")
-        for s in specs:
-            rp.check_in_features(s.in_features)
+        if schedule is None:  # fused2 bounds every trip's outputs by 2^C itself (adaptive activation bits)
+            for s in specs:
+                rp.check_in_features(s.in_features)
         segment_id = uuid.uuid4().hex
         with self._lock.hold():
             self._ready()
@@ -2618,7 +2662,8 @@ class MaskStore:
             chunk_slots=min(chunk_slots, slots),
             checks=checks,
             linears=tuple(
-                SegmentLinear(id=s.id.key, out_features=s.out_features, in_features=s.in_features) for s in specs
+                SegmentLinear(id=s.id.key if isinstance(s.id, LinearId) else str(s.id),
+                              out_features=s.out_features, in_features=s.in_features) for s in specs
             ),
             kek_id=wrapped.kek_id,
             wrapped_dek=base64.b64encode(wrapped.wrapped).decode(),
@@ -2627,6 +2672,7 @@ class MaskStore:
             created_at=_now_iso(),
             destination=destination,
             check_field=check_field,
+            schedule=schedule,
         )
         path = self._segment_dir(fingerprint, rp.name) / f"{segment_id}{SEGMENT_SUFFIX}"
         try:
@@ -2842,8 +2888,15 @@ class MaskStore:
         from pgw.core.freivalds import check_soundness_bits
 
         rp = h.ring_params
-        weakest = min(h.linears, key=lambda lin: check_soundness_bits(rp, lin.in_features, h.checks, h.check_field))
-        bits = check_soundness_bits(rp, weakest.in_features, h.checks, h.check_field)
+        if h.check_field == "p61":  # fused2: the same bound for every linear (range check 2^(C+1) < p)
+            from pgw.maskstore.fused2 import fused2_soundness_bits
+
+            weakest = h.linears[0]
+            bits = fused2_soundness_bits(rp, h.checks)
+        else:
+            weakest = min(h.linears,
+                          key=lambda lin: check_soundness_bits(rp, lin.in_features, h.checks, h.check_field))
+            bits = check_soundness_bits(rp, weakest.in_features, h.checks, h.check_field)
         if bits < floor:
             raise MaskStoreError(
                 f"segment gives only {bits:.0f} bits of Freivalds soundness for {weakest.id} "
@@ -2933,9 +2986,15 @@ class MaskStore:
 
     # ---- reservation -----------------------------------------------------------------------------
     def reserve(
-        self, fingerprint: str, ring: RingParams | str, slots: int, *, session_id: str = ""
+        self, fingerprint: str, ring: RingParams | str, slots: int, *, session_id: str = "",
+        schedule: str | None = None,
     ) -> MaskReservation:
         """Atomically consume ``slots`` slots (oldest segments first) and return them.
+
+        ``schedule``: the mask schedule the caller consumes (``None``: standard; ``"fused2"``: pair-mask
+        segments). Segments of another schedule are refused after the commit (fail closed: the slots stay
+        consumed, never handed out); a correct factory never puts both under one ``(fingerprint, ring)``, since a
+        fused2 segment carries the fused2 lane fingerprint.
 
         Raises:
             MaskExhaustedError: not enough slots available.
@@ -3046,6 +3105,13 @@ class MaskStore:
                     raise MaskStoreError(f"segment file for {r.segment_id} has a different header")
                 seg.set_dek(self._dek_for(seg.header))
             res = MaskReservation(self, rid, session_id, fingerprint, rp, opened)
+            if res.schedule != schedule:
+                bad = res.schedule
+                res._store = None  # the failed reservation's bookkeeping below closes it in the store
+                res.close()
+                opened = []
+                raise MaskStoreError(f"segments of schedule {bad!r} cannot serve a {schedule!r} reservation",
+                                     details={"fingerprint": short_fingerprint(fingerprint), "ring": rname})
         except BaseException as exc:
             for _, seg in opened:
                 seg.close()
