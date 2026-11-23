@@ -619,11 +619,18 @@ fn dec_chunk(fast: Vx, cx: &Ctx, it: &DecItem<'_>, b0: usize, outs: &[Shared<u32
     for i in 0..2 {
         let h = &mut h16[i * NR * L..(i + 1) * NR * L];
         #[cfg(target_arch = "x86_64")]
-        if fast.z() {
+        if fast != Vx::Port {
             let src: [*const u8; L] =
                 std::array::from_fn(|l| it.hint[((b0 + l.min(lanes - 1)) * 2 + i) * NR * 3..].as_ptr());
-            // SAFETY: each source has 3 NR bytes (masked 48-byte loads), h has NR L words; AVX-512 (`fast`).
-            unsafe { crate::simd::load_hint(&src, lanes, NR, h.as_mut_ptr()) };
+            // SAFETY: each source has 3 NR bytes (masked 48- / 24-byte loads), h has NR L words; the ISA is
+            // capped at the CPU (`Isa::parse`).
+            unsafe {
+                if fast.z() {
+                    crate::simd::load_hint(&src, lanes, NR, h.as_mut_ptr())
+                } else {
+                    crate::simd2::load_hint(&src, lanes, NR, h.as_mut_ptr())
+                }
+            };
             continue;
         }
         for l in 0..L {

@@ -219,6 +219,29 @@ pub unsafe fn enc_out(k: &crate::simd::EncConsts, s: *const u32, nu: usize, lane
     std::hint::black_box(&xs);
 }
 
+/// The AVX2 copy of [`crate::simd::load_hint`]: 16 polynomials of `n` 24-bit residues (`src[l]`) into
+/// `h[c 16 + l]` (lanes `>= lanes` zero).
+#[target_feature(enable = "avx2")]
+pub unsafe fn load_hint(src: &[*const u8; 16], lanes: usize, n: usize, h: *mut u32) {
+    let mask6 = _mm256_set_epi32(0, 0, -1, -1, -1, -1, -1, -1); // 24 bytes = 6 dwords, no read past them
+    let perm = _mm256_set_epi32(0, 5, 4, 3, 0, 2, 1, 0);
+    let shuf = _mm256_set_epi8(-1, 11, 10, 9, -1, 8, 7, 6, -1, 5, 4, 3, -1, 2, 1, 0, -1, 11, 10, 9, -1, 8, 7, 6, -1, 5, 4,
+                               3, -1, 2, 1, 0);
+    for c in (0..n).step_by(8) {
+        let mut v = [[_mm256_setzero_si256(); 8]; 2];
+        for l in 0..lanes {
+            let raw = _mm256_maskload_epi32(src[l].add(3 * c) as *const i32, mask6);
+            v[l / 8][l % 8] = _mm256_shuffle_epi8(_mm256_permutevar8x32_epi32(raw, perm), shuf);
+        }
+        transpose8x8(&mut v[0]); // v[0][j] = coefficient c + j, lanes 0..8
+        transpose8x8(&mut v[1]);
+        for j in 0..8 {
+            _mm256_storeu_si256(h.add((c + j) * 16) as *mut _, v[0][j]);
+            _mm256_storeu_si256(h.add((c + j) * 16 + 8) as *mut _, v[1][j]);
+        }
+    }
+}
+
 /// ChaCha20 keystream (RFC 8439, zero nonce, 32-bit block counter from `first`) into `out` (a multiple of
 /// 64 bytes), 8 blocks per iteration (one per lane).
 #[target_feature(enable = "avx2")]
