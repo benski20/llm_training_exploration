@@ -158,11 +158,19 @@ generation) depends on `core` and `wire`. `service` depends on `core`, `modelpac
 - **Integrity:** `check_output_range` (|yq| ≤ qmax·127·n) plus Freivalds over `Z_{2^K}` (`pgw.core.freivalds`),
   or, for segments in the opt-in prime-field format, Freivalds over `F_p` (5.1).
 
-### 5.1 Prime-field Freivalds check (opt-in segment format `check_field = "p31"`; normative)
-Off by default: factories write it only with `PGW_FACTORY_CHECK_FIELD=p31` (`check_field`), gateways accept
-it only with `prime_check = true` (`PGW_GATEWAY_PRIME_CHECK`; otherwise such segments are refused before any
-mask row is used). Old segments (no `check_field` in the header) keep the ring check; both formats can be
-served side by side. Research note: `research/notes/prime-field-freivalds.md`.
+### 5.1 Prime-field Freivalds check (segment format `check_field = "p31"`; normative)
+Factories write it with `PGW_FACTORY_CHECK_FIELD=p31`, and by default (`check_field = "auto"`, since the pks-v3
+adversarial review, finding F4) whenever the masks come from an encrypted factory (`he_service_url`, standard
+schedule, K32 rings): the ring check verifies only the masked product `y_hat`, so a wrong mask is visible online
+only to the range check, whose reaction depends on the data (one bit of a private activation); the p31 check
+verifies the unmasked output and catches it with the same reaction for every input (below). Masks the customer
+computes itself (plain CPU / GPU factory, mask service) keep the ring format under `auto`. Gateways accept p31
+with `prime_check = true` (`PGW_GATEWAY_PRIME_CHECK`), and by default (unset = auto) wherever the gateway already runs the TripEngine (trip lane or `PGW_TRIP_ENGINE`; auto never changes its code path) with the native prime
+kernels, the ring is at most 32 bits and the model makes no padded speculation calls (`spec_rows`,
+`spec_mask_rows`), which refuse prime extents; otherwise such segments are refused before any mask row is used
+(deployments with padded speculation set the factory's `check_field = "ring"`; the setup wizard and the demo
+launcher do). Old segments (no `check_field` in the header) keep the ring check; both formats can be served side
+by side. Research note: `research/notes/prime-field-freivalds.md`.
 
 - **Field.** `p = 2^31 − 1`. Only K32 rings (the `uW` words are stored like ring elements, 4 bytes each,
   every word `< p`; a reader refuses words `≥ p`).
@@ -194,7 +202,12 @@ served side by side. Research note: `research/notes/prime-field-freivalds.md`.
   probes is caught with probability `≥ 1 − 1/p` per wrong call and then cut off (any failure aborts the
   request and trips the breaker), as with the ring check. `min_soundness_bits` applies unchanged.
 - **Also covers `W r`.** The check runs on the unmasked `yq`, so a wrong `W r` row from the factory that
-  moves `yq` is caught too (the ring check covers the service product only).
+  moves `yq` is caught too (the ring check covers the service product only). For a mask wrong by `delta`
+  (in any entry): either `|yq| > B` (range check) or `e = -delta` as an integer with `|e| <= 2B < p`, which the
+  prime check rejects except with probability `<= (1 + 2^-33)/p` per vector; both trip the breaker, so the
+  reaction does not depend on the data (tested: `tests/engine/test_prime_check.py::
+  test_wrong_mask_caught_online_only_by_p31`, where the ring format lets the same wrong mask through silently).
+  This backs up, and does not replace, the factory's 40-bit self-check of provider products (7.9).
 - **Privacy.** Unchanged: the provider sees the same `x_hat` bytes; `u`, `uWp` stay in the encrypted
   segment / gateway memory and are wiped like the ring vectors; the kernels are constant time (loops over
   public sizes, every vector compared, masked final reduction).
@@ -464,6 +477,25 @@ modulus is q = 2^56 for K ≤ 32 and 2^64 for K = 40. The service returns `y = W
 factory subtracts `H·s`, using the hint H = W8·A, which it builds locally. It then rounds away the
 noise at the scaling factor Δ = 2^(q−K). Every decrypted row is verified with private check
 vectors before it is stored. The online Freivalds and range checks do not change.
+
+**Factory self-check of provider products (normative; pks-v3 adversarial review F1/F3).** The reply is
+additively malleable: adding `Δ·δ` to one `y` entry moves one decrypted mask entry by exactly `δ`, with no noise
+growth (every scheme here: v1, v2, v3). A uniform vector over `Z_{2^K}` misses an error of 2-adic valuation `v`
+with probability `2^-(K-v)`, so two vectors let `δ = 2^31` through with probability 1/4. Therefore, for every
+product that comes from a provider (any `remote`: mlwe v1/v2 over HTTP or the bulk channel, a fleet's sharded
+remote, pks-v3, the encrypted fused2 digit split), the factory checks **every row** with
+`ceil(40 / h)` private uniform vectors (`h = K − ⌈log2(4B)⌉`; 14 at capped K32 widths, never fewer than 2):
+errors whose entries all exceed `2B` fail the gateway range check for every input, and every other error is
+missed with probability at most `2^-40` (`pgw.core.freivalds.private_check_vectors_for`, `HE_SELF_CHECK_BITS`).
+The vectors and `v W8` are kept across accepted segments and wiped and redrawn after any failed or aborted segment
+(a provider never learns anything about the vectors in use). The check runs on 32-bit SIMD lanes for `K <= 32`
+(`pgw_fast.he_check_rows`): 14 vectors cost less than the former 2 on the 64-bit path. Masks computed by the
+customer itself (plain CPU / GPU factory, mask service) keep 2 vectors: their errors are faults, not choices.
+A segment whose provider products fail the check (or whose reply is malformed) is aborted and counted as a
+provider integrity failure: a CRITICAL alert, `pgw_factory_provider_integrity_failures_total`, a count in
+`factory-state.json` that no success or restart resets, and after `max_provider_integrity_failures` (default 3)
+the factory halts (fail closed, every fleet worker) until an operator runs `pgw factory clear-halt`. Transport
+errors keep the exponential back-off.
 
 `POST /pgw/v1/maskgen` (msgpack, same headers, auth, limits and error bodies as compute):
 
@@ -897,7 +929,12 @@ containers.
   store a seed and recompute `W r` on the gateway GPU when one exists ("self-factory" mode).
 - Speculative decoding and prefix caching on the gateway (fewer rounds per accepted token).
 - Formal write-up of the security argument and an external audit.
-- Compact-hint encrypted masks (`pks-v3`): implemented, **opt-in, default off, pending external review**.
+- Compact-hint encrypted masks (`pks-v3`): implemented, **pending external review (lattice-estimator run and
+  cryptographer sign-off)**. Library default off (the settings refuse it without the acknowledgement below);
+  since the adversarial review's fixes (40-bit factory self-check, fail closed on provider integrity failures,
+  p31 format, authenticated hint metadata, build lock) it is the default **preset** of the CPU-only co-located demo
+  (`launch.py --he-scheme auto`) and of the customer-cloud template's CPU-only presets (`he_scheme = "auto"`),
+  which pass the acknowledgement explicitly; `mlwe` remains one switch away.
   The provider modulus-switches its 7.9 reply to `q1 ~ 2^48`, packs 32 rows per element of the reply ring
   `Z[Z]/(Z^8192+1)` and key-switches it (hybrid, `log2(q1 P) = 108`) to a fresh reply secret; the customer's hint
   is 256 coefficients per output row (1.5 KB, 16x smaller) and decryption is one pointwise product and inverse NTT

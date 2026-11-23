@@ -21,6 +21,18 @@ Crash safety and resume:
 * A ``factory.lock`` file lock prevents two factory processes from driving the same store or
   export directory at once.
 
+Provider integrity failures (fail closed; pks-v3 adversarial review, F3): with an encrypted factory the
+products come from an untrusted provider. A segment whose provider products fail the private self-check
+(:class:`pgw.core.IntegrityError`) or whose reply is malformed (a ``ProtocolError`` from decoding the reply)
+is aborted, as before, and the failure is attributed to the provider: logged as a CRITICAL alert, counted
+in ``factory-state.json`` (``provider_integrity_failures``; never reset by a later success or a restart)
+and in ``pgw_factory_provider_integrity_failures_total``. After ``max_provider_integrity_failures``
+(default 3) the factory halts (:class:`ProviderIntegrityHalt`): it stops producing, reports unhealthy, and
+refuses to start again until an operator clears the halt (``pgw factory clear-halt``) after investigating
+the provider. Each failed attempt is a chance for an active provider to probe the self-check, so attempts
+must be bounded. Transport errors (timeouts, refused connections, ``UNAVAILABLE``) and local faults keep
+the exponential back-off and retry forever.
+
 In-memory ring (``ring_sink``, design ``research/plans/mask-ringbuffer-design.md`` §5.2): per
 ``(fingerprint, ring)`` that has a gateway ring, plans are ordered most urgent first: ring below
 ``ring_low_fraction`` of its capacity, store below low water, ring not full, store below target.
@@ -43,7 +55,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
-from pgw.core.errors import ConfigError, PGWError
+from pgw.core.errors import ConfigError, ErrorCode, IntegrityError, PGWError, ProtocolError
 from pgw.core.fingerprint import short_fingerprint
 from pgw.core.ring import RingParams
 from pgw.factory.governor import FactoryStopped, Throttle
@@ -51,15 +63,82 @@ from pgw.factory.metrics import FactoryMetrics
 from pgw.factory.sinks import StoreSink
 from pgw.maskstore.ringbuf import RingFull
 
-__all__ = ["FactoryLock", "FactoryScheduler", "FactoryState", "RefillPlan", "ramp_segment_slots"]
+__all__ = [
+    "FactoryLock", "FactoryScheduler", "FactoryState", "ProviderIntegrityHalt", "RefillPlan", "clear_halt_at",
+    "is_provider_integrity_failure", "ramp_segment_slots",
+]
 
 log = logging.getLogger(__name__)
 
 STATE_FILE = "factory-state.json"
+HALT_FILE = "factory-halted.json"
 LOCK_FILE = "factory.lock"
 _DEFAULT_LOW = 4096
 _DEFAULT_TARGET = 65536
 _MAX_BACKOFF_S = 600.0
+#: Provider integrity failures kept in ``factory-state.json`` (the count itself is never truncated).
+_MAX_FAILURE_RECORDS = 50
+
+
+def clear_halt_at(state_dir: Path, note: str = "") -> list[dict[str, Any]]:
+    """Operator action without a running scheduler (``pgw factory clear-halt``): clear the halt and the
+    provider integrity failure count of the factory state in ``state_dir`` and of every fleet worker under
+    ``state_dir/fleet/w*``. Takes each directory's factory lock (refuses while that factory runs). Returns
+    one record per directory that was halted or had failures."""
+    out: list[dict[str, Any]] = []
+    fleet = Path(state_dir) / "fleet"
+    dirs = [Path(state_dir), *([fleet] if fleet.is_dir() else []),
+            *sorted(p for p in fleet.glob("w*") if p.is_dir())]
+    for d in dirs:
+        st_path, halt_path = d / STATE_FILE, d / HALT_FILE
+        if not st_path.exists() and not halt_path.exists():
+            continue
+        lock = FactoryLock(d / LOCK_FILE)
+        lock.acquire()
+        try:
+            st = FactoryState.load(st_path)
+            halted = st.halted is not None or halt_path.exists()
+            if not halted and not st.provider_integrity_failures:
+                continue
+            out.append({"state_dir": str(d), "halted": halted, "failures": st.provider_integrity_failures})
+            st.halted = None
+            st.provider_integrity_failures = 0
+            st.provider_integrity_log = [*st.provider_integrity_log,
+                                         {"at": time.time(), "cleared": True, "note": str(note)[:200]}
+                                         ][-_MAX_FAILURE_RECORDS:]
+            st.save(st_path)
+            with contextlib.suppress(FileNotFoundError):
+                halt_path.unlink()
+            log.warning("factory halt cleared by the operator in %s (%s)", d, note or "no note")
+        finally:
+            lock.release()
+    return out
+
+
+class ProviderIntegrityHalt(IntegrityError):  # noqa: N818 - a state, like FactoryStopped
+    """The factory stopped after too many provider-attributable integrity failures (fail closed).
+
+    Production resumes only after an operator clears the halt (:meth:`FactoryScheduler.clear_halt`,
+    ``pgw factory clear-halt``)."""
+
+
+def _has_encrypted_provider(gen: Any) -> bool:
+    """Whether ``gen``'s products come from an encrypted-mask provider (mlwe v1/v2, pks-v3, fused2 + HE)."""
+    return getattr(gen, "remote", None) is not None or getattr(gen, "he", None) is not None
+
+
+def is_provider_integrity_failure(exc: BaseException, gen: Any) -> bool:
+    """A failure the provider is accountable for: an encrypted generator's :class:`IntegrityError` (its
+    products failed the private self-check, or a reply had the wrong shape) or a malformed reply
+    (``ProtocolError`` with ``details["reply"]``, :func:`pgw.hemask.wire.decode_maskgen_response`).
+
+    Transport errors (timeouts, connection failures, ``UNAVAILABLE`` / rate limits) and every failure of a
+    local generator are not: they are retried with back-off."""
+    if isinstance(exc, ProviderIntegrityHalt) or not _has_encrypted_provider(gen):
+        return False
+    if isinstance(exc, IntegrityError):
+        return True
+    return isinstance(exc, ProtocolError) and exc.code == ErrorCode.PROTOCOL and bool(exc.details.get("reply"))
 
 
 @dataclass(frozen=True)
@@ -119,6 +198,12 @@ class FactoryState:
     last_run_at: float | None = None
     last_segment_id: str | None = None
     throughput: dict[str, float] = field(default_factory=dict)
+    #: Provider-attributable integrity failures since the last operator clear (never reset by success).
+    provider_integrity_failures: int = 0
+    #: The most recent of them (time, model/ring, error; no secrets), at most ``_MAX_FAILURE_RECORDS``.
+    provider_integrity_log: list[dict[str, Any]] = field(default_factory=list)
+    #: Set when the factory halted on provider integrity failures; cleared only by an operator.
+    halted: dict[str, Any] | None = None
 
     @staticmethod
     def key(fingerprint: str, ring: str) -> str:
@@ -138,7 +223,8 @@ class FactoryState:
             st = cls(**{k: v for k, v in data.items() if k in known})
             if not isinstance(st.totals, dict) or not isinstance(st.throughput, dict) or not (
                 st.in_progress is None or isinstance(st.in_progress, dict)
-            ):
+            ) or not isinstance(st.provider_integrity_failures, int) or not isinstance(
+                st.provider_integrity_log, list) or not (st.halted is None or isinstance(st.halted, dict)):
                 raise ValueError("state has fields of the wrong type")
             return st
         except (OSError, ValueError, TypeError) as exc:
@@ -337,8 +423,9 @@ class FactoryScheduler:
         self._wake.set()
 
     def _start(self) -> None:
-        """Take the lock and recover from an interrupted previous run (once)."""
+        """Take the lock and recover from an interrupted previous run (once). Refuses to run while halted."""
         self.lock.acquire()
+        self._check_not_halted()
         if self._resumed:
             return
         self._resumed = True
@@ -378,6 +465,86 @@ class FactoryScheduler:
             self.state.save(self.state_path)
         except OSError as exc:
             log.error("cannot persist factory state to %s: %s", self.state_path, exc)
+
+    # ---- provider integrity (fail closed) -------------------------------------------------------
+    @property
+    def halt_path(self) -> Path:
+        """Marker file of a halt (kept next to the state file, so a corrupt or deleted state file does not
+        clear a halt)."""
+        return self.state_dir / HALT_FILE
+
+    def halted(self) -> dict[str, Any] | None:
+        """The halt record, or ``None`` while the factory may produce."""
+        if self.state.halted is not None:
+            return self.state.halted
+        for path in self._halt_paths():
+            try:
+                data = json.loads(path.read_text())
+            except FileNotFoundError:
+                continue
+            except (OSError, ValueError):
+                return {"reason": "unreadable halt marker", "path": str(path)}
+            return data if isinstance(data, dict) else {"reason": "halt marker", "path": str(path)}
+        return None
+
+    def _halt_paths(self) -> list[Path]:
+        shared = getattr(self, "shared_halt_path", None)  # a fleet: one halt stops every worker
+        return [self.halt_path, *([Path(shared)] if shared is not None else [])]
+
+    def _check_not_halted(self) -> None:
+        h = self.halted()
+        if h is not None:
+            raise ProviderIntegrityHalt(
+                "mask factory is halted after repeated provider integrity failures; investigate the compute "
+                "provider, then clear the halt with 'pgw factory clear-halt'", details={"halt": h})
+
+    def _provider_integrity_failure(self, exc: BaseException, fingerprint: str, ring: str) -> None:
+        """Count a provider-attributable failure (alert); halt at the limit (raises :class:`ProviderIntegrityHalt`)."""
+        st = self.state
+        st.provider_integrity_failures += 1
+        n = st.provider_integrity_failures
+        limit = int(getattr(self.settings, "max_provider_integrity_failures", 3))
+        rec = {"at": time.time(), "fingerprint": short_fingerprint(fingerprint), "ring": ring,
+               "error": f"{type(exc).__name__}: {getattr(exc, 'message', str(exc))}"[:300]}
+        st.provider_integrity_log = [*st.provider_integrity_log, rec][-_MAX_FAILURE_RECORDS:]
+        log.critical("ALERT: provider integrity failure %d of %d allowed for %s/%s (%s); the segment was aborted "
+                     "and its seed is never used. An honest provider never causes this: investigate the compute "
+                     "provider", n, limit, short_fingerprint(fingerprint), ring, rec["error"])
+        self.metrics.provider_integrity_failure()
+        if n >= limit:
+            st.halted = {"at": time.time(), "failures": n, "limit": limit, "last": rec}
+            self._save_state()
+            for path in self._halt_paths():
+                try:
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.write_text(json.dumps(st.halted, indent=1))
+                except OSError as e:  # the state file still carries the halt
+                    log.error("cannot write the halt marker %s: %s", path, e)
+            self.metrics.halted(True)
+            log.critical("ALERT: mask factory HALTED after %d provider integrity failures (limit %d); it will not "
+                         "produce or restart until an operator runs 'pgw factory clear-halt'", n, limit)
+            raise ProviderIntegrityHalt(
+                f"mask factory halted after {n} provider integrity failures (limit {limit})",
+                details={"halt": st.halted}) from exc
+        self._save_state()
+
+    def clear_halt(self, note: str = "") -> dict[str, Any] | None:
+        """Operator action: clear a halt and the failure count (after investigating the provider). Returns the
+        cleared halt record (``None`` if the factory was not halted)."""
+        prev = self.halted()
+        st = self.state
+        st.halted = None
+        st.provider_integrity_failures = 0
+        st.provider_integrity_log = [*st.provider_integrity_log, {"at": time.time(), "cleared": True,
+                                                                  "note": str(note)[:200]}][-_MAX_FAILURE_RECORDS:]
+        self._save_state()
+        for path in self._halt_paths():
+            with contextlib.suppress(FileNotFoundError):
+                path.unlink()
+        self.metrics.halted(False)
+        log.warning("factory halt cleared by the operator (%s); provider integrity failure count reset",
+                    note or "no note")
+        return prev
 
     def stop(self) -> None:
         """Request a stop: the current segment is aborted and :meth:`run_forever` returns."""
@@ -605,6 +772,9 @@ class FactoryScheduler:
                 self._save_state()
                 log.error("segment generation failed for %s/%s: %s", short_fingerprint(key[0]), key[1],
                           self.state.last_error)
+                gen = self.generators.get((plan.fingerprint, plan.ring))
+                if is_provider_integrity_failure(exc, gen):
+                    self._provider_integrity_failure(exc, plan.fingerprint, plan.ring)  # raises at the limit
                 errors.append(exc)
                 del left[key]
                 continue
@@ -621,7 +791,8 @@ class FactoryScheduler:
         """Loop ``plan``/``run_once`` every ``poll_interval_s`` until stopped.
 
         A low-water notification from the store wakes the loop early. Failures back off
-        exponentially (``error_backoff_s`` doubling up to 10 minutes).
+        exponentially (``error_backoff_s`` doubling up to 10 minutes). Configuration errors and a halt on
+        provider integrity failures (:class:`ProviderIntegrityHalt`) end the loop (raised).
         """
         if stop_event is not None:
             self.stop_event = stop_event
@@ -642,7 +813,7 @@ class FactoryScheduler:
                         wait = 0.0  # re-plan immediately; inventory may still be below target
                 except FactoryStopped:
                     break
-                except ConfigError as exc:
+                except (ConfigError, ProviderIntegrityHalt) as exc:
                     self._record_error(exc)
                     raise
                 except Exception as exc:
@@ -674,10 +845,14 @@ class FactoryScheduler:
             reasons.append(f"no progress for {stale_s:.0f}s")
         if self.consecutive_errors >= max_err:
             reasons.append(f"{self.consecutive_errors} consecutive failed runs")
+        halt = self.halted()
+        if halt is not None:
+            reasons.append("halted after provider integrity failures (operator action required)")
         return not reasons, {
             "healthy": not reasons, "reasons": reasons, "seconds_since_progress": round(stale_s, 1),
             "consecutive_errors": self.consecutive_errors, "last_error": self.last_run_error,
-            "disk_limited": self.disk_limited,
+            "disk_limited": self.disk_limited, "halted": halt is not None,
+            "provider_integrity_failures": self.state.provider_integrity_failures,
         }
 
     def status(self) -> dict[str, Any]:
@@ -712,6 +887,9 @@ class FactoryScheduler:
             "rings": self._ring_status(),
             "last_error": self.state.last_error,
             "last_segment_id": self.state.last_segment_id,
+            "halted": self.halted(),
+            "provider_integrity_failures": self.state.provider_integrity_failures,
+            "max_provider_integrity_failures": int(getattr(self.settings, "max_provider_integrity_failures", 3)),
             "models": rows,
             "plan": [asdict(p) for p in self.plan()],
         }

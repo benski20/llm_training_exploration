@@ -333,6 +333,13 @@ class HEMaskBackend:
     factory's Freivalds self-check.
     """
 
+    #: Soundness target (bits) of the factory's private every-row self-check of this backend's products
+    #: (:meth:`pgw.factory.MaskGenerator._private_vectors`, which never goes below
+    #: :data:`pgw.core.freivalds.HE_SELF_CHECK_BITS` for any remote product): the provider can shift any
+    #: decrypted entry by an exact amount of its choosing (add ``2^(q-K) delta`` to ``y``), so two uniform
+    #: ring vectors (which miss a ``2^31`` error with probability 1/4) are not enough (pks-v3 adversarial
+    #: review, F1 / R1).
+    self_check_bits: float = 40.0
     #: Fused device passes (:mod:`pgw.hemask.devmm`), or ``None`` (the CPU / per-call fastmm engines).
     _dev: Any = None
     #: Class defaults of the decryption state (instances set their own in ``__init__``; tests that build a

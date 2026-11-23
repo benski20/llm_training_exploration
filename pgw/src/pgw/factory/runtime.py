@@ -98,7 +98,8 @@ def build_generators(settings: FactorySettings, packs: list[Any], throttle: Thro
                               self_check_rows=settings.self_check_rows, remote=remote,
                               gpu_prng=None if settings.gpu_prng == "auto" else bool(settings.gpu_prng),
                               skip_kinds=settings.skip_kinds,
-                              check_field=None if settings.check_field == "ring" else settings.check_field)
+                              check_field=None if settings.effective_check_field == "ring"
+                              else settings.effective_check_field)
             if g.key in gens:
                 raise ConfigError(f"duplicate pack/ring {pack.name}/{ring}")
             gens[g.key] = g
@@ -224,7 +225,16 @@ def _build_pks_backend(settings: FactorySettings, pack: Any, ring: str, clients:
     if len(clients) != 1:
         raise ConfigError("he_scheme='pks-v3' supports one compute service (he_service_url)")
     skip = frozenset(settings.skip_kinds)
-    store = PKSHintStore.open_or_build(hint_root, pack, only=linear_keys(pack, skip))
+    mac_key = None
+    key_file = getattr(settings, "he_hint_key_file", None)
+    if key_file is not None:  # authenticates the hint store's meta.json (seeds, row norms, digests)
+        from pgw.maskstore.keys import _read_key_file, write_key_file
+
+        if not Path(key_file).exists():
+            write_key_file(key_file)
+            log.info("factory: created the hint key %s (keep it outside the hint directory)", key_file)
+        mac_key = _read_key_file(Path(key_file))
+    store = PKSHintStore.open_or_build(hint_root, pack, only=linear_keys(pack, skip), mac_key=mac_key)
     out = {s.id.key: s.out_features for s in pack.linear_specs()}
     remote = RemotePKS.http(clients[0], pack.fingerprint, out, store.a_seed, timeout_s=settings.he_timeout_s)
     log.info("factory: encrypted mask generation for %s via %s (scheme pks-v3, compact hint %.2f GB)",

@@ -74,7 +74,7 @@ PKS_V3_ACK = "pks-v3-unreviewed-n8192"
 D = 256  # module degree seen by the provider = slots per group
 RANK = 16  # upload module rank (provider view)
 NU = RANK * D  # upload ring degree (4096)
-NR = 8192  # reply ring degree (production; core-SVP ~218 at log2(q1 P) = 108)
+NR = 8192  # reply ring degree (production; core-SVP 251 classical / 228 quantum at log2(q1 P) = 108, HE-std limit 218)
 PACK = NR // D  # 32 output rows per reply ciphertext
 _U64 = np.uint64
 _M56 = _U64((1 << 56) - 1)

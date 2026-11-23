@@ -340,6 +340,37 @@ def outbox_serve_cmd(export_dir: Path, token_file: Path, host: str, port: int, t
         srv.stop()
 
 
+@factory_group.command("clear-halt")
+@click.option("--state-dir", type=click.Path(path_type=Path), default=None,
+              help="Factory state directory (default: PGW_FACTORY_STATE_DIR, else the mask store root)")
+@click.option("--note", default="", help="Why the halt is cleared (recorded in factory-state.json)")
+@click.option("--yes", is_flag=True, help="Confirm that the provider was investigated")
+@_handle_errors
+def clear_halt_cmd(state_dir: Path | None, note: str, yes: bool) -> None:
+    """Resume an encrypted factory that halted after provider integrity failures (operator action).
+
+    The factory halts (fail closed) after max_provider_integrity_failures segments whose provider products
+    failed its private self-check. Investigate the compute provider first: an honest provider never causes one.
+    Clears the halt and the failure count of the factory (and of every fleet worker under it)."""
+    import os
+
+    from pgw.factory.scheduler import clear_halt_at
+
+    if not yes:
+        raise click.UsageError("investigate the compute provider first, then pass --yes")
+    if state_dir is None:
+        env = os.environ.get("PGW_FACTORY_STATE_DIR") or os.environ.get("PGW_MASKSTORE_ROOT")
+        if not env:
+            raise click.UsageError("pass --state-dir (or set PGW_FACTORY_STATE_DIR / PGW_MASKSTORE_ROOT)")
+        state_dir = Path(env)
+    cleared = clear_halt_at(state_dir, note)
+    if not cleared:
+        click.echo(f"no halt or provider integrity failure recorded under {state_dir}")
+        return
+    for c in cleared:
+        click.echo(f"cleared {c['state_dir']}: halted={c['halted']}, provider integrity failures={c['failures']}")
+
+
 @factory_group.command("status")
 @click.option("--pack", "packs", multiple=True, type=click.Path(path_type=Path), help="Model pack(s) to plan for")
 @click.option("--json", "as_json", is_flag=True, help="Machine-readable output")

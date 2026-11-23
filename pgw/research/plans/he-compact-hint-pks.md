@@ -42,7 +42,7 @@ customer storage; exactness of `W r mod 2^K`. "per output-slot" = per (output ro
 | E. multi-secret (PVW) packed LWE | LWE std | unchanged | unchanged | `dim` MACs per output-slot (dense) | hint | yes | far too slow |
 | F. smaller q / smaller dimension | needs `q >= 2^(K + 23)` for `W e`; n=2048 allows log q 54 only | - | -5-10% | -50% | -50% | yes | not worth a parameter change |
 | G. partner factory (plaintext `W r` on a non-colluding GPU, SPEC 7.7) | non-collusion, not lattice | provider-independent GPU | masks only (4 B x m) | none | none | yes | exists; trust model differs |
-| **H. pks-v3 (this note)** | upload RLWE n=4096 log q 56 (as A); reply key RLWE n=4096 log Q 108 (HE-std 128 classical limit 109; production: n=8192, core-SVP 218) | A + mod switch, 16-row packing, hybrid key switch: ~100 modmul per output-slot (+384 if A~ is re-transformed every group) | 7 B x n + reply key (16 x N x 13.5 B per linear and group: +3.6% at 72B) / 4.5 B x m | 1 NTT product per 16 rows: **8.8 ns** per output-slot measured (op-count floor ~4-5) | **1.5 KB per output row** (10.5 GB at 72B; 0 if streamed at +6 B x m down) | yes (tested bit-exact at 72B widths) | **recommended to take to review** |
+| **H. pks-v3 (this note)** | upload RLWE n=4096 log q 56 (as A); reply key RLWE n=4096 log Q 108 (HE-std 128 classical limit 109; production: n=8192, log Q 108 against an HE-std limit of 218, core-SVP 251) | A + mod switch, 16-row packing (32 rows at the production n = 8192), hybrid key switch: ~100 modmul per output-slot (+384 if A~ is re-transformed every group) | 7 B x n + reply key (16 x N x 13.5 B per linear and group: +3.6% at 72B) / 4.5 B x m | 1 NTT product per 16 rows: **8.8 ns** per output-slot measured (op-count floor ~4-5) | **1.5 KB per output row** (10.5 GB at 72B; 0 if streamed at +6 B x m down) | yes (tested bit-exact at 72B widths) | **recommended to take to review** |
 
 Seeded `A` (never uploaded) and the randomised upload switch (bb = 53) are already in today's scheme; both stay
 compatible with pks-v3. Moving NTT-heavy work to the provider is exactly what pks-v3 does.
@@ -65,7 +65,7 @@ for `l < 16`, with `k_l` public and seeded (sampled in the NTT domain), `q1 = p1
 (primes `= 1 mod 8192`). 885 KB per linear and group (2x at N = 8192).
 
 **Provider.** `y = W8 b mod 2^56` (unchanged GEMM). Modulus switch `y` and `H` to `q1`
-(`round(x q1 / 2^56)`, exact integer helper); pack 16 rows: `body = sum_j Y^j iota(y'_j)`,
+(`round(x q1 / 2^56)`, exact integer helper); pack 16 rows (this paragraph describes the n = 4096 prototype; the production n = 8192 reply ring packs 32 rows, `PACK = NR / 256`): `body = sum_j Y^j iota(y'_j)`,
 `A~_l = sum_j Y^j iota(h'_{j,l})` (pure re-indexing: coefficient `16u + j`); hybrid key switch
 `C0 = P body - sum_l A~_l beta_l`, `C1 = sum_l A~_l k_l` (mod `q1 P`, RNS NTT), ModDown to `c0, c1 mod q1`;
 send `c0` rounded to `yb = 36` bits (4.5 B per output-slot). `A~` is per (model, A seed): the provider holds it
@@ -74,7 +74,7 @@ or re-derives it, or a global nothing-up-my-sleeve `A` lets all customers share 
 the default).
 
 **Compact hint.** `c1` depends only on public data (`W8`, `A`, `k`), so it is fixed per linear: 4096 coefficients
-per 16 rows = **256 per output row** (1.5 KB at 48 bits, 2 KB in NTT form). The customer builds it once with
+per 16 rows (8192 per 32 rows at n = 8192) = **256 per output row** (1.5 KB at 48 bits, 2 KB in NTT form). The customer builds it once with
 today's hint-build pass (`H` rows are streamed through the key-switch reduction and never stored), or downloads a
 provider-built copy whose hash is reproducible (see 5).
 
@@ -147,7 +147,7 @@ of an H100. Provider memory: `A~` per (model, A seed), 34 GB (7B) to 169 GB (72B
   as today's MLWE). Reply key: n = 4096, log Q = 107.99 sits at the HE-standard classical 128-bit limit (109) with
   no margin and above its quantum limit (101); core-SVP 96.9 in our model (the standard's (4096, 109) point gives
   95.5). **Production should use the n = 8192 reply ring** (32 rows per ciphertext, same 256 hint coefficients per
-  row, Q = 2^108 against a limit of 218, core-SVP 218): ~8% more customer work per coefficient, 2x reply-key bytes
+  row, Q = 2^108 against an HE-standard limit of 218, core-SVP 251 classical / 228 quantum): ~8% more customer work per coefficient, 2x reply-key bytes
   (or one reply key per group for all linears, see 6). The prototype uses 4096 to keep numpy fast; the algorithm is
   identical. Run the lattice estimator (`LWE.estimate(LWE.Parameters(n=8192, q=2**108, Xs=ND.UniformMod(3),
   Xe=ND.CenteredBinomial(21)))` and n = 4096, q = 2^56 for the upload) before sign-off.

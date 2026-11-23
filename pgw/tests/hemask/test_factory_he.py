@@ -221,3 +221,85 @@ def test_he_pipeline_bytes_budget_limits_outstanding(tiny_pack: Any, tmp_path: P
     assert busy_at_submit and max(busy_at_submit) == 0
     local = _collect(MaskGenerator(tiny_pack, ring, device="cpu"), 256, 256)
     assert all(torch.equal(out[k], local[k]) for k in local)
+
+
+class ShiftingProvider(FakeProvider):
+    """A malicious provider that adds an exact chosen error ``delta`` to one decrypted mask entry of every
+    reply: ``y += 2^(q - K) delta`` (the reply is additively malleable; pks-v3 adversarial review, F1)."""
+
+    def __init__(self, pack: Any, q_bits: int, k: int, delta: int):
+        super().__init__(pack)
+        self.step = np.uint64((delta << (q_bits - k)) % (1 << 64))
+
+    def __call__(self, linear: str, b: np.ndarray) -> np.ndarray:
+        y = super().__call__(linear, b)
+        y[0, 0] += self.step
+        return y
+
+
+@pytest.mark.parametrize("delta", [0, 1 << 27, 1 << 31])
+def test_mlwe_factory_self_check_is_sound_against_chosen_errors(tiny_pack: Any, tmp_path: Path, delta: int) -> None:
+    """mlwe v1/v2 (the default encrypted factory): the provider's exact chosen error is caught by the private
+    every-row check, which now uses enough vectors for 40 bits (was 2: a 2^31 error passed with probability
+    1/4, a 2^27 error, inside the K32A12C27 range where the gateway's reaction depends on the data, with
+    2^-10). An honest provider still gives the local segments bit for bit."""
+    from pgw.core.freivalds import HE_SELF_CHECK_BITS, private_check_vectors_for
+
+    ring = RingParams.from_name("K32A12C27")
+    hints = HintStore.open_or_build(tmp_path / "hints", tiny_pack, rank=8, q_bits=56)
+    remote = HEMaskBackend(tiny_pack, ring, hints, ShiftingProvider(tiny_pack, 56, 32, delta), groups_per_call=2)
+    gen = MaskGenerator(tiny_pack, ring, device="cpu", remote=remote)
+    for s in tiny_pack.linear_specs():
+        assert gen._private_vectors(s) == private_check_vectors_for(ring, s.in_features, HE_SELF_CHECK_BITS) > 2
+    if delta:
+        with pytest.raises(IntegrityError):
+            _collect(gen, 300, 300)
+        return
+    local = _collect(MaskGenerator(tiny_pack, ring, device="cpu"), 300, 300)
+    he = _collect(gen, 300, 300)
+    assert local.keys() == he.keys() and all(torch.equal(local[k], he[k]) for k in local)
+
+
+def test_private_vectors_floor_applies_to_every_remote(tiny_pack: Any) -> None:
+    """Local products keep 2 private vectors (faults, not chosen errors); any remote product (a fleet's
+    sharded remote, a backend that declares nothing or asks for fewer bits) gets at least 40 bits."""
+    from pgw.core.freivalds import private_check_vectors_for
+    from pgw.factory.fleet import SegmentShardedRemote
+
+    ring = RingParams.from_name("K32A12C27")
+    want = {s.id.key: private_check_vectors_for(ring, s.in_features, 40.0) for s in tiny_pack.linear_specs()}
+
+    class Weak:  # declares fewer bits than the floor: ignored
+        self_check_bits = 2.0
+
+    for remote in (SegmentShardedRemote([FakeProvider(tiny_pack)]), Weak(), object()):
+        gen = MaskGenerator(tiny_pack, ring, device="cpu", remote=remote)
+        assert {s.id.key: gen._private_vectors(s) for s in tiny_pack.linear_specs()} == want
+    local = MaskGenerator(tiny_pack, ring, device="cpu")
+    assert all(local._private_vectors(s) == 2 for s in tiny_pack.linear_specs())
+
+
+def test_private_vectors_reused_until_a_segment_fails(tiny_pack: Any, tmp_path: Path) -> None:
+    """The private vectors (and their ``v W8``) are kept across accepted segments and wiped and redrawn after
+    any failed or abandoned one, so a provider never probes the vectors in use."""
+    ring = RingParams.from_name("K32A12C27")
+    hints = HintStore.open_or_build(tmp_path / "hints", tiny_pack, rank=8, q_bits=56)
+    prov = ShiftingProvider(tiny_pack, 56, 32, 0)
+    gen = MaskGenerator(tiny_pack, ring, device="cpu", remote=HEMaskBackend(tiny_pack, ring, hints, prov))
+    _collect(gen, 256, 256)
+    first = {k: (cu.copy(), cw.copy(), cu) for k, (cu, cw) in gen._priv_cache.items()}
+    assert len(first) == len(list(tiny_pack.linear_specs()))
+    _collect(gen, 256, 256)
+    assert all(gen._priv_cache[k][0] is first[k][2] for k in first)  # reused
+    prov.step = np.uint64(1 << (24 + 27))  # now tamper: 2^27 in one entry
+    with pytest.raises(IntegrityError):
+        _collect(gen, 256, 256)
+    assert gen._priv_cache == {} and all(not v[2].any() for v in first.values())  # wiped
+    prov.step = np.uint64(0)
+    _collect(gen, 256, 256)
+    assert all(not np.array_equal(gen._priv_cache[k][0], first[k][0]) for k in first)  # fresh
+    # abandoning a segment midway also redraws
+    it = gen.generate(SEED, 256, checks=2, chunk_slots=256)
+    next(it)
+    it.close()
+    assert gen._priv_cache == {}

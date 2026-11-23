@@ -548,3 +548,54 @@ def test_factory_self_check_catches_provider_errors(tmp_path: Path, shift: int, 
     b = {(g.id.key, g.slot_start): g.wr.clone() for g in gen.generate(seed, 300, checks=2, chunk_slots=300)}
     assert a.keys() == b.keys() and all(torch.equal(a[k], b[k]) for k in a)
     assert gen.last_stats.self_checked_rows == 300 * 4
+
+
+# ---- hint store: authenticated metadata (F6) and the build lock (F7) -------------------------------------
+def test_hint_meta_is_authenticated_with_the_customer_key(tmp_path: Path) -> None:
+    import json
+
+    from pgw.hemask.pks_backend import PKSHintStore
+
+    pack = _Pack({"blk.0.q": (64, 48)})
+    key, other = os.urandom(32), os.urandom(32)
+    st = PKSHintStore.open_or_build(tmp_path, pack, mac_key=key)
+    seeds = (st.a_seed, st.ks_seed)
+    st.close()
+    assert "mac" in st.meta
+    assert PKSHintStore.open(tmp_path, pack.fingerprint, mac_key=key) is not None
+    with pytest.raises(IntegrityError, match="not authenticated"):
+        PKSHintStore.open(tmp_path, pack.fingerprint, mac_key=other)
+    meta_p = PKSHintStore.dir_for(tmp_path, pack.fingerprint) / "meta.json"
+    meta = json.loads(meta_p.read_text())
+    meta["row_norms"]["blk.0.q"] = 1.0  # would defeat the noise refusal
+    meta_p.write_text(json.dumps(meta))
+    with pytest.raises(IntegrityError, match="not authenticated"):
+        PKSHintStore.open_or_build(tmp_path, pack, mac_key=key)
+    # without a key only the digests are checked (trust boundary documented): the edit is not detected
+    assert PKSHintStore.open(tmp_path, pack.fingerprint) is not None
+    # a store built without a key is rebuilt (fresh seeds) once a key is configured
+    del meta["mac"]
+    meta_p.write_text(json.dumps(meta))
+    st2 = PKSHintStore.open_or_build(tmp_path, pack, mac_key=key)
+    assert (st2.a_seed, st2.ks_seed) != seeds and "mac" in st2.meta
+    st2.close()
+
+
+def test_hint_rebuild_refused_while_another_process_has_the_store_open(tmp_path: Path) -> None:
+    from pgw.hemask.pks_backend import PKSHintStore
+
+    pack = _Pack({"blk.0.q": (64, 48), "blk.0.o": (32, 48)})
+    st = PKSHintStore.open_or_build(tmp_path, pack, only={"blk.0.q"})
+    assert st._lock_fd is not None
+    # a second opener that only reads it shares the lock
+    st_b = PKSHintStore.open_or_build(tmp_path, pack, only={"blk.0.q"})
+    assert st_b.a_seed == st.a_seed
+    st_b.close()
+    # a rebuild (more linears) would replace the seeds under the first process: refused
+    with pytest.raises(ConfigError, match="another process"):
+        PKSHintStore.open_or_build(tmp_path, pack, only={"blk.0.q", "blk.0.o"})
+    assert PKSHintStore.open(tmp_path, pack.fingerprint).a_seed == st.a_seed  # type: ignore[union-attr]
+    st.close()
+    st3 = PKSHintStore.open_or_build(tmp_path, pack, only={"blk.0.q", "blk.0.o"})  # once it is closed, the rebuild goes ahead
+    assert set(st3.meta["row_norms"]) == {"blk.0.q", "blk.0.o"} and st3.a_seed != st.a_seed
+    st3.close()
