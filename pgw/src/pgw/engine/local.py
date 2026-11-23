@@ -81,6 +81,10 @@ class LocalComputeClient:
         self._specs: dict[str, LinearSpec] = {s.id.key: s for s in pack.linear_specs()}
         self._weights: dict[str, PreparedWeight] = {}
         self._lock = threading.Lock()
+        # One request's GEMMs at a time: the CPU (or the one GPU) is a single device. Pipelined prompt blocks
+        # put two requests in flight, and two multi-threaded CPU GEMMs at once (two BLAS thread teams next to
+        # the gateway's threads in the same process) only oversubscribe the cores. Same products, same bytes.
+        self._compute_lock = threading.Lock()
 
     def _weight(self, key: str) -> PreparedWeight:
         w = self._weights.get(key)
@@ -116,7 +120,9 @@ class LocalComputeClient:
             x_hat = unpack_ring(item.x_hat, (item.rows, spec.in_features), ring)
             if self.record:
                 self.received.append((item.linear, x_hat.clone()))
-            y_hat = self._weight(item.linear).matmul(x_hat.to(self.device), ring).cpu()
+            w = self._weight(item.linear)
+            with self._compute_lock:
+                y_hat = w.matmul(x_hat.to(self.device), ring).cpu()
             if self.tamper is not None:
                 y_hat = self.tamper(item.linear, y_hat) & ring.mask
             out.append(ComputeResult(item.linear, item.rows, pack_ring(y_hat, ring)))

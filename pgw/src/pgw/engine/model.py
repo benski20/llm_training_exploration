@@ -1217,7 +1217,10 @@ class TransformerModel:
             if nd is not None and nd.eligible(st):  # PGW_DECODE_NATIVE: every layer in the native driver
                 nd.run(st)
                 first_layer = self.num_layers
-        for layer in range(first_layer, self.num_layers):
+        chunk = self._prefill_chunk(st, pads) if first_layer == 0 else 0
+        if chunk:
+            yield from self._chunked_layers(st, chunk, capture)
+        for layer in range(first_layer if not chunk else self.num_layers, self.num_layers):
             if pads is not None:
                 yield from self._padded(self._layer_standard(layer, st), pads)
             elif sched is None:
@@ -1235,6 +1238,57 @@ class TransformerModel:
         if pads is not None:  # the head's calls take the pass's padding too (supports_pad_rows checked it)
             return (yield from self._padded(self.head_mode.steps(self, seqs, st.hs), pads))
         return (yield from self.head_mode.steps(self, seqs, st.hs))
+
+    #: Chunked prefill (``PGW_PREFILL_CHUNK_ROWS``, gateway ``prefill_chunk_rows``; 0 = off, the default): a pass
+    #: in which a sequence has more than this many new rows runs as consecutive sub-passes of at most this
+    #: many rows per sequence, each through every layer (chunk-major), so the gateway's working set (linear
+    #: inputs and outputs, masks, attention scratch) is bounded by the chunk instead of the prompt. Only on the
+    #: native float path, where every row's bits depend only on that row and the cache prefix it sees: the
+    #: logits, the KV cache and every linear's rows are bit-identical to the unchunked pass. Provider-visible
+    #: effect: the same rows and bytes per linear in total, in ``ceil(rows / chunk)`` trips per linear whose
+    #: sizes are a function of the public prompt length and this public setting.
+    prefill_chunk_rows = _env_int("PGW_PREFILL_CHUNK_ROWS") or 0
+
+    def _prefill_chunk(self, st: PassState, pads: Any) -> int:
+        """Rows per sub-pass of a chunked prefill for this pass, or 0 (one pass, as before)."""
+        chunk = int(self.prefill_chunk_rows or 0)
+        if (chunk <= 0 or pads is not None or self.schedule is not None or not isinstance(st.ops, NativeFloatOps)
+                or any(tr is not None for tr in st.trees)):
+            return 0
+        return chunk if max(int(t.numel()) for t in st.ids) > chunk else 0
+
+    def _chunked_layers(self, st: PassState, chunk: int,
+                        capture: dict[int, tuple[frozenset[int], dict[int, torch.Tensor]]]
+                        ) -> PyGenerator[list[LinearCall], list[torch.Tensor], None]:
+        """Every layer of ``st`` as sub-passes of at most ``chunk`` rows per sequence (chunk-major; see
+        :attr:`prefill_chunk_rows`). Sub-pass ``c`` carries rows ``[c chunk, (c + 1) chunk)`` of every sequence
+        that has them; its rows attend to the cache prefix that earlier sub-passes wrote in every layer.
+        Leaves ``st.hs`` (and captured hidden states) as the whole pass would."""
+        n = [int(t.numel()) for t in st.ids]
+        hs_parts: list[list[torch.Tensor]] = [[] for _ in n]
+        cap_parts: dict[int, dict[int, list[torch.Tensor]]] = {si: {} for si in capture}
+        for c0 in range(0, max(n), chunk):
+            act = [si for si, ni in enumerate(n) if ni > c0]
+            c1 = c0 + chunk
+            sub = PassState([st.seqs[si] for si in act], [st.ids[si][c0:c1] for si in act],
+                            [st.caches[si] for si in act], [st.starts[si] + c0 for si in act],
+                            [(st.rope[si][0][c0:c1], st.rope[si][1][c0:c1]) for si in act],
+                            [st.hs[si][c0:c1] for si in act], st.ops)
+            subcap = {j: (capture[si][0], {}) for j, si in enumerate(act) if si in capture}
+            for layer in range(self.num_layers):
+                yield from self._layer_standard(layer, sub)
+                if subcap:
+                    self._capture(subcap, sub, layer)
+            for j, si in enumerate(act):
+                hs_parts[si].append(sub.hs[j])
+                if j in subcap:
+                    for lay, h in subcap[j][1].items():
+                        cap_parts[si].setdefault(lay, []).append(h)
+            del sub
+        st.hs = [p[0] if len(p) == 1 else torch.cat(p, dim=0) for p in hs_parts]
+        for si, layers in cap_parts.items():
+            for lay, ps in layers.items():
+                capture[si][1][lay] = ps[0] if len(ps) == 1 else torch.cat(ps, dim=0)
 
     def _embed(self, t: torch.Tensor) -> torch.Tensor:
         """Embedding rows of token ids ``t`` in the compute dtype (a compacted bfloat16 table is widened

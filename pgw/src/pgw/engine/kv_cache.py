@@ -86,7 +86,12 @@ class KVCache:
             )
         if total <= self.capacity:
             return
-        new_cap = min(self.max_len, max(total, 2 * self.capacity))
+        new_cap = max(total, 2 * self.capacity)
+        if new_cap + new_cap // 4 >= self.max_len:
+            # close to the limit (e.g. a long prompt's pass with max_tokens to go): allocate the limit now, so
+            # the first decode step does not copy the whole cache into a doubled buffer (2x peak memory)
+            new_cap = self.max_len
+        new_cap = min(self.max_len, new_cap)
         shape = (self.num_layers, new_cap, self.num_kv_heads, self.head_dim)
         k = torch.zeros(shape, dtype=self.dtype, device=self.device)
         v = torch.zeros_like(k)

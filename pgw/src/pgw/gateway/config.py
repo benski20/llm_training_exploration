@@ -351,6 +351,15 @@ class GatewayModelConfig(BaseModel):
         "PGW_ATTN_THREADS; the same bits for any thread count). '-bf16kv': the KV cache stored as bfloat16 (half "
         "the bytes). Each is its own reference. Unset: PGW_FLOAT_OPS or 'torch'",
     )
+    prefill_chunk_rows: int | None = Field(
+        None, ge=0, le=1 << 20, description="Chunked prefill (default off): a prompt pass in which a sequence has "
+        "more than this many rows runs as consecutive sub-passes of at most this many rows each through every "
+        "layer, so gateway memory is bounded by the chunk instead of the prompt (needed for prompts of many "
+        "thousands of tokens). Bit-identical logits, KV cache and linear rows (needs a native float_ops: every row "
+        "is computed from that row and its cache prefix only). The provider sees the same rows and bytes per "
+        "linear in total, in ceil(rows / chunk) trips whose sizes follow from the public prompt length and this "
+        "public setting. 0 = off; None = PGW_PREFILL_CHUNK_ROWS or off. 2048 is a reasonable value",
+    )
     head_mode: Literal["gateway", "provider_int8"] = Field(
         "gateway", description="LM head: 'gateway' (default) = the exact float32 head on the gateway CPU; "
         "'provider_int8' = the masked LM head (pgw.engine.masked_head): the head quantized per row to int8 as one "
@@ -475,6 +484,9 @@ class GatewayModelConfig(BaseModel):
             raise ValueError(f"model {self.name!r}: lane needs masked mode")
         if self.head_mode == "provider_int8" and self.mode == "float":
             raise ValueError(f"model {self.name!r}: head_mode='provider_int8' needs masked (or plain) mode")
+        if self.prefill_chunk_rows and not self.float_ops.startswith("native"):
+            raise ValueError(f"model {self.name!r}: prefill_chunk_rows needs a native float_ops (only there are "
+                             "chunked rows bit-identical to one pass)")
         if self.prefix_cache != "off":
             # reused K/V rows are bit-identical to recomputed ones only on the row-invariant native float path
             # (fixed-order per-row kernels) with exact integer linears; torch's float kernels and the float
