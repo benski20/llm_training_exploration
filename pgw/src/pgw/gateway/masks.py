@@ -14,6 +14,14 @@ Parts every linear is done with are closed eagerly, at the start of the next tok
 :meth:`ensure` call for the model's first linear), never mid-step: closing zeroes a part's check
 vectors. A long session therefore holds open only the parts it still reads, so it never pins every
 slab of an in-memory mask ring (:mod:`pgw.maskstore.ringbuf`) until it ends.
+
+Incremental mode (``chunked=True``; gateway ``mask_reservation = "incremental"``): the same chain with a small,
+fixed, public chunk size. Extensions are whole chunks (never clipped to what the request may still use, so their
+sizes and the moments the store is asked depend only on the rows taken, never on ``max_tokens``), the next chunk is
+reserved ahead in the background, and retired parts are closed (their close commit) on a background thread
+instead of inside the token step. The gateway pairs it with an entitlement ledger (:class:`EntitlementLedger`)
+that admits a request only when the store can cover every live session's remaining entitlement, so the
+on-demand extensions do not run short in normal operation (and fail closed if they ever do).
 """
 
 from __future__ import annotations
@@ -35,7 +43,28 @@ def _decrypt_ahead() -> bool:
 
     return bool(store.TRIP_DECRYPT_AHEAD)
 
-__all__ = ["WindowedReservation"]
+__all__ = ["EntitlementLedger", "WindowedReservation", "chunk_entitlement"]
+
+
+def chunk_entitlement(first: int, cap: int, chunk: int) -> int:
+    """Most slots an incremental session can ever reserve: ``first`` plus whole chunks up to ``cap``."""
+    first, cap, chunk = int(first), int(cap), int(chunk)
+    return first + chunk * max(0, -(-(cap - first) // chunk))
+
+
+_closer_lock = threading.Lock()
+_closer: Any = None
+
+
+def _close_pool() -> Any:
+    """One shared background thread for retired parts' closes (incremental mode)."""
+    global _closer
+    with _closer_lock:
+        if _closer is None:
+            from concurrent.futures import ThreadPoolExecutor
+
+            _closer = ThreadPoolExecutor(max_workers=1, thread_name_prefix="pgw-mask-retire")
+        return _closer
 
 
 def _ring_of(part: Any) -> Any:
@@ -48,6 +77,58 @@ log = logging.getLogger(__name__)
 
 #: ``fn(slots) -> reservation`` (a :class:`pgw.maskstore.MaskReservation`-like object).
 Reserve = Callable[[int], Any]
+
+
+def _close_quietly(part: Any) -> None:
+    try:
+        part.close()
+    except Exception:  # pragma: no cover - close() burns; never fail a step for it
+        log.exception("closing an exhausted mask reservation part failed")
+
+
+class EntitlementLedger:
+    """Admission for incremental reservations (one per model runtime, i.e. per fingerprint and ring).
+
+    An incremental session holds only a chunk or two of masks, but is *entitled* to more (up to its
+    chunk-aligned cap). A request is admitted only when the store's available slots cover the remaining
+    entitlement of every live session plus the new request's, so a running answer's extensions find slots
+    (the guarantee an up-front reservation gave) while nothing beyond what is used is consumed. Only this
+    process reserves from the store for this ``(fingerprint, ring)`` (a store is never shared between
+    hosts); mask factories only add slots. Stock lost otherwise (retired segments) can still make an
+    extension fail: that fails closed (:class:`MaskExhaustedError`, nothing taken; the answer ends with an
+    error and its reservation is burned).
+
+    The ledger lives in gateway memory only: a crash loses entitlements, never consumed slots.
+    """
+
+    def __init__(self) -> None:
+        import weakref
+
+        self._live: weakref.WeakSet[WindowedReservation] = weakref.WeakSet()
+        self.refused = 0
+
+    def outstanding(self) -> int:
+        """Slots live sessions may still reserve."""
+        total = 0
+        for w in list(self._live):
+            if w.closed:
+                self._live.discard(w)
+                continue
+            total += w.outstanding
+        return total
+
+    def admit(self, available: int, entitled: int) -> bool:
+        """True when ``available`` slots cover the live sessions' outstanding entitlement plus ``entitled``."""
+        ok = int(available) - self.outstanding() >= int(entitled)
+        if not ok:
+            self.refused += 1
+        return ok
+
+    def add(self, w: WindowedReservation) -> None:
+        self._live.add(w)
+
+    def __len__(self) -> int:
+        return sum(1 for w in list(self._live) if not w.closed)
 
 
 class WindowedReservation:
@@ -72,10 +153,14 @@ class WindowedReservation:
             :meth:`charge_to` (charged minus reserved slots, public), and no part is retired before
             :meth:`close` (when a part runs out depends on the drafts; closing it early frees store or ring
             capacity at a data-dependent time).
+        chunked: Incremental mode: ``window`` is a fixed chunk; on-demand extensions are whole chunks
+            (``chunk * ceil(missing / chunk)``, at most up to ``cap``, which the gateway sets to the chunk-aligned
+            entitlement, :func:`chunk_entitlement`), and retired parts are closed on a background thread
+            (:meth:`close` waits for those closes).
     """
 
     def __init__(self, first: Any, reserve: Reserve, *, cap: int, window: int, ahead: bool = False,
-                 public: bool = False):
+                 public: bool = False, chunked: bool = False):
         if window < 1:
             raise ValueError("window must be >= 1")
         self._parts: list[Any] = [first]
@@ -105,6 +190,9 @@ class WindowedReservation:
         self.charged = 0
         #: linear key -> the current part's native trip lease (``PGW_TRIP_NATIVE``; see :meth:`trip_lease`).
         self.trip_leases: dict[str, Any] = {}
+        self.chunked = bool(chunked)
+        #: chunked mode: background closes of retired parts (joined by :meth:`close`)
+        self._retiring: list[Any] = []
 
     def __repr__(self) -> str:
         return f"WindowedReservation(parts={len(self._parts)}, slots={self.slots}, cap={self.cap})"
@@ -119,6 +207,13 @@ class WindowedReservation:
     def closed(self) -> bool:
         """True after :meth:`close`."""
         return self._closed
+
+    @property
+    def outstanding(self) -> int:
+        """Slots this session may still ask the store for (``cap`` minus reserved and in-flight; 0 once closed)."""
+        if self._closed:
+            return 0
+        return max(0, self.cap - self.slots - self._pending)
 
     @property
     def parts(self) -> tuple[Any, ...]:
@@ -217,7 +312,10 @@ class WindowedReservation:
                     "session mask reservation exhausted",
                     details={"linear": str(lid), "needed": rows, "remaining": have + room},
                 )
-            n = min(room, max(missing, self.window))
+            if self.chunked:  # whole chunks: the size depends on the rows taken only
+                n = min(room, self.window * -(-missing // self.window))
+            else:
+                n = min(room, max(missing, self.window))
             part = self._reserve(n)
             self._parts.append(part)
             self.extensions += 1
@@ -253,7 +351,10 @@ class WindowedReservation:
             if missing <= 0:
                 return
             room = self.cap - self.slots - self._pending
-            n = min(room, max(missing, self.window))
+            if self.chunked:
+                n = min(room, self.window * -(-missing // self.window))
+            else:
+                n = min(room, max(missing, self.window))
             part = self._reserve(n)
             self._parts.append(part)
             self.extensions += 1
@@ -297,10 +398,13 @@ class WindowedReservation:
             keys = getattr(p, "linear_keys", None)
             if not keys or any(int(p.remaining(k)) > 0 for k in keys):
                 break
-            try:
-                p.close()
-            except Exception:  # pragma: no cover - close() burns; never fail a step for it
-                log.exception("closing an exhausted mask reservation part failed")
+            if self.chunked:
+                # every row of the part is taken: its close (zeroing, the durable close record) runs off the
+                # token step; close() joins it. The part is never read again (cursors moved past it).
+                self._retiring = [f for f in self._retiring if not f.done()]
+                self._retiring.append(_close_pool().submit(_close_quietly, p))
+            else:
+                _close_quietly(p)
             self._live += 1
             self.retired += 1
         p = parts[min(self._live, last)]
@@ -431,6 +535,8 @@ class WindowedReservation:
             pending = self._ahead_thread
         if pending is not None:
             pending.join()  # its result is burned by the thread itself (closed)
+        for f in self._retiring:  # background closes of retired parts (chunked mode; _close_quietly logs)
+            f.result()
         errors: list[BaseException] = []
         for p in parts:
             try:

@@ -365,6 +365,8 @@ On CUDA the Freivalds precomputation `u·W8 mod 2^K` uses the same exact int8 di
 - A reservation hands out rows strictly in order, per linear. Rows are never returned. `close()` zeroizes buffers.
 - A reservation that spans segments is split at extent boundaries, because `u` differs per segment.
 - The gateway reserves `len(prompt) + max_tokens` slots per request. Unused slots are burned and counted in `pgw_masks_burned_slots_total`.
+  By default it reserves them in windows (`mask_window_tokens`, 9.4); with `mask_reservation = "incremental"`
+  (opt-in, 9.4c) in small public chunks as decoding proceeds, so unused `max_tokens` capacity is never consumed.
 
 ### 7.6 Keys and rollback
 - Envelope encryption: a random 32-byte DEK per segment, wrapped by a KEK from a `KeyProvider`:
@@ -614,7 +616,9 @@ an integration test.
 Each request gets one `MaskReservation` of `prompt_len + max_tokens` slots, passed to the backend as
 `LinearCall.session`. The backend takes `T` rows per call for that linear and splits calls at
 segment-extent boundaries. If the store has too few slots, the request fails fast with
-`mask_exhausted` before any compute.
+`mask_exhausted` before any compute. The gateway reserves the prompt plus a first window (`mask_window_tokens`, default 64; 0 = everything up
+front) and extends by windows while decoding (`pgw.gateway.masks.WindowedReservation`); admission then checks
+that the store's stock covers `prompt + max_tokens` (a check, not a hold). Incremental chunks: 9.4c.
 
 ### 9.4a Chat-speed settings (phase A; per model, off by default)
 None changes a bit of any answer (each is tested gateway-level against the plaintext reference) and none
@@ -705,6 +709,49 @@ prompt pass (`pgw.engine.prefix_cache`, `Generator.generate/astream(..., prefix=
   (3) less is shown elsewhere: the full prompt length of a continued turn is no longer sent as a row count. No
   token, activation or mask information changes: every row is still masked with a fresh single-use mask.
   Because of (1) and (2) the setting stays opt-in; deployments that must hide conversation structure keep it off.
+
+### 9.4c Incremental mask reservations (`mask_reservation = "incremental"`; opt-in, default off)
+Mask demand per generated token is prompt-pass rows + one row per decode pass (R with strict speculation, or the
+public charge schedule with `spec_mask_rows`) + **burned** slots. Up front (`mask_window_tokens = 0`) every request
+burns `max_tokens - generated`; windows burn up to about 1.5 windows (64-96 slots with the ahead reservation of a
+tiered store) per request. Incremental mode keeps single use and burn-on-close exactly as before and changes only
+*how much is reserved when*:
+- **Schedule.** The first reservation is `prompt rows + c` (c = `mask_chunk_slots`, default 8; with strict
+  speculation rounded up to a multiple of `spec_rows`), never clipped to `max_tokens`. Later parts are whole chunks:
+  at the start of a token step, when fewer than `c/2` reserved rows would be left after the step, the next chunk is
+  reserved on a background thread (store transaction + fsync off the token step); a step that still lacks rows
+  extends synchronously by `c * ceil(missing / c)` before any row of the step is taken (as windows do). Parts every
+  linear has finished are closed (burned, zeroed, close recorded) on a background thread; closing the session joins
+  those closes and burns the rest. `spec_mask_rows` keeps its public `charge_to` schedule with chunks as windows.
+- **Burn.** At most the unused rows of the current chunk plus one ahead chunk: `< 1.5 c` slots per request
+  (cancelled, failed and finished alike), instead of `max_tokens - generated`.
+- **Admission (entitlement ledger).** An up-front reservation guaranteed that a running answer never runs out of
+  masks. Incremental mode keeps that guarantee in gateway memory: each live session is entitled to
+  `chunk_entitlement(prompt rows + c, cap, c) + c` slots (its cap rounded up to whole chunks, plus one spare chunk;
+  the cap is `prompt rows + max_tokens` (x the speculation factor), or `mask_rows_needed` with strict speculation),
+  and a request is admitted only when the store's available slots cover every live session's remaining entitlement
+  plus its own (checked and the first part reserved under one lock), else `mask_exhausted` before any compute.
+  Only this process reserves from its store for its fingerprint and ring (7.6) and factories only add, so the
+  extensions find slots. The ledger is not durable: a crash loses entitlements, never consumed slots.
+- **Exhaustion.** If an extension fails anyway (stock retired or lost, a tiered ring's fail-fast extension, a store
+  fault after the durable commit), the step raises `MaskExhaustedError` (or the fault) before any of its rows is
+  taken or sent: the provider sees no partial pass, the answer ends with an error event (`mask_exhausted`), every
+  part is burned, nothing is reused; slots committed by a faulted transaction are lost, never handed out.
+- **What the provider sees.** Unchanged in every channel: (1) *calls*: the prompt pass lies inside the first part,
+  1-row decode passes never straddle a part, and strict passes of R rows never do either (chunks are multiples of
+  R, part boundaries fall at `prompt rows + k c`), so items, row counts and order are those of an up-front
+  reservation (tests compare them call by call); segment-extent splits are as before. (Windows of 64 with R = 3 do
+  split some strict passes at window boundaries.) (2) *timing*: store transactions (reserve, close) happen at pass
+  indices fixed by the rows taken, which are public in every mode that hides drafts, mostly on background
+  threads; the spare chunk keeps the ahead reservation running to the end, so nothing changes when an answer
+  nears `max_tokens`. (3) *mask generation traffic* (encrypted masks: the factory's `maskgen` requests reach the
+  provider at a rate driven by consumption): consumption is now rows used + `< 1.5 c`, a function of the public
+  row counts; with up-front reservations it was `prompt + max_tokens` per request, which put the (private)
+  `max_tokens` into the factory's cadence. No token, activation, mask or acceptance information is involved.
+- **Cost.** One store transaction per chunk instead of per window (both off the token step); a part re-decrypts
+  the `W r` chunk its first slot lies in (segment chunks are `DEFAULT_CHUNK_BYTES` = 1 MiB for the widest linear:
+  about 6 slots at 7B K32, 26 at 0.5B), so chunks of at least that many slots keep the decrypt overhead small.
+  Measured: STATUS 2026-11-23.
 
 ### 9.5 Failure handling
 - Service unavailable: retry with backoff (wire client), then fail the request (`unavailable`). KV

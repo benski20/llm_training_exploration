@@ -137,6 +137,10 @@ spec:
               value: {{ .Values.config.drainTimeoutSeconds | quote }}
             - name: PGW_GATEWAY_MASK_WINDOW_TOKENS
               value: {{ .Values.config.maskWindowTokens | quote }}
+            - name: PGW_GATEWAY_MASK_RESERVATION
+              value: {{ .Values.config.maskReservation | default "window" | quote }}
+            - name: PGW_GATEWAY_MASK_CHUNK_SLOTS
+              value: {{ .Values.config.maskChunkSlots | default 8 | quote }}
             - name: PGW_GATEWAY_MASKSTORE_GC_INTERVAL_S
               value: {{ .Values.maskstore.gcIntervalSeconds | quote }}
             - name: PGW_MASKSTORE_MIN_FREE_BYTES

@@ -61,7 +61,7 @@ from pgw.engine.backends import Int8DraftBackend, NativeInt8DraftBackend, int8_l
 from pgw.engine.prefix_cache import ConversationPrefixCache, PrefixHit, PrefixSink
 from pgw.gateway.config import GatewayModelConfig, GatewaySettings, network_path, origin_of
 from pgw.gateway.egress import EgressGuardTransport
-from pgw.gateway.masks import WindowedReservation
+from pgw.gateway.masks import EntitlementLedger, WindowedReservation, chunk_entitlement
 from pgw.gateway.metrics import GatewayMetrics
 from pgw.gateway.safety import AdmissionController, CircuitBreaker
 
@@ -506,6 +506,9 @@ class ModelRuntime:
         self.measured_rtt_s: float | None = None
         self._sessions: set[ActiveSession] = set()
         self._lock = asyncio.Lock()
+        #: mask_reservation='incremental': live sessions' remaining entitlements (admission) and its lock
+        self.mask_ledger = EntitlementLedger()
+        self._ledger_lock = asyncio.Lock()
         self._integrity = self.metrics.get("pgw_gateway_integrity_failures_total")
         self._active_gauge = self.metrics.get("pgw_gateway_active_sessions")
         self._noise_gauge = self.metrics.get("pgw_gateway_noise_alarm")
@@ -754,7 +757,7 @@ class ModelRuntime:
                     if attach is not None:  # in-memory mask ring (mask_ring.enabled)
                         await asyncio.to_thread(
                             attach, self.name, pack.fingerprint, self.ring, pack.linear_specs(),
-                            max_session_slots=self.max_context + int(self.settings.mask_window_tokens),
+                            max_session_slots=self.max_context + self._mask_extension_slots(),
                         )
                     try:
                         client, models = await self._connect()
@@ -1450,6 +1453,51 @@ class ModelRuntime:
         await pc.wait_settled(key, float(self.config.prefix_cache_wait_s))
         return pc.take(key, ids), pc.sink(key)
 
+    def _mask_extension_slots(self) -> int:
+        """Slots of one extension: the window, or (incremental) the chunk. With fixed-row strict speculation the
+        chunk is rounded up to a multiple of ``spec_rows``: part boundaries then fall between decode passes (the
+        first part ends ``chunk`` rows after the prompt pass), so no pass's call is split at a part boundary."""
+        if self.settings.mask_reservation == "incremental":
+            chunk = int(self.settings.mask_chunk_slots)
+            r = self.config.spec_rows
+            if r is not None and self.config.spec_strict_passes:
+                chunk = int(r) * -(-chunk // int(r))
+            return chunk
+        return int(self.settings.mask_window_tokens)
+
+    async def _reserve_incremental(self, rows0: int, need: int, cap: int, rid: str, public: bool) -> tuple[Any, int]:
+        """``mask_reservation = "incremental"``: the prompt plus one chunk now, whole chunks later (see
+        :class:`pgw.gateway.masks.WindowedReservation`, ``chunked``). Admitted only when the store covers every
+        live session's remaining entitlement plus this request's (:class:`EntitlementLedger`); the first part
+        is reserved under the same lock, so two admissions never both count the same stock."""
+        chunk = self._mask_extension_slots()
+        first = rows0 + chunk  # never clipped to the cap: sizes do not depend on max_tokens
+        # plus one spare chunk: the ahead reservation is never stopped by the cap while the answer runs, so
+        # whether a background store transaction happens near the end does not depend on max_tokens either
+        entitled = chunk_entitlement(first, cap, chunk) + chunk
+        async with self._ledger_lock:
+            avail = await asyncio.to_thread(self._available_slots)
+            if not self.mask_ledger.admit(avail, entitled):
+                held = self.mask_ledger.outstanding()
+                raise MaskExhaustedError(
+                    f"not enough mask slots for this request: it can use up to {need} ({rows0} prompt rows + the "
+                    f"decode budget), {avail} are available and {held} are promised to running requests. Lower "
+                    "max_tokens, or retry when the mask factory has added more (the Masks page shows the stock)",
+                    details={"needed": need, "available": avail, "promised": held, "model": self.name},
+                )
+            res = await _reserve_shielded(self.mask_store, self.fingerprint, self.ring, first, rid)
+            store, fp, ring = self.mask_store, self.fingerprint, self.ring
+            reserve_ext = getattr(store, "reserve_extension", None)
+
+            def extend(slots: int) -> Any:  # a background (ahead) thread, or the backend's worker thread
+                if reserve_ext is not None:
+                    return reserve_ext(fp, ring, slots, session_id=rid)
+                return store.reserve(fp, ring, slots, session_id=rid)
+
+            w = WindowedReservation(res, extend, cap=entitled, window=chunk, ahead=True, public=public, chunked=True)
+            self.mask_ledger.add(w)
+        return w, first
+
     async def _reserve_for(self, ids: list[int], params: SamplingParams, rid: str,
                            reused: int = 0) -> tuple[Any, int]:
         """Reserve the prompt plus a first window (or everything when windows are disabled). ``reused``
@@ -1467,6 +1515,10 @@ class ModelRuntime:
             # strict speculation: every decode pass (dummy passes too) takes spec_rows rows, whatever the text;
             # the engine refuses a reservation that could run short before the provider sees a pass
             need = cap = int(fixed(len(ids), params.max_tokens, reused))
+        # spec_mask_rows (L3): the store is asked for slots on the public charge schedule only (charge_to)
+        public = self.config.spec_rows is not None and self.config.spec_mask_rows is not None
+        if self.settings.mask_reservation == "incremental":
+            return await self._reserve_incremental(rows0, need, cap, rid, public)
         first = cap if window <= 0 else min(cap, rows0 + window)
         if first < cap:
             # Fail fast (before any compute) when the store could not serve the whole request.
@@ -1491,8 +1543,6 @@ class ModelRuntime:
                 return reserve_ext(fp, ring, slots, session_id=rid)
             return store.reserve(fp, ring, slots, session_id=rid)
 
-        # spec_mask_rows (L3): the store is asked for slots on the public charge schedule only (charge_to)
-        public = self.config.spec_rows is not None and self.config.spec_mask_rows is not None
         return WindowedReservation(res, extend, cap=cap, window=window, ahead=reserve_ext is not None,
                                    public=public), first
 

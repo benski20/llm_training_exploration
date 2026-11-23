@@ -105,6 +105,11 @@ config:
   # Masks are reserved for the prompt plus this many tokens and extended while generating, so an
   # early stop or disconnect burns at most one window (0 = reserve prompt + max_tokens up front).
   maskWindowTokens: 64
+  # "incremental" (opt-in): reserve the prompt plus maskChunkSlots, then whole chunks ahead of decoding;
+  # a finished answer burns < 1.5 chunks, and admission holds every live request's prompt + max_tokens
+  # in memory instead of on disk (SPEC 9.4c). "window" (default): maskWindowTokens as above.
+  maskReservation: window
+  maskChunkSlots: 8
   # Additional PGW_* environment variables (non-secret).
   extraEnv: {}
 

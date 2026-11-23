@@ -42,6 +42,50 @@ SLA pilot. Three reasons:
   --cmd "python benchmarks/provider_scale_bench.py --presets 7b --tp 1 --rows 1,2,4 --iters 200 --modes graph
   --tune-rows --json /tmp/ps.json"` (`graph_report.tuning` has each shape's baseline and chosen device ms; the
   graph trip means use the picks; `device_us` is the graph-timed kernel alone).
+## Update 2026-11-23: incremental mask reservations (opt-in), toward ~1.1-1.3 mask slots per generated token
+
+Mask demand per generated token = prompt-pass rows (re-sent every turn) + decode rows + burned slots. The 7B e2e
+measured about 2.7 (plain). `prefix_cache = "conversation"` (9.4b) removes the re-sent prompt rows;
+**`mask_reservation = "incremental"`** (gateway setting, default `"window"`; `mask_chunk_slots`, default 8; SPEC 9.4c)
+removes the burn: the prompt plus one public chunk up front, whole chunks reserved ahead on a background thread,
+retired chunks closed off the token step, `< 1.5` chunks burned per request (finished, cancelled or failed) instead
+of `max_tokens - generated` (up front) or up to 1-1.5 windows of 64. Admission keeps the up-front guarantee in
+memory (`EntitlementLedger`: the store must cover every live request's remaining chunk-aligned prompt + max_tokens
+plus one spare chunk), so extensions do not run short mid-answer; if one fails anyway the step fails closed before
+any row is taken or sent and every part is burned. Privacy: unchanged in every provider-visible channel (calls,
+row counts and order equal an up-front reservation's, chunks are multiples of `spec_rows` in strict mode; store
+transactions happen at public pass indices; mask consumption, which drives the encrypted factory's `maskgen`
+cadence, becomes rows used + `< 1.5 c`, no longer `prompt + max_tokens`, so `max_tokens` leaves that channel).
+Strict speculation with `spec_mask_rows` keeps its public `charge_to` schedule (chunks as windows).
+
+- Tests: `tests/gateway/test_incremental_masks.py` (bit-identical answers and logprobs vs up front, plain and strict
+  R = 3, multi-turn with prefix reuse; provider calls identical call by call; consumption = rows used + < 2 chunks;
+  admission refuses what live entitlements need; mid-answer exhaustion and a fault after the durable commit end the
+  answer with an error, no partial pass, nothing reused, next answer exact; cancel burns every part; 4 concurrent
+  tenants exact; default off), `tests/engine/test_trip_native.py::test_incremental_chunks_equal_plain_and_bytes_identical`
+  (chunked chains with and without `PGW_TRIP_NATIVE` leases: masked == plain).
+- 0.5B, real masked path (fsync store, file counter, every linear remote, in-process exact provider;
+  `benchmarks/incremental_masks_bench.py`; Qwen2.5-0.5B-Instruct, 4-turn chat, max_tokens 256, greedy; same answers
+  in every configuration): window 64 without reuse **2491 slots / 868 tokens = 2.87** slots/token (up front: 2619 =
+  3.02; prompt rows alone 1.84); window 64 with reuse **1056 / 868 = 1.22** (up front with reuse 1184 = 1.36). The
+  answers here mostly ran to max_tokens and the 64-windows happened to end close to the answers (burn 5, 1, 1, 25),
+  so the window burn was small in this run; its expectation is ~window/2 per request on a plain store and ~1 window
+  with the tiered store's ahead reservation. Incremental, measured turns: burn 5 and 9 slots (chunk 8, one answer
+  at max_tokens: the spare chunk). Incremental with reuse = rows0 + generated - 1 + burn per turn (asserted by the
+  tests): **~1.21-1.23 slots/token** for this chat, independent of window alignment and of max_tokens. The
+  incremental-with-reuse run itself was killed by the shared box (load average high, factory at 4-6 slots/s), as
+  was a 5-turn run; TTFT and decode times on this box were dominated by other load (decode 290-440 ms/token in all
+  configurations, TTFT equal within noise for the same prompt-pass rows), so no timing difference is claimed.
+- Projected 7B (plain decoding, chat answers of ~150-250 tokens, new message + template ~20-40 tokens per turn):
+  1 (decode) + 0.1-0.25 (new prompt rows) + ~8/200 (burn) = **~1.15-1.3 slots/token**, vs 2.7 measured; with strict
+  R = 2 about 2.1-2.3 (vs 4.2), with `spec_mask_rows` C about C + 0.15-0.3.
+- Costs: one store transaction (reserve) and one close per chunk, both on background threads; a part re-decrypts
+  the `W r` chunk its first slot lies in (1 MiB segment chunks: ~6 slots at 7B K32, so about 0.75 x one slot of
+  extra AES-GCM per token at c = 8, ~0.4 ms on one core at the 11 GiB/s measured here; c = 16 halves it).
+- Default: proposed as the default once it has run on the 7B co-located e2e (the ledger is stricter than the
+  window mode's stock check: a store that covers the stock but not every live request's max_tokens refuses new
+  requests instead of risking mid-answer exhaustion; deployments with large max_tokens need correspondingly more
+  stock, as up front). Not done: chunk handoff of the decrypted segment chunk between consecutive parts.
 
 ## Update 2026-11-22: native UDS lane channel (opt-in), persistent GPU worker's first H100 run
 

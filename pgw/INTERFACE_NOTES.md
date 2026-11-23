@@ -604,3 +604,12 @@ Behaviour changes other components and operators must know about:
 - Why: a continued chat turn runs (and masks) only its new tokens; outputs bit-identical (SPEC 9.4b).
 - Impact: backwards compatible; `prefix_cache` leaves the pending list (needs `float_ops = "native"`).
 - Status: done (SPEC 9.4b)
+
+## 2026-11-23 gateway -> all: incremental mask reservations (`mask_reservation = "incremental"`, opt-in)
+- What: gateway settings `mask_reservation` (`"window"` default | `"incremental"`) and `mask_chunk_slots` (8;
+  `PGW_GATEWAY_MASK_RESERVATION`, `PGW_GATEWAY_MASK_CHUNK_SLOTS`, Helm `config.maskReservation/maskChunkSlots`).
+  `pgw.gateway.masks`: `WindowedReservation(..., chunked=True)` (whole-chunk extensions, background closes of retired
+  parts, `outstanding`), `EntitlementLedger` (`ModelRuntime.mask_ledger`), `chunk_entitlement`. SPEC 9.4c.
+- Why: mask demand per generated token (no more `max_tokens` slots burned per request; admission guarantee kept).
+- Impact: none by default; store, engine, backend, wire and factory interfaces unchanged.
+- Status: done
