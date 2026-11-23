@@ -231,6 +231,9 @@ def main() -> None:
             "act_bits_hist": {str(k): v for k, v in sorted(sched.bits_hist.items())},
         }
         client.close()
+        print(json.dumps(res, indent=1), flush=True)
+        if args.json:  # the decode result first (a replay that runs out of time keeps it)
+            Path(args.json).write_text(json.dumps(res, indent=1))
         if not args.no_replay:
             t2 = time.time()
             plain = TransformerModel(pack, Fused2PlainBackend(ring))

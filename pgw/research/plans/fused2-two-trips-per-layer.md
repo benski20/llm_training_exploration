@@ -18,6 +18,12 @@ On Qwen2.5-0.5B the new reference is about as good as today's int8 reference by 
 float 23.67, 1020 tokens) but **agrees less often with the float model on the top-1 token: 93.0% vs 96.4%**
 (wikitext), 94.9% vs 96.9% on fixed prompts. It is a different model, not a free lunch; see section 6.
 
+**Update 2026-11-23 (sections 7-8).** The gap was the int8 rounding of the folded weights; migrating the norm
+gain into the residual's fixed-point grid (public integer multipliers, provider computes `R + hmul * W1 x`)
+closes it: 0.5B top-1 96.8% vs 97.1% for the int8 reference on 4088 tokens (equal on the prompts; ppl 19.86 vs
+19.83), 1.5B 98.0% vs 97.7%, at ring **K56C53** (7 bytes per element) with the same trips, elements, masks and
+factory products. An exact socket harness for one 7B e2e run is ready (section 8).
+
 | | standard (today) | fused2 |
 |---|---|---|
 | trips per token, gateway LM head | 4L | **2L + 1** (layer-0 qkv, then 2 per layer) |
@@ -184,6 +190,10 @@ What it buys is large where latency is trips: per-token round trips halve (70B: 
 payload grows about 2.5-3x (two linears' worth at 1.25-1.5x width; 70B average 137 KB -> about 340-410 KB),
 so on any link where `RTT >> bytes / bandwidth` the per-token latency nearly halves.
 
+**Update 2026-11-23:** condition (1) below is met by the migration of section 7 (0.5B within 0.3 points of the int8
+reference on 4088 tokens, 1.5B above it), at the price of K56 instead of K40/K48 (1.75x the K32 bytes; no HE
+factory modulus for it). Conditions (2) (7B quality) and the production path (section 8) remain.
+
 Recommendation: keep it opt-in and off; do not promote to a preset until (1) a weight-folding variant closes
 the top-1 gap (section 4 lists candidates; target: top-1 vs float within 1 point of the int8 reference),
 (2) the 7B quality check that `GatewayModelConfig.schedule` is gated on passes, and (3) K40 holds at 7B with
@@ -205,7 +215,7 @@ replacing one rounding at a time:
 | ... and without residual rounding | 96.7% | - |
 | float qkv folds only (gate_up folds int8) | 93.6% | - |
 | float gate_up folds only (qkv folds int8) | 95.3% | - |
-| int8 fold of one single linear (all others float), any of the 48 | 96.0-97.1% | - |
+| int8 fold of one single linear (all others float; layers 0-4 measured) | 96.2-97.1% | - |
 | top-16 columns of each fold kept off the int8 matrix (gateway, 16-bit) | 93.4-94.4% | - |
 
 So **the whole gap is the int8 rounding of the folded weights** `W diag(g * sw1)`, spread over all layers
@@ -234,7 +244,33 @@ gateway itself from the verified `H`, `gateway_bits`-bit weights): it keeps K48,
 holds 4-18 columns per fold on the gateway and still exceeds the K48C45 bound by 1-2 bits on some rows.
 
 ### 7.3 Quality (engine = the exact pinned reference; sim = the float64 simulator)
-QUALITY_TABLE
+Qwen2.5-0.5B-Instruct, wikitext-2 test, first 4097 tokens in 8 windows of 512 (4088 predictions), plus the 6 fixed
+prompts (98 positions); `benchmarks/results/fused2/quality_qwen05b_4k.json`.
+
+| model | ring | ppl | top-1 = float (wikitext) | top-1 = float (prompts) | max abs dlogprob next token (prompts) | rows below 12 act. bits |
+|---|---|---|---|---|---|---|
+| float (HF fp32) | - | 19.931 | - | - | - | - |
+| int8 reference (today), engine | K32A12C27 | 19.834 | **97.1%** | 96.9% | 2.45 | - |
+| fused2 2026-11-22 (int8 fold), engine | K48A12C45 | 20.083 | 94.1% | 94.9% | 2.30 | 0 |
+| **fused2 + migration (8 bits), engine** | **K56A12C53** | **19.855** | **96.8%** | **96.9%** | 2.21 | **0** |
+| fused2 + calibrated split fold (4 bits, 4 columns), engine, 1022 tokens only | K48A12C45 | - | 96.2% (int8 ref. 96.4% on ~1k) | 98.0% | 1.81 | 0.01% |
+| simulator: int8 reference / old fused2 / migration 8 bits / float folds (ceiling) | - | 19.83 / 20.08 / 19.86 / 19.84 | 96.9 / 93.9 / 96.9 / 97.2% | - | - | - |
+
+Qwen2.5-1.5B-Instruct (simulator only: the engine at 1.5B is too slow on this box), wikitext-2, 2049 tokens:
+
+| model | ppl | top-1 = float | max bits H / Z / Z bound |
+|---|---|---|---|
+| float | 12.744 | - | - |
+| int8 reference | 12.821 | 97.65% | - |
+| fused2 2026-11-22 | 12.853 | 96.48% | 33.8 / 41.6 / 45.3 |
+| **fused2 + migration (8 bits)** | **12.811** | **97.99%** | 40.5 / 49.1 / 52.1 (fits K56C53) |
+
+Reading: with migration fused2 is on par with today's int8 reference (0.5B engine: -0.3 points top-1 on 4088
+tokens, about 13 tokens, within the sampling noise of the paired difference, and equal on the prompts; 1.5B:
++0.3 points; ppl equal within noise and better than float on both), against 93.9% / 96.5% before. The bit
+budget is the same at 0.5B and 1.5B (Z bound 52.0-52.1 bits), so K56C53 should hold at 7B; the e2e driver's
+`--auto-bits` probes public text first and falls back to 6 or 4 migration bits if more than 1% of rows would
+lose activation bits.
 
 ## 8. Update 2026-11-23: an exact e2e harness (opt-in) and what the production path still lacks
 

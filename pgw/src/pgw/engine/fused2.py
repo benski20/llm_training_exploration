@@ -23,6 +23,9 @@ Fixed-point semantics (normative for this reference; every rounding is done by t
   (sw1 * s)`` channel-wise, no rounding on the provider.
 * ``W2'`` = int8 per-row quantization of ``W2 diag(g * sw1)`` (``g`` the RMSNorm gain, ``sw1`` the first
   linear's row scales). Layer 0's qkv uses ``W diag(g)`` and the per-row absmax quantized embedding.
+  With residual-grid migration (``Fused2Weights(multipliers=...)``, e.g. :func:`migration_multipliers`; the
+  quality fix of 2026-11-23) the first linear's output is ``hmul * (W1_8 aq)`` and every ``sw1`` above reads
+  ``sw1 / hmul`` (the residual's grid), so ``W2' = int8(W2 diag(g * sw1 / hmul))`` has near-uniform columns.
 * After the trip: ``h' = (H * sw1) * s`` (float64), ``rinv = 1/sqrt(mean(h'^2) + eps)``,
   ``z = (Z * sw2) * (s * rinv) + bias`` (float64, then float32).
 * ``A_t`` is the most bits ``<= A`` for which the exact a-priori bounds
