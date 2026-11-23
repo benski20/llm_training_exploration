@@ -15,6 +15,95 @@ SLA pilot. Three reasons:
 2. The HSM, KMS and TPM integrations have never run against real hardware or cloud services.
 3. There has been no external security audit.
 
+## Update 2026-11-23: long contexts (prefill and decode): bounded attention scratch, fused/tiled kernels, chunked prefill
+
+**Finding.** Real masked path, Qwen2.5-0.5B, in-process exact provider, 4-vCPU box: prompt passes of ~500-800 rows
+took 88-138 s against 2.9 s for 228 rows. Reproduced (512 rows: 50-277 s). Two causes:
+
+1. **Not the gateway.** In those passes `block_wait` (waiting on the in-process CPU provider) was 46 of 50 s, 150 of
+   157 s, 268 of 278 s; the gateway's own work (attention and norms, mask takes, prepare, finish) was ~5 s for 512 rows
+   and grows linearly. The provider's float64 BLAS GEMMs (2.9 GB of float64 weights, 4-thread MKL) take 3 s in
+   isolation for 512 rows x 24 layers but were busy 64-288 s in the pass: two pipelined prompt blocks put two
+   multi-threaded GEMMs in flight next to the gateway's threads, on a box shared with other sessions (load average
+   6-11 on 4 vCPUs during the runs; the same GEMM alone went 125 -> 1621 ms per layer while another tenant ran).
+   `LocalComputeClient` now runs one request's GEMMs at a time (same bytes); the rest is the test rig's CPU stand-in
+   for the GPU service. Also the plain path: the one-time int8-vs-float64 timing probe could pick float64 for the
+   whole process when the box was busy for a moment (plain linears ~5-10x slower at 128 rows). It now measures
+   interleaved, best of 15, and re-measures a slow verdict (up to 4 rounds, ~1 s worst case, once per process).
+2. **The gateway's native prompt attention was O(T^2) in memory.** One call kept `(rows, nh, start + rows)` float64
+   scores: 1.9 GB per layer call at 4096 rows, 7.5 GB at 8192, 30 GB at 16k, 120 GB at 32k. Long prompts could not
+   run, and attention was memory-bound (18 ns per score on one thread).
+
+**Fixes (native float ops; each bit-identical, so default on).** Compared against the previous build's outputs on
+276 problems (v1, v2 blocks 256 and 16, bf16 KV, threads 1 and 3) at the AVX-512, AVX2 and scalar levels: 0
+mismatches. New Rust tests: fused == two-phase, long rows == the original one-row kernel, row tiles == one call.
+- Prompt passes run as **fused (row, KV head) units**: phase A over every block, row maxima, phase B and the
+  block-order merge in a per-thread scratch of `nh x len` scores (3.7 MB per thread at 32k) instead of one big buffer.
+  Each row has the same operations in the same order, and units are independent, so any partition or thread count
+  gives the same bits. One thread: 18 -> 9.5 ns per score. Decode-sized passes keep the (row, KV head, block) units.
+  That path keeps **row tiles** under a 48 MB scratch budget.
+- **Scores** are computed 16 positions at a time with the same per-score trees. Block maxima are vectorised (the
+  same maximum). **Several heads per pass over V.** The AVX-512 value pass runs in **tiles of 256 positions**, with
+  the accumulators and dens carried in memory between tiles (exact f32/f64 stores), so V is read from DRAM once per
+  KV group instead of once per head batch.
+- Decode-sized passes over >= 4096 positions use the attention pool when threads are automatic. The bits do not
+  depend on the thread count.
+- **KV cache**: a growth step within 25 % of the limit allocates the limit at once. The first decode step after a
+  long prompt no longer copies the whole cache into a doubled buffer (2x peak).
+- **Chunked prefill** (`prefill_chunk_rows` / `PGW_PREFILL_CHUNK_ROWS`, **default off**; native float ops only,
+  validated): a pass in which a sequence has more than `c` new rows runs as sub-passes of at most `c` rows, each
+  through every layer. Logits, KV and linear rows are bit-identical. Gateway memory is bounded by the chunk (masks,
+  linear inputs and outputs). The provider sees the same rows and bytes per linear in total, but in
+  `ceil(rows / c)` trips whose sizes depend on the public prompt length and this public setting. That changes the
+  trip pattern, so it is opt-in. 2048 is a reasonable value.
+
+**Gateway prompt pass vs length** (masked path, zero-cost stub provider, so this is gateway work only: synthetic
+0.5B shapes, 2 layers, `native`; same box load for before and after; x12 for 24 layers). Wall s (attention + float
+part) / peak RSS:
+
+| rows | before | after | after, chunk 2048 |
+|---|---|---|---|
+| 128 | 0.17 (0.01) / 0.62 GB | 0.15 (0.01) / 0.62 GB | |
+| 1024 | 0.55 (0.14) / 1.01 GB | 0.47 (0.10) / 0.81 GB | |
+| 2048 | 1.25 (0.48) / 1.52 GB | 1.01 (0.25) / 1.05 GB | |
+| 4096 | 3.34 (1.84) / 3.34 GB | 2.57 (0.99) / 1.74 GB | |
+| 8192 | not run (7.5 GB scratch per call) | 6.41 (3.43) / 2.33 GB | |
+| 16384 | impossible (30 GB) | 19.3 (13.3) / 3.90 GB | 19.5 (13.2) / **1.26 GB** |
+| 32768 | impossible (120 GB) | | 58.9 (47.5) / **1.54 GB** |
+
+Everything except attention is linear in rows: mask takes, prepare and finish together come to ~0.45 ms per row per
+2 layers. Attention is quadratic: on this box a 0.5B 32k prompt is ~570 s of attention over 24 layers (~10 ns per
+score per thread). The units are independent, so this scales with gateway cores. Projected 7B (per layer x4 for
+28 heads x 128 vs 14 x 64, 28 layers): a 16k prompt is ~750 s of attention on 4 vCPUs. Long 7B prompts need a
+many-core gateway, or prefix reuse (`prefix_cache = "conversation"`) so they are paid once. Plain exact-integer
+passes (real 0.5B): the gateway float part at 4096 rows went 13.0 -> 9.0-12 s. The plain linears dominate and vary
+3x run to run on this shared box.
+
+**Decode attention, ms per token, all layers** (native kernel per layer x layers, automatic threads as the model
+uses them; before: 1 thread for decode; same load). Before -> after:
+
+| context | 0.5B v1 f32 | 0.5B v2-bf16 | 7B v1 f32 | 7B v1-bf16 | 7B v2-bf16 |
+|---|---|---|---|---|---|
+| 1k | 3.7 -> 2.2 | 3.2 -> 2.6 | 18 -> 14 | 14 -> 12.5 | 14.5 -> 12 |
+| 4k | 26 -> 11 | 15 -> 8.5 | 165 -> 28 | 118 -> 33 | 66 -> 22 |
+| 16k | 153 -> 32 | 65 -> 22.5 | 721 -> 142 | 509 -> 112 | 284 -> 101 |
+| 32k | 330 -> 59 | 128 -> 39 | 1665 -> 365 | 1257 -> 308 | 754 -> 326 |
+
+One thread alone (the V tiling): 7B 32k v1 1665 -> 667 ms. Decode cost, KV memory and masks are linear in context.
+KV is 24.6 KB per token for 0.5B f32 (12.3 KB bf16) and 112 KB for 7B f32 (56 KB bf16), so 32k is 0.8/0.4 GB and
+3.7/1.8 GB. Mask demand per decode row does not depend on context. 7B at 32k is memory-bound on this box: the floor
+is ~0.2 s per token for 1.8 GB of bf16 KV. Use `-bf16kv` and more gateway bandwidth or cores there; 4-8k contexts
+are 22-33 ms per token.
+
+- Tests: `tests/engine/test_prefill_chunk.py`: one pass == chunks (700, 512, 1, n-1 rows; 0-3 threads) == token by
+  token at 1500 positions, for v1, v2 (16-position blocks), and bf16 v1/v2; logits and KV bit-identical; a chunked
+  pass on a cached prefix plus a batch of two lengths; captured hidden states; masked chunked == plain, with
+  provider rows <= chunk and = prompt per linear in total and mask consumption unchanged; KV limit allocation; row
+  tiles == single rows at 3000 rows. `tests/gateway/test_prefill_chunk_gateway.py`: multi-turn chat plain, with
+  conversation reuse and strict speculation, bit-identical, with the same per-linear rows and masks consumed, and
+  config validation. Existing native, decode-driver, tree, prefix-cache, thread-scope and gateway wiring suites
+  pass (346 tests), as do core, factory and maskgen (661).
+
 ## Update 2026-11-23: decode driver keeps "alarm before the next payload"; few-row GEMV tuning (opt-in)
 
 - **Native decode driver, noise statistics** (`PGW_DECODE_NATIVE`, still opt-in): sampled noise statistics came back
