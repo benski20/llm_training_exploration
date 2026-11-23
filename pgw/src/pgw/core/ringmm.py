@@ -212,17 +212,24 @@ def _cpu_int8_timing_ok() -> bool:
     w = torch.randint(-128, 128, (512, 1024), dtype=torch.int8, generator=gen)
     af, wf = a.to(torch.float64), w.to(torch.float64).t().contiguous()
 
-    def best(fn: Callable[[], object]) -> float:
+    def once(fn: Callable[[], object]) -> float:
+        t0 = time.perf_counter()
         fn()
-        times = []
-        for _ in range(5):
-            t0 = time.perf_counter()
-            fn()
-            times.append(time.perf_counter() - t0)
-        return min(times)
+        return time.perf_counter() - t0
 
-    t_int8 = best(lambda: torch._int_mm(a, w.t()))
-    t_f64 = best(lambda: af @ wf)
+    # interleaved, best of many: on a loaded machine a burst of other work during one side's few runs used to
+    # pick the float64 path for the whole process (plain prompt passes then ~10x slower at 128 rows)
+    i8, f64 = (lambda: torch._int_mm(a, w.t())), (lambda: af @ wf)
+    i8(), f64()
+    t_int8 = t_f64 = float("inf")
+    for rnd in range(4):  # a slow verdict is re-measured a little later (up to ~1 s once per process)
+        if rnd:
+            time.sleep(0.1)
+        for _ in range(15):
+            t_int8 = min(t_int8, once(i8))
+            t_f64 = min(t_f64, once(f64))
+        if t_int8 * 2.0 <= t_f64:
+            break
     fast = t_int8 * 2.0 <= t_f64
     log.info("CPU int8 GEMM %.3f ms vs float64 %.3f ms: %s", t_int8 * 1e3, t_f64 * 1e3,
              "using cpu_int8" if fast else "int8 is slow on this CPU, using cpu_f64")

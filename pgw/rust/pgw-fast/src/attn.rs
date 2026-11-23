@@ -421,6 +421,37 @@ mod simd {
         _mm512_mul_pd(_mm512_mul_pd(p, f1), f2)
     }
 
+    /// The fixed 16-lane tree of sixteen accumulators at once: `out[i] = tree(acc[i]) as f64 * scale`.
+    /// Level by level (w = 8, 4, 2, 1) every add is `l[x] + l[x + w]` of one score, as in [`tree8`] after
+    /// its first level; the lanes are only moved between registers (exact), and the final permute puts the
+    /// scores back in position order.
+    #[inline]
+    #[target_feature(enable = "avx512f,avx512bw,avx512dq,avx512vl,avx2")]
+    unsafe fn tree16x16(acc: &[__m512; 16], scale: f64, out: *mut f64) {
+        // w = 8: [v8 of score 2i | v8 of score 2i + 1]
+        let mut r1 = [_mm512_setzero_ps(); 8];
+        for (i, r) in r1.iter_mut().enumerate() {
+            let (a, b) = (acc[2 * i], acc[2 * i + 1]);
+            *r = _mm512_add_ps(_mm512_shuffle_f32x4::<0b01_00_01_00>(a, b), _mm512_shuffle_f32x4::<0b11_10_11_10>(a, b));
+        }
+        // w = 4: 128-bit blocks = v4 of scores 4i .. 4i + 3
+        let mut r2 = [_mm512_setzero_ps(); 4];
+        for (i, r) in r2.iter_mut().enumerate() {
+            let (a, b) = (r1[2 * i], r1[2 * i + 1]);
+            *r = _mm512_add_ps(_mm512_shuffle_f32x4::<0b10_00_10_00>(a, b), _mm512_shuffle_f32x4::<0b11_01_11_01>(a, b));
+        }
+        // w = 2: lane block L = [v2 of score L (2) | v2 of score 4 + L (2)] (resp. 8 + L, 12 + L)
+        let r3a = _mm512_add_ps(_mm512_shuffle_ps::<0x44>(r2[0], r2[1]), _mm512_shuffle_ps::<0xEE>(r2[0], r2[1]));
+        let r3b = _mm512_add_ps(_mm512_shuffle_ps::<0x44>(r2[2], r2[3]), _mm512_shuffle_ps::<0xEE>(r2[2], r2[3]));
+        // w = 1: position 4 L + e holds score L + 4 e
+        let r4 = _mm512_add_ps(_mm512_shuffle_ps::<0x88>(r3a, r3b), _mm512_shuffle_ps::<0xDD>(r3a, r3b));
+        let idx = _mm512_setr_epi32(0, 4, 8, 12, 1, 5, 9, 13, 2, 6, 10, 14, 3, 7, 11, 15);
+        let r = _mm512_permutexvar_ps(idx, r4);
+        let sc = _mm512_set1_pd(scale);
+        _mm512_storeu_pd(out, _mm512_mul_pd(_mm512_cvtps_pd(_mm512_castps512_ps256(r)), sc));
+        _mm512_storeu_pd(out.add(8), _mm512_mul_pd(_mm512_cvtps_pd(_mm512_extractf32x8_ps::<1>(r)), sc));
+    }
+
     #[target_feature(enable = "avx512f,avx512bw,avx512dq,avx512vl,avx2")]
     pub(super) unsafe fn scores_512<T: Kv>(q_t: &[f32], k: &[T], j0: usize, j1: usize, g: usize, dm: Dims,
                                            s_t: P<f64>, lmax: usize, bm_t: P<f64>, b: usize, nbmax: usize) {
@@ -437,7 +468,39 @@ mod simd {
                 let hq = g * groups + h;
                 let qh = qp.add(hq * hd);
                 let srow = s_t.0.add(hq * lmax);
-                for j in tj..te {
+                // sixteen positions at a time: independent accumulator chains, and the sixteen fixed trees
+                // reduced together by lane permutes (each add pairs exactly the lanes the one-score tree
+                // pairs, first operand first), so every score has the bits of the one-at-a-time code
+                let mut j = tj;
+                while j + 16 <= te {
+                    let kr = kp.add(j * stride + g * hd);
+                    let mut acc = [_mm512_setzero_ps(); 16];
+                    for c in 0..nc {
+                        let qv = _mm512_loadu_ps(qh.add(16 * c));
+                        for (i, a) in acc.iter_mut().enumerate() {
+                            *a = _mm512_add_ps(*a, _mm512_mul_ps(qv, ld16(kr.add(i * stride + 16 * c))));
+                        }
+                    }
+                    tree16x16(&acc, scale, srow.add(j));
+                    j += 16;
+                }
+                // then four at a time (independent chains; each score's operations unchanged)
+                while j + 4 <= te {
+                    let kr = kp.add(j * stride + g * hd);
+                    let mut acc = [_mm512_setzero_ps(); 4];
+                    for c in 0..nc {
+                        let qv = _mm512_loadu_ps(qh.add(16 * c));
+                        for (i, a) in acc.iter_mut().enumerate() {
+                            *a = _mm512_add_ps(*a, _mm512_mul_ps(qv, ld16(kr.add(i * stride + 16 * c))));
+                        }
+                    }
+                    for (i, a) in acc.iter().enumerate() {
+                        let v8 = _mm256_add_ps(_mm512_castps512_ps256(*a), _mm512_extractf32x8_ps::<1>(*a));
+                        *srow.add(j + i) = tree8(v8) as f64 * scale;
+                    }
+                    j += 4;
+                }
+                for j in j..te {
                     let kr = kp.add(j * stride + g * hd);
                     let mut acc = _mm512_setzero_ps();
                     for c in 0..nc {
@@ -452,40 +515,31 @@ mod simd {
         for h in 0..groups {
             let hq = g * groups + h;
             let srow = s_t.0.add(hq * lmax);
-            let mut m = f64::NEG_INFINITY;
-            for j in j0..j1 {
-                let x = *srow.add(j);
-                m = if x > m { x } else { m };
-            }
-            *bm_t.0.add(hq * nbmax + b) = m;
+            *bm_t.0.add(hq * nbmax + b) = max_512(srow.add(j0), j1 - j0);
         }
     }
 
-    /// `acc[0..N] = sum_j e_j * v_j[chunks]` (each from 0, `j` order); with `den`, also `sum_j e_j` (float64).
+    /// `max` of `n` scores with the scalar rule `m = if x > m { x } else { m }` from `-inf`, on 8 lanes and
+    /// then over the lanes with the same rule: the same maximum (NaN never taken; when +0 and -0 tie for it
+    /// either may be kept, and `exp(s - m)` is the same for both, so the attention bits do not change).
     #[inline]
     #[target_feature(enable = "avx512f,avx512bw,avx512dq,avx512vl,avx2")]
-    unsafe fn pv_512<T: Kv, const N: usize>(e: *const f32, n: usize, vp: *const T, stride: usize, out: *mut f32,
-                                           den: Option<&mut f64>) {
-        let mut acc = [_mm512_setzero_ps(); N];
-        let mut d = 0f64;
-        let want = den.is_some();
-        for jj in 0..n {
-            let ej = *e.add(jj);
-            if want {
-                d += ej as f64;
-            }
-            let ev = _mm512_set1_ps(ej);
-            let vr = vp.add(jj * stride);
-            for (i, a) in acc.iter_mut().enumerate() {
-                *a = _mm512_add_ps(*a, _mm512_mul_ps(ev, ld16(vr.add(16 * i))));
-            }
+    unsafe fn max_512(p: *const f64, n: usize) -> f64 {
+        let mut mv = _mm512_set1_pd(f64::NEG_INFINITY);
+        let n8 = n / 8 * 8;
+        let mut j = 0;
+        while j < n8 {
+            let x = _mm512_loadu_pd(p.add(j));
+            mv = _mm512_mask_blend_pd(_mm512_cmp_pd_mask::<_CMP_GT_OQ>(x, mv), mv, x);
+            j += 8;
         }
-        for (i, a) in acc.iter().enumerate() {
-            _mm512_storeu_ps(out.add(16 * i), *a);
+        let mut lanes = [0f64; 8];
+        _mm512_storeu_pd(lanes.as_mut_ptr(), mv);
+        let mut m = f64::NEG_INFINITY;
+        for x in lanes.into_iter().chain((n8..n).map(|j| *p.add(j))) {
+            m = if x > m { x } else { m };
         }
-        if let Some(x) = den {
-            *x = d;
-        }
+        m
     }
 
     #[target_feature(enable = "avx512f,avx512bw,avx512dq,avx512vl,avx2")]
@@ -500,41 +554,127 @@ mod simd {
         super::UNIT.with(|u| {
             let mut u = u.borrow_mut();
             let e = &mut u.1;
-            e.resize(n, 0.0);
+            e.resize(groups * n, 0.0);
             let ep = e.as_mut_ptr();
             for h in 0..groups {
                 let hq = g * groups + h;
                 let sp = s_t.as_ptr().add(hq * lmax + j0);
+                let eh = ep.add(h * n);
                 let mv = _mm512_set1_pd(m_t[hq]);
                 let n8 = n / 8 * 8;
                 let mut jj = 0;
                 while jj < n8 {
                     let x = _mm512_sub_pd(_mm512_loadu_pd(sp.add(jj)), mv);
-                    _mm256_storeu_ps(ep.add(jj), _mm512_cvtpd_ps(exp8(x)));
+                    _mm256_storeu_ps(eh.add(jj), _mm512_cvtpd_ps(exp8(x)));
                     jj += 8;
                 }
                 for jj in n8..n {
-                    *ep.add(jj) = exp_f64(*sp.add(jj) - m_t[hq]) as f32;
+                    *eh.add(jj) = exp_f64(*sp.add(jj) - m_t[hq]) as f32;
                 }
-                let vp = v.as_ptr().add(j0 * stride + g * hd);
-                let out = acc_t.0.add((hq * nbmax + b) * hd);
-                let mut den = 0f64;
-                let nc = hd / 16;
-                let mut c = 0;
-                while c < nc {
-                    let first = if c == 0 { Some(&mut den) } else { None };
-                    let (vo, oo) = (vp.add(16 * c), out.add(16 * c));
-                    let step = match nc - c {
-                        r if r >= 8 => { pv_512::<T, 8>(ep, n, vo, stride, oo, first); 8 }
-                        r if r >= 4 => { pv_512::<T, 4>(ep, n, vo, stride, oo, first); 4 }
-                        r if r >= 2 => { pv_512::<T, 2>(ep, n, vo, stride, oo, first); 2 }
-                        _ => { pv_512::<T, 1>(ep, n, vo, stride, oo, first); 1 }
-                    };
-                    c += step;
+            }
+            // several heads of the group per pass over V (each V row loaded once for all of them): every
+            // head's accumulators and den see exactly the operations of a one-head pass, in the same order.
+            // The positions go in tiles of PV_TILE rows (the tile stays in cache for all head batches); the
+            // accumulators and dens are carried from tile to tile in memory (f32 / f64 stores and loads are
+            // exact), so each head still adds e_j v_j in j order from 0.
+            let vp = v.as_ptr().add(j0 * stride + g * hd);
+            let nc = hd / 16;
+            let hmax = if nc >= 8 { 2 } else { 4 };
+            let mut dens = [0f64; 64];
+            assert!(groups <= dens.len());
+            let mut t0 = 0;
+            while t0 < n {
+                let tn = (n - t0).min(super::PV_TILE);
+                let init = t0 == 0;
+                let mut h0 = 0;
+                while h0 < groups {
+                    let hn = (groups - h0).min(hmax);
+                    let mut den = [0f64; 4];
+                    den[..hn].copy_from_slice(&dens[h0..h0 + hn]);
+                    let mut outs = [std::ptr::null_mut::<f32>(); 4];
+                    for (i, o) in outs.iter_mut().enumerate().take(hn) {
+                        *o = acc_t.0.add(((g * groups + h0 + i) * nbmax + b) * hd);
+                    }
+                    let eh = ep.add(h0 * n + t0);
+                    let vt = vp.add(t0 * stride);
+                    let mut c = 0;
+                    while c < nc {
+                        let first = c == 0;
+                        let vo = vt.add(16 * c);
+                        macro_rules! pv {
+                            ($n:literal) => {
+                                match hn {
+                                    4 => pv_heads_512::<T, $n, 4>(eh, n, tn, vo, stride, &outs, 16 * c, &mut den, first, init),
+                                    3 => pv_heads_512::<T, $n, 3>(eh, n, tn, vo, stride, &outs, 16 * c, &mut den, first, init),
+                                    2 => pv_heads_512::<T, $n, 2>(eh, n, tn, vo, stride, &outs, 16 * c, &mut den, first, init),
+                                    _ => pv_heads_512::<T, $n, 1>(eh, n, tn, vo, stride, &outs, 16 * c, &mut den, first, init),
+                                }
+                            };
+                        }
+                        let step = match nc - c {
+                            r if r >= 8 => { pv!(8); 8 }
+                            r if r >= 4 => { pv!(4); 4 }
+                            r if r >= 2 => { pv!(2); 2 }
+                            _ => { pv!(1); 1 }
+                        };
+                        c += step;
+                    }
+                    dens[h0..h0 + hn].copy_from_slice(&den[..hn]);
+                    h0 += hn;
                 }
-                *den_t.0.add(hq * nbmax + b) = den;
+                t0 += tn;
+            }
+            for (h, d) in dens.iter().enumerate().take(groups) {
+                *den_t.0.add((g * groups + h) * nbmax + b) = *d;
             }
         });
+    }
+
+    /// `acc[0..N] += sum_j e_j * v_j[chunks]` over `tn` positions (`j` order; with `want`, also `den += sum_j e_j`
+    /// in float64) for `H` heads at once (their `e` rows at stride `es`; outputs `outs[h] + off`): one load of
+    /// each V row for all of them. `init`: the accumulators start from 0 (else from `outs`, the previous
+    /// tile's sums), and so does `den` (else its value). Per head the operations of a one-head pass, in order.
+    #[inline]
+    #[target_feature(enable = "avx512f,avx512bw,avx512dq,avx512vl,avx2")]
+    #[allow(clippy::too_many_arguments)]
+    unsafe fn pv_heads_512<T: Kv, const N: usize, const H: usize>(e: *const f32, es: usize, tn: usize, vp: *const T,
+                                                                   stride: usize, outs: &[*mut f32; 4], off: usize,
+                                                                   den: &mut [f64; 4], want: bool, init: bool) {
+        let mut acc = [[_mm512_setzero_ps(); N]; H];
+        let mut d = [0f64; H];
+        if !init {
+            for h in 0..H {
+                for i in 0..N {
+                    acc[h][i] = _mm512_loadu_ps(outs[h].add(off + 16 * i));
+                }
+                d[h] = den[h];
+            }
+        }
+        for jj in 0..tn {
+            let vr = vp.add(jj * stride);
+            let mut vv = [_mm512_setzero_ps(); N];
+            for (i, x) in vv.iter_mut().enumerate() {
+                *x = ld16(vr.add(16 * i));
+            }
+            for h in 0..H {
+                let ej = *e.add(h * es + jj);
+                if want {
+                    d[h] += ej as f64;
+                }
+                let ev = _mm512_set1_ps(ej);
+                for i in 0..N {
+                    acc[h][i] = _mm512_add_ps(acc[h][i], _mm512_mul_ps(ev, vv[i]));
+                }
+            }
+        }
+        for h in 0..H {
+            for i in 0..N {
+                _mm512_storeu_ps(outs[h].add(off + 16 * i), acc[h][i]);
+            }
+            if want {
+                den[h] = d[h];
+            }
+        }
     }
 
     // ---------------- AVX2 ----------------
@@ -589,7 +729,25 @@ mod simd {
                 let hq = g * groups + h;
                 let qh = qp.add(hq * hd);
                 let srow = s_t.0.add(hq * lmax);
-                for j in tj..te {
+                // four positions at a time (independent chains; each score's operations unchanged)
+                let mut j = tj;
+                while j + 4 <= te {
+                    let kr = kp.add(j * stride + g * hd);
+                    let mut acc = [[_mm256_setzero_ps(); 2]; 4];
+                    for c in 0..nc {
+                        let (q0, q1) = (_mm256_loadu_ps(qh.add(16 * c)), _mm256_loadu_ps(qh.add(16 * c + 8)));
+                        for (i, a) in acc.iter_mut().enumerate() {
+                            let ki = kr.add(i * stride + 16 * c);
+                            a[0] = _mm256_add_ps(a[0], _mm256_mul_ps(q0, ld8(ki)));
+                            a[1] = _mm256_add_ps(a[1], _mm256_mul_ps(q1, ld8(ki.add(8))));
+                        }
+                    }
+                    for (i, a) in acc.iter().enumerate() {
+                        *srow.add(j + i) = tree8(_mm256_add_ps(a[0], a[1])) as f64 * scale;
+                    }
+                    j += 4;
+                }
+                for j in j..te {
                     let kr = kp.add(j * stride + g * hd);
                     let (mut a0, mut a1) = (_mm256_setzero_ps(), _mm256_setzero_ps());
                     for c in 0..nc {
@@ -718,9 +876,164 @@ fn run_units(pool: Option<&Pool>, n: usize, f: &(dyn Fn(usize) + Sync)) {
 /// (`(len, kvh, hd)`, row stride `kvh * hd`), into `out (rows, nh * hd)`. `block`: 0 = v1, else the v2
 /// block size. Units (row, KV head, block) run on `threads` threads (0 or 1: the calling thread); every
 /// row's bits are the same for any `threads` and any `rows`.
+///
+/// Long passes (prompt rows) run in **row tiles** of consecutive rows whose per-call scratch (scores
+/// `(rows, nh, lmax)` in float64 and the block partials) fits in [`ATTN_SCRATCH_BYTES`]: each row's
+/// arithmetic is unchanged (it never depends on the other rows of the pass), so the bits are those of one
+/// call over all rows, while the scratch stays bounded instead of growing as `rows x (start + rows)`.
 #[allow(clippy::too_many_arguments)]
 pub fn attend_rows<T: Kv>(q: &[f32], k: &[T], v: &[T], rows: usize, start: usize, dm: Dims, out: &mut [f32],
                           threads: usize, block: usize) {
+    attend_rows_budget(q, k, v, rows, start, dm, out, threads, block, ATTN_SCRATCH_BYTES);
+}
+
+/// [`attend_rows`] with an explicit scratch budget (tests use a tiny one to force many tiles).
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn attend_rows_budget<T: Kv>(q: &[f32], k: &[T], v: &[T], rows: usize, start: usize, dm: Dims,
+                                        out: &mut [f32], threads: usize, block: usize, budget: usize) {
+    if rows == 0 {
+        return;
+    }
+    if fused_eligible(rows, dm, threads, start) {
+        attend_fused(q, k, v, rows, start, dm, out, threads, block);
+        return;
+    }
+    let tile = attn_tile_rows(rows, start, dm, block, budget);
+    let (w, stride) = (dm.nh * dm.hd, dm.kvh * dm.hd);
+    let mut r0 = 0;
+    while r0 < rows {
+        let r1 = (r0 + tile).min(rows);
+        let len = (start + r1) * stride;
+        attend_tile(&q[r0 * w..r1 * w], &k[..len], &v[..len], r1 - r0, start + r0, dm, &mut out[r0 * w..r1 * w],
+                    threads, block);
+        r0 = r1;
+    }
+    trim_scratch();
+}
+
+/// Positions per tile of the AVX-512 value pass (a tile of V rows is reused from cache by every head batch).
+pub(crate) const PV_TILE: usize = 256;
+
+/// Passes with at least this many (row, KV head) units per thread run fused (see [`attend_fused`]).
+const FUSED_UNITS_PER_THREAD: usize = 2;
+
+/// Whether a pass runs as fused (row, KV head) units: prompt-sized passes (enough units for the threads).
+/// Decode-sized passes keep the (row, KV head, block) units, whose blocks parallelise one long row.
+pub(crate) fn fused_eligible(rows: usize, dm: Dims, threads: usize, start: usize) -> bool {
+    let t = auto_threads(rows, start, threads).max(1);
+    rows >= 2 && rows * dm.kvh >= FUSED_UNITS_PER_THREAD * t
+}
+
+thread_local! {
+    /// Per-thread scratch of a fused unit: scores `(nh, len)`, block maxima, row maxima, block dens and accs.
+    static FUSED: RefCell<(Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>, Vec<f32>)> =
+        const { RefCell::new((Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new())) };
+}
+
+/// Prompt passes: one unit per (row, KV head) does that row's phase A over every block, the row maxima of
+/// the group's heads, phase B over every block and the block-order merge, in the calling thread's scratch
+/// (`nh x len` scores, a few hundred KB, in cache) instead of `(rows, nh, lmax)` scores written for all rows
+/// and read back. Every operation of a row is that of [`attend_tile`] (the same [`scores_unit`],
+/// [`values_unit`], maximum rule and merge, in the same order, with the row's own `len` and block count as
+/// strides), so the bits are identical; units are independent, so any thread count gives the same bits.
+#[allow(clippy::too_many_arguments)]
+fn attend_fused<T: Kv>(q: &[f32], k: &[T], v: &[T], rows: usize, start: usize, dm: Dims, out: &mut [f32],
+                       threads: usize, block: usize) {
+    let Dims { nh, kvh, hd, .. } = dm;
+    let groups = nh / kvh;
+    let w = nh * hd;
+    let pool = pool_for(auto_threads(rows, start, threads));
+    let op = P(out.as_mut_ptr());
+    let unit = |i: usize| {
+        let (t, g) = (i / kvh, i % kvh);
+        let len = start + t + 1;
+        let bs = if block == 0 { len } else { block };
+        let nbt = len.div_ceil(bs);
+        FUSED.with(|f| {
+            let mut f = f.borrow_mut();
+            let (s, bm, mx, pden, pacc) = &mut *f;
+            if s.len() < nh * len {
+                s.resize(nh * len, 0.0);
+            }
+            if bm.len() < nh * nbt {
+                bm.resize(nh * nbt, 0.0);
+                pden.resize(nh * nbt, 0.0);
+            }
+            if pacc.len() < nh * nbt * hd {
+                pacc.resize(nh * nbt * hd, 0.0);
+            }
+            mx.resize(nh, 0.0);
+            let (sp, bmp) = (P(s.as_mut_ptr()), P(bm.as_mut_ptr()));
+            let qt = &q[t * w..(t + 1) * w];
+            for b in 0..nbt {
+                let j0 = b * bs;
+                scores_unit::<T>(qt, k, j0, (j0 + bs).min(len), g, dm, sp, len, bmp, b, nbt);
+            }
+            for h in 0..groups {
+                let hq = g * groups + h;
+                let mut m = f64::NEG_INFINITY;
+                for &x in &bm[hq * nbt..hq * nbt + nbt] {
+                    m = if x > m { x } else { m };
+                }
+                mx[hq] = m;
+            }
+            let (dp, ap) = (P(pden.as_mut_ptr()), P(pacc.as_mut_ptr()));
+            for b in 0..nbt {
+                let j0 = b * bs;
+                values_unit::<T>(v, &s[..nh * len], &mx[..nh], j0, (j0 + bs).min(len), g, dm, len, dp, ap, b, nbt);
+            }
+            for h in 0..groups {
+                let hq = g * groups + h;
+                let base = hq * nbt;
+                let mut den = pden[base];
+                for b in 1..nbt {
+                    den += pden[base + b];
+                }
+                // SAFETY: (t, hq) of `out` is written by this unit only (in bounds: t < rows, hq < nh).
+                let o = unsafe { std::slice::from_raw_parts_mut(op.at(t * w + hq * hd).0, hd) };
+                o.copy_from_slice(&pacc[base * hd..(base + 1) * hd]);
+                for b in 1..nbt {
+                    for (od, &a) in o.iter_mut().zip(&pacc[(base + b) * hd..(base + b + 1) * hd]) {
+                        *od += a;
+                    }
+                }
+                for od in o.iter_mut() {
+                    *od = (*od as f64 / den) as f32;
+                }
+            }
+        });
+    };
+    run_units(pool, rows * kvh, &unit);
+}
+
+/// Scratch budget of one attention call (bytes): row tiles are sized to stay within it.
+pub const ATTN_SCRATCH_BYTES: usize = 48 << 20;
+
+/// Rows per tile of [`attend_rows`] (all rows when they fit in the scratch budget).
+pub(crate) fn attn_tile_rows(rows: usize, start: usize, dm: Dims, block: usize, budget: usize) -> usize {
+    let lmax = start + rows;
+    let bs = if block == 0 { lmax } else { block };
+    let nbmax = lmax.div_ceil(bs.max(1));
+    // scores (f64) + block maxima, dens (f64) + accs (f32) per row
+    let per_row = dm.nh * (lmax * 8 + nbmax * (16 + dm.hd * 4) + 8);
+    (budget / per_row.max(1)).clamp(1, rows)
+}
+
+/// Release per-thread scratch above the budget (a long pass must not keep its buffers for good).
+fn trim_scratch() {
+    CALL.with(|c| {
+        let mut c = c.borrow_mut();
+        let bytes = (c.0.capacity() + c.1.capacity() + c.2.capacity() + c.3.capacity()) * 8 + c.4.capacity() * 4;
+        if bytes > 2 * ATTN_SCRATCH_BYTES {
+            *c = (Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new());
+        }
+    });
+}
+
+/// One row tile of [`attend_rows`] (the original single-call body).
+#[allow(clippy::too_many_arguments)]
+fn attend_tile<T: Kv>(q: &[f32], k: &[T], v: &[T], rows: usize, start: usize, dm: Dims, out: &mut [f32],
+                      threads: usize, block: usize) {
     if rows == 0 {
         return;
     }
@@ -805,13 +1118,19 @@ pub fn attend_rows<T: Kv>(q: &[f32], k: &[T], v: &[T], rows: usize, start: usize
     });
 }
 
-/// Threads for a pass: one for decode-sized work, more for long prompts (bits do not depend on it).
+/// Context length (positions) from which a decode-sized pass uses the pool (`threads = 0`).
+pub const AUTO_THREADS_MIN_CONTEXT: usize = 4096;
+
+/// Threads for a pass: one for decode-sized work over a short context, more for long prompts and long
+/// contexts (bits do not depend on it).
 pub(crate) fn auto_threads(rows: usize, start: usize, threads: usize) -> usize {
     if threads > 0 {
         return threads;
     }
     let work = rows * (start + rows);
-    if rows < 4 || work < 1 << 14 {
+    // decode-sized passes stay on one thread unless the context is long (a 1-row pass over thousands of
+    // positions: the units are (KV head, block) pairs, enough work to pay the hand-off)
+    if (rows < 4 && start + rows < AUTO_THREADS_MIN_CONTEXT) || work < 1 << 14 {
         1
     } else {
         std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1).min(8)
@@ -1047,6 +1366,88 @@ mod tests {
             }
             for d in 0..hd {
                 out[hq * hd + d] = (acc[d] as f64 / den) as f32;
+            }
+        }
+    }
+
+    #[test]
+    fn long_rows_match_the_original_kernel() {
+        // rows longer than several value tiles (PV_TILE): the prompt pass (fused units) and single decode rows
+        // both equal the original one-row kernel, every ISA
+        for (nh, kvh, hd) in [(14usize, 2usize, 64usize), (8, 2, 128)] {
+            let dm = Dims { nh, kvh, hd, scale: 0.125 };
+            let (len, w, st) = (3 * super::PV_TILE + 41, nh * hd, kvh * hd);
+            let q = data(len * w, 31);
+            let k = data(len * st, 32);
+            let v = data(len * st, 33);
+            for cap in [2u8, 1, 0] {
+                ISA_CAP.store(cap, Ordering::Relaxed);
+                let mut all = vec![0f32; len * w];
+                attend_rows(&q, &k, &v, len, 0, dm, &mut all, 3, 0);
+                for t in [0usize, super::PV_TILE - 1, super::PV_TILE, 2 * super::PV_TILE + 1, len - 1] {
+                    let mut want = vec![0f32; w];
+                    attend_row_ref(&q[t * w..(t + 1) * w], &k, &v, t + 1, dm, &mut want);
+                    let mut o = vec![0f32; w];
+                    attend_rows(&q[t * w..(t + 1) * w], &k[..(t + 1) * st], &v[..(t + 1) * st], 1, t, dm, &mut o, 2, 0);
+                    assert_eq!(&all[t * w..(t + 1) * w], &want[..], "dims {nh}/{hd} cap {cap} row {t} (pass)");
+                    assert_eq!(o, want, "dims {nh}/{hd} cap {cap} row {t} (decode)");
+                }
+            }
+            ISA_CAP.store(2, Ordering::Relaxed);
+        }
+    }
+
+    #[test]
+    fn fused_units_and_pv_tiles_give_the_bits_of_the_two_phase_call() {
+        // prompt passes as fused (row, KV head) units equal the two-phase (row, KV head, block) call, for rows
+        // longer than a value tile (several PV_TILE tiles carried), v1 and v2, every ISA and thread count
+        for (nh, kvh, hd) in [(4usize, 2usize, 16usize), (8, 2, 128), (6, 3, 32)] {
+            let dm = Dims { nh, kvh, hd, scale: 0.2 };
+            let (len, w, st) = (2 * super::PV_TILE + 77, nh * hd, kvh * hd);
+            let q = data(len * w, 21);
+            let k = data(len * st, 22);
+            let v = data(len * st, 23);
+            for cap in [2u8, 1, 0] {
+                ISA_CAP.store(cap, Ordering::Relaxed);
+                for block in [0usize, 16, 256] {
+                    for (rows, start) in [(len, 0usize), (5, len - 5), (40, 300)] {
+                        let qs = &q[start * w..(start + rows) * w];
+                        let (ks, vs) = (&k[..(start + rows) * st], &v[..(start + rows) * st]);
+                        let mut want = vec![0f32; rows * w];
+                        attend_tile(qs, ks, vs, rows, start, dm, &mut want, 1, block);
+                        for threads in [1usize, 3] {
+                            let mut a = vec![0f32; rows * w];
+                            attend_fused(qs, ks, vs, rows, start, dm, &mut a, threads, block);
+                            assert_eq!(a, want, "dims {nh}/{kvh}/{hd} cap {cap} block {block} rows {rows} t {threads}");
+                        }
+                    }
+                }
+            }
+            ISA_CAP.store(2, Ordering::Relaxed);
+        }
+    }
+
+    #[test]
+    fn row_tiles_give_the_bits_of_one_call() {
+        // a long prompt pass in many row tiles (tiny scratch budget) equals one untiled call, v1 and v2
+        let dm = Dims { nh: 4, kvh: 2, hd: 16, scale: 0.25 };
+        let (len, w, st) = (203usize, 4 * 16, 2 * 16);
+        let q = data(len * w, 11);
+        let k = data(len * st, 12);
+        let v = data(len * st, 13);
+        for block in [0usize, 32] {
+            for (rows, start) in [(len, 0usize), (150, 53)] {
+                let qs = &q[start * w..(start + rows) * w];
+                let mut want = vec![0f32; rows * w];
+                attend_tile(qs, &k, &v, rows, start, dm, &mut want, 1, block);
+                for budget in [1usize, 5000, 40_000] {
+                    assert!(attn_tile_rows(rows, start, dm, block, budget) < rows);
+                    for threads in [1usize, 3] {
+                        let mut a = vec![0f32; rows * w];
+                        attend_rows_budget(qs, &k, &v, rows, start, dm, &mut a, threads, block, budget);
+                        assert_eq!(a, want, "block {block} rows {rows} budget {budget} threads {threads}");
+                    }
+                }
             }
         }
     }
