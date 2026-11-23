@@ -15,6 +15,18 @@ SLA pilot. Three reasons:
 2. The HSM, KMS and TPM integrations have never run against real hardware or cloud services.
 3. There has been no external security audit.
 
+## 2026-11-23 — 7B at 28 tok/s with the encrypted mask factory keeping up (Modal, H100, CPU-only gateway)
+
+Same stack as the 28 tok/s entry (shared-memory lane, native decode driver, masked head, p31, weight-free gateway),
+48 gateway cores, encrypted (MLWE v2) factory with 8 workers x 4 threads, refill active through the window:
+- **Sustained 150 s of back-to-back chats: decode 28.27 tok/s median (min 24.1)**, warm single chat 22.2 tok/s;
+  logprobs bit-identical, text equal, every sustain chat identical.
+- **Masks keep up:** consumption 24.8 slots/s (2.62 slots per generated token incl. prompts), factory production
+  26.9 slots/s in the window (25.5 commit-to-commit), stock 14634 -> 14950 (min 14438), keeps_up = true.
+- Customer side: CPU only, no linear weights on the gateway. The default v2 factory still keeps its ~34 GB encryption
+  hint at 7B; the compact pks-v3 scheme (~2.1 GB, ~1 core per 50 slots/s) needs an independent review before it can
+  be the default.
+
 ## Update 2026-11-23: fused2 in the gateway service, the factory scheduler and the HE factory (opt-in)
 
 - **Gateway service** (`schedule = "fused2"`, no longer pending; `pgw.gateway.fused2`, `ModelRuntime`): public fused2
