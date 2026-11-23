@@ -15,6 +15,37 @@ SLA pilot. Three reasons:
 2. The HSM, KMS and TPM integrations have never run against real hardware or cloud services.
 3. There has been no external security audit.
 
+## Update 2026-11-23: fused2 pair masks from the encrypted mask store (opt-in; format, factory, gateway)
+
+- **Format** (`pgw.maskstore.format`, SPEC 7.2): fused2 pair-mask segments are today's `*.pgwm` files with
+  `schedule = "fused2"` + `check_field = "p61"` (omitted from standard headers, whose bytes are unchanged; readers
+  without the fields refuse them). One entry per fused2 linear in pass order (`r_x` / `W1 r_x` for a trip's first
+  linear, `v` / `W2' v` for a pair's second; the gateway forms `r_R = v - hmul W1 r_x`), `r` derived as today,
+  `uW = (u * hmul) W mod (2^61 - 1)` as 8-byte words. Header fingerprint = the fused2 lane fingerprint;
+  `reserve(..., schedule="fused2")`, a mismatched schedule is refused (fail closed).
+- **Factory** (`pgw.factory.fused2_gen`, `python -m pgw.factory.fused2_gen generate|bench`): exact `W r mod 2^K`
+  (`cpu_f64` on CPU, `cuda_int8` on a customer GPU), exact p61 words (float64 limbs), start-up check vs numpy uint64 /
+  Python-int references, per-chunk private self-check, abort on error, device scrub on CUDA. CPU, 4 vCPUs, Qwen2.5-7B
+  shapes: **5.3 slots/s** full model into an encrypted store (6.1 without the write; 7.2 at K32 with the same code),
+  + 16 s of `uW` per segment. GPU not measured (no GPU here): ~95-100 slots/s estimated on a T4 (K56 = 7 int8 digit
+  GEMMs vs 4 at K32; host ChaCha20/PCIe ceiling ~600 slots/s).
+- **Gateway** (`pgw.engine.fused2_store`): `Fused2MaskedBackend(ring, provider, weights=tables)` takes pair rows from
+  the call's store session (`MaskReservation` / `WindowedReservation`, incremental: `open_fused2_session`), no
+  in-process source, no weights; takes never cross a segment extent (trips run in row pieces), check vectors copied
+  per segment and wiped; the native driver (`Fused2NativeDecode`) runs a pass natively when it fits one extent and
+  installs the segment's check vectors on change (`wipe_checks()`).
+- **Measured**: `tests/engine/test_fused2_store.py` (10 tests: format round trip / old readers refuse, exact segment
+  content, self-check abort, masked == plain via the store on the Python path and the native driver over the lane,
+  incremental session, 1 slot per token, tamper + rows never reused, crashed gateway process, burn on close);
+  maskstore + factory + gateway mask suites unchanged (668 passed). End to end, Qwen2.5-0.5B, `benchmarks/fused2_e2e.py
+  --masks store`: factory process -> encrypted store -> weight-free gateway, logits bit-identical (4/4), 1.0 slot per
+  token.
+- **HE**: v2 / pks-v3 cannot make K56 masks (`q <= 2^64`, 24 bits of noise room: K40 / K32). Plan section 11: a direct
+  scheme needs `q >= 2^80` (RNS, new parameters, review); the practical path is digit decomposition on the existing
+  schemes (4 v2-K40 products or 7 pks-v3 products per mask, recombined exactly; p61 words need no HE).
+- Not done: the gateway service still refuses `schedule = "fused2"` (request path -> `open_fused2_session`), the
+  factory scheduler / mask-service CLI do not run the fused2 generator yet, K56 device PRNG, GPU numbers.
+
 ## 2026-11-23 — 7B at 28 tok/s with a CPU-only, weight-free gateway (Modal, H100 provider)
 
 Measured (Modal co-located, Qwen2.5-7B-Instruct, H100 provider with 12 cores, 32-core CPU-only gateway holding no

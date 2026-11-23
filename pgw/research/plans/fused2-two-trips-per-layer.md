@@ -424,3 +424,109 @@ per token, that is about 31-32 tok/s if the gateway work stays the same), up to 
 and 9-26 ms at 72B with a 0.2 ms RTT. Its 1.75x bytes
 per element make it lose on a slow link (RTT 0.1 ms at 50 Gbit/s: roughly even at 72B). The benchmark decides
 which side of 1.3x the op lands on.
+
+## 11. Update 2026-11-23: production mask supply for fused2 (encrypted store, factory, gateway; opt-in)
+
+Goal: a weight-free CPU-only gateway gets its fused2 pair masks exactly as it gets today's masks: encrypted store
+segments filled by the customer-side factory, durable single use, (incremental) reservations, crash safety, burn
+on close. All default off; existing formats and paths unchanged; masked == plain bit for bit.
+
+**Format** (`pgw.maskstore.format`, SPEC 7.2): a fused2 pair-mask segment is today's segment file with
+`schedule = "fused2"` and `check_field = "p61"` (mandatory together; both omitted from standard headers, so their
+bytes are unchanged; readers that do not know `schedule` or `p61` refuse the header, `extra = "forbid"`, tested
+with a reader model without the field). Entries: the fused2 linears in pass order (`0.qkv/f2, 0.o, 0.gate_up/f2,
+0.down, 1.qkv/f2, ...`), each one single-stage product, because the no-chain correction needs nothing else
+(section 2): `r`, `W r` = `r_x`, `W1 r_x` for a trip's first linear and `v`, `W2' v` for a pair's second; the
+gateway forms `r_R = v - hmul * W1 r_x` itself from the public `hmul`. `r` is derived exactly as today
+(`ring_uniform_rows(n, K, slot, 1, "r", key)`), so the store's reservation, extent, chunk-cache, prefetch and burn
+machinery is reused unchanged. Check words: `uW = (u * hmul) W mod (2^61 - 1)` per linear, stored as 8-byte words
+(values up to 2^61 do not fit K56 elements; `SegmentLayout.check_bpe`), `u = u64le(stream("u-p61", key)) mod p`
+(`pgw.maskstore.fused2.p61_check_vectors`). The header fingerprint is the fused2 lane fingerprint (binds base pack,
+ring and every `w8` / `hmul`), so fused2 and standard segments never share an inventory key; in addition a
+reservation records its segments' schedule and `reserve(..., schedule=)` refuses a mismatch (fail closed: the slots
+stay consumed). Header rules: fused2 ids only with the schedule, p61 only with the schedule, a capped ring with
+`2^(C+1) < p`, `checks >= 1`; the import soundness floor uses `checks * (log2 p - log2(1 + 2^-3))` (60.8 bits per
+vector and stage). Not supported for fused2: the in-memory mask ring (`ringbuf`) and the HE factory (below).
+
+**Factory** (`pgw.factory.fused2_gen.Fused2MaskGenerator`; `python -m pgw.factory.fused2_gen generate|bench`): holds
+the public fused2 weights (a provider-only weights file suffices; never anything of the provider's), writes
+fresh-seeded segments through `MaskStore.writer(..., schedule="fused2", check_field="p61")` (or an export sink).
+Products `W r mod 2^K` by `PreparedWeight` (exact: `cpu_f64` digit GEMMs on the CPU, `cuda_int8` tensor-core digit
+GEMMs on a customer GPU, i.e. the GPU mask service's arithmetic; for K a multiple of 8 up to 56 every step is
+wrapping 64-bit integer arithmetic); `uW` by three 21-bit limbs of `u * hmul mod p` times the int8 weight in float64
+BLAS (every partial sum an integer below 2^53: exact in any order), recombined mod p. Guards: `startup_check()`
+(production device vs numpy uint64 wrapping products for fresh rows of sampled linears, `uW` columns vs Python
+integers; bit for bit or `IntegrityError`), a per-chunk self-check before every write with private ring vectors
+(`u_s . (W r) == (u_s W) . r mod 2^K`, numpy uint64, independent of the GEMM backend; sampled rows, `-1` all), abort
+on any error (never committed), device-memory scrub after every segment on CUDA, secrets (`r`, stream keys, `u`,
+`uW`) zeroed. Not wired into `FactoryScheduler` / `pgw factory mask-service` yet (its own process entry point).
+
+Throughput, CPU (this 4-vCPU Xeon @ 2.3 GHz, `cpu_f64`, Qwen2.5-7B shapes with random public weights, one layer
+measured and scaled by 28, a 256-slot segment encrypted into a real store; `bench --model qwen2.5-7b --layers 1
+--slots 256 --store-root DIR`): **5.3 slots/s for the full 7B model**, steady state (6.8 ms per slot and layer:
+GEMMs 6.0 ms at 39 GMAC/s, ChaCha20 0.2 ms, self-check 0.02 ms, AES-GCM + write 0.55 ms), plus 0.58 s per layer and
+segment for `uW` (16 s per 7B segment: ~2% at 4096 slots) and a one-time 1.4 s per layer for the private self-check
+vectors. A fused2 slot has the same MACs as a standard slot (6.5 G for 7B); K56 costs two f64 digit GEMMs per
+product (without the store write: 6.1 slots/s at K56 vs 7.2 at K32 with the same generator; the f64 GEMMs are
+partly bound by streaming the float64 weights, so the second digit costs ~20%, not 2x). Demand at the measured 28 tok/s with incremental reservations (~1.2-1.3 slots per token) is ~35 slots/s:
+~26 such cores on the CPU path, so 7B+ wants the GPU mask service. GPU estimate (not measured, no GPU here): the
+`cuda_int8` product at K56 runs 7 int8 digit GEMMs where K32 runs 4, so the measured T4 mask-service rate for 7B
+(164-174 slots/s at K32, STATUS 2026-11-22) scales to **~95-100 slots/s on a T4** (L4/A10G 1.5-1.9x); `r` is
+expanded on the host (native ChaCha20) and crosses PCIe (6.6 MB of `r` up, 11 MB of `W r` down per 7B slot: a
+~600 slots/s ceiling at 12 GB/s), so a larger GPU is host-bound before it is GEMM-bound (moving the K56 PRNG to the
+device, as for K32, lifts that). One command to confirm (not run): `python -m pgw.factory.fused2_gen bench --model
+qwen2.5-7b --layers 2 --slots 1024 --device cuda`.
+
+**Gateway** (`pgw.engine.fused2_store`): `Fused2MaskedBackend(ring, provider, weights=gateway_tables)` no longer
+needs an in-process mask source: a call whose session is a store reservation (`MaskReservation`, or a
+`WindowedReservation`, incremental included: `open_fused2_session(store, lane_fp, ring, tables, prompt_rows, cap=,
+chunk=)`) takes its pair rows from it (`Fused2StoreMasks`): per trip `take_checked` of the first linear, then the same
+number of rows of the second (rows and the check vectors of the extent they came from, atomically; misaligned rows
+fail closed). A take never crosses a segment extent, so a trip may run in row pieces (rows are independent; each
+piece is masked, checked and wiped like a whole trip). Check vectors are copied once per (segment, linear) into
+arrays the source owns (a concurrent close that wipes the store's shared copies cannot turn a check into `u = 0`;
+an all-zero `u` is refused), replaced and zeroed when the segment changes, and zeroed when the session is released
+(`backend.release(session)`, or swept once closed). The native driver (`Fused2NativeDecode`) takes a whole pass from
+the session when every linear's rows fit the current extent (else the Python path runs that pass in pieces),
+installs the driver's check vectors only when the segment (token) changes, and `wipe_checks()` zeroes the driver's
+copies (also after a pass of a closed session; a driver that served a store session refuses a static source
+afterwards). One slot per token: every linear's cursor moves by the pass's rows. `benchmarks/fused2_e2e.py --masks
+store` runs the chain: the factory process fills an encrypted store, the gateway (weight-free tables) decodes from
+an incremental reservation, the plain replay checks exactness. The gateway service itself still refuses
+`schedule = "fused2"` (`PENDING_SPEED_SETTINGS`); wiring its request path to `open_fused2_session` is the next step.
+Measured end to end (Qwen2.5-0.5B-Instruct, this box, CPU provider over loopback TCP, `--masks store --tokens 3`):
+the factory process wrote one 50-slot encrypted segment (start-up check passed, 4.4 slots/s while the other
+processes ran), the gateway decoded from an incremental reservation on weight-free tables: 49 trips per token,
+1.0 slot per token, 384 checks passed, logits bit-identical to the plain replay at 4/4 positions (max diff 0.0).
+
+Tests (`tests/engine/test_fused2_store.py`, CPU; a real store, the real native lane for the driver): header round
+trip; readers without the field refuse; inconsistent headers and writer arguments refused; a standard reservation
+refuses fused2 segments (fail closed); stored rows, products and p61 words vs Python-integer references; start-up
+check and per-chunk self-check abort on one flipped bit (nothing committed); masked == plain bit for bit via the
+store (Python path with a prompt crossing segment extents, an incremental windowed session, the native driver over
+the lane with every decode pass native), one slot per token; tampering caught and the failed pass's rows never
+reused; a gateway process killed after taking rows: its slots stay consumed and the next reservation gets other
+rows; burn on close. The existing maskstore, factory and fused2 suites pass unchanged.
+
+**HE note: what an encrypted (HE) factory for K56 needs (not implemented).** The encrypted factories compute
+`W8 r mod 2^K` blind: v1/v2 (`pgw.hemask.lwe`) encrypt `r` scaled by `Delta = 2^(q-K)` at `q <= 2^64` and need
+`q - K >= 24` bits of room for the noise `W8 e`, so `K <= 40`; pks-v3 (`pgw.hemask.pks`) uploads at `2^56` with
+`Delta = 2^24` and returns `W8 r mod 2^32` through a `q1 ~ 2^48` packed reply (K32 only). K56 masks therefore need
+either
+(a) **a direct scheme with `q >= 2^80`** (56 message bits + 24 noise bits): ciphertext arithmetic above 64 bits
+(two-limb, or RNS with at least two ~40-bit primes plus the key-switching special modulus), the provider's GEMM
+`W8 B mod q` per RNS limb (int8 digit GEMMs per limb: about 2x today's provider work), v2 hints `H = W8 A` or pks
+compact hints and a reply modulus of about `2^(56 + 16)` for the 32-row packing, ring dimension and error re-chosen
+for 128-bit security at `log2 q ~ 84` (an MLWE dimension of 4096 is still within the HE-standard bound for ternary secrets), a
+new noise analysis and an external review; or
+(b) **digit decomposition on the existing schemes (no new cryptography)**: write each uniform `r = sum_i 2^(b i) d_i`
+with independent uniform digits `d_i < 2^b`, let the existing factory compute each `W8 d_i` blind, recover each
+`W8 d_i` as an exact integer (`|W8 d_i| < 2^(b + 7 + log2 n)`, so its value mod `2^K_he` is exact after centering
+when `b + 7 + log2 n < K_he - 1`) and recombine `W8 r = sum_i 2^(b i) (W8 d_i) mod 2^56` on the customer side. v2
+at K40: `b = 14` (`14 + 7 + 14.9 < 39` up to 72B's `n = 29568`), 4 products per mask; pks-v3 at K32: `b = 8`
+(`8 + 7 + 14.9 < 31`), 7 products per mask. HE work, upload and reply traffic per slot grow 4x (v2 at K40 vs K32)
+or 7x (pks-v3); privacy is unchanged (each digit plane is a uniform message under a fresh MLWE secret); the factory's
+private per-row self-check runs on the recombined `W r mod 2^56`; the p61 check words `(u * hmul) W mod p` need no
+HE (public `W`, customer `u`: 0.58 s per 7B layer and segment on this 4-vCPU box). Option (b) is the practical path (reviewed
+schemes, 4-7x the HE cost: pks-v3 measured ~1.8 customer cores for ~35 slots/s at K32, so ~13 cores at K56), unless
+the GPU mask service is available, which needs no HE at all.

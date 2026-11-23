@@ -338,6 +338,15 @@ headers keep their exact bytes; readers that do not know the field refuse the he
 chunks it needs. Size per slot is `Σ m · K/8` bytes, for example 1.5 MB for Qwen2.5-0.5B at K40 and
 6.9 MB for Llama-3-8B at K40 (8.3 MB at K48). `r` is **not stored**; it is regenerated from the seed.
 
+fused2 pair-mask segments (opt-in; `schedule = "fused2"`, omitted when unset; readers without the field refuse
+the header): the same layout over the fused2 linears of a lane weight set in pass order (`0.qkv/f2, 0.o,
+0.gate_up/f2, 0.down, 1.qkv/f2, ...`; `fingerprint` = the fused2 lane fingerprint; ring e.g. K56A12C53). Each
+entry is one single-stage product: `r_x`, `W1·r_x` for a trip's first linear, `v`, `W2'·v` for a pair's second
+(the gateway masks the residual with `r_R = v - hmul·W1·r_x`). `check_field = "p61"` is mandatory: chunk 0 holds
+`(u·hmul)·W mod (2^61 - 1)` as 8-byte little-endian words, `u (p61) = ring_uniform((checks, m), 64, "u-p61",
+linear_id) mod (2^61 - 1)`. One slot = one row of every entry. `reserve(..., schedule="fused2")` serves them;
+a reservation of another schedule refuses them (`pgw.maskstore.fused2`, `pgw.factory.fused2_gen`).
+
 ### 7.3 Mask derivation (normative; `pgw.core.prng`)
 ```
 key(labels) = HKDF-Expand(SHA-256, prk=seed, info="pgw/v1/prng" || Σ u32be(len)||typed(label), 32)

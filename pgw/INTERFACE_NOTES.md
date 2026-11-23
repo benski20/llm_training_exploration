@@ -613,3 +613,16 @@ Behaviour changes other components and operators must know about:
 - Why: mask demand per generated token (no more `max_tokens` slots burned per request; admission guarantee kept).
 - Impact: none by default; store, engine, backend, wire and factory interfaces unchanged.
 - Status: done
+
+## 2026-11-23 engine (fused2) -> maskstore, factory, gateway: fused2 pair-mask segments in the store (opt-in)
+- What: `SegmentHeader.schedule` (`None` | `"fused2"`) and `check_field = "p61"` (only together; fused2 linear ids
+  `<l>.qkv/f2 | <l>.o | <l>.gate_up/f2 | <l>.down`; `SegmentLayout.check_bpe` = 8 for p61 words);
+  `MaskStore.writer(..., schedule=)`, `MaskStore.reserve(..., schedule=)` (mismatch refused after the commit, fail
+  closed), `MaskReservation.schedule`; `pgw.maskstore.fused2` (`p61_check_vectors`, `pack_p61` / `unpack_p61`,
+  `fused2_soundness_bits`); `pgw.factory.fused2_gen.Fused2MaskGenerator`; `pgw.engine.fused2_store`
+  (`Fused2StoreMasks`, `open_fused2_session`); `Fused2MaskedBackend(ring, provider, masks=None, *, weights=)`,
+  `masks_for(session)`, `release(session)`; `TripMasks.c1 / c2`; `Fused2NativeDecode.wipe_checks()`. SPEC 7.2.
+- Why: a weight-free gateway gets fused2 masks from the encrypted store (single use, reservations, crash safety).
+- Impact: none by default: standard headers keep their exact bytes, `reserve()` without `schedule` behaves as before
+  for standard segments (and now refuses fused2 ones); older readers refuse fused2 headers.
+- Status: done (plan fused2-two-trips-per-layer.md section 11)
