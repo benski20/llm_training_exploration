@@ -35,7 +35,26 @@ use std::time::{Duration, Instant};
 
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<DecodeDriver>()?;
+    m.add_function(pyo3::wrap_pyfunction!(decode_phase_ns, m)?)?;
     Ok(())
+}
+
+/// Cumulative ns of the driver's local phases per linear slot of a layer (qkv, o, gate_up, down):
+/// `[prepare x4, finish x4, float ops x4, trips x4]` (process-wide counters for benchmarks; timing only).
+static PHASE_NS: [std::sync::atomic::AtomicU64; 16] = [const { std::sync::atomic::AtomicU64::new(0) }; 16];
+
+fn phase_add(i: usize, v: u64) {
+    PHASE_NS[i].fetch_add(v, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// The driver's phase counters (see [`PHASE_NS`]); `reset` zeroes them after reading.
+#[pyfunction]
+#[pyo3(signature = (reset = false))]
+fn decode_phase_ns(reset: bool) -> Vec<u64> {
+    PHASE_NS
+        .iter()
+        .map(|a| if reset { a.swap(0, std::sync::atomic::Ordering::Relaxed) } else { a.load(std::sync::atomic::Ordering::Relaxed) })
+        .collect()
 }
 
 fn verr(msg: impl Into<String>) -> PyErr {
@@ -266,6 +285,15 @@ struct LaneIn<'a> {
     timeout: Duration,
 }
 
+fn src_prefetch(s: Option<&Src<'_>>) {
+    match s {
+        Some(Src::U64(v)) => crate::lane::wait_prefetch::add_slice(v),
+        Some(Src::U32(v)) => crate::lane::wait_prefetch::add_slice(v),
+        Some(Src::Bytes(v)) => crate::lane::wait_prefetch::add_slice(v),
+        None => {}
+    }
+}
+
 fn ns(d: Duration) -> u64 {
     u64::try_from(d.as_nanos()).unwrap_or(u64::MAX)
 }
@@ -363,6 +391,8 @@ fn run_loop<T: crate::attn::Kv>(
         rid[8] = (rid[8] & 0x3F) | 0x80;
         let t1 = Instant::now();
         st.local_ns += ns(t1 - t0);
+        phase_add(pos % 4, ns(t1 - t0));
+        phase_add(12 + pos % 4, 1);
         let lane = match lane {
             Some(l) => l,
             None => {
@@ -385,7 +415,17 @@ fn run_loop<T: crate::attn::Kv>(
             body_len: p.payload.len() as u32,
             request_id: rid,
         };
+        if crate::lane::wait_prefetch::enabled() {
+            // read right after the reply: this trip's W r and output check vector, the next trip's
+            // input-half vector (prefetched while the provider computes; timing only)
+            ticket.prefetch_wr();
+            src_prefetch(tr.u.as_ref());
+            if let Some(nx) = trips.get(pos + 1 - base) {
+                src_prefetch(nx.uw.as_ref());
+            }
+        }
         let res = lane.ch.trip_raw(&hdr, &p.payload, &mut p.reply, lane.timeout);
+        crate::lane::wait_prefetch::clear();
         let t2 = Instant::now();
         match res {
             Ok((0, _cus)) => {}
@@ -430,6 +470,8 @@ fn run_loop<T: crate::attn::Kv>(
         let fin = ticket.finish_core(&p.reply, tr.u, &lin.scale, lin.bias.as_deref(), lin.bound, mode, lin.threads_f,
                                      split_f, &mut p.y[..t * m]);
         drop(ticket);
+        let tf = Instant::now();
+        phase_add(4 + pos % 4, ns(tf - t2));
         st.trips += 1;
         st.rows += t as u64;
         match fin {
@@ -467,7 +509,9 @@ fn run_loop<T: crate::attn::Kv>(
         }
         DecodeDriver::after_trip(cfg, p, pos, &mut kv, cos, sin);
         p.pos = pos + 1;
-        st.local_ns += ns(Instant::now() - t2);
+        let te = Instant::now();
+        phase_add(8 + pos % 4, ns(te - tf));
+        st.local_ns += ns(te - t2);
     }
     if let Some((s, bad, at)) = join(&mut pending, st) {
         p.pos = at;
@@ -827,6 +871,8 @@ impl DecodeDriver {
                 None => None,
             };
             py.allow_threads(|| {
+                // the trip split's pool workers stay warm for this call (PGW_POOL_ACTIVE_SPIN_US; timing only)
+                let _warm = crate::prepare::pool::Warm::new();
                 if let Some(y) = inj {
                     let m = y.len();
                     pass.y[..m].copy_from_slice(y);

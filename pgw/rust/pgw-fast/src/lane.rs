@@ -40,6 +40,84 @@ pub const TICKET_LEN: usize = 32;
 pub const ALPN: &[u8] = b"pgw-lane/1";
 
 /// Reply statuses (`pgw.wire.lane.Status`).
+/// Cache warm-up while a trip waits on the provider (opt-in, `PGW_LANE_WAIT_PREFETCH=1`; timing only).
+///
+/// A native driver registers, before a lane call, the memory its next steps read right after the reply
+/// (this trip's `W r` rows and check vectors, the next trip's input-half vector); the lane call issues
+/// software prefetches for those lines **after** the request has left and before it waits for the reply,
+/// so the gateway's per-trip work after the reply runs from cache instead of DRAM. Prefetch instructions
+/// never fault and never change memory: no value, check or byte on the wire depends on them.
+pub mod wait_prefetch {
+    use std::cell::RefCell;
+    use std::sync::OnceLock;
+
+    /// At most this many bytes are prefetched per lane call (bounded work while the reply may arrive).
+    const MAX_BYTES: usize = 4 << 20;
+
+    thread_local! {
+        static REGIONS: RefCell<Vec<(usize, usize)>> = const { RefCell::new(Vec::new()) };
+    }
+
+    /// `PGW_LANE_WAIT_PREFETCH` (read once; default off).
+    pub fn enabled() -> bool {
+        static ON: OnceLock<bool> = OnceLock::new();
+        *ON.get_or_init(|| {
+            matches!(std::env::var("PGW_LANE_WAIT_PREFETCH").ok().as_deref().map(str::trim),
+                     Some("1" | "true" | "yes" | "on"))
+        })
+    }
+
+    /// Register `len` bytes at `ptr` for the calling thread's next lane call (no-op when off).
+    pub fn add(ptr: *const u8, len: usize) {
+        if len == 0 || ptr.is_null() || !enabled() {
+            return;
+        }
+        REGIONS.with(|r| r.borrow_mut().push((ptr as usize, len)));
+    }
+
+    /// Register a slice (any element type).
+    pub fn add_slice<T>(s: &[T]) {
+        add(s.as_ptr().cast::<u8>(), std::mem::size_of_val(s));
+    }
+
+    /// Forget the registered regions without prefetching them.
+    pub fn clear() {
+        REGIONS.with(|r| r.borrow_mut().clear());
+    }
+
+    /// Prefetch the registered regions (at most `MAX_BYTES`) and forget them.
+    pub fn run() {
+        REGIONS.with(|r| {
+            let mut v = r.borrow_mut();
+            let mut budget = MAX_BYTES;
+            for &(a, len) in v.iter() {
+                let len = len.min(budget);
+                budget -= len;
+                let mut off = 0;
+                while off < len {
+                    prefetch((a + off) as *const u8);
+                    off += 64;
+                }
+                if budget == 0 {
+                    break;
+                }
+            }
+            v.clear();
+        });
+    }
+
+    #[inline(always)]
+    fn prefetch(p: *const u8) {
+        #[cfg(target_arch = "x86_64")]
+        // SAFETY: a prefetch hint never faults and never reads or writes memory architecturally.
+        unsafe {
+            std::arch::x86_64::_mm_prefetch::<{ std::arch::x86_64::_MM_HINT_T0 }>(p.cast::<i8>());
+        }
+        #[cfg(not(target_arch = "x86_64"))]
+        let _ = p;
+    }
+}
+
 pub mod status {
     pub const OK: u8 = 0;
     pub const BAD_HEADER: u8 = 1;
@@ -933,6 +1011,7 @@ mod chan {
             self.timeouts(rto, wto)?;
             let conn = self.conn.as_mut().ok_or(LaneError::Closed)?;
             conn.send(&hdr, body, &mut self.scratch)?;
+            super::wait_prefetch::run();
             let sent = Instant::now();
             let spin = self.spin_for(u32::from(h.linear), h.rows);
             let spin_until = if spin.is_zero() { None } else { Some(sent + spin) };
@@ -1002,6 +1081,7 @@ mod chan {
             self.timeouts(rto, wto)?;
             let conn = self.conn.as_mut().ok_or(LaneError::Closed)?;
             conn.send(&hdr, body, &mut self.scratch)?;
+            super::wait_prefetch::run();
             let sent = Instant::now();
             let spin = self.spin_for(u32::from(h.linear), h.rows);
             let spin_until = if spin.is_zero() { None } else { Some(sent + spin) };
@@ -1056,6 +1136,7 @@ mod chan {
             if reg.srv_parked().load(Ordering::SeqCst) != 0 {
                 shm::ring(sock)?;
             }
+            super::wait_prefetch::run();
             let sent = Instant::now();
             let ready = || reg.rep_seq().load(Ordering::Acquire) == seq;
             let mut blocked = false;

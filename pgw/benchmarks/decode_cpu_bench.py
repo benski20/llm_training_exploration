@@ -237,6 +237,11 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
     rows: list[dict[str, Any]] = []
     prof = cProfile.Profile() if args.profile and not args.profile_prefill else None
     outs = []
+    from pgw.core.native import fast as _fast
+
+    phase_fn = getattr(_fast, "decode_phase_ns", None) if _fast is not None else None
+    if phase_fn is not None:
+        phase_fn(True)  # the native decode driver's per-phase counters: decode passes of the timed runs only
     thr0 = _thread_cpu()
     for _ in range(args.repeat):
         st0 = backend.stats.snapshot()
@@ -255,6 +260,14 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
             "round_trips_per_token": (st1["round_trips"] - st0["round_trips"]) / toks,
         })
     thr1 = _thread_cpu()
+    phases: dict[str, Any] = {}
+    if phase_fn is not None:
+        ph = phase_fn(True)
+        for i, kind in enumerate(("qkv", "o", "gate_up", "down")):
+            nt = max(1, ph[12 + i])
+            if ph[12 + i]:
+                phases[kind] = {"trips": ph[12 + i], "prepare_us": round(ph[i] / 1e3 / nt, 1),
+                                "finish_us": round(ph[4 + i] / 1e3 / nt, 1), "float_us": round(ph[8 + i] / 1e3 / nt, 1)}
     ntk = max(1, args.repeat * args.tokens)
     by_name: dict[str, float] = {}
     for tid, (name, c1) in thr1.items():
@@ -318,6 +331,7 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
                                            "calls_per_token": round(v[2] / ntok, 2)}
                                        for k, v in sorted(dec_timers.items())}} if timers is not None else {}),
         "first_tokens": outs[0][0][:8],
+        **({"decode_native_phases_us_per_trip": phases} if phases else {}),
     }
     if prof:
         s = io.StringIO()
