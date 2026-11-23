@@ -409,7 +409,7 @@ DRAFT_BACKENDS = ("auto", "native_int8", "torch_int8", "float")
 
 def spec_options(spec_rows: int, draft_pack: str | None = None, draft_device: str | None = None, *,
                  draft_backend: str | None = None, pipeline_steps: int | None = None,
-                 spec_mask: str | None = None) -> dict[str, Any]:
+                 spec_mask: str | None = None, draft_head: str | None = None) -> dict[str, Any]:
     """Strict-speculation presets for the wizard's ``models.json`` (``launch.py --spec-rows``; ``{}`` when off).
 
     Every decode pass then carries exactly ``spec_rows`` masked rows per sequence (the pending token, the
@@ -428,6 +428,11 @@ def spec_options(spec_rows: int, draft_pack: str | None = None, draft_device: st
     out: dict[str, Any] = {"spec_rows": r, "spec_strict_passes": True, "spec_lookup": SPEC_LOOKUP}
     # spec_mask: a run-time ``C[/B]`` (launch.py --spec-mask, passed with the run); None = the deploy-time setting
     out.update(spec_mask_options(os.environ.get("PGW_MODAL_SPEC_MASK", "") if spec_mask is None else spec_mask))
+    if draft_head:  # launch.py --draft-head: a trained target-feature head drafts (no draft model, no lookup)
+        if draft_pack or pipeline_steps is not None:
+            raise ValueError("--draft-head excludes the draft model and pipelined drafting")
+        out.update({"draft_backend": "feature_head", "draft_head_path": str(draft_head), "spec_lookup": 0})
+        return out
     if draft_pack:
         out["draft_pack_path"] = str(draft_pack)
         if draft_device:
@@ -451,7 +456,7 @@ def spec_options(spec_rows: int, draft_pack: str | None = None, draft_device: st
 #: plain phase (``launch.py --ab-plain``), which restarts the gateway process on the same configuration otherwise.
 SPEC_MODEL_KEYS = ("spec_rows", "spec_strict_passes", "spec_mask_rows", "spec_mask_credit", "spec_lookup",
                    "spec_lookup_min_n", "spec_tokens", "draft_pack_path", "draft_device", "draft_backend",
-                   "spec_pipeline_steps")
+                   "spec_pipeline_steps", "draft_head_path")
 
 
 def drop_speculation(models_file: Path) -> list[str]:

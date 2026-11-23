@@ -75,6 +75,10 @@ PACK = "/srv/pgw-provider/pack" if VOLUME_PACK else "/opt/packs/" + MODEL_NAME
 # customer.py: a pack of Qwen2.5-0.5B-Instruct the gateway runs in plaintext (here on the CPU: the gateway's
 # process sees no GPU) to propose tokens. Default: no draft (prompt lookup only).
 DRAFT = os.environ.get("PGW_MODAL_DRAFT", "0") == "1"
+#: launch.py --draft-head PATH (deploy time): a trained target-feature draft head baked into the image
+#: (public data only: trained on the public model's own outputs); read by the gateway's user.
+DRAFT_HEAD_LOCAL = os.environ.get("PGW_MODAL_DRAFT_HEAD", "").strip()
+DRAFT_HEAD = "/opt/pgw-modal/draft_head.pt" if DRAFT_HEAD_LOCAL else ""
 DRAFT_REPO, DRAFT_REVISION = "Qwen/Qwen2.5-0.5B-Instruct", "7ae557604adf67be50417f59c2c2f167def9a775"
 DRAFT_PACK = "/opt/packs/draft"  # = pgw_modal_boot.DRAFT_PACK
 MAX_LIFETIME_S = 88 * 60  # hard cap (function timeout): nothing outlives 90 minutes
@@ -143,6 +147,7 @@ SEPARATE_USERS = os.environ.get("PGW_MODAL_COLOCATED_USERS", "1") != "0"
 GATEWAY_GPU = os.environ.get("PGW_MODAL_GATEWAY_GPU", "0") == "1" and GPU is not None
 GPU_SPEC = f"{GPU.split(':')[0]}:2" if GATEWAY_GPU and GPU else GPU
 RUNTIME_ENV = {"PGW_MODAL_MODEL": MODEL_NAME, "PGW_MODAL_DRAFT": "1" if DRAFT else "0",
+               "PGW_MODAL_DRAFT_HEAD": DRAFT_HEAD_LOCAL,
                "PGW_MODAL_SPEC_MASK": os.environ.get("PGW_MODAL_SPEC_MASK", ""),
                "PGW_MODAL_COLOCATED_USERS": "1" if SEPARATE_USERS else "0",
                "PGW_MODAL_GATEWAY_GPU": "1" if GATEWAY_GPU else "0",
@@ -197,6 +202,8 @@ image = (
     .add_local_file(HERE / "trip_gate.py", "/opt/pgw-modal/trip_gate.py")
     .add_local_file(HERE / "e2e_driver.py", "/opt/pgw-modal/e2e_driver.py")
 )
+if DRAFT_HEAD_LOCAL and modal.is_local():
+    image = image.add_local_file(DRAFT_HEAD_LOCAL, DRAFT_HEAD, copy=True)
 
 app = modal.App("pgw-colocated" + APP_SUFFIX, image=image)
 
@@ -314,7 +321,9 @@ def pair(run_id: str, ttl_s: int = 80 * 60, e2e: bool = False, local_linears: st
             spec = boot.spec_options(spec_rows, DRAFT_PACK if DRAFT else None, None,
                                      draft_backend=genv.get("PGW_MODAL_DRAFT_BACKEND") or None,
                                      pipeline_steps=int(pipe) if pipe.strip() else None,
-                                     spec_mask=genv.get("PGW_MODAL_SPEC_MASK"))
+                                     spec_mask=genv.get("PGW_MODAL_SPEC_MASK"),
+                                     draft_head=(DRAFT_HEAD if spec_rows and DRAFT_HEAD and Path(DRAFT_HEAD).is_file()
+                                                 else None))
             result["spec_options"] = spec
             # with its own GPU (gsplit), the gateway's exact local linears run there (self-checked, else the CPU)
             # and its LM head too (the CPU kernel's fixed summation order as one GPU kernel: the same logits bit

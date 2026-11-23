@@ -829,6 +829,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                     help="bake the Qwen2.5-0.5B draft model into the customer image (deploy time; needs --spec-rows "
                          "and a --model larger than the 0.5B; PGW_MODAL_DRAFT=1). On a CPU customer it runs on the "
                          "gateway's CPU, with --customer-gpu on its GPU")
+    ap.add_argument("--draft-head", default="",
+                    help="--spec-rows, co-located: bake this trained target-feature draft head file into the gateway "
+                         "image (deploy time; PGW_MODAL_DRAFT_HEAD; benchmarks/feature_head_train.py output) and draft "
+                         "with it (draft_backend = feature_head; excludes --spec-draft and pipelined drafting)")
     ap.add_argument("--local-linears", choices=["off", "attention", "attention_down", "auto", "auto_kinds"],
                     default=None,
                     help="exact local linears (E2) of the customer gateway (default: 'attention_down' co-located, "
@@ -1010,6 +1014,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         ap.error("--he-bulk-split must be in [1, 8]")
     if args.spec_rows != 0 and not 2 <= args.spec_rows <= 8:
         ap.error("--spec-rows must be 0 (off) or in [2, 8]")
+    if args.draft_head:
+        if not args.spec_rows or args.spec_draft or args.placement != "colocated":
+            ap.error("--draft-head needs --spec-rows and --placement colocated, and excludes --spec-draft")
+        if not os.path.isfile(args.draft_head):
+            ap.error(f"--draft-head: no such file {args.draft_head}")
     if args.spec_draft and not args.spec_rows:
         ap.error("--spec-draft needs --spec-rows (the draft is only used by strict speculation)")
     if args.spec_mask:
@@ -1067,6 +1076,7 @@ def main(argv: list[str] | None = None) -> None:
     # the deploy-time choices also drive the cost estimate (customer memory) in this process
     for var, val in (("PGW_MODAL_MODEL", args.model if args.model != DEFAULT_MODEL else None),
                      ("PGW_MODAL_DRAFT", "1" if args.spec_draft else None),
+                     ("PGW_MODAL_DRAFT_HEAD", os.path.abspath(args.draft_head) if args.draft_head else None),
                      ("PGW_MODAL_GATEWAY_GPU", "1" if args.gateway_gpu else None),
                      ("PGW_MODAL_SPEC_MASK", args.spec_mask.strip() or None),
                      ("PGW_MODAL_GATEWAY_CACHE", "1" if args.gateway_cache else None),
