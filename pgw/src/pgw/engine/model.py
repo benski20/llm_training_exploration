@@ -1217,6 +1217,12 @@ class TransformerModel:
             if nd is not None and nd.eligible(st):  # PGW_DECODE_NATIVE: every layer in the native driver
                 nd.run(st)
                 first_layer = self.num_layers
+        elif (pads is None and not capture and getattr(sched, "native_decode", None) is not None
+              and getattr(_decode_native.sync_pass, "on", False)):
+            nd2 = sched.native_decode  # the native fused2 driver (pgw.engine.fused2_native; opt-in)
+            if nd2.eligible(st):
+                nd2.run(st)
+                first_layer = self.num_layers
         chunk = self._prefill_chunk(st, pads) if first_layer == 0 else 0
         if chunk:
             yield from self._chunked_layers(st, chunk, capture)

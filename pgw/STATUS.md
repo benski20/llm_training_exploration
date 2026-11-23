@@ -37,6 +37,24 @@ checks, sampled noise checks inline before the next payload):
   --gateway-env PGW_LANE_SPIN_AUTO_US=400 --gateway-env PGW_LANE_SHM=1 --gateway-env PGW_TRIP_DECRYPT_AHEAD=1
   --provider-env PGW_SERVICE_LANE_SHM=1 --provider-env PGW_SERVICE_LANE_ZERO_COPY=1 --provider-env
   PGW_SERVICE_LANE_OWN_LOCK=1` (plus the factory sizing env of the README's CPU-only 7B command).
+## Update 2026-11-23: fused2 tensor-core pair op ("planes") and native fused2 decode driver (opt-in, not yet on GPU)
+
+- Provider: `PGW_SERVICE_FUSED2_VARIANT=planes` (`pgw.core.ring64`): input as 8 balanced int8 digit planes per row
+  (written by the fused unpack and by stage 1's epilogue), ONE int8 tensor-core dot per tile with an int32 accumulator
+  over the whole split (exact: split length <= 131071 enforced), recombined once in uint64; epilogue fused into the
+  GEMV when unsplit; CUDA graphs unchanged. Exact vs the Python-int reference (interpreter: 1-16 rows, K 32-64,
+  splits, extremes). Target 1.0-1.3x the two K32 singles (today 2.0x); H100 numbers pending this one command
+  (<= ~2 min, ~$0.13, not run): `modal run deploy/modal/gpu_bench.py --target h100_c4 --timeout-min 2 --cmd "python
+  benchmarks/fused2_pair_bench.py --rows 1,2,4,8 --reps 30 --variants planes,sum --budget-s 50 --json /tmp/f2planes.json"`.
+- Gateway: `pgw_fast.Fused2Driver` (`rust/pgw-fast/src/decode_f2.rs`, `pgw.engine.fused2_native`,
+  `PGW_FUSED2_DECODE_NATIVE=1`): a whole fused2 pass (2L + 1 trips, float work, native 7-byte unpack/unmask, native
+  p61 checks of both stages, native TripChannel UDS/shm, segment masks: 1 slot per token, weight-free gateway) in
+  one GIL-free call; sampled noise trips end the call (statistics before the next payload). Bit-identical to the
+  Python fused2 path on the native float ops (now allowed) and to the plain reference; byte-identical provider
+  bodies; tamper (H, consistent H, Z, Z without residual, skipped multipliers) caught. Head still after the layers.
+- Per-token budgets 7B/32B/72B (co-located shm and 0.1-0.2 ms RTT): plan section 10. 7B co-located wait: standard
+  15.3 ms, fused2 today 15.5 ms, fused2 at 1.0-1.3x 10.3-11.9 ms.
+
 ## Update 2026-11-23: fused2 production pieces (opt-in): graphed pair op, pair items on the lane, segments, native p61
 
 - Provider: `pgw.core.ring64` Triton pair op over Z/2^K (K <= 64): `H = R + hmul * W1 x`, `Z = W2' H`, split-K uint64

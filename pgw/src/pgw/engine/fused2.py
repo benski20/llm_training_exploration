@@ -585,6 +585,8 @@ class Fused2Schedule:
         self.h_absmax: dict[str, torch.Tensor] | None = None
         #: Activation bits used per trip row (diagnostics: ``{bits: rows}``).
         self.bits_hist: dict[int, int] = {}
+        #: The native decode driver (:mod:`pgw.engine.fused2_native`, opt-in) or None.
+        self.native_decode: Any = None
         self._lock = threading.Lock()
 
     def linears(self, model: Any, layer: int) -> Sequence[LinearId]:
@@ -684,7 +686,12 @@ def enable_fused2(model: Any, weights: Fused2Weights, ring: RingParams) -> Fused
     if not getattr(model.backend, "fused2", False):
         raise ConfigError("the model's backend does not take fused2 calls")
     if model.float_ops is not None:
-        raise ConfigError("fused2 prototype runs on the torch float ops")
+        from pgw.engine.model import NativeFloatOps
+
+        # the native float ops (attention, SiLU in pgw_fast) are their own pinned reference, the one the native
+        # fused2 decode driver (pgw.engine.fused2_native) reproduces bit for bit
+        if not isinstance(model.float_ops, NativeFloatOps):
+            raise ConfigError("fused2 runs on the torch or the native float ops")
     sched = Fused2Schedule(weights, ring)
     model.schedule = sched
     return sched

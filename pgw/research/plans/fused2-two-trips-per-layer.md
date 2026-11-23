@@ -344,3 +344,83 @@ per 7B layer (4 checks, 1 row): numpy 2.8 ms -> 0.9 ms (21-bit limbs) -> **0.17 
 Still missing: the native decode driver (`rust/pgw-fast/src/decode.rs`) has no fused2 pass (the harness gateway is
 the Python `TransformerModel` with the torch float ops, about 1-2 ms of Python per trip at 7B), the maskstore / HE
 factory for pair segments, the provider LM head folded into the last trip, speculation padding.
+
+## 10. Update 2026-11-23: digit-plane tensor-core pair op, native fused2 decode driver, per-token budgets (opt-in)
+
+Measured before (H100, `benchmarks/results/fused2/pair_op_h100_2026-11-23.json`): the graphed K56 pair op at 1 row
+costs 0.217 ms (`o+gate_up`) and 0.154 ms (`down+qkv`), about 2.0x the two graphed K32 single trips it replaces
+(0.105 / 0.080 ms); 10.4 ms vs 5.2 ms of provider compute per 7B token. The int8 weight bytes are the same, so
+the extra cost is the 64-bit CUDA-core arithmetic of the `sum` kernel (and the old `dot` kernel was worse: 7 thin
+dots per tile, 8-byte input reloads per M tile, digit peeling in the loop: 1.57 ms at 4 rows).
+
+**Provider: `planes` variant** (`pgw.core.ring64`, `PGW_SERVICE_FUSED2_VARIANT=planes`; opt-in, `auto` unchanged
+until the H100 numbers are in):
+- the unpack kernel writes each input element directly as 8 balanced int8 digit planes (`d[(row * 8 + i), k]`,
+  `x = sum_i d_i 256^i mod 2^64`; the residual `R` as int64), and stage 1's epilogue writes `H` the same way;
+- the GEMV is ONE int8 tensor-core `tl.dot` per tile, `W (BLOCK_M, BLOCK_K) @ D^T (BLOCK_K, 8 * rows_pow2)`
+  (16 columns for 1-2 rows, 64 for 8), accumulated in **int32 over the whole split** (exact while
+  `128 * 128 * n_per_split < 2^31`, enforced by the host: `PLANES_MAX_SPLIT_N = 131071`; 7B `down` is 18944,
+  72B 29568), recombined once per program (`sum_i acc_i << 8i`, wrapping uint64). Weight bytes are read once
+  (the memory-bound part, as K32); the digit planes are `8 * rows_pow2` bytes per input element and stay in L2;
+- unsplit stages (e.g. 7B `gate_up`, 592 tiles of 64 rows) run the epilogue in the GEMV itself (`* hmul`, `+ R`,
+  `mod 2^K`, packed reply bytes, next stage's planes): 3 kernels per pair trip, 5 when both stages are split;
+  CUDA graphs unchanged (`PairOp.capture`), the lane's graph check unchanged;
+- split-K heuristic: 64-row tiles (128 above 4 rows), 256-byte K steps, about two programs per SM, splits of at
+  least 4 K steps. Exactness: Python-int reference, interpreter tests for 1-16 rows, K 32/48/56/64, forced splits,
+  extreme operands, buffer reuse across row counts (`tests/core/test_ring64.py`); `self_check` covers `planes`.
+
+H100 micro-benchmark (one command, <= ~2 min of GPU, ~$0.13; NOT run here: no Modal spend in this session):
+
+    modal run deploy/modal/gpu_bench.py --target h100_c4 --timeout-min 2 \
+        --cmd "python benchmarks/fused2_pair_bench.py --rows 1,2,4,8 --reps 30 --variants planes,sum \
+               --budget-s 50 --json /tmp/f2planes.json"
+
+It prints per item and rows the heuristic of each variant, then sweeps tiles / splits while the budget lasts,
+checks every configuration byte for byte against the prototype provider, and summarizes pair / (two K32 singles)
+at 1 and 8 rows per variant. Expected (not measured): close to the K32 singles (the same weight bytes, one MMA
+per tile); if 1-row `o` (56 tiles) is launch- or split-bound, the sweep's `x2` split entry shows it.
+
+**Gateway: native fused2 decode driver** (`pgw_fast.Fused2Driver`, `rust/pgw-fast/src/decode_f2.rs`,
+`pgw.engine.fused2_native`; `enable_fused2_native(model)` or `PGW_FUSED2_DECODE_NATIVE=1` via `maybe_enable`):
+one GIL-free native call runs a whole fused2 pass of one sequence (<= 8 rows): the `2L + 1` trips on the native
+`TripChannel` (UDS or shm; the lane items of section 9), per trip the quantization with the exact bounds (numpy's
+float64 roundings and pairwise sums reproduced bit for bit), masking with the pass's mask rows (taken by Python
+from `Fused2MaskSource` / the factory's pair-mask segments: one slot per token, weight-free gateway), 7-byte
+pack / unpack / unmask / centering, native p61 range + Freivalds checks of both stages before any output is
+used, then the float work on the native float ops (RoPE + attention + KV write, SiLU) and the fixed-point residual.
+Sampled noise trips hand back `(x_hat, xq)` and end the driver call, so their statistics run before the next
+payload is built; duplicate-row fingerprints are recorded before a payload leaves when the backend has a monitor.
+fused2 now also runs on `float_ops = "native"` in Python (the reference the driver matches). The head runs after
+the layers as before (masked head not folded into the last trip).
+Tests (`tests/engine/test_fused2_native.py`, real `LaneManager` + Triton op on CPU): native == Python fused2 ==
+plain, bit for bit, over UDS and shm, prompt and decode; byte-identical provider-visible bodies (same mask seed);
+one mask slot per token with segment masks; tamper (H, consistent H, Z, Z without residual, skipped multipliers)
+caught natively; a sampled trip ends the call; the `planes` service op behind the lane gives the same logits.
+Not measured: the native gateway's time at 7B shapes (expected well under 1 ms per layer: the p61 checks were
+0.17 ms per 7B layer, masking and unpacking are a few passes over ~80k elements per layer).
+
+**Per-token budgets (1 row decode, provider waits only; the gateway's own work, ~10.8 ms/token at 7B on the 32-core
+gateway today, comes on top for both).** Device times scale the measured 7B K32 singles (0.186 ms per layer, 233 MB
+of int8 weights) by weight bytes (32B: 488 MB/layer, 72B: 878 MB/layer: conservative, larger matrices stream
+better); fused2 "now" = the measured 2.0x, "planes" = the target 1.0-1.3x (projected, needs the benchmark above).
+Co-located: the shm lane's ~0.09 ms fixed cost per trip (measured; it reproduces the measured 15.7 ms wait of the
+7B 28 tok/s run). Separate host: RTT per trip plus bytes at 50 Gbit/s (K32 4 B, K56 7 B per element).
+
+| model | path | trips | device ms | co-located shm ms | RTT 0.1 ms | RTT 0.2 ms | MB/token |
+|---|---|---|---|---|---|---|---|
+| 7B | standard K32 | 112 | 5.2 | 15.3 | 17.8 | 29.0 | 8.9 |
+| 7B | fused2 now (2.0x) | 57 | 10.4 | 15.5 | 18.6 | 24.3 | 15.6 |
+| 7B | fused2 planes 1.0-1.3x | 57 | 5.2-6.8 | **10.3-11.9** | 13.4-14.9 | 19.1-20.6 | 15.6 |
+| 32B | standard K32 | 256 | 24.9 | 47.9 | 55.2 | 80.8 | 29.6 |
+| 32B | fused2 now | 129 | 49.7 | 61.3 | 70.9 | 83.8 | 51.8 |
+| 32B | fused2 planes 1.0-1.3x | 129 | 24.9-32.3 | **36.5-43.9** | 46.1-53.5 | 59.0-66.4 | 51.8 |
+| 72B | standard K32 | 320 | 56.0 | 84.8 | 95.1 | 127.1 | 44.8 |
+| 72B | fused2 now | 161 | 111.9 | 126.4 | 140.5 | 156.6 | 78.3 |
+| 72B | fused2 planes 1.0-1.3x | 161 | 56.0-72.7 | **70.4-87.2** | 84.6-101.4 | 100.7-117.5 | 78.3 |
+
+Reading: at today's 2.0x the pair op only breaks even co-located (7B) and loses at 32B/72B; at 1.0-1.3x fused2
+saves 3.4-5.0 ms per 7B token co-located (15.3 -> 10.3-11.9 ms of waiting; on the measured 28 tok/s run, 35.7 ms
+per token, that is about 31-32 tok/s if the gateway work stays the same), up to 14 ms at 72B co-located (-2 at 1.3x)
+and 9-26 ms at 72B with a 0.2 ms RTT. Its 1.75x bytes
+per element make it lose on a slow link (RTT 0.1 ms at 50 Gbit/s: roughly even at 72B). The benchmark decides
+which side of 1.3x the op lands on.

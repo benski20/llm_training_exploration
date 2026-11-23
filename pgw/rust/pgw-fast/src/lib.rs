@@ -30,6 +30,7 @@ pub mod attn;
 pub mod bitpack;
 #[cfg(unix)]
 pub mod decode;
+pub mod decode_f2;
 pub mod finish;
 pub mod hemask;
 pub mod lane;
@@ -62,6 +63,7 @@ fn pgw_fast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     bitpack::register(m)?;
     #[cfg(unix)]
     decode::register(m)?;
+    decode_f2::register(m)?;
     finish::register(m)?;
     hemask::register(m)?;
     lane::register(m)?;
