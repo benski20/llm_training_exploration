@@ -184,6 +184,17 @@ class ServiceSettings(PGWSettings):
         "and channels of revoked tokens close within this interval)",
     )
 
+    # ---- provisioning (pgw.service.provision: /pgw/v1/provision/...) --------------------------
+    provision: bool = Field(
+        False, description="Serve /pgw/v1/provision/... to authenticated tenants: the public, non-secret artifacts "
+        "of the served packs (manifest, plain tensors, scales/biases, tokenizer, int8 weights) and pks-v3 hint "
+        "operands H = W8 A for customer-chosen seeds (the client verifies them; pgw.provision). Off by default; the "
+        "pack directories must hold the plain tensors and tokenizer files",
+    )
+    provision_max_jobs: int = Field(4, ge=1, description="Concurrent hint jobs (all tenants; 2 per tenant)")
+    provision_job_ttl_s: float = Field(6 * 3600.0, gt=0, description="Idle hint jobs expire after this")
+    provision_chunk_mb: int = Field(8, ge=1, le=64, description="Artifact chunk size (MiB)")
+
     # ---- enrollment (pgw service enroll ..., POST /pgw/v1/enroll) --------------------------
     enrollment_file: Path | None = Field(
         None, description="Enrollment records (JSON, 0600; only hashes of the code secrets). Setting it enables "
