@@ -270,7 +270,8 @@ class AccountsStore:
     def audit_events(self, org_id: str | None = None, *, limit: int = 100, before: int | None = None,
                      ) -> list[dict[str, Any]]:
         """Newest first."""
-        q, args = "SELECT * FROM audit WHERE 1=1", []
+        q = "SELECT * FROM audit WHERE 1=1"
+        args: list[Any] = []
         if org_id is not None:
             q += " AND org_id = ?"
             args.append(org_id)
@@ -534,9 +535,9 @@ class AccountsStore:
             args.append(until)
         out = []
         for r in self._conn().execute(q + " ORDER BY u.day DESC, u.key_id, u.model", args):
-            d = dict(r)
-            d["key_id"] = "sk_" + d["key_id"]
-            out.append(d)
+            row = dict(r)
+            row["key_id"] = "sk_" + row["key_id"]
+            out.append(row)
         return out
 
     def day_totals(self, day: str) -> dict[str, tuple[float, int]]:
@@ -959,7 +960,7 @@ class Accounts:
         """
         svc = self.enroll_service
         assert svc is not None
-        return svc.limiter.guarded(client, lambda: self._enroll(authorization, body, client))
+        return svc.limiter.guarded(client, lambda: self._enroll(authorization, body, client))  # type: ignore[no-any-return]
 
     def _key_from_header(self, authorization: str | None, client: str) -> SDKKey:
         scheme, _, token = (authorization or "").strip().partition(" ")
@@ -1057,13 +1058,13 @@ class Accounts:
         out["sdk"] = {"key_id": rec.key_id, "org_id": rec.org_id, "installation_id": inst, "env": rec.env,
                       "models_scope": list(rec.models), "limits": self.limits_view(rec, org),
                       "expires_at": rec.expires_at}
-        return out
+        return out  # type: ignore[no-any-return]
 
     def usage_for_key(self, authorization: str | None, client: str, days: int) -> dict[str, Any]:
         """``GET /pgw/v1/sdk/usage`` (blocking)."""
         svc = self.enroll_service
         assert svc is not None
-        return svc.limiter.guarded(client, lambda: self._usage_for_key(authorization, client, days))
+        return svc.limiter.guarded(client, lambda: self._usage_for_key(authorization, client, days))  # type: ignore[no-any-return]
 
     def _usage_for_key(self, authorization: str | None, client: str, days: int) -> dict[str, Any]:
         rec, org = self.authenticate_key(authorization, client, "sdk.usage.failed")
