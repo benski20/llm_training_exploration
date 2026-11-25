@@ -1,0 +1,262 @@
+"""The background mask factory of the client library: one supervised child process per model and key.
+
+The child runs the existing factory (:mod:`pgw.factory`: scheduler, fleet of ``mask_workers`` worker processes,
+the pks-v3 / mlwe encrypted backends or local generation, the 40-bit self-check of provider products, the halt
+after repeated provider integrity failures) at low CPU priority (``nice``), with ``torch`` threads capped, and
+keeps the model's mask stock between the low-water mark and the target.
+
+Several processes on one host that use the same key and cache directory share one mask store and one factory
+per model: the factory is run by whichever process holds ``<factory dir>/owner.lock``; the others retry the lock
+every few seconds and take over when its holder exits. The child exits with its parent (``PR_SET_PDEATHSIG``).
+Its output goes to ``<factory dir>/factory.log`` (nothing on the application's stdout or stderr).
+"""
+
+from __future__ import annotations
+
+import contextlib
+import json
+import logging
+import os
+import signal
+import subprocess
+import sys
+import threading
+import time
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+from pgw.sdk.cache import HeldLock, ensure_private_dir
+
+__all__ = ["FactoryPlan", "FactoryProcess", "factory_env"]
+
+log = logging.getLogger(__name__)
+
+_LOG_MAX_BYTES = 4 << 20
+
+
+@dataclass(frozen=True)
+class FactoryPlan:
+    """Everything the factory child of one model needs (no secret values: only file paths)."""
+
+    model: str
+    pack_path: Path
+    ring: str
+    state_dir: Path
+    store_root: Path
+    kek_file: Path
+    counter_file: Path
+    scheme: str
+    check_field: str
+    masked_head: bool
+    workers: int
+    threads: int
+    nice: int
+    target_slots: int
+    low_water_slots: int
+    segment_slots: int
+    first_segment_slots: int
+    service_url: str | None = None
+    token_file: Path | None = None
+    ca_file: Path | None = None
+    client_cert_file: Path | None = None
+    client_key_file: Path | None = None
+    hint_dir: Path | None = None
+    hint_key_file: Path | None = None
+
+
+def factory_env(plan: FactoryPlan) -> dict[str, str]:
+    """``PGW_FACTORY_*`` / ``PGW_MASKSTORE_*`` for the child (paths only; secrets stay in their 0600 files)."""
+    env: dict[str, str] = {
+        "PGW_FACTORY_PACK_PATH": str(plan.pack_path),
+        "PGW_FACTORY_RINGS": json.dumps([plan.ring]),
+        "PGW_FACTORY_RING": plan.ring,
+        "PGW_FACTORY_DEVICE": "cpu",
+        "PGW_FACTORY_STATE_DIR": str(plan.state_dir),
+        "PGW_FACTORY_SEGMENT_SLOTS": str(plan.segment_slots),
+        "PGW_FACTORY_FIRST_SEGMENT_SLOTS": str(plan.first_segment_slots),
+        "PGW_FACTORY_LOW_WATER_SLOTS": str(plan.low_water_slots),
+        "PGW_FACTORY_TARGET_SLOTS": str(plan.target_slots),
+        "PGW_FACTORY_NICE": str(plan.nice),
+        "PGW_FACTORY_CPU_THREADS": str(plan.threads),
+        "PGW_FACTORY_WORKERS": str(plan.workers),
+        "PGW_FACTORY_POLL_INTERVAL_S": "2",
+        "PGW_FACTORY_CHECK_FIELD": plan.check_field,
+        "PGW_FACTORY_MASKED_HEAD": "true" if plan.masked_head else "false",
+        "PGW_FACTORY_FACTORY_ID": "sdk",
+        "PGW_FACTORY_ERROR_BACKOFF_S": "5",
+        "PGW_MASKSTORE_ROOT": str(plan.store_root),
+        "PGW_MASKSTORE_KEY_PROVIDER": "file",
+        "PGW_MASKSTORE_KEY_FILE": str(plan.kek_file),
+        "PGW_MASKSTORE_COUNTER": "file",
+        "PGW_MASKSTORE_COUNTER_FILE": str(plan.counter_file),
+        "PGW_MASKSTORE_TARGET_SLOTS": str(plan.target_slots),
+        "PGW_MASKSTORE_LOW_WATER_SLOTS": str(plan.low_water_slots),
+    }
+    if plan.scheme in ("pks-v3", "mlwe"):
+        assert plan.service_url is not None
+        env["PGW_FACTORY_HE_SERVICE_URL"] = plan.service_url
+        env["PGW_FACTORY_HE_SCHEME"] = plan.scheme
+        if plan.token_file is not None:
+            env["PGW_FACTORY_HE_TOKEN_FILE"] = str(plan.token_file)
+        if plan.ca_file is not None:
+            env["PGW_FACTORY_HE_CA_FILE"] = str(plan.ca_file)
+        if plan.client_cert_file is not None and plan.client_key_file is not None:
+            env["PGW_FACTORY_HE_CLIENT_CERT_FILE"] = str(plan.client_cert_file)
+            env["PGW_FACTORY_HE_CLIENT_KEY_FILE"] = str(plan.client_key_file)
+        if plan.hint_dir is not None:
+            env["PGW_FACTORY_HE_HINT_DIR"] = str(plan.hint_dir)
+        if plan.scheme == "pks-v3":
+            from pgw.hemask.pks import PKS_V3_ACK
+
+            # the library's explicit acknowledgement: pks-v3 is pending external review (SPEC 7.9, 16)
+            env["PGW_FACTORY_HE_PKS_ACK"] = PKS_V3_ACK
+            if plan.hint_key_file is not None:
+                env["PGW_FACTORY_HE_HINT_KEY_FILE"] = str(plan.hint_key_file)
+    return env
+
+
+def _child_env(plan: FactoryPlan) -> dict[str, str]:
+    # Only what a Python process needs plus the factory's own settings: no PGW_* of the application (its
+    # gateway settings, API key) and no proxies for the provider other than the standard ones.
+    keep = ("PATH", "HOME", "LANG", "LC_ALL", "TMPDIR", "PYTHONPATH", "VIRTUAL_ENV", "HTTPS_PROXY", "https_proxy",
+            "NO_PROXY", "no_proxy", "SSL_CERT_FILE", "SSL_CERT_DIR", "LD_LIBRARY_PATH")
+    env = {k: v for k, v in os.environ.items() if k in keep}
+    env.update(factory_env(plan))
+    env["PGW_SDK_PARENT_PID"] = str(os.getpid())
+    env["OMP_NUM_THREADS"] = str(max(1, plan.threads))
+    env["PGW_LOG_LEVEL"] = "INFO"
+    return env
+
+
+class FactoryProcess:
+    """Supervises the factory child of one model (start, restart on change or crash, stop).
+
+    Args:
+        plan: The child's configuration.
+        poll_s: How often a non-owner retries the owner lock and the owner checks the child.
+    """
+
+    def __init__(self, plan: FactoryPlan, *, poll_s: float = 3.0):
+        self.plan = plan
+        self.poll_s = poll_s
+        ensure_private_dir(plan.state_dir)
+        self._lock = HeldLock(plan.state_dir / "owner.lock")
+        self._proc: subprocess.Popen[bytes] | None = None
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+        self._mu = threading.Lock()
+        self.starts = 0
+        self.last_exit: int | None = None
+
+    @property
+    def log_file(self) -> Path:
+        """The child's log (truncated when it grows past 4 MiB at a restart)."""
+        return self.plan.state_dir / "factory.log"
+
+    @property
+    def owner(self) -> bool:
+        """Whether this process runs the factory (else another process on the host does)."""
+        return self._lock.held
+
+    @property
+    def running(self) -> bool:
+        """Whether this process's child is alive."""
+        p = self._proc
+        return p is not None and p.poll() is None
+
+    def start(self) -> FactoryProcess:
+        """Start supervising (returns at once)."""
+        if self._thread is None:
+            self._stop.clear()
+            self._supervise_once()
+            self._thread = threading.Thread(target=self._loop, name=f"pgw-sdk-factory-{self.plan.model}", daemon=True)
+            self._thread.start()
+        return self
+
+    def _loop(self) -> None:
+        while not self._stop.wait(self.poll_s):
+            try:
+                self._supervise_once()
+            except Exception:  # pragma: no cover - never kill the supervisor
+                log.exception("mask factory supervisor error")
+
+    def _supervise_once(self) -> None:
+        with self._mu:
+            if self._stop.is_set():
+                return
+            if not self._lock.try_acquire():
+                return  # another process on this host runs this model's factory
+            p = self._proc
+            if p is not None and p.poll() is None:
+                return
+            if p is not None:
+                self.last_exit = p.returncode
+                log.warning("mask factory for %s exited with code %s; restarting", self.plan.model, p.returncode)
+            self._spawn()
+
+    def _spawn(self) -> None:
+        lf = self.log_file
+        with contextlib.suppress(OSError):
+            if lf.exists() and lf.stat().st_size > _LOG_MAX_BYTES:
+                lf.unlink()
+        fd = os.open(lf, os.O_WRONLY | os.O_CREAT | os.O_APPEND | getattr(os, "O_CLOEXEC", 0), 0o600)
+        try:
+            self._proc = subprocess.Popen(  # noqa: S603 - our own module, fixed arguments
+                [sys.executable, "-m", "pgw.sdk._factory_child"], env=_child_env(self.plan),
+                stdin=subprocess.DEVNULL, stdout=fd, stderr=fd, close_fds=True, cwd=str(self.plan.state_dir))
+        finally:
+            os.close(fd)
+        self.starts += 1
+        log.info("mask factory for %s started (pid %d, %d worker(s), scheme %s)", self.plan.model, self._proc.pid,
+                 self.plan.workers, self.plan.scheme)
+
+    def stop(self, timeout_s: float = 30.0) -> None:
+        """Stop the child (SIGTERM, then SIGKILL) and release the owner lock (idempotent)."""
+        self._stop.set()
+        t, self._thread = self._thread, None
+        if t is not None and t is not threading.current_thread():
+            t.join(timeout=self.poll_s + 5)
+        with self._mu:
+            p, self._proc = self._proc, None
+            if p is not None and p.poll() is None:
+                with contextlib.suppress(OSError):
+                    p.send_signal(signal.SIGTERM)
+                try:
+                    p.wait(timeout=timeout_s)
+                except subprocess.TimeoutExpired:
+                    p.kill()
+                    p.wait(timeout=10)
+            self._lock.release()
+
+    def state(self) -> dict[str, Any]:
+        """Factory state for status displays (``factory-state.json`` of the child, halt flag; no secrets)."""
+        out: dict[str, Any] = {"owner": self.owner, "running": self.running, "starts": self.starts,
+                               "workers": self.plan.workers, "scheme": self.plan.scheme,
+                               "target_slots": self.plan.target_slots, "low_water_slots": self.plan.low_water_slots}
+        out.update(read_factory_state(self.plan.state_dir))
+        return out
+
+
+def read_factory_state(state_dir: Path) -> dict[str, Any]:
+    """Public fields of a factory state directory (``factory-state.json``, ``factory-halted.json``)."""
+    out: dict[str, Any] = {}
+    try:
+        st = json.loads((state_dir / "factory-state.json").read_text(encoding="utf-8"))
+        for k in ("totals", "provider_integrity_failures", "last_run_at", "last_error", "halted", "throughput"):
+            if k in st:
+                out[k] = st[k]
+    except (OSError, ValueError):
+        pass
+    out["halted"] = bool(out.get("halted")) or (state_dir / "factory-halted.json").exists()
+    return out
+
+
+def wait_for(predicate: Any, timeout_s: float, poll_s: float = 0.2) -> bool:
+    """Poll ``predicate()`` until true or ``timeout_s`` passed."""
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        if predicate():
+            return True
+        time.sleep(poll_s)
+    return bool(predicate())

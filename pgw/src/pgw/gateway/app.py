@@ -32,7 +32,6 @@ from typing import Any
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import HTMLResponse, JSONResponse, Response
-from pydantic import ValidationError
 from starlette.responses import StreamingResponse
 
 from pgw.console.sessions import COOKIE_NAME, CSRF_HEADER, ConsoleSessions, LoginRateLimiter
@@ -43,12 +42,17 @@ from pgw.gateway.auth import ANONYMOUS_KEY, ApiKey, ApiKeyStore, KeyNotFoundErro
 from pgw.gateway.config import GatewaySettings
 from pgw.gateway.egress import disable_library_telemetry
 from pgw.gateway.metrics import GatewayMetrics
+from pgw.gateway.openai_render import TokenText as _TokenText
+from pgw.gateway.openai_render import chat_logprobs as _chat_logprobs
+from pgw.gateway.openai_render import chat_messages as _chat_messages
+from pgw.gateway.openai_render import sampling_params as _sampling
+from pgw.gateway.openai_render import stop_ids as _stop_ids
+from pgw.gateway.openai_render import visible as _visible
 from pgw.gateway.openai_schemas import (
     ChatCompletionRequest,
     CompletionRequest,
     ModelCard,
     ModelList,
-    message_text,
 )
 from pgw.gateway.runtime import ActiveSession, InferenceRuntime, InvalidRequestError, ModelRuntime
 
@@ -177,103 +181,12 @@ def _sse(obj: Any) -> bytes:
 _SSE_DONE = b"data: [DONE]\n\n"
 
 
-def _sampling(req: ChatCompletionRequest | CompletionRequest, max_tokens: int, logprobs: int | None) -> SamplingParams:
-    try:
-        return SamplingParams(
-            max_tokens=max_tokens,
-            temperature=req.temperature,
-            top_p=req.top_p,
-            top_k=req.top_k,
-            min_p=req.min_p,
-            repetition_penalty=req.repetition_penalty,
-            presence_penalty=req.presence_penalty,
-            frequency_penalty=req.frequency_penalty,
-            stop=req.stop,
-            stop_token_ids=tuple(req.stop_token_ids or ()),
-            seed=req.seed,
-            logprobs=logprobs,
-            ignore_eos=req.ignore_eos,
-        )
-    except ValidationError as exc:
-        first = exc.errors()[0] if exc.errors() else {"msg": "invalid"}
-        raise InvalidRequestError(f"invalid sampling parameters: {first['msg']}") from exc
-
-
-def _chat_messages(req: ChatCompletionRequest) -> list[dict[str, Any]]:
-    out: list[dict[str, Any]] = []
-    for m in req.messages:
-        try:
-            text = message_text(m.content)
-        except ValueError as exc:
-            raise InvalidRequestError(str(exc)) from exc
-        role = "system" if m.role == "developer" else m.role
-        msg: dict[str, Any] = {"role": role, "content": text}
-        if m.name:
-            msg["name"] = m.name
-        out.append(msg)
-    return out
-
-
-class _TokenText:
-    """Token id -> (display string, raw bytes) for logprobs (cached per request).
-
-    ``bytes`` are the token's raw bytes, which can be part of a multi-byte UTF-8 character (OpenAI
-    semantics: clients join them to rebuild split characters). The display string is those bytes
-    decoded with replacement characters.
-    """
-
-    def __init__(self, rt: ModelRuntime):
-        self.rt = rt
-        self._cache: dict[int, tuple[str, bytes]] = {}
-
-    def entry(self, tid: int) -> tuple[str, bytes]:
-        """``(token, raw_bytes)`` of one token id."""
-        hit = self._cache.get(tid)
-        if hit is None:
-            tok = self.rt.tokenizer
-            assert tok is not None
-            raw = tok.token_bytes(tid)
-            hit = (raw.decode("utf-8", "replace"), raw)
-            self._cache[tid] = hit
-        return hit
-
-    def __call__(self, tid: int) -> str:
-        return self.entry(tid)[0]
-
-
 @dataclass
 class _Collected:
     text: str = ""
     finish: str | None = None
     tokens: int = 0
     events: list[TokenEvent] = field(default_factory=list)
-
-
-def _stop_ids(rt: ModelRuntime, params: SamplingParams) -> frozenset[int]:
-    ids = set(params.stop_token_ids)
-    if not params.ignore_eos:
-        if rt.tokenizer is not None:
-            ids.update(rt.tokenizer.eos_token_ids)
-        if rt.model is not None:
-            ids.update(getattr(rt.model.arch, "eos_token_ids", ()) or ())
-    return frozenset(ids)
-
-
-def _visible(ev: TokenEvent, stop_ids: frozenset[int]) -> bool:
-    """Whether a token event belongs to the output (stop tokens are not part of it)."""
-    return not (ev.finish_reason == "stop" and ev.token_id in stop_ids)
-
-
-def _chat_logprobs(events: list[TokenEvent], tt: _TokenText) -> dict[str, Any]:
-    content = []
-    for ev in events:
-        tok, raw = tt.entry(ev.token_id)
-        tops = []
-        for i, lp in ev.top_logprobs or []:
-            ttok, traw = tt.entry(i)
-            tops.append({"token": ttok, "logprob": lp, "bytes": list(traw)})
-        content.append({"token": tok, "logprob": ev.logprob, "bytes": list(raw), "top_logprobs": tops})
-    return {"content": content}
 
 
 def _completion_logprobs(events: list[TokenEvent], tt: _TokenText, offset0: int) -> dict[str, Any]:
