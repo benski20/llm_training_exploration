@@ -39,6 +39,7 @@ __all__ = ["cli", "main"]
 _LAZY = {
     "factory": ("pgw.factory.cli", "factory_group", "factory"),
     "gateway": ("pgw.gateway.cli", "gateway_group", "gateway"),
+    "sdk": ("pgw.sdk.cli", "sdk_group", "gateway"),
 }
 
 

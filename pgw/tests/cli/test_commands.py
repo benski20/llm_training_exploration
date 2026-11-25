@@ -15,7 +15,7 @@ from pgw.cli import cli
 from pgw.cli._common import EXIT_ERROR, EXIT_INTERRUPTED, EXIT_NOT_IMPLEMENTED, LazyGroup, handle_errors
 from pgw.core.errors import ConfigError
 
-TOP_LEVEL = {"version", "doctor", "pack", "inspect", "factory", "maskstore", "service", "gateway", "bench", "config"}
+TOP_LEVEL = {"version", "doctor", "pack", "inspect", "factory", "maskstore", "service", "gateway", "bench", "config", "sdk"}
 
 
 def test_help_lists_every_command(runner: CliRunner) -> None:
@@ -33,7 +33,7 @@ def test_help_lists_every_command(runner: CliRunner) -> None:
     ["maskstore", "init", "--help"], ["maskstore", "status", "--help"], ["maskstore", "import", "--help"],
     ["maskstore", "gc", "--help"], ["maskstore", "rotate-key", "--help"],
     ["service", "serve", "--help"], ["service", "token", "create", "--help"],
-    ["bench", "ring", "--help"], ["config", "show", "--help"], ["config", "render", "--help"],
+    ["bench", "ring", "--help"], ["sdk", "status", "--help"], ["sdk", "doctor", "--help"], ["config", "show", "--help"], ["config", "render", "--help"],
     ["doctor", "--help"], ["pack", "--help"], ["inspect", "--help"],
 ])
 def test_subcommand_help(runner: CliRunner, path: list[str]) -> None:
