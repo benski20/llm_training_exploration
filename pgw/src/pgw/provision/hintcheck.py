@@ -30,7 +30,10 @@ Arithmetic: everything mod ``2^64`` (uint64 wrap, a ring map onto mod ``2^56``);
 
 from __future__ import annotations
 
+import os
 from collections.abc import Iterable
+from concurrent.futures import ThreadPoolExecutor
+from typing import Any
 
 import numpy as np
 
@@ -65,8 +68,27 @@ def decode_h56(data: bytes | bytearray | memoryview, rows: int) -> np.ndarray:
         raise ConfigError(f"H chunk has {len(data)} bytes, expected {rows * NU * H_BYTES}")
     raw = np.frombuffer(data, dtype=np.uint8).reshape(rows, NU, H_BYTES)
     full = np.zeros((rows, NU, 8), dtype=np.uint8)
-    full[..., :H_BYTES] = raw
+
+    def part(b0: int, b1: int) -> None:
+        full[b0:b1, :, :H_BYTES] = raw[b0:b1]
+
+    _row_parallel(part, rows)
     return full.view("<u8").reshape(rows, NU).astype(np.uint64, copy=False)
+
+
+_POOL: ThreadPoolExecutor | None = None
+
+
+def _row_parallel(fn: Any, rows: int, min_rows: int = 64) -> list[Any]:
+    """``fn(b0, b1)`` over row ranges in a shared thread pool (numpy and BLAS release the GIL)."""
+    global _POOL
+    nt = max(1, os.cpu_count() or 1)
+    if nt == 1 or rows < 2 * min_rows:
+        return [fn(0, rows)]
+    if _POOL is None:
+        _POOL = ThreadPoolExecutor(max_workers=nt, thread_name_prefix="pgw-hcheck")
+    step = max(min_rows, -(-rows // nt))
+    return list(_POOL.map(lambda b0: fn(b0, min(rows, b0 + step)), range(0, rows, step)))
 
 
 def _bits(sx: SeedExpander, shape: tuple[int, int], label: str) -> np.ndarray:
@@ -166,9 +188,15 @@ class LinearHCheck:
         if (h > _M56).any():
             raise ConfigError(f"{self.linear}: H entry out of range")
         self._mark(self._h_rows, r0, h.shape[0], "H")
-        hx = _mm_u64_small(h, self._xf)  # (rows, d)
-        ub = self._u[r0:r0 + h.shape[0]].astype(_U64)
-        self._gl += ub.T @ hx  # wraps mod 2^64
+
+        def part(b0: int, b1: int) -> np.ndarray:
+            hx = _mm_u64_small(h[b0:b1], self._xf)  # (rows, d)
+            ub = self._u[r0 + b0:r0 + b1].astype(_U64)
+            out: np.ndarray = ub.T @ hx  # wraps mod 2^64
+            return out
+
+        for g in _row_parallel(part, h.shape[0]):
+            self._gl += g
 
     @property
     def complete(self) -> bool:

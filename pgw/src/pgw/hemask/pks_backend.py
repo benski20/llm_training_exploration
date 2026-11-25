@@ -92,15 +92,25 @@ def row_norm(w: np.ndarray) -> float:
     return float(np.sqrt((np.asarray(w).astype(np.float64) ** 2).sum(1)).max())
 
 
-def switch_hint_fast(h: np.ndarray) -> np.ndarray:
-    """:func:`pgw.hemask.pks.switch_hint` with torch's threaded int64 ops (the same exact 14-bit-digit arithmetic as
-    :func:`pgw.hemask.pks.round_mul_shift`; bit-identical, ``tests/provision/test_hintcheck.py``)."""
-    from pgw.service.pks_gpu import _round_mul_shift
+def switch_hint_fast(h: np.ndarray, threads: int | None = None) -> np.ndarray:
+    """:func:`pgw.hemask.pks.switch_hint` on row blocks in threads (numpy releases the GIL in its ufuncs): the
+    same function on every row, so bit-identical (``tests/provision/test_hintcheck.py``)."""
+    from concurrent.futures import ThreadPoolExecutor
 
-    q1 = PKSParams().q1
-    t = torch.from_numpy(np.ascontiguousarray(np.asarray(h, dtype=np.uint64) & _M56).view(np.int64))
-    out = _round_mul_shift(t, q1, 56) % q1
-    return out.numpy().view(np.uint64)
+    h = np.asarray(h, dtype=np.uint64)
+    par = PKSParams()
+    nt = max(1, int(threads or os.cpu_count() or 1))
+    if nt == 1 or h.shape[0] < 2 * nt:
+        return pks.switch_hint(h, par)
+    out = np.empty(h.shape, dtype=np.uint64)
+    step = -(-h.shape[0] // nt)
+
+    def run(r0: int) -> None:
+        out[r0:r0 + step] = pks.switch_hint(h[r0:r0 + step], par)
+
+    with ThreadPoolExecutor(max_workers=nt) as ex:
+        list(ex.map(run, range(0, h.shape[0], step)))
+    return out
 
 
 class PKSHintStore:

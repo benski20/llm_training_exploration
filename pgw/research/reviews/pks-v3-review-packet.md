@@ -92,7 +92,22 @@ factory with the in-process provider, segments bit-identical to local generation
 ## 8. Not covered / open
 
 External estimator run; side channels beyond branch-free arithmetic (ternary rejection sampling leaks only the
-count of rejected bytes); a check for provider-built hints; sharing one reply key across the linears of a group (analysed in the plan, section 7.8: covered for a passive
+count of rejected bytes); sharing one reply key across the linears of a group (analysed in the plan, section 7.8: covered for a passive
 provider only with a larger H2 sample count, not covered for an active one, not implemented). The customer kernels
 were retuned (plan 7.7: AVX-512 / IFMA / AVX2 copies) with outputs bit-identical to the reference; parameters,
 streams and the CBD(21) sampler are unchanged.
+
+## 9. Provider-built, client-verified hint (added 2026-11-25)
+
+The SDK lets the provider compute the expensive part of the hint, `H = W8 A mod 2^56` (90+ % of the build), for the
+customer's freshly drawn `a_seed` (`ks_seed` never leaves the customer). The customer accepts `H` only after a 2-adic
+Freivalds check against the fingerprint-pinned `W8` (42 binary challenge columns per side, soundness error
+`<= 2^-41` against any error the provider picks), then computes `switch_hint` and the key switch itself; the stored
+hint is bit-identical to a local build with the same seeds. The key-switched hint itself is not checkable cheaply
+(two exact roundings between `W8` and it). Argument, attack analysis and costs: `pks-v3-provider-hint.md`.
+
+**Q7 for the reviewer:** is the provider's view or the order of events in this mode different from a local build in
+a way that matters (the provider learning `a_seed` and computing `A`, `H` before the first maskgen request; adaptive
+choice of `H` across linears; the one-bit pass/fail outcome of a provisioning attempt)? Our argument (section 4 of
+that note): all of it is public data, no secret exists yet when the check runs, and challenges are fresh per linear
+and attempt.
