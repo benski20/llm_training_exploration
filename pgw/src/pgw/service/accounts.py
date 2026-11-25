@@ -1158,6 +1158,13 @@ def add_admin_routes(app: Any, accounts: Accounts) -> None:
     boot = [bytes.fromhex(h) for h in (getattr(s, "accounts_admin_token_sha256", None) or [])]
 
     def admin(request: Any) -> dict[str, Any]:
+        # failed admin authentications count against the per-address limiter of enrollment
+        limiter = getattr(accounts.enroll_service, "limiter", None)
+        if limiter is not None:
+            return limiter.guarded(client_ip(request), lambda: _admin(request))  # type: ignore[no-any-return]
+        return _admin(request)
+
+    def _admin(request: Any) -> dict[str, Any]:
         scheme, _, token = (request.headers.get("authorization") or "").strip().partition(" ")
         token = token.strip()
         if scheme.lower() != "bearer" or not token:
@@ -1220,6 +1227,10 @@ def add_admin_routes(app: Any, accounts: Accounts) -> None:
                 raise PGWError("models must be a list", code=ErrorCode.PROTOCOL)
 
             def create() -> dict[str, Any]:
+                for f in ("expires_in_s", "rows_per_s"):
+                    v = b.get(f)
+                    if v is not None and (isinstance(v, bool) or not isinstance(v, int | float)):
+                        raise PGWError(f"{f} must be a number", code=ErrorCode.PROTOCOL)
                 key, rec = store.create_key(
                     oid, str(b.get("name", "")), str(s.public_url), accounts.ca_sha256,
                     env=str(b.get("env") or s.sdk_key_env), models=[str(m) for m in models],

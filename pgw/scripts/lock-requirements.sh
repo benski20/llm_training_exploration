@@ -28,3 +28,9 @@ lock service-cpu  "$CPU" requirements/torch-cpu.in   --extra service
 lock factory-cpu  "$CPU" requirements/torch-cpu.in   --extra factory
 lock service-cuda "$CU"  requirements/torch-cu124.in --extra service --extra gpu
 lock factory-cuda "$CU"  requirements/torch-cu124.in --extra factory --extra gpu
+# provider images (deploy/docker/provider*.Dockerfile): the service plus the pack tool, which builds packs into the
+# provider's volume on first boot; the same versions as the service and gateway locks
+lock provider-cpu  "$CPU" requirements/torch-cpu.in   --extra service --extra pack -c requirements/service-cpu.txt \
+    -c requirements/pack-pins.in
+lock provider-cuda "$CU"  requirements/torch-cu124.in --extra service --extra gpu --extra pack \
+    -c requirements/service-cuda.txt -c requirements/pack-pins.in

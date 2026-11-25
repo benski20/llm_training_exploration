@@ -15,6 +15,33 @@ SLA pilot. Three reasons:
 2. The HSM, KMS and TPM integrations have never run against real hardware or cloud services.
 3. There has been no external security audit.
 
+## 2026-11-25 — Hosted provider: SDK keys, usage metering, provider image, RunPod tooling (not run on RunPod)
+
+For the in-process client library (`docs/sdk/CONTRACT.md`; payloads in its appendix A1-A4):
+- **Accounts** (`pgw.service.accounts`, on with `PGW_SERVICE_ACCOUNTS_DB`, SQLite WAL): organisations, SDK keys
+  `pgw_<env>_<base32>` (provider URL + pinned CA SHA-256 + key id + 192-bit secret; codec `pgw.enroll.sdk_key`;
+  stored as a digest, constant-time compare, model scope, expiry, per-key row rate, key/org daily token quotas,
+  installation and enrollment-rate limits), installations, per key/model/UTC-day usage (trips, rows, tokens,
+  maskgen columns, bytes; metered in memory, flushed by a thread) and an audit log without secrets.
+  `POST /pgw/v1/sdk/enroll` (authenticated by the key) reuses the enrollment machinery
+  (`EnrollmentService.issue_credentials`) and returns exactly what `/pgw/v1/enroll` returns plus `sdk`;
+  `pgw.enroll.client.enroll_with_sdk_key` is the client side. Revoking a key removes its installations' tokens and
+  refuses its tenant at once in-process (within `accounts_refresh_s` elsewhere); open stream and lane channels close.
+  SDK tenants get 403 outside their model scope and 429 over rate or quota on every compute path (HTTP, stream, lane
+  open and lane drain, maskgen). Admin API `/pgw/v1/admin/...` (off by default; global or org-scoped tokens).
+  CLI: `pgw service orgs|keys|usage|audit|admin-token`. Other tenants are untouched.
+- **Images**: `deploy/docker/provider.Dockerfile` (CUDA base, hash-locked torch 2.5.1+cu124 / triton, `pgw_fast`
+  built in a builder stage with a pinned Rust toolchain, pack tool, root only to hand over the volume, service as
+  uid 10001 with no_new_privs, health check) and `provider-cpu.Dockerfile`; locks `requirements/provider-*.txt`;
+  `deploy/docker/provider-smoke.sh`; GHCR workflow `.github/workflows/provider-image.yml` (not run).
+- **RunPod** (`deploy/runpod/`): launcher with cost estimate and a required hard `--max-usd`, Secure Cloud default,
+  GPU / data center / volume selectable, server-side TTL self-stop plus a detached client-side watchdog, attested
+  bootstrap of an SDK key, `--client-pod` (CPU pod in the same data center), `--status`, `--stop`; `rtt_probe.py`.
+  Provider tuning for remote clients: TLS trip lane on 8444 (`lane_advertised_port`, new, default off), trip stream
+  priority high, masked head `also`, maskgen v3. **No RunPod call has been made** (no API key yet): unit-tested
+  against a mocked API; the bootstrap against a real loopback TLS service.
+- Tests: `tests/service/test_accounts.py`, `tests/deploy/test_runpod.py`, `tests/deploy/test_provider_image.py`.
+
 ## 2026-11-23 — pks-v3 review fixes on the default path; pks-v3 the CPU-only demo preset (pending external review)
 
 Fixes for `research/reviews/pks-v3-adversarial-review.md` (F1, F3, F4, F6, F7, F10), now on **every** encrypted

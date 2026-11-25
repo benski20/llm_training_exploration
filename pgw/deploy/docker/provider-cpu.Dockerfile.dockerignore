@@ -1,0 +1,19 @@
+# Build context allowlist (BuildKit reads <Dockerfile>.dockerignore next to the Dockerfile).
+# Only what the image needs: never packs, mask stores, keys, accounts databases, caches or tests.
+*
+!pyproject.toml
+!requirements/provider-cpu.txt
+!README.md
+!src/
+!rust/
+rust/target
+rust/**/target
+!deploy/docker/entrypoint.sh
+!deploy/docker/provider-entrypoint.sh
+!deploy/docker/healthcheck.py
+!deploy/runpod/pod_boot.py
+!deploy/runpod/rtt_probe.py
+**/__pycache__
+**/*.pyc
+**/*.so
+**/*.egg-info

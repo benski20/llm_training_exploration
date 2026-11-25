@@ -7,7 +7,8 @@ factory needs no network, and the gateway may talk only to the compute service.
 
 | directory | what | for |
 |---|---|---|
-| [docker/](docker/) | Dockerfiles: `gateway` (CPU), `factory` (CPU), `factory-cuda`, `service-cuda`, `service-cpu` (demo/CI); `pgw-entrypoint`, `pgw-healthcheck` | all container deployments |
+| [docker/](docker/) | Dockerfiles: `gateway` (CPU), `factory` (CPU), `factory-cuda`, `service-cuda`, `service-cpu` (demo/CI), `provider` (CUDA base, service + SDK-key accounts + native extension + pack tool + RunPod boot) and `provider-cpu` (tests, client test pod); `pgw-entrypoint`, `pgw-healthcheck`, `provider-smoke.sh` | all container deployments |
+| [runpod/](runpod/README.md) | provider on RunPod pods: launcher with cost cap, TTL self-stop + watchdog, SDK key bootstrap, client pod in the same data center, `rtt_probe.py` | our hosted provider |
 | [compose/](compose/README.md) | docker-compose demo: pack -> factory -> service -> gateway on one machine | evaluation, development |
 | [helm/](helm/README.md) | charts `pgw-gateway`, `pgw-factory`, `pgw-service` | Kubernetes (customer cluster, our cluster) |
 | [systemd/](systemd/) | hardened units, env examples, `install.sh` | VMs and bare metal; base of the OVA/AMI images |
@@ -28,7 +29,15 @@ docker build -f deploy/docker/gateway.Dockerfile      -t pgw-gateway .
 docker build -f deploy/docker/factory.Dockerfile      -t pgw-factory .
 docker build -f deploy/docker/factory-cuda.Dockerfile -t pgw-factory-cuda .
 docker build -f deploy/docker/service-cuda.Dockerfile -t pgw-service-cuda .
+docker build -f deploy/docker/provider.Dockerfile     -t pgw-provider .       # hosted provider (RunPod)
+docker build -f deploy/docker/provider-cpu.Dockerfile -t pgw-provider-cpu .   # + deploy/docker/provider-smoke.sh
 ```
+
+The `provider` images (`.github/workflows/provider-image.yml` pushes them to GHCR on a `pgw-provider-v*` tag) build
+the native extension `pgw_fast` in a builder stage with a pinned Rust toolchain, install the hash-locked
+`requirements/provider-*.txt` (service + pack tool, the same versions as the service and gateway locks), and start
+as root only to hand the data directory (or, under `pgw-runpod-boot`, the RunPod volume) to uid 10001; every PGW
+process runs as 10001 with `no_new_privs`.
 
 All images: multi-stage, Python 3.12 slim, non-root uid 10001, read-only-root compatible, JSON logs,
 no secrets. `pgw-entrypoint` renders config templates listed in `PGW_RENDER=src:dst[,src:dst]`

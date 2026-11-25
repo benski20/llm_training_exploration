@@ -5,7 +5,8 @@
     pgw-healthcheck service   # GET /readyz on PGW_SERVICE_PORT (default 8443)
     pgw-healthcheck --live service   # /healthz instead of /readyz
 
-TLS is detected from ``PGW_<ROLE>_TLS__CERT_FILE``. The probe talks to 127.0.0.1 only, so the
+TLS is detected from ``PGW_<ROLE>_TLS__CERT_FILE`` (or forced with ``PGW_HEALTHCHECK_SCHEME=https``, for
+servers whose TLS settings are not in the container's environment, e.g. the RunPod provider boot). The probe talks to 127.0.0.1 only, so the
 server certificate is not verified. When the server requires client certificates, set
 ``PGW_HEALTHCHECK_CERT_FILE`` / ``PGW_HEALTHCHECK_KEY_FILE`` to a probe certificate.
 Exit code 0 = healthy, 1 = unhealthy.
@@ -39,7 +40,7 @@ def main(argv: list[str]) -> int:
     except ValueError:
         print(f"unhealthy: invalid {prefix}PORT {raw_port!r}", file=sys.stderr)
         return 1
-    tls = bool(os.environ.get(prefix + "TLS__CERT_FILE"))
+    tls = bool(os.environ.get(prefix + "TLS__CERT_FILE")) or os.environ.get("PGW_HEALTHCHECK_SCHEME") == "https"
     path = "/healthz" if live else "/readyz"
     url = f"{'https' if tls else 'http'}://127.0.0.1:{port}{path}"
     ctx = None

@@ -1,0 +1,4 @@
+# Pack tool pins of the provider images: the same versions as the gateway lock (both parties pack the same bytes)
+transformers==5.23.0
+huggingface-hub==2.4.0
+tokenizers==0.23.3
