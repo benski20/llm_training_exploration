@@ -15,6 +15,49 @@ SLA pilot. Three reasons:
 2. The HSM, KMS and TPM integrations have never run against real hardware or cloud services.
 3. There has been no external security audit.
 
+## 2026-11-25 — Client library integrated: one product, proven end to end on CPU (real Qwen2.5-0.5B-Instruct)
+
+The five parts of the client library (SDK, provisioning, provider accounts, console, packaging) were built against
+stubs of each other; they now run as one product (`docs/sdk/CONTRACT.md`, appendix updated):
+- **One SDK key codec**: `pgw.enroll.sdk_key` (stdlib, published test vector); `pgw.sdk.keys.parse_key` wraps it
+  (pasted-key leniency only). The SDK's 5-byte-checksum format is gone.
+- **Enrollment**: the SDK uses the real `POST /pgw/v1/sdk/enroll`; the reply now carries `lane: {transport, port}`
+  (the advertised TCP+TLS lane port) and `masked_head` per model. The SDK tests run the real accounts-enabled service
+  (keys created and revoked through the admin API; the test-only route is gone).
+- **Provisioning**: the default provisioner is the real `pgw.provision.client.provision` behind
+  `pgw.sdk.provisioning.ProviderProvisioner`. **Fingerprints pinned in the library**: 0.5B and 1.5B derived here
+  with the pack tool from the public checkpoints at the pinned commits (`scripts/pin_model_fingerprints.py`); 3B/7B
+  pinned by commit and cross-checked on first use by re-deriving the pack from the public checkpoint
+  (`source="hf"`, remembered in the cache) until their fingerprints are baked in. A provider serving another pack
+  is refused before any download. **`hint="local"` is the default** (the provider-built hint streams ~44 GB at 7B;
+  opt-in `hint="provider"`). The gateway runs on the weight-free gateway pack (`GatewayPack` in
+  `pgw.gateway.runtime`); the background factory gets a **factory pack** (the fingerprint-checked int8 weights,
+  ~6.5 GB at 7B, `provision(factory_pack=True)`) for its private check vectors and the local hint build.
+- **Console on the provider**: `PGW_PLATFORM_ENABLED=1` mounts `pgw.platform` at `/platform` on the same store as
+  the admin API (`pgw.service.platform_accounts`). New, content-free: `POST /pgw/v1/sdk/report` (the client's
+  per-request record: model, token counts, latency, status, whether every check passed; allow-list parsed),
+  request counts and the input/output split per key/model/day in usage, a request log (`/orgs/{org}/requests`,
+  kept `PGW_SERVICE_ACCOUNTS_REQUEST_LOG_DAYS`, 30) and `/orgs/{org}/models`. "Verified" is shown as **checked
+  client-side** (the provider cannot check results; it records the client's statement).
+- **Architecture rule**: the fused2 table derivation moved to `pgw.modelpack.fused2_weights` (code unchanged, the
+  engine re-exports it); the service no longer imports the engine.
+- **torch 2.15.0** (the measured Modal stack) in every lock and image (CPU `+cpu`, CUDA `+cu132`, provider base
+  `nvidia/cuda:13.2.1`); locks regenerated, all constrained by `pack-pins.in`. Docker images not rebuilt here.
+- SDK: `create(timeout=...)` bounds the request (a short timeout never cancels a model start-up in progress); during
+  a model's first fill the request waits for the one-time mask setup instead of failing after `mask_wait_s`.
+- **End to end** (`tests/sdk/test_e2e_product.py`, CPU, loopback TLS, this 4-vCPU box): real provider service
+  (accounts, provisioning, console, TCP+TLS lane, masked head), org + console token via the CLI, key via the admin
+  API, empty cache -> `from pgw import OpenAI` -> enroll -> provision (real endpoints; the provider's pack of
+  Qwen2.5-0.5B-Instruct equals the baked pin) -> chat non-streaming and streaming **bit-identical** to the gateway
+  path -> usage, split and request log via the admin API and the console, no content anywhere -> key revoked, next
+  call refused. 5 passed in 72 s; first request on an empty cache 23.8 s (plain masks). The library's default scheme
+  (pks-v3, hint built locally from the factory pack) is covered bit-identically on the tiny model
+  (`tests/sdk/test_e2e_cpu.py`); at 0.5B the client built the hint locally (24 layers + head in ~4 min on this box)
+  but the **CPU provider's pks-v3 maskgen peaked at ~10 GB and was OOM-killed** on this 15 GB box, so that check is
+  opt-in (`PGW_SDK_E2E_PKS=1`). Open: provider memory of CPU pks-v3 maskgen; 3B/7B fingerprints not yet baked in;
+  images not rebuilt with torch 2.15.0; mypy baseline errors moved with the fused2 code are unchanged.
+
+
 ## 2026-11-25 — Hosted provider: SDK keys, usage metering, provider image, RunPod tooling (not run on RunPod)
 
 For the in-process client library (`docs/sdk/CONTRACT.md`; payloads in its appendix A1-A4):
