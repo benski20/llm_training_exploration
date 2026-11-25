@@ -181,7 +181,7 @@ quota), `quota.exceeded`, `admin.denied`. `attest` lets a launcher holding a boo
 sends the token, that the TLS endpoint it reached holds the provider CA:
 `mac = HMAC-SHA256(key = SHA-256(admin token) as 32 raw bytes, "pgw-admin-attest-v1" | nonce | ca_sha256)`.
 
-### A3. Provisioning (owner: provisioning agent; `src/pgw/provision/`, `src/pgw/service/provision.py`)
+### A5. Provisioning (owner: provisioning agent; `src/pgw/provision/`, `src/pgw/service/provision.py`)
 
 **Client API** (stable names; extra keyword arguments may be added with defaults):
 
