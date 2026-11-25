@@ -14,7 +14,7 @@ one-time model preparation on first use.
 | Python | 3.11, 3.12 or 3.13 (CPython) |
 | Operating system | Linux x86_64 or aarch64 (glibc 2.28 or newer: Ubuntu 20.04+, Debian 11+, RHEL 8+), macOS on Apple silicon |
 | Hardware | CPU only. No GPU, no CUDA. See [Supported models](models.md) for the CPU, memory and disk to plan per model |
-| Network | outbound HTTPS to the provider address encoded in your key; low latency to our GPU matters (see [Concepts](concepts.md#why-your-application-should-run-near-our-gpu)) |
+| Network | outbound HTTPS to the provider address encoded in your key. Run in the **same data center** as our GPU service (see [Concepts](concepts.md#why-your-application-should-run-near-our-gpu)) |
 | Key | an SDK key that starts with `pgw_`, issued to you by us |
 
 Alpine Linux (musl) and Windows are not supported in this release.
@@ -22,7 +22,9 @@ Alpine Linux (musl) and Windows are not supported in this release.
 ## 2. Install
 
 Use a virtual environment. On Linux, install the CPU build of PyTorch: the default PyTorch package on
-PyPI for Linux x86_64 also pulls several gigabytes of CUDA libraries that PGW never uses.
+PyPI for Linux x86_64 also pulls several gigabytes of CUDA libraries that PGW never uses. Release 0.1 is
+measured with PyTorch 2.15.0 (`torch==2.15.0` from the same index pins it); other versions from 2.4 on work and
+give the same results.
 
 ```bash
 python3 -m venv .venv && . .venv/bin/activate
@@ -83,13 +85,21 @@ print(resp.choices[0].message.content)
 The first call on a machine does three things before it answers:
 
 1. **Enrollment.** A client key pair is generated on your machine; our service issues a certificate for it.
-2. **Model preparation.** The library downloads the non-secret model data it needs (tokenizer and the small
-   plaintext parts of the model) and checks every file against the model fingerprint.
-3. **Mask setup.** The library prepares the material it needs to generate one-time masks with our help, and
-   verifies what we contributed before using it.
+2. **Model preparation.** The library downloads the public model data it needs and checks every file against
+   the model fingerprint, which the library itself pins for every supported model (a service serving anything
+   else is refused): the tokenizer and the small plaintext parts of the model for your process, and the public
+   int8 weights for the background mask generation (about 6.5 GB at 7B; your request handling never loads them).
+3. **Mask setup.** With the default `hint="local"`, the background mask processes build the one-time setup on
+   your machine from those weights: about 20-30 minutes of CPU at 7B on 4 cores (a few minutes at 0.5B).
 
-All three are cached. Expect a few minutes for the 7B model on the first call and a few seconds to start
-after that. Mask generation then keeps running in background threads while your process is up.
+All three are cached: expect one-time ~6.5 GB of public weight download plus ~20-30 min of CPU for the 7B
+model on a 4-core machine, then a few seconds to start. Mask generation keeps running in background
+processes while your process is up. The [Configuration reference](configuration.md#cache-directory) has the
+disk figures and the `hint="provider"` alternative.
+
+**Placement.** Run the process that imports `pgw` in the same data center as our GPU service: every
+generated token needs about a hundred round trips to it ([Concepts](concepts.md#why-your-application-should-run-near-our-gpu)).
+For the pilot, that is a CPU machine in the data center we name with your key.
 
 ## 5. Streaming
 

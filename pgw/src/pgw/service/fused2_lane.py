@@ -17,8 +17,9 @@ deadlines, UDS / shared-memory / TLS transports and fallback statuses as every l
 only uniformly masked ring elements of public shapes (exactly what the socket harness carried).
 
 Weights are public: ``w8`` of ``o`` / ``down``, their multipliers ``hmul`` and the folded ``W2'`` (``qkv/f2``,
-``gate_up/f2``), from :meth:`pgw.engine.fused2.Fused2Weights.save` (``provider_only=True``) or derived here from
-the provider's own pack (:meth:`Fused2LaneEntry.from_pack`: the int8 fold with pack-time migration multipliers).
+``gate_up/f2``), from :meth:`pgw.modelpack.fused2_weights.Fused2Weights.save` (``provider_only=True``) or derived
+here from the provider's own pack (:meth:`Fused2LaneEntry.from_pack`: the int8 fold with pack-time migration
+multipliers).
 The entry's lane fingerprint (:func:`fused2_fingerprint`) binds the base pack, the ring and every item's weights;
 a gateway pins it like a pack fingerprint.
 
@@ -97,7 +98,8 @@ class Fused2Item:
 
 
 def fused2_items(weights: Any) -> list[Fused2Item]:
-    """The trip items of a :class:`pgw.engine.fused2.Fused2Weights` in pass order (gateway and service agree)."""
+    """The trip items of a :class:`pgw.modelpack.fused2_weights.Fused2Weights` in pass order (gateway and service
+    agree)."""
     w = weights
     out = [Fused2Item(w.qkv[0].key, w.qkv[0].key, None, w.qkv[0].n, w.qkv[0].m, 0)]
     for i in range(w.num_layers):
@@ -170,8 +172,9 @@ class Fused2LaneEntry:
     def from_pack(cls, pack: Any, migrate_bits: int = 8, ring: RingParams | str = DEFAULT_RING, **kw: Any
                   ) -> Fused2LaneEntry:
         """Derive the public fused2 weights from the provider's own pack (int8 fold, pack-time migration
-        multipliers :func:`pgw.engine.fused2.migration_multipliers`; no calibration text, no float checkpoint)."""
-        from pgw.engine.fused2 import Fused2Weights, migration_multipliers
+        multipliers :func:`pgw.modelpack.fused2_weights.migration_multipliers`; no calibration text, no float
+        checkpoint). Pure table derivation from :mod:`pgw.modelpack` (the service never imports the engine)."""
+        from pgw.modelpack.fused2_weights import Fused2Weights, migration_multipliers
 
         mults = migration_multipliers(pack, int(migrate_bits)) if migrate_bits else None
         # sigma=False: the pair op and the fingerprint use w8 and hmul only (no SVDs on the provider)
@@ -214,7 +217,7 @@ def load_fused2_entries(state: Any, *, device: str | torch.device | None = None,
     out: dict[str, Fused2LaneEntry] = {}
     t0 = time.perf_counter()
     entries: list[Fused2LaneEntry] = []
-    from pgw.engine.fused2 import Fused2Weights
+    from pgw.modelpack.fused2_weights import Fused2Weights
 
     for path in files:
         entries.append(Fused2LaneEntry.from_weights(Fused2Weights.load(path.strip()), ring, device=device,
@@ -356,7 +359,7 @@ def serve(argv: list[str] | None = None) -> None:  # pragma: no cover - process 
     from pathlib import Path
     from types import SimpleNamespace
 
-    from pgw.engine.fused2 import Fused2Weights
+    from pgw.modelpack.fused2_weights import Fused2Weights
     from pgw.service import ModelRegistry, ServiceMetrics, ServiceSettings
     from pgw.service.lane import LaneManager
 

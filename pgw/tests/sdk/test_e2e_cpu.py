@@ -1,7 +1,7 @@
 """End to end on CPU: the client library against a real ``pgw service`` process on loopback.
 
-The provider runs the real service (TLS, TCP+TLS trip lane, masked LM head, enrollment) with the test SDK
-enrollment route; the client enrolls with an SDK key, provisions from the local pack, runs the in-process gateway
+The provider runs the real service (TLS, TCP+TLS trip lane, masked LM head, accounts with SDK enrollment and the
+admin API); the client enrolls with an SDK key created through the admin API, provisions from the local pack, runs the in-process gateway
 with the default stack (native trip / decode drivers, p31 checks, masked head, incremental reservations, prefix
 cache) and its own background mask factory, and must give bit-identical answers to the existing gateway path
 (the plaintext reference of ``pgw gateway`` with the same model settings) for the same seed and prompt.
@@ -238,7 +238,7 @@ def test_revoked_and_unknown_keys_are_refused(provider: Provider, tmp_path: Path
     from pgw.sdk import AuthenticationError
     from pgw.sdk.keys import SdkKey
 
-    unknown = SdkKey.new(provider.url, provider.ca_sha256, env="test").encode()
+    unknown = SdkKey.new("test", provider.url, provider.ca_sha256).encode()
     c = _client(provider, unknown, tmp_path / "u")
     with pytest.raises(AuthenticationError):
         c.models.list()
@@ -255,7 +255,7 @@ def test_wrong_ca_pin_is_refused_before_anything_is_sent(provider: Provider, tmp
     from pgw.sdk import IntegrityError
     from pgw.sdk.keys import SdkKey
 
-    bad = SdkKey.new(provider.url, b"\x42" * 32, env="test").encode()
+    bad = SdkKey.new("test", provider.url, b"\x42" * 32).encode()
     c = _client(provider, bad, tmp_path / "pin")
     with pytest.raises(IntegrityError, match="does not match"):
         c.models.list()
@@ -345,7 +345,7 @@ def test_processes_share_session_store_and_factory(provider: Provider, tmp_path:
 
     from tests.sdk.conftest import ROOT
 
-    key = provider.new_key(tenant="mp-test")
+    key = provider.new_key("mp-test")
     args = [sys.executable, "-c", _MP_CODE, key, str(tmp_path), str(provider.pack_dir), str(ROOT / "src"), str(ROOT)]
     env = {k: v for k, v in os.environ.items() if not k.startswith("PGW_")}
     procs = [subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)  # noqa: S603
@@ -361,6 +361,6 @@ def test_processes_share_session_store_and_factory(provider: Provider, tmp_path:
     sessions = list((tmp_path / "cache" / "sessions").iterdir())
     assert len(sessions) == 1
     lines = (Path(provider.log.parent) / "secrets" / "tokens").read_text().splitlines()
-    assert sum(ln.startswith("mp-test:") for ln in lines) == 1  # enrolled once for both processes
+    assert sum(ln.startswith(provider.tenant(key) + ":") for ln in lines) == 1  # enrolled once for both processes
     meta = json.loads((sessions[0] / "enrollment.json").read_text())
     assert meta["key_id"] == sessions[0].name

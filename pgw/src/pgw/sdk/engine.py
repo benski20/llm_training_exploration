@@ -84,6 +84,17 @@ _RETRY_CODES = frozenset({str(ErrorCode.BACKEND_UNAVAILABLE), str(ErrorCode.DEAD
                           str(ErrorCode.UNAVAILABLE)})
 
 
+def _accepts(fn: Any, name: str) -> bool:
+    """Whether callable ``fn`` takes keyword argument ``name``."""
+    import inspect
+
+    try:
+        params = inspect.signature(fn).parameters
+    except (TypeError, ValueError):
+        return False
+    return name in params or any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values())
+
+
 def apply_native_env(on: bool = True) -> None:
     """Choose the native trip / decode stack for runtimes built from now on (``setdefault``: process-wide, so the
     first client's choice, or an explicit environment value, applies to every client of the process)."""
@@ -114,6 +125,11 @@ class ModelHandle:
     ring: str = PREFERRED_RING
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     ready_event: asyncio.Event = field(default_factory=asyncio.Event)
+    start_task: asyncio.Task[None] | None = None
+    #: a mask reservation succeeded in this process (the first fill is over)
+    masks_seen: bool = False
+    #: last provisioning progress line (no secrets: stage and byte counts)
+    progress: str | None = None
     requests: int = 0
     verified_requests: int = 0
     integrity_failures: int = 0
@@ -123,7 +139,7 @@ class ModelHandle:
 
     def public(self) -> dict[str, Any]:
         """Status view (no secrets, no content)."""
-        out: dict[str, Any] = {"model": self.name, "state": self.state, "error": self.error,
+        out: dict[str, Any] = {"model": self.name, "state": self.state, "error": self.error, "progress": self.progress,
                                "masked_head": self.masked_head, "ring": self.ring, "requests": self.requests,
                                "verified_requests": self.verified_requests,
                                "integrity_failures": self.integrity_failures,
@@ -171,7 +187,7 @@ class Engine:
         self.key = key
         self.options = options
         self.layout = CacheLayout(options.cache_dir, options.state_dir)
-        self.provisioner = provisioner or default_provisioner()
+        self.provisioner = provisioner or default_provisioner(options)
         self._enroll_transport = enroll_transport
         self.pid = os.getpid()
         self.session: Session | None = None
@@ -186,6 +202,12 @@ class Engine:
         self._status_lock = threading.Lock()
         self._gc_stop = threading.Event()
         self._gc_thread: threading.Thread | None = None
+        #: content-free request reports for the provider's console (``usage_reports``)
+        self.reporter: Any = None
+        if options.usage_reports:
+            from pgw.sdk.reports import Reporter
+
+            self.reporter = Reporter(lambda: self.session)
 
     # ---- event loop ----------------------------------------------------------------------------
     def _ensure_loop(self) -> asyncio.AbstractEventLoop:
@@ -317,22 +339,35 @@ class Engine:
         return [n for n in SUPPORTED_MODELS if n in names]
 
     async def ensure_model(self, model: str) -> ModelHandle:
-        """The model's handle, started (enroll, provision, connect, factory) on first use."""
+        """The model's handle, started (enroll, provision, connect, factory) on first use.
+
+        The start-up runs as its own task: a caller that gives up (a short per-request ``timeout``) does not cancel
+        a provisioning that is under way; the next request waits for the same start-up."""
         name = canonical_model(model)
         h = self.models.get(name)
         if h is None:
             h = self.models[name] = ModelHandle(name)
         if h.state == "ready":
             return h
+        t = h.start_task
+        if t is None or t.done():
+            if (t is not None and not t.cancelled() and t.exception() is None
+                    and h.state in ("ready", "connecting")):
+                return h
+            t = h.start_task = asyncio.get_running_loop().create_task(self._start_guarded(h))
+        await asyncio.shield(t)
+        return h
+
+    async def _start_guarded(self, h: ModelHandle) -> None:
         async with h.lock:
             if h.state in ("ready", "connecting"):
-                return h
+                return
             try:
                 await asyncio.wait_for(self._start_model(h), timeout=self.options.ready_timeout_s)
             except TimeoutError as exc:
                 h.state, h.error = "failed", "start-up timed out"
-                raise NotReadyError(f"model {name!r} did not become ready within {self.options.ready_timeout_s:.0f}s"
-                                    ) from exc
+                raise NotReadyError(f"model {h.name!r} did not become ready within "
+                                    f"{self.options.ready_timeout_s:.0f}s") from exc
             except BaseException as exc:
                 h.state = "failed"
                 h.error = getattr(exc, "message", None) or type(exc).__name__
@@ -342,7 +377,6 @@ class Engine:
                 if isinstance(exc, PGWError):
                     raise from_pgw_error(exc) from exc
                 raise
-        return h
 
     async def _start_model(self, h: ModelHandle) -> None:
         from pgw.gateway.metrics import GatewayMetrics
@@ -365,8 +399,19 @@ class Engine:
         h.state = "provisioning"
         self.layout.ensure()
         ensure_private_dir(self.layout.models_dir)
-        raw = await asyncio.to_thread(self.provisioner, h.name, session=session, cache_dir=self.layout.models_dir,
-                                      progress=lambda msg: log.info("provisioning %s: %s", h.name, msg))
+        # the masked LM head is decided first: a provisioned hint store covers the head linear only when asked
+        h.masked_head = await self._decide_masked_head(session, str(entry["fingerprint"]).lower())
+        self._write_status()
+
+        def progress(msg: str) -> None:
+            h.progress = str(msg)[:200]
+            log.info("provisioning %s: %s", h.name, msg)
+            self._write_status_soon()
+
+        pkw: dict[str, Any] = {"session": session, "cache_dir": self.layout.models_dir, "progress": progress}
+        if _accepts(self.provisioner, "masked_head"):
+            pkw["masked_head"] = h.masked_head
+        raw = await asyncio.to_thread(self.provisioner, h.name, **pkw)
         prov = adapt(raw, model=h.name)
         if prov.fingerprint != str(entry["fingerprint"]).lower():
             raise IntegrityError(f"provisioned artifacts of {h.name!r} do not match the provider's fingerprint",
@@ -378,7 +423,6 @@ class Engine:
         if self._settings is None:
             self._settings = self._gateway_settings(session)
         h.ring = self._pick_ring(entry)
-        h.masked_head = await self._decide_masked_head(session, prov.fingerprint)
         apply_native_env(self.options.native)
         cfg = self._model_config(h, session, prov)
         self._settings.validate_policy([cfg])
@@ -512,7 +556,7 @@ class Engine:
             hint_key = h.provisioned.hint_key_file or (sdir / "pks-hint.key")
         s = self.session
         return FactoryPlan(
-            model=h.name, pack_path=h.provisioned.pack_path, ring=h.ring,
+            model=h.name, pack_path=h.provisioned.factory_pack_path or h.provisioned.pack_path, ring=h.ring,
             state_dir=self.layout.factory_dir(kid) / h.provisioned.fingerprint[:16],
             store_root=self.layout.masks_dir(kid), kek_file=sdir / "masks.kek", counter_file=sdir / "masks.counter",
             scheme=scheme, check_field="p31" if prime else "ring", masked_head=h.masked_head,
@@ -550,19 +594,30 @@ class Engine:
             h.runtime.reset_safety(breaker=True, noise=True)
 
     async def _open(self, h: ModelHandle, rt: Any, ids: list[int], params: Any, rid: str, prefix_key: str | None,
-                    deadline: float) -> Any:
-        """Admit and reserve masks; waits (back-pressure) while the mask stock is empty or the service reconnects."""
+                    deadline: float, setup_deadline: float | None = None) -> Any:
+        """Admit and reserve masks; waits (back-pressure) while the mask stock is empty or the service reconnects.
+
+        ``mask_wait_s`` bounds the wait for masks, except during the model's first fill on this host (no mask seen
+        yet, the factory running and healthy: it may still be building the one-time pks-v3 hint, tens of minutes at
+        7B), when the request waits up to ``setup_deadline`` (the start-up budget ``ready_timeout_s``)."""
         mask_deadline = min(deadline, time.monotonic() + self.options.mask_wait_s)
         delay = 0.1
         while True:
             try:
-                return (await rt.open_sessions([ids], params, request_id=rid, prefix_key=prefix_key))[0]
+                sess = (await rt.open_sessions([ids], params, request_id=rid, prefix_key=prefix_key))[0]
+                h.masks_seen = True
+                return sess
             except MaskExhaustedError as exc:
                 fac = h.factory
                 broken = fac is not None and fac.owner and fac.failures >= 3 and fac.last_error
-                if broken or time.monotonic() + delay > mask_deadline:
+                first_fill = (fac is not None and not broken and not h.masks_seen and setup_deadline is not None
+                              and not fac.state().get("halted"))
+                limit = max(mask_deadline, setup_deadline) if first_fill and setup_deadline else mask_deadline
+                if broken or time.monotonic() + delay > limit:
                     why = f"; the mask factory is failing: {fac.last_error}" if broken and fac is not None else (
                         "" if self.options.factory else "; the background mask factory is off (factory=False)")
+                    if first_fill:
+                        why += "; the one-time mask setup of this model is still running (see pgw sdk status)"
                     raise NotReadyError(f"no masks in stock for model {h.name!r} after waiting{why}",
                                         code=str(exc.code), request_id=rid) from exc
             except BreakerOpenError as exc:  # blocked after an integrity failure: hard error, never waited out
@@ -576,21 +631,68 @@ class Engine:
             await asyncio.sleep(delay)
             delay = min(1.0, delay * 1.5)
 
+    def _budget(self, timeout_s: float | None) -> float:
+        """Whole-request budget: an explicit per-request ``timeout`` bounds everything (waiting for a model that is
+        still starting included); the default allows ``ready_timeout_s`` for a first start-up on top."""
+        if timeout_s is not None:
+            return float(timeout_s)
+        return self.options.timeout_s + self.options.ready_timeout_s
+
     async def chat_events(self, req: Any, *, conversation: str | None = None,
-                          meta: dict[str, Any] | None = None) -> AsyncIterator[tuple[Any, Any]]:
+                          meta: dict[str, Any] | None = None,
+                          timeout_s: float | None = None) -> AsyncIterator[tuple[Any, Any]]:
+        """:meth:`_chat_events` plus the content-free request report (:mod:`pgw.sdk.reports`)."""
+        meta = meta if meta is not None else {}
+        started, t0 = time.time(), time.monotonic()
+        first: float | None = None
+        status: str = "error"
+        code: str | None = "cancelled"
+        try:
+            async for item in self._chat_events(req, conversation=conversation, meta=meta, timeout_s=timeout_s):
+                if first is None:
+                    first = time.monotonic()
+                yield item
+            status, code = "ok", None
+        except PGWError as exc:
+            code = str(exc.code)
+            raise
+        except TimeoutError:
+            code = "deadline_exceeded"
+            raise
+        except Exception as exc:
+            code = str(getattr(exc, "code", "") or "internal")
+            raise
+        finally:
+            if code == "cancelled" and time.monotonic() - t0 >= 0.98 * self._budget(timeout_s):
+                code = "deadline_exceeded"  # the request's budget ran out (asyncio.timeout cancels the generator)
+            if self.reporter is not None and "model" in meta:
+                self.reporter.add({
+                    "ts": started, "model": meta["model"], "status": status, "error_code": code,
+                    "prompt_tokens": int(meta.get("prompt_tokens", 0)),
+                    "completion_tokens": int(meta.get("completion_tokens", 0)),
+                    "latency_ms": round((time.monotonic() - t0) * 1000.0, 3),
+                    "ttft_ms": round((first - t0) * 1000.0, 3) if first is not None else None,
+                    "stream": bool(meta.get("stream")), "checks_ok": status == "ok"})
+
+    async def _chat_events(self, req: Any, *, conversation: str | None = None,
+                           meta: dict[str, Any] | None = None,
+                           timeout_s: float | None = None) -> AsyncIterator[tuple[Any, Any]]:
         """Run one chat request; yields ``(ModelHandle, TokenEvent)`` (and fills ``meta``: id, usage, ...).
 
         Transport failures and temporary unavailability before the first token are retried
-        (``max_retries``); integrity failures never are.
+        (``max_retries``); integrity failures never are. ``timeout_s``: this request's budget (default
+        ``options.timeout_s``, plus ``ready_timeout_s`` while the model starts).
         """
         from pgw.gateway.openai_render import chat_messages, sampling_params
 
         meta = meta if meta is not None else {}
         t0 = time.monotonic()
-        deadline = t0 + self.options.timeout_s
+        deadline = t0 + (float(timeout_s) if timeout_s is not None else self.options.timeout_s)
         rid = "chatcmpl-" + uuid.uuid4().hex[:24]
         meta["id"] = rid
-        h, rt = await self._ready_runtime(req.model, deadline + self.options.ready_timeout_s)
+        meta["t0"] = t0
+        h, rt = await self._ready_runtime(
+            req.model, deadline if timeout_s is not None else deadline + self.options.ready_timeout_s)
         meta["model"] = h.name
         meta["system_fingerprint"] = rt.fingerprint[:12] if rt.fingerprint else None
         msgs = chat_messages(req)
@@ -608,7 +710,8 @@ class Engine:
             sess = None
             try:
                 sess = await self._open(h, rt, ids, params, rid if attempt == 0 else f"{rid}-r{attempt}",
-                                        prefix_key, deadline)
+                                        prefix_key, deadline,
+                                        None if timeout_s is not None else deadline + self.options.ready_timeout_s)
                 h.requests += 1
                 meta["prompt_tokens"] = len(sess.prompt_ids)
                 meta["cached_tokens"] = int(sess.prefix_reused)
@@ -639,7 +742,8 @@ class Engine:
                 if sess is not None:
                     await sess.close()
 
-    async def chat(self, req: Any, *, conversation: str | None = None) -> T.ChatCompletion:
+    async def chat(self, req: Any, *, conversation: str | None = None,
+                   timeout_s: float | None = None) -> T.ChatCompletion:
         """Non-streaming chat completion."""
         from pgw.gateway.openai_render import TokenText, chat_logprobs, stop_ids, visible
 
@@ -649,8 +753,8 @@ class Engine:
         finish: str | None = None
         rt = None
         stops: frozenset[int] = frozenset()
-        async with asyncio.timeout(self.options.timeout_s + self.options.ready_timeout_s):
-            async for h, ev in self.chat_events(req, conversation=conversation, meta=meta):
+        async with asyncio.timeout(self._budget(timeout_s)):
+            async for h, ev in self.chat_events(req, conversation=conversation, meta=meta, timeout_s=timeout_s):
                 if rt is None:
                     rt = h.runtime
                     stops = stop_ids(rt, meta["params"])
@@ -673,17 +777,11 @@ class Engine:
                          "logprobs": logprobs, "finish_reason": finish}],
             "usage": usage})
 
-    async def chat_stream(self, req: Any, *, conversation: str | None = None) -> AsyncIterator[T.ChatCompletionChunk]:
+    async def chat_stream(self, req: Any, *, conversation: str | None = None,
+                          timeout_s: float | None = None) -> AsyncIterator[T.ChatCompletionChunk]:
         """Streaming chat completion (chunks as the gateway's SSE stream sends them)."""
-        from pgw.gateway.openai_render import TokenText, chat_logprobs, stop_ids, visible
-
-        meta: dict[str, Any] = {}
+        meta: dict[str, Any] = {"stream": True}
         created = int(time.time())
-        include_usage = req.include_usage
-        tt = None
-        stops: frozenset[int] = frozenset()
-        first = True
-        prefix_cache = False
 
         def chunk(choices: list[dict[str, Any]], **extra: Any) -> T.ChatCompletionChunk:
             body = {"id": meta["id"], "created": created, "model": meta.get("model", req.model),
@@ -691,7 +789,20 @@ class Engine:
             body.update(extra)
             return T.ChatCompletionChunk.model_validate(body)
 
-        async for h, ev in self.chat_events(req, conversation=conversation, meta=meta):
+        async with asyncio.timeout(self._budget(timeout_s)):
+            async for item in self._chat_stream_body(req, conversation, meta, timeout_s, chunk):
+                yield item
+
+    async def _chat_stream_body(self, req: Any, conversation: str | None, meta: dict[str, Any],
+                                timeout_s: float | None, chunk: Any) -> AsyncIterator[T.ChatCompletionChunk]:
+        from pgw.gateway.openai_render import TokenText, chat_logprobs, stop_ids, visible
+
+        include_usage = req.include_usage
+        tt = None
+        stops: frozenset[int] = frozenset()
+        first = True
+        prefix_cache = False
+        async for h, ev in self.chat_events(req, conversation=conversation, meta=meta, timeout_s=timeout_s):
             if first:
                 first = False
                 tt = TokenText(h.runtime)
@@ -786,6 +897,9 @@ class Engine:
             self._write_status()
             loop.call_soon_threadsafe(loop.stop)
             thread.join(timeout=10)
+        if self.reporter is not None:
+            with contextlib.suppress(Exception):
+                self.reporter.close(timeout_s=5.0)
         self._gc_stop.set()
         gct, self._gc_thread = self._gc_thread, None
         if gct is not None:

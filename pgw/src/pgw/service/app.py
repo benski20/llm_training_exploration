@@ -11,8 +11,10 @@ Routes (SPEC.md section 6.2):
                            :mod:`pgw.service.provision`)
     GET  /pgw/v1/enroll/ca, POST /pgw/v1/enroll   gateway enrollment (when ``enrollment_file`` is set;
                            see :mod:`pgw.enroll.service`)
-    POST /pgw/v1/sdk/enroll, GET /pgw/v1/sdk/usage   SDK keys (when ``accounts_db`` is set; admin API under
-                           /pgw/v1/admin with ``accounts_admin_api``; see :mod:`pgw.service.accounts`)
+    POST /pgw/v1/sdk/enroll, GET /pgw/v1/sdk/usage, POST /pgw/v1/sdk/report   SDK keys, usage and the
+                           content-free request log (when ``accounts_db`` is set; admin API under /pgw/v1/admin
+                           with ``accounts_admin_api``; see :mod:`pgw.service.accounts`)
+    GET  /platform/...     the developer console (``PGW_PLATFORM_ENABLED=1``; :mod:`pgw.platform`)
 Run with hypercorn for HTTP/2 (``pgw service serve`` / ``python -m pgw.service``).
 
 Lifecycle: on startup the app loads every configured pack (``verify="full"``, linears only) in a
@@ -328,13 +330,26 @@ def create_app(
             acc = Accounts(AccountsStore(s.accounts_db), s, registry=state.registry,
                            authenticator=state.handler.authenticator)
             acc.ca_sha256 = ca_fingerprint(enroll_svc.ca_pem) if enroll_svc.ca_pem else None
+
+            def _lane_hint() -> dict[str, Any] | None:
+                # the SDK uses the TCP+TLS trip lane when enrollment names it (port as clients reach it)
+                lane = state.lane
+                if lane is None or getattr(lane, "transport", None) != "tcp" or getattr(lane, "svc", None) is None:
+                    return None
+                return {"transport": "tcp", "port": int(s.lane_advertised_port or lane.svc.port)}
+
+            acc.lane_hint = _lane_hint
             state.accounts = acc
             state.handler.accounts = acc
             if state.handler.authenticator is not None:
                 state.handler.authenticator.tenant_gate = acc
             add_sdk_routes(app, acc, enroll_svc)
+            from pgw.service.accounts import add_report_route
+
+            add_report_route(app, acc, state.handler)
             if s.accounts_admin_api:
                 add_admin_routes(app, acc)
+    _mount_platform(app, state)
 
     app.add_route("/healthz", healthz, methods=["GET"], include_in_schema=False)
     app.add_route("/readyz", readyz, methods=["GET"], include_in_schema=False)
@@ -345,6 +360,35 @@ def create_app(
         app.add_middleware(_HeaderToTLSExt, header=s.trusted_client_cert_header,
                            pem_header=s.trusted_client_cert_pem_header)
     return app
+
+
+def _mount_platform(app: Any, state: ServiceState) -> None:
+    """The developer console (:mod:`pgw.platform`) at ``/platform`` when ``PGW_PLATFORM_ENABLED=1``: on this
+    service's own accounts (the store behind the admin API), or on another provider's admin API with
+    ``PGW_PLATFORM_ACCOUNTS_URL`` (+ ``_TOKEN_FILE``, ``_CA_FILE``)."""
+    from pgw.platform import PlatformSettings
+
+    ps = PlatformSettings()
+    if not ps.enabled:
+        return
+    from pgw.core.errors import ConfigError
+    from pgw.platform import HttpAccountsClient, mount_platform
+
+    client: Any
+    if ps.accounts_url:
+        if ps.accounts_token_file is None:
+            raise ConfigError("PGW_PLATFORM_ACCOUNTS_URL needs PGW_PLATFORM_ACCOUNTS_TOKEN_FILE (a global admin token)")
+        token = ps.accounts_token_file.read_text(encoding="utf-8").strip()
+        client = HttpAccountsClient(ps.accounts_url, token, sso_org=ps.oidc_org,
+                                    verify=str(ps.accounts_ca_file) if ps.accounts_ca_file else True)
+    elif state.accounts is not None:
+        from pgw.service.platform_accounts import ServiceAccountsClient
+
+        client = ServiceAccountsClient(state.accounts, sso_org=ps.oidc_org)
+    else:
+        raise ConfigError("PGW_PLATFORM_ENABLED needs accounts (PGW_SERVICE_ACCOUNTS_DB) or PGW_PLATFORM_ACCOUNTS_URL")
+    mount_platform(app, client, ps)
+    log.info("developer console mounted at %s", "/" + ps.path_prefix.strip("/"))
 
 
 class _HeaderToTLSExt:

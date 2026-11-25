@@ -123,8 +123,8 @@ def test_every_page_renders_with_security_headers(client: TestClient) -> None:
 
 def test_overview_content(client: TestClient) -> None:
     html = client.get("/platform/").text
-    for s in ("Requests", "Tokens", "Verified results", "Active keys", "Recent requests", "Top keys",
-              "No content stored", "Private<span class=\"pill-sep\" aria-hidden=\"true\">·</span>verified"):
+    for s in ("Requests", "Tokens", "Checked results", "Active keys", "Recent requests", "Top keys",
+              "No content stored", "Private<span class=\"pill-sep\" aria-hidden=\"true\">·</span>checked client-side"):
         assert s in html
 
 

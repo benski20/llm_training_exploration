@@ -7,7 +7,8 @@
     A provider CA with a server certificate for 127.0.0.1 and a client-issuing CA (files).
 ``provider`` (module)
     A real ``pgw service`` process on loopback (CPU; TLS; TCP+TLS trip lane; masked LM head served; pks-v3 maskgen
-    on; enrollment) with the test SDK enrollment route (:mod:`tests.sdk.provider_main`), and a valid SDK key.
+    on; accounts with the admin API, provisioning and the developer console; :mod:`tests.sdk.provider_main`). Keys
+    are created and revoked through the admin API (``Provider.new_key`` / ``revoke``).
 """
 
 from __future__ import annotations
@@ -124,32 +125,42 @@ def free_port() -> int:
 
 @dataclass
 class Provider:
-    """The running provider process and the files the tests drive it with."""
+    """The running provider process and what the tests drive it with."""
 
     url: str
     proc: subprocess.Popen[bytes]
     log: Path
-    keys_file: Path
     tamper_file: Path
     ca_sha256: bytes
     lane_port: int
     pack_dir: Path
+    ca_file: Path
+    admin_token: str
+    root: Path
+    org: str = "acme"
 
-    def new_key(self, tenant: str = "sdk-test") -> str:
-        from pgw.sdk.keys import SdkKey
+    def admin(self, method: str, path: str, **kw: Any) -> Any:
+        """One admin API call (``/pgw/v1/admin``) with the bootstrap admin token; returns the JSON reply."""
+        r = httpx.request(method, f"{self.url}/pgw/v1/admin{path}", verify=str(self.ca_file), timeout=30.0,
+                          trust_env=False, headers={"Authorization": f"Bearer {self.admin_token}"}, **kw)
+        assert r.status_code == 200, (r.status_code, r.text)
+        return r.json()
 
-        k = SdkKey.new(self.url, self.ca_sha256, env="test")
-        keys = json.loads(self.keys_file.read_text()) if self.keys_file.exists() else {}
-        keys[k.key_id_hex] = {"secret_sha256": k.secret_sha256().hex(), "tenant": tenant}
-        self.keys_file.write_text(json.dumps(keys))
-        return k.encode()
+    def new_key(self, name: str = "sdk-test", **limits: Any) -> str:
+        """A fresh SDK key of the test organisation (``env = test``), shown once by the admin API."""
+        return str(self.admin("POST", f"/orgs/{self.org}/keys", json={"name": name, "env": "test", **limits})["key"])
 
     def revoke(self, key: str) -> None:
         from pgw.sdk.keys import parse_key
 
-        keys = json.loads(self.keys_file.read_text())
-        keys[parse_key(key).key_id_hex]["revoked"] = True
-        self.keys_file.write_text(json.dumps(keys))
+        self.admin("POST", f"/orgs/{self.org}/keys/{parse_key(key).key_id_str}/revoke")
+
+    @staticmethod
+    def tenant(key: str) -> str:
+        """The provider's tenant of an SDK key (``sdk.<key id hex>``)."""
+        from pgw.sdk.keys import parse_key
+
+        return "sdk." + parse_key(key).key_id_hex
 
     def tail(self, n: int = 8000) -> str:
         try:
@@ -160,13 +171,15 @@ class Provider:
 
 def start_provider(root: Path, pack_dir: Path, pki: dict[str, Any], *, extra_env: dict[str, str] | None = None,
                    ) -> Provider:
+    import secrets as _secrets
+
     port, lane_port = free_port(), free_port()
     url = f"https://127.0.0.1:{port}"
     secrets = root / "secrets"
     secrets.mkdir(mode=0o700, exist_ok=True)
-    keys_file = root / "sdk-keys.json"
-    keys_file.write_text("{}")
     tamper = root / "tamper.flag"
+    admin_token = "pgwa-test-" + _secrets.token_urlsafe(24)
+    admin_sha = hashlib.sha256(admin_token.encode()).hexdigest()
     env = {k: v for k, v in os.environ.items() if not k.startswith("PGW_")}
     env.update({
         "PYTHONPATH": os.pathsep.join([str(ROOT / "src"), str(ROOT), env.get("PYTHONPATH", "")]),
@@ -185,8 +198,12 @@ def start_provider(root: Path, pack_dir: Path, pki: dict[str, Any], *, extra_env
         "PGW_SERVICE_CLIENT_ISSUING_CA_KEY_FILE": str(pki["client-ca.key"]),
         "PGW_SERVICE_LANE": "tcp", "PGW_SERVICE_LANE_PORT": str(lane_port),
         "PGW_SERVICE_MASKED_HEAD": "also", "PGW_SERVICE_MASKGEN_V3": "true",
-        "PGW_TEST_SDK_KEYS": str(keys_file), "PGW_TEST_TAMPER_FILE": str(tamper),
-        "PGW_TEST_LANE_PORT": str(lane_port),
+        "PGW_SERVICE_ACCOUNTS_DB": str(secrets / "accounts.db"), "PGW_SERVICE_ACCOUNTS_ADMIN_API": "true",
+        "PGW_SERVICE_ACCOUNTS_ADMIN_TOKEN_SHA256": json.dumps([admin_sha]),
+        "PGW_SERVICE_ACCOUNTS_FLUSH_S": "0.5", "PGW_SERVICE_ACCOUNTS_REFRESH_S": "0.5",
+        "PGW_SERVICE_SDK_ENROLLS_PER_KEY_PER_HOUR": "1000",
+        "PGW_SERVICE_PROVISION": "true", "PGW_PLATFORM_ENABLED": "1",
+        "PGW_TEST_TAMPER_FILE": str(tamper),
     })
     (secrets / "tokens").touch(mode=0o600)
     (secrets / "mtls_tenants").touch(mode=0o600)
@@ -196,7 +213,7 @@ def start_provider(root: Path, pack_dir: Path, pki: dict[str, Any], *, extra_env
     proc = subprocess.Popen([sys.executable, "-m", "tests.sdk.provider_main"], env=env, cwd=str(ROOT),
                             stdout=fh, stderr=subprocess.STDOUT)
     fh.close()
-    prov = Provider(url, proc, log, keys_file, tamper, pki["ca_sha256"], lane_port, pack_dir)
+    prov = Provider(url, proc, log, tamper, pki["ca_sha256"], lane_port, pack_dir, pki["ca.pem"], admin_token, root)
     t0 = time.monotonic()
     while time.monotonic() - t0 < 300:
         if proc.poll() is not None:
@@ -204,6 +221,7 @@ def start_provider(root: Path, pack_dir: Path, pki: dict[str, Any], *, extra_env
         try:
             r = httpx.get(f"{url}/readyz", verify=str(pki["ca.pem"]), timeout=5.0, trust_env=False)
             if r.status_code == 200:
+                prov.admin("POST", "/orgs", json={"org_id": prov.org, "name": "Acme"})
                 return prov
         except httpx.HTTPError:
             pass
@@ -225,9 +243,8 @@ def stop_provider(p: Provider) -> None:
 @pytest.fixture(autouse=True, scope="module")
 def _restore_native_env() -> Iterator[None]:
     """Clients set the native-stack switches process-wide (``setdefault``); keep them out of other test modules."""
-    from pgw.sdk.engine import NATIVE_ENV
-
     from pgw.maskstore import store as _store
+    from pgw.sdk.engine import NATIVE_ENV
 
     saved = {k: os.environ.get(k) for k in NATIVE_ENV}
     ahead = _store.TRIP_DECRYPT_AHEAD

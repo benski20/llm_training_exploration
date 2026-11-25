@@ -18,9 +18,9 @@ ever seeing your prompts or the answers. This page is all you need to start.
 
 ## Prerequisites
 
-* A RunPod account of your own, to run a small CPU machine next to our GPU. (Your application can live
-  anywhere; only the process that uses the library must be close to our GPU, because every generated token
-  needs about a hundred network round trips to it.)
+* A RunPod account of your own, to run a small CPU machine in **the same data center as our GPU** (required:
+  every generated token needs about a hundred network round trips to it). Your users can be anywhere; only the
+  process that uses the library must run in that data center.
 * Basic familiarity with a Linux shell and Python.
 
 ## Setup in five minutes
@@ -45,6 +45,7 @@ ever seeing your prompts or the answers. This page is all you need to start.
    ```
 
 3. **Check the machine:** `pgw doctor` must report no `FAIL` and `pgw_fast, pgw_ntt, pgw_pks loaded`.
+   After step 4, `pgw sdk doctor --online` checks your key and reaches our service.
 4. **Set your key** (paste it from the separate message; do not store it in files you share):
 
    ```bash
@@ -69,8 +70,10 @@ ever seeing your prompts or the answers. This page is all you need to start.
    print(f"\n[first token {first - t0:.2f} s, {n} tokens, {(n - 1) / (end - first):.1f} tokens/s]", file=sys.stderr)
    ```
 
-   The very first run prepares the model on this machine and takes a few minutes; later runs start in
-   seconds.
+   The very first run prepares the model on this machine: for the 7B model a one-time download of about
+   6.5 GB of public weights and about 20-30 minutes of CPU on 4 cores (less with more cores; a few minutes for
+   0.5B), all cached. Later runs start in seconds. `pgw sdk status` shows the progress and, afterwards, the
+   prepared models and the last integrity check.
 
 ## What to test
 
@@ -91,7 +94,7 @@ Tool calling, JSON-schema structured output, images and `n > 1` are not availabl
 
 Write to `<SUPPORT CONTACT>` with:
 
-* the output of `pgw doctor --json` and `pip freeze`;
+* the output of `pgw doctor --json`, `pgw sdk status --json` and `pip freeze` (none of them contains your key);
 * the time (with time zone), the model, the error message and code, and the request id if one is shown;
 * what you expected and what happened.
 
@@ -107,8 +110,9 @@ and tell us at once: these are security signals, not ordinary errors.
   is noise. We cannot read it, and neither can anyone who breaks into our servers.
 * Every result we send back is checked by your machine. If we, or anyone between us, returned a wrong
   result, the request fails instead of giving you a wrong answer.
-* We do see that you made a request, for which model, how many tokens, and when. We use this for billing
-  and capacity only.
+* We do see that you made a request, for which model, how many tokens, and when; your library also reports
+  these counts and whether every check passed, without any content, for your organisation's console. We use
+  this for billing, capacity and the console only.
 * Honest status: no external security audit of PGW has been completed yet, and the default mask
   scheme (`pks-v3`) is awaiting an independent cryptographic review. We will tell you as soon as the
   reviews are done. Details: [Security model summary](security.md).

@@ -68,9 +68,11 @@ We store no prompts or answers because we never receive them.
   [security whitepaper](../security/whitepaper.md#5-integrity-the-freivalds-bound) for the bound.
 * **Masks made with our help.** When our service helps generate masks, every row it contributes is
   self-checked in your process with at least 40 bits of soundness against errors we could choose, before
-  any mask is used. The one-time setup material we build for you is derived from seeds your process chose
-  and is verified the same way (or built locally if you prefer).
-* **Model data.** Every downloaded file is checked against the model fingerprint pinned in the protocol.
+  any mask is used. The one-time setup material is built in your process by default (`hint="local"`); with
+  `hint="provider"` we compute its expensive part for seeds your process chose, and your process accepts it
+  only after a check with at least 40 bits of soundness against the public weights.
+* **Model data.** Every downloaded file is checked against the model fingerprint, and the library pins the
+  fingerprint of every supported model itself: a service that serves another build is refused.
 * **Service identity.** The service certificate authority is pinned by your key; a different server is
   refused even if it has a publicly valid certificate.
 

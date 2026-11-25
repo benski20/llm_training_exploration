@@ -44,8 +44,20 @@ from pgw.core.errors import AuthError, ConfigError, ErrorCode, PGWError, RateLim
 from pgw.enroll.sdk_key import SDKKey, SDKKeyError, format_key_id, parse_key_id, secret_digest
 
 __all__ = [
-    "SDK_ENROLL_PATH", "SDK_TENANT_PREFIX", "SDK_USAGE_PATH", "Accounts", "AccountsStore", "KeyRecord",
-    "KeyRejectedError", "add_admin_routes", "add_sdk_routes", "attest_mac", "day_of", "revoke_key_everywhere",
+    "SDK_ENROLL_PATH",
+    "SDK_REPORT_PATH",
+    "SDK_TENANT_PREFIX",
+    "SDK_USAGE_PATH",
+    "Accounts",
+    "AccountsStore",
+    "KeyRecord",
+    "KeyRejectedError",
+    "add_admin_routes",
+    "add_report_route",
+    "add_sdk_routes",
+    "attest_mac",
+    "day_of",
+    "revoke_key_everywhere",
     "tenant_for_key",
 ]
 
@@ -53,6 +65,7 @@ log = logging.getLogger(__name__)
 
 SDK_ENROLL_PATH = "/pgw/v1/sdk/enroll"
 SDK_USAGE_PATH = "/pgw/v1/sdk/usage"
+SDK_REPORT_PATH = "/pgw/v1/sdk/report"
 ADMIN_PREFIX = "/pgw/v1/admin"
 SDK_TENANT_PREFIX = "sdk."
 ADMIN_TOKEN_PREFIX = "pgwa-"  # noqa: S105 - a prefix, not a secret
@@ -84,6 +97,12 @@ CREATE TABLE IF NOT EXISTS usage (
     rows INTEGER NOT NULL DEFAULT 0, tokens REAL NOT NULL DEFAULT 0, maskgen_cols INTEGER NOT NULL DEFAULT 0,
     maskgen_requests INTEGER NOT NULL DEFAULT 0, bytes_in INTEGER NOT NULL DEFAULT 0,
     bytes_out INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (day, key_id, model));
+CREATE TABLE IF NOT EXISTS requests (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, ts REAL NOT NULL, received_at REAL NOT NULL, key_id TEXT NOT NULL,
+    org_id TEXT NOT NULL, model TEXT NOT NULL, status TEXT NOT NULL, error_code TEXT, prompt_tokens INTEGER NOT NULL,
+    completion_tokens INTEGER NOT NULL, latency_ms REAL, ttft_ms REAL, stream INTEGER NOT NULL,
+    checks_ok INTEGER NOT NULL);
+CREATE INDEX IF NOT EXISTS requests_org ON requests(org_id, id);
 CREATE TABLE IF NOT EXISTS audit (
     id INTEGER PRIMARY KEY AUTOINCREMENT, ts REAL NOT NULL, event TEXT NOT NULL, org_id TEXT, key_id TEXT,
     actor TEXT, client TEXT, detail TEXT);
@@ -93,7 +112,12 @@ CREATE TABLE IF NOT EXISTS admin_tokens (
     revoked_at REAL);
 """
 _SCHEMA_VERSION = "1"
-_USAGE_FIELDS = ("trips", "rows", "tokens", "maskgen_cols", "maskgen_requests", "bytes_in", "bytes_out")
+_USAGE_FIELDS = ("trips", "rows", "tokens", "maskgen_cols", "maskgen_requests", "bytes_in", "bytes_out",
+                 "requests", "prompt_tokens", "completion_tokens", "errors", "checks_ok")
+#: usage columns added after schema 1 (client-reported request counts; added to older databases at open)
+_REPORT_FIELDS = ("requests", "prompt_tokens", "completion_tokens", "errors", "checks_ok")
+_REPORT_MAX_ITEMS = 256
+_ERROR_CODE_RE = re.compile(r"^[a-z0-9_.-]{1,64}$")
 _LIMIT_FIELDS = ("daily_token_quota", "rows_per_s", "burst_rows", "max_installations")
 
 
@@ -236,6 +260,10 @@ class AccountsStore:
                 if str(mode).lower() != "wal":  # pragma: no cover - e.g. a network filesystem
                     log.warning("accounts database %s: journal_mode is %s, not WAL", self.path, mode)
                 c.executescript(_SCHEMA)
+                have = {r[1] for r in c.execute("PRAGMA table_info(usage)")}
+                for f in _REPORT_FIELDS:  # schema 1 databases: the client-reported request counters
+                    if f not in have:
+                        c.execute(f"ALTER TABLE usage ADD COLUMN {f} INTEGER NOT NULL DEFAULT 0")
                 c.execute("INSERT OR IGNORE INTO meta (k, v) VALUES ('schema', ?)", (_SCHEMA_VERSION,))
             except sqlite3.Error as exc:
                 raise ConfigError(f"cannot open the accounts database {self.path}: {exc}") from exc
@@ -537,7 +565,54 @@ class AccountsStore:
         for r in self._conn().execute(q + " ORDER BY u.day DESC, u.key_id, u.model", args):
             row = dict(r)
             row["key_id"] = "sk_" + row["key_id"]
+            if row.get("requests"):
+                # client-reported (the provider meters trips and token positions itself; the request count, the
+                # input/output split and the integrity verdict come from the client library's reports)
+                row["verified"] = row.pop("checks_ok")
+                row["reported_by"] = "client"
+            else:
+                for f in _REPORT_FIELDS:
+                    row.pop(f, None)
             out.append(row)
+        return out
+
+    # ---- request log (content-free, reported by the client library) ----------------------------------
+    def add_requests(self, rows: list[tuple[Any, ...]], *, keep_days: int) -> None:
+        """Append request records ``(ts, received_at, key_hex, org_id, model, status, error_code, prompt_tokens,
+        completion_tokens, latency_ms, ttft_ms, stream, checks_ok)`` and drop records older than ``keep_days``."""
+        with self._tx() as c:
+            c.executemany("INSERT INTO requests (ts, received_at, key_id, org_id, model, status, error_code, "
+                          "prompt_tokens, completion_tokens, latency_ms, ttft_ms, stream, checks_ok) VALUES "
+                          "(?,?,?,?,?,?,?,?,?,?,?,?,?)", rows)
+            c.execute("DELETE FROM requests WHERE received_at < ?", (self.clock() - keep_days * 86400.0,))
+
+    def requests(self, org_id: str, *, limit: int = 50, before: int | None = None, key_id: str | None = None,
+                 model: str | None = None, status: str | None = None) -> list[dict[str, Any]]:
+        """Request records of an organisation, newest first (metadata only: there is no content to return)."""
+        q = "SELECT * FROM requests WHERE org_id = ?"
+        args: list[Any] = [org_id]
+        if before is not None:
+            q += " AND id < ?"
+            args.append(int(before))
+        if key_id:
+            q += " AND key_id = ?"
+            args.append(_key_hex(key_id))
+        if model:
+            q += " AND model = ?"
+            args.append(model)
+        if status in ("ok", "error"):
+            q += " AND status = ?"
+            args.append(status)
+        q += " ORDER BY id DESC LIMIT ?"
+        args.append(max(1, min(int(limit), 500)))
+        out = []
+        for r in self._conn().execute(q, args):
+            d = dict(r)
+            out.append({"id": str(d["id"]), "ts": d["ts"], "key_id": "sk_" + d["key_id"], "model": d["model"],
+                        "status": d["status"], "error_code": d["error_code"], "prompt_tokens": d["prompt_tokens"],
+                        "completion_tokens": d["completion_tokens"], "latency_ms": d["latency_ms"],
+                        "ttft_ms": d["ttft_ms"], "stream": bool(d["stream"]), "private": True,
+                        "verified": bool(d["checks_ok"]), "verification": "client-reported"})
         return out
 
     def day_totals(self, day: str) -> dict[str, tuple[float, int]]:
@@ -674,6 +749,11 @@ class Accounts:
         self.clock = clock
         self.enroll_service: Any = None  # pgw.enroll.service.EnrollmentService, set by add_sdk_routes
         self.ca_sha256: bytes | None = None
+        #: ``() -> {"transport": "tcp", "port": int} | None``: the TCP+TLS trip lane clients should use (the
+        #: advertised port when the lane is published through a port mapping); set by the app
+        self.lane_hint: Callable[[], dict[str, Any] | None] | None = None
+        #: content-free request log and session reports (``pgw.service.requestlog``); set by the app
+        self.request_log: Any = None
         self._lock = threading.RLock()
         self._enroll_lock = threading.Lock()
         self._keys: dict[str, _KeyState] = {}  # tenant -> state
@@ -781,6 +861,13 @@ class Accounts:
         out = _ModelInfo(str(m.name), ref, max(1, kinds.count(ref)))
         self._models[fingerprint] = out
         return out
+
+    def _masked_head_bases(self) -> set[str]:
+        """Base fingerprints whose masked-LM-head pack is served too (``masked_head = also``)."""
+        try:
+            return {str(m.base_fingerprint) for m in self.registry.models() if getattr(m, "base_fingerprint", None)}
+        except Exception:
+            return set()
 
     # ---- gate (authenticator) -----------------------------------------------------------------------
     def check(self, tenant: str) -> None:
@@ -934,6 +1021,48 @@ class Accounts:
                 self._lane_models.pop(t, None)
         return dead
 
+    # ---- request reports (content-free, from the client library) -----------------------------------
+    def record_report(self, tenant: str, body: Any) -> dict[str, Any]:
+        """``POST /pgw/v1/sdk/report`` (blocking): the client library's records of finished requests.
+
+        Each item is parsed by allow-list (``ts``, ``model``, ``status``, ``error_code``, ``prompt_tokens``,
+        ``completion_tokens``, ``latency_ms``, ``ttft_ms``, ``stream``, ``checks_ok``); anything else is dropped,
+        so no content can be stored. The counts add to the key's usage (``requests``, ``prompt_tokens``,
+        ``completion_tokens``, ``errors``, ``checks_ok``) and, unless ``accounts_request_log_days`` is 0, to the
+        request log. The provider already sees the same counts and timing in the masked traffic.
+
+        Raises:
+            AuthError: not an active SDK tenant.  PGWError(protocol): malformed body.
+        """
+        if not tenant.startswith(SDK_TENANT_PREFIX):
+            raise PGWError("reports are accepted from SDK installations only", code=ErrorCode.PERMISSION_DENIED)
+        st = self._keys.get(tenant)
+        now = self.clock()
+        if st is None or not st.active(now):
+            raise AuthError("credentials revoked or expired")
+        items = body.get("requests") if isinstance(body, dict) else None
+        if not isinstance(items, list) or len(items) > _REPORT_MAX_ITEMS:
+            raise PGWError(f"requests must be a list of at most {_REPORT_MAX_ITEMS} records", code=ErrorCode.PROTOCOL)
+        rows: list[tuple[Any, ...]] = []
+        for it in items:
+            r = _parse_report(it, now)
+            if r is None:
+                continue
+            if st.allowed is not None and r["model"] not in st.allowed:
+                continue
+            day = day_of(r["ts"])
+            with self._lock:
+                self._pending.add((day, st.rec.key_hex, r["model"]), requests=1, prompt_tokens=r["prompt_tokens"],
+                                  completion_tokens=r["completion_tokens"], errors=int(r["status"] == "error"),
+                                  checks_ok=int(r["checks_ok"]))
+            rows.append((r["ts"], now, st.rec.key_hex, st.rec.org_id, r["model"], r["status"], r["error_code"],
+                         r["prompt_tokens"], r["completion_tokens"], r["latency_ms"], r["ttft_ms"], int(r["stream"]),
+                         int(r["checks_ok"])))
+        keep = int(getattr(self.settings, "accounts_request_log_days", 30))
+        if rows and keep > 0:
+            self.store.add_requests(rows, keep_days=keep)
+        return {"accepted": len(rows)}
+
     # ---- keys (runtime side) ------------------------------------------------------------------------
     def revoke_key(self, key_id: str, *, actor: str | None = None) -> dict[str, Any]:
         """Revoke a key everywhere and refuse its tenant in this process at once."""
@@ -1054,7 +1183,12 @@ class Accounts:
                          detail={"installation_id": inst, "name": name, "token_id": trec.token_id,
                                  "cert_serial": f"{serial:x}" if serial is not None else None,
                                  "models": [m["name"] for m in models]})
-        out["models"] = models
+        heads = self._masked_head_bases()
+        out["models"] = [{**m, "masked_head": m["fingerprint"] in heads} for m in models]
+        out["lane"] = None
+        if self.lane_hint is not None:
+            with contextlib.suppress(Exception):
+                out["lane"] = self.lane_hint()
         out["sdk"] = {"key_id": rec.key_id, "org_id": rec.org_id, "installation_id": inst, "env": rec.env,
                       "models_scope": list(rec.models), "limits": self.limits_view(rec, org),
                       "expires_at": rec.expires_at}
@@ -1078,6 +1212,31 @@ class Accounts:
                 "limits": self.limits_view(rec, org),
                 "today": {"tokens": round(self._today_tokens(rec.key_hex), 3), "trips": tok_trips[1]},
                 "usage": rows}
+
+
+def _parse_report(it: Any, now: float) -> dict[str, Any] | None:
+    """One request record by allow-list, or ``None`` when it is malformed (dropped, never stored)."""
+    if not isinstance(it, dict):
+        return None
+
+    def num(k: str, lo: float, hi: float) -> float | None:
+        v = it.get(k)
+        if isinstance(v, bool) or not isinstance(v, int | float) or not lo <= float(v) <= hi:
+            return None
+        return float(v)
+
+    ts = num("ts", now - 7 * 86400.0, now + 300.0)
+    model = it.get("model")
+    pt, ct = num("prompt_tokens", 0, 10_000_000), num("completion_tokens", 0, 10_000_000)
+    if ts is None or pt is None or ct is None or not isinstance(model, str) or not _MODEL_RE.fullmatch(model):
+        return None
+    status = "error" if it.get("status") == "error" else "ok"
+    code = it.get("error_code")
+    return {"ts": ts, "model": model, "status": status,
+            "error_code": code if isinstance(code, str) and _ERROR_CODE_RE.fullmatch(code) else None,
+            "prompt_tokens": int(pt), "completion_tokens": int(ct),
+            "latency_ms": num("latency_ms", 0, 1e8), "ttft_ms": num("ttft_ms", 0, 1e8),
+            "stream": it.get("stream") is True, "checks_ok": it.get("checks_ok") is True and status == "ok"}
 
 
 # -------------------------------------------------------------------------------------------------- routes
@@ -1146,6 +1305,22 @@ def add_sdk_routes(app: Any, accounts: Accounts, enroll_service: Any) -> None:
 
     app.add_route(SDK_ENROLL_PATH, _guard(post_enroll), methods=["POST"], include_in_schema=False)
     app.add_route(SDK_USAGE_PATH, _guard(get_usage), methods=["GET"], include_in_schema=False)
+
+
+def add_report_route(app: Any, accounts: Accounts, handler: Any) -> None:
+    """``POST /pgw/v1/sdk/report``: content-free request records from an enrolled SDK installation (authenticated
+    like ``/pgw/v1/compute``: its service token and/or client certificate)."""
+    import asyncio
+
+    from pgw.wire.server import _client_cert_subject, _maybe_await
+
+    async def report(request: Any) -> Any:
+        ident = await _maybe_await(handler.authenticate(request.headers.get("authorization"),
+                                                        _client_cert_subject(request.scope)))
+        body = await _read_json(request)
+        return await asyncio.to_thread(accounts.record_report, str(ident.tenant_id), body)
+
+    app.add_route(SDK_REPORT_PATH, _guard(report), methods=["POST"], include_in_schema=False)
 
 
 def add_admin_routes(app: Any, accounts: Accounts) -> None:
@@ -1283,6 +1458,26 @@ def add_admin_routes(app: Any, accounts: Accounts) -> None:
         return {"events": await run(lambda: store.audit_events(oid, limit=int(lim),
                                                                before=int(before) if before else None))}
 
+    async def requests_(request: Any) -> Any:
+        who = await run(lambda: admin(request))
+        oid = request.path_params["org"]
+        scoped(who, oid, request)
+        q = request.query_params
+        lim, before = q.get("limit", "50"), q.get("before")
+        if not lim.isdigit() or (before is not None and before != "" and not before.isdigit()):
+            raise PGWError("limit and before must be integers", code=ErrorCode.PROTOCOL)
+        recs = await run(lambda: store.requests(oid, limit=int(lim), before=int(before) if before else None,
+                                                key_id=q.get("key_id") or None, model=q.get("model") or None,
+                                                status=q.get("status") or None))
+        nxt = recs[-1]["id"] if len(recs) >= max(1, min(int(lim), 500)) else None
+        return {"requests": recs, "next_before": nxt}
+
+    async def models_(request: Any) -> Any:
+        who = await run(lambda: admin(request))
+        oid = request.path_params["org"]
+        scoped(who, oid, request)
+        return {"models": served_models(accounts)}
+
     async def attest(request: Any) -> Any:
         b = await _read_json(request)
         nonce = b.get("nonce") if isinstance(b, dict) else None
@@ -1300,6 +1495,23 @@ def add_admin_routes(app: Any, accounts: Accounts) -> None:
     app.add_route(p + "/orgs/{org}/installations", _guard(installations), methods=["GET"], include_in_schema=False)
     app.add_route(p + "/orgs/{org}/usage", _guard(usage), methods=["GET"], include_in_schema=False)
     app.add_route(p + "/orgs/{org}/audit", _guard(audit), methods=["GET"], include_in_schema=False)
+    app.add_route(p + "/orgs/{org}/requests", _guard(requests_), methods=["GET"], include_in_schema=False)
+    app.add_route(p + "/orgs/{org}/models", _guard(models_), methods=["GET"], include_in_schema=False)
+
+
+def served_models(accounts: Accounts) -> list[dict[str, Any]]:
+    """The console's model catalogue: the models this service serves (one entry per base pack)."""
+    out: dict[str, dict[str, Any]] = {}
+    reg = accounts.registry
+    for m in (reg.models() if reg is not None else []):
+        name = str(m.name)
+        if name in out:
+            continue
+        arch = getattr(getattr(m, "manifest", None), "arch", None)
+        out[name] = {"id": name, "name": name, "status": "available",
+                     "context_length": getattr(arch, "max_position_embeddings", None),
+                     "description": "Qwen2.5 Instruct, int8 linears (masked on the provider)"}
+    return list(out.values())
 
 
 def format_key_id_hex(key_hex: str) -> str:

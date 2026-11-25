@@ -137,13 +137,14 @@ def overview(ctx: Ctx, *, rng: str, usage: Sequence[UsageRow], prev: Sequence[Us
         segmented([(r, ctx.url("/", range=r), r == rng) for r in RANGES], "Time range"))
 
     verified_rate = cur.verified_rate
-    verified_head = f"{verified_rate} verified" if cur.verified is not None else "Verified in your process"
+    verified_head = (f"{verified_rate} checked client-side" if cur.verified is not None
+                     else "Checked in your process")
     posture = (
         '<section class="posture-strip" aria-label="Privacy posture">'
         f'<div class="posture-item">{icon("lock", 14)}<span><strong>Masked in your process</strong>'
         '<span class="muted"> Our GPUs only see masked data</span></span></div>'
         f'<div class="posture-item">{icon("shield", 14)}<span><strong>{e(verified_head)}</strong>'
-        '<span class="muted"> Every result is integrity-checked</span></span></div>'
+        '<span class="muted"> Every result is integrity-checked by your client</span></span></div>'
         f'<div class="posture-item">{icon("check", 14)}<span><strong>No content stored</strong>'
         '<span class="muted"> Only metadata is logged</span></span></div>'
         '</section>'
@@ -155,9 +156,10 @@ def overview(ctx: Ctx, *, rng: str, usage: Sequence[UsageRow], prev: Sequence[Us
         + stat("Tokens", compact(cur.tokens),
                f'{compact(cur.prompt)} in · {compact(cur.completion)} out' if cur.prompt is not None
                else f'{integer(cur.tokens)} {delta(cur.tokens, before.tokens)}')
-        + (stat("Verified results", e(verified_rate), f'{integer(cur.verified)} of {integer(cur.requests or 0)} requests',
+        + (stat("Checked results", e(verified_rate),
+                f'{integer(cur.verified)} of {integer(cur.requests or 0)} requests, reported by your client',
                 tone="ok" if cur.requests else "")
-           if cur.verified is not None else stat("Verified results", "–", "Checked in your process, per result"))
+           if cur.verified is not None else stat("Checked results", "–", "Checked in your process, per result"))
         + stat("Active keys", str(len(active)), f"{len(keys) - len(active)} revoked" if len(keys) != len(active)
                else "none revoked")
         + "</div>"
@@ -333,9 +335,9 @@ def usage_page(ctx: Ctx, *, rng: str, by: str, usage: Sequence[UsageRow], keys: 
         + stat("Requests", compact(t.requests) if metered_requests else "–",
                integer(t.requests) if t.requests is not None else "Counted by the client library")
         + tok_stats
-        + (stat("Verified results", e(t.verified_rate), f'{integer(t.errors)} failed requests',
+        + (stat("Checked results", e(t.verified_rate), f'{integer(t.errors)} failed requests (client-reported)',
                 tone="ok" if t.requests else "")
-           if t.verified is not None else stat("Verified results", "–", "Checked in your process, per result"))
+           if t.verified is not None else stat("Checked results", "–", "Checked in your process, per result"))
         + "</div>"
     )
     what = "Requests" if metered_requests else "Tokens"
@@ -388,7 +390,7 @@ def usage_page(ctx: Ctx, *, rng: str, by: str, usage: Sequence[UsageRow], keys: 
         rows.append(f'<tr><td>{label}</td>{"".join(cells)}{share}</tr>')
     cols = [first, ("Requests", "al-right")]
     cols += [("Input tokens", "al-right"), ("Output tokens", "al-right")] if split else [("Tokens", "al-right")]
-    cols += [("Verified", "al-right hide-sm")] + ([] if by == "day" else [("Share", "hide-sm")])
+    cols += [("Checked", "al-right hide-sm")] + ([] if by == "day" else [("Share", "hide-sm")])
     if rows:
         tbl = table(cols, rows, caption="Usage breakdown")
     else:

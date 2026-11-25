@@ -17,8 +17,13 @@ First release of the client library for pilot customers.
 * Prebuilt wheels with native extensions (`pgw_fast`, `pgw_ntt`, `pgw_pks`) for Linux x86_64 and aarch64
   (manylinux 2.28) and macOS arm64, one wheel per platform for CPython 3.11 to 3.13 (stable ABI); a
   pure-Python fallback when no wheel matches.
-* `pgw doctor` reports which native extensions are loaded.
+* `pgw doctor` reports which native extensions are loaded; `pgw sdk status` and `pgw sdk doctor` show the
+  enrolled keys, prepared models, mask stock and last integrity check (no secrets).
+* Fingerprint pins for every supported model in the library; the one-time mask setup is built locally by
+  default (`hint="local"`; `hint="provider"` is opt-in). Per-request `timeout` in `create()`.
+* Content-free request reports (`usage_reports`, on by default) for the organisation's console.
 * Distribution name `pgw-sdk` (import name `pgw`); proprietary license; type information included (`py.typed`).
 
 Known limitations: no tool calling, structured output, `n > 1` or image inputs; request metadata (model,
-token counts, timing) is visible to the service; no external security audit has been completed yet.
+token counts, timing) is visible to the service; no external security audit has been completed yet; the process
+using the library must run in the same data center as the GPU service.

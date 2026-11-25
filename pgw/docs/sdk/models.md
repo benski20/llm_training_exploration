@@ -33,12 +33,21 @@ Your process needs CPU for the parts of the model that run locally and for backg
 memory for the model's small plaintext parts and working state, and disk for the cache. The figures
 below are planning estimates for a pilot, not measurements; the pilot will confirm them.
 
-| model | vCPUs (estimate) | memory (estimate) | free disk for the cache (estimate) |
-|---|---|---|---|
-| `qwen2.5-0.5b-instruct` | 4 | 8 GB | 5 GB |
-| `qwen2.5-1.5b-instruct` | 4-8 | 8 GB | 8 GB |
-| `qwen2.5-3b-instruct` | 8 | 16 GB | 10 GB |
-| `qwen2.5-7b-instruct` | 16 | 32 GB | 20 GB |
+| model | vCPUs (estimate) | memory (estimate) | free disk for the cache (estimate) | first-use download |
+|---|---|---|---|---|
+| `qwen2.5-0.5b-instruct` | 4 | 8 GB | 10 GB | about 1 GB |
+| `qwen2.5-1.5b-instruct` | 4-8 | 8 GB | 13 GB | about 3 GB |
+| `qwen2.5-3b-instruct` | 8 | 16 GB | 17 GB | about 6 GB |
+| `qwen2.5-7b-instruct` | 16 | 32 GB | 26 GB | about 11 GB (6.5 GB of it the int8 weights) |
+
+The disk figures include the mask stock budget (`mask_store_gb`, 8 GB per model by default), the public int8
+weights kept for background mask generation, and the one-time mask setup (about 2.4 GB at 7B). The mask setup is
+built on your machine on first use (`hint="local"`): about 20-30 minutes of CPU at 7B on 4 cores, once.
+
+Fingerprints: the library pins every model above. 0.5B and 1.5B are pinned by their pack fingerprint; 3B and 7B
+by the public checkpoint's commit, and on first use the library re-derives the model from that public checkpoint
+to check our service's fingerprint (a one-time download of the checkpoint from Hugging Face: about 6 GB at 3B,
+15 GB at 7B, in place of the int8 weights from us), until a later release bakes their fingerprints in too.
 
 More vCPUs raise tokens per second until the round trips to our GPU dominate. For reference, in our lab
 (measured, 2026-11-23) a CPU-only gateway with 48 cores placed next to an H100 decoded Qwen2.5-7B at about

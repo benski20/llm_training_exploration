@@ -4,8 +4,10 @@
     export PGW_API_KEY=pgw_...        # the key you received
     python examples/chat.py
 
-The first run enrolls this machine and prepares the model in the local cache (a few minutes for 7B);
-later runs start in seconds. Prompts and answers never leave this process in readable form.
+Run it in the same data center as the PGW GPU service. The first run enrolls this machine and prepares the model
+in the local cache (once: for 7B about 6.5 GB of public weights to download and about 20-30 min of CPU on 4 cores;
+`pgw sdk status` shows the progress); later runs start in seconds. Prompts and answers never leave this process in
+readable form.
 """
 
 from __future__ import annotations

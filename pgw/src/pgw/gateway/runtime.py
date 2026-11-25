@@ -559,11 +559,22 @@ class ModelRuntime:
 
     # ---- lifecycle ----------------------------------------------------------------------------
     def _open_pack(self) -> Any:
-        from pgw.modelpack import ModelPack
-
         # "full": hash plain tensors, tokenizer files and every linear (incl. scales/biases) against
         # the manifest, and the manifest against the pinned fingerprint. Packs may come from images
         # the compute operator publishes; a swapped tokenizer/template must not go unnoticed.
+        from pathlib import Path
+
+        from pgw.modelpack import ModelPack
+        from pgw.provision.pack import LINEAR_META_FILE
+
+        if self.config.mode == "masked" and (Path(self.config.pack_path) / LINEAR_META_FILE).is_file():
+            # a weight-free gateway pack (pgw.provision): plain tensors, scales/biases and tokenizer only, every
+            # byte checked against the same fingerprint-bound manifest; the masked gateway never reads W8
+            from pgw.provision.pack import GatewayPack
+
+            return GatewayPack.open_gateway(
+                self.config.pack_path, expected_fingerprint=self.config.fingerprint,
+                verify="full" if self.settings.pack_verify == "full" else "fingerprint")
         return ModelPack.open(
             self.config.pack_path, verify=self.settings.pack_verify, expected_fingerprint=self.config.fingerprint
         )

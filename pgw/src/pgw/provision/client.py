@@ -43,7 +43,15 @@ import numpy as np
 from pgw.core.errors import ConfigError, FingerprintMismatchError, IntegrityError, ModelNotFoundError
 from pgw.core.fingerprint import validate_fingerprint
 from pgw.modelpack.manifest import MANIFEST_FILE, TOKENIZER_DIR, Manifest
-from pgw.provision.pack import GatewayPack, PackObject, gateway_objects, weight_objects, write_safetensors_layout
+from pgw.provision.pack import (
+    LINEAR_META_FILE,
+    GatewayPack,
+    PackObject,
+    _tensor_obj,
+    gateway_objects,
+    weight_objects,
+    write_safetensors_layout,
+)
 
 __all__ = ["ProvisionedModel", "provision", "stream_weights"]
 
@@ -75,6 +83,8 @@ class ProvisionedModel:
     masked_head: bool
     sizes: dict[str, int] = field(default_factory=dict)
     timings: dict[str, float] = field(default_factory=dict)
+    #: full pack (int8 weights included) for the background mask factory (``factory_pack=True``), else ``None``
+    factory_pack_dir: Path | None = None
 
     def open_pack(self, verify: Literal["full", "fingerprint"] = "full") -> GatewayPack:
         """The weight-free gateway pack (``verify="full"`` re-hashes every byte against the manifest)."""
@@ -392,6 +402,105 @@ def _ensure_norm_sidecar(gpack: GatewayPack, weights: _Weights) -> None:
 
 
 # ------------------------------------------------------------------------------------------------
+# Factory pack: the full pack (int8 weights included) for the client's background mask factory
+# ------------------------------------------------------------------------------------------------
+
+FACTORY_PACK_DIR = "factory-pack"
+
+
+def _install_factory_pack(weights: _Weights, gpack: GatewayPack, man: Manifest, mdir: Path,
+                          progress: Progress) -> Path:
+    """``mdir/factory-pack``: a full :class:`pgw.modelpack.ModelPack` with the same fingerprint as the gateway pack.
+
+    The in-process gateway never reads ``W8``; the client's background mask factory does (its private check vectors
+    ``v W8`` once per process, and the pks-v3 hint when it is built locally). ``W8`` comes from ``weights`` (each
+    linear checked against the fingerprint-bound manifest), scales and biases and the plain tensors from the verified
+    gateway pack (plain-only files and the tokenizer are hard links where the file system allows). The directory is
+    built under a temporary name, verified in full against the pinned fingerprint and renamed."""
+    from pgw.modelpack.loader import ModelPack
+    from pgw.modelpack.st_io import read_safetensors_header
+
+    part = mdir / (FACTORY_PACK_DIR + ".partial")
+    shutil.rmtree(part, ignore_errors=True)
+    part.mkdir(parents=True, mode=0o700)
+
+    def link_or_copy(src: Path, dst: Path) -> None:
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            os.link(src, dst)
+        except OSError:
+            shutil.copyfile(src, dst)
+
+    link_or_copy(gpack.root / MANIFEST_FILE, part / MANIFEST_FILE)
+    for t in man.tokenizer:
+        link_or_copy(gpack.root / TOKENIZER_DIR / t.file, part / TOKENIZER_DIR / t.file)
+    weight_of = {e.weight: e.id for e in man.linears}
+    lin_files = set(man.linear_files())
+    for f in man.plain_files():
+        if f not in lin_files:
+            link_or_copy(gpack.root / f, part / f)
+    headers: dict[str, Any] = {}
+
+    def gateway_bytes(name: str) -> bytes:
+        src = man.tensors[name].file
+        src = LINEAR_META_FILE if (src in lin_files and name not in man.plain_tensor_names()) else src
+        if src not in headers:
+            headers[src], _ = read_safetensors_header(gpack.root / src)
+        he = headers[src][name]
+        with open(gpack.root / src, "rb") as fh:
+            fh.seek(he.begin)
+            return fh.read(he.nbytes)
+
+    total = sum(o.size for o in weight_objects(man))
+    done = 0
+    for f in sorted(lin_files):
+        names = sorted(n for n, t in man.tensors.items() if t.file == f)
+        objs = [_tensor_obj(man, n, f) for n in names]
+        offs = write_safetensors_layout(part / f, objs)
+        fd = os.open(part / f, os.O_RDWR)
+        try:
+            for o in objs:
+                if o.name in weight_of:
+                    data = weights.get(weight_of[o.name]).tobytes()
+                    done += len(data)
+                    _emit(progress, "weights", done, total, item=weight_of[o.name])
+                else:
+                    data = gateway_bytes(o.name)
+                if len(data) != o.size:
+                    raise IntegrityError(f"{o.name}: wrong size for the factory pack")
+                os.pwrite(fd, data, offs[o.id][0])
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+    try:
+        ModelPack.open(part, verify="full", expected_fingerprint=man.fingerprint).close()
+    except Exception:
+        shutil.rmtree(part, ignore_errors=True)
+        raise
+    final = mdir / FACTORY_PACK_DIR
+    if final.exists():
+        shutil.rmtree(final)
+    part.rename(final)
+    return final
+
+
+def _open_factory_pack(mdir: Path, fp: str) -> Any:
+    """The cached factory pack if it is complete and has fingerprint ``fp`` (manifest check only; the factory
+    verifies every byte when it opens it), else ``None``."""
+    from pgw.modelpack.loader import ModelPack
+
+    d = mdir / FACTORY_PACK_DIR
+    if not d.is_dir():
+        return None
+    try:
+        return ModelPack.open(d, verify="fingerprint", expected_fingerprint=fp)
+    except Exception as exc:
+        log.warning("cached factory pack for %s is unusable (%s); rebuilding", fp[:12], exc)
+        shutil.rmtree(d, ignore_errors=True)
+        return None
+
+
+# ------------------------------------------------------------------------------------------------
 # Hint
 # ------------------------------------------------------------------------------------------------
 
@@ -597,8 +706,12 @@ def provision(model: str, *, session: Any = None, cache_dir: str | Path, progres
               hint: HintMode = "provider", expected_fingerprint: str | None = None, masked_head: bool = True,
               source: Literal["provider", "hf"] = "provider", hf_repo: str | None = None,
               hf_revision: str | None = None, hf_name: str | None = None, hf_plain_dtype: str | None = None,
-              keep_full_pack: bool = False) -> ProvisionedModel:
-    """Provision ``model`` (name or fingerprint) under ``cache_dir`` (see the module docstring)."""
+              keep_full_pack: bool = False, factory_pack: bool = False) -> ProvisionedModel:
+    """Provision ``model`` (name or fingerprint) under ``cache_dir`` (see the module docstring).
+
+    ``factory_pack=True`` also keeps a full pack with the int8 weights (``factory_pack_dir``) for the client's
+    background mask factory: built from the provider's fingerprint-checked ``W8`` (or kept from ``source="hf"``),
+    once; the hint check and a local hint build then read ``W8`` from it instead of streaming it again."""
     if hint not in ("provider", "local", "none"):
         raise ConfigError(f"hint must be 'provider', 'local' or 'none', not {hint!r}")
     if source not in ("provider", "hf"):
@@ -689,6 +802,31 @@ def provision(model: str, *, session: Any = None, cache_dir: str | Path, progres
 
         wsrc: _Weights | None = None
 
+        # ---- factory pack (full pack for the client's background mask factory)
+        fpack_dir: Path | None = None
+        streamed_w = 0
+        if factory_pack:
+            t2 = time.perf_counter()
+            fpk = _open_factory_pack(mdir, fp)
+            if fpk is None:
+                if full is not None:  # source="hf": the verified full pack is the factory pack
+                    full.close()
+                    dst = mdir / FACTORY_PACK_DIR
+                    shutil.rmtree(dst, ignore_errors=True)
+                    Path(full.root).rename(dst)
+                    full = None
+                else:
+                    wsrc = wsrc or weights()
+                    _install_factory_pack(wsrc, gpack, man, mdir, progress)
+                fpk = _open_factory_pack(mdir, fp)
+                if fpk is None:
+                    raise IntegrityError("the factory pack could not be built")
+            full = full or fpk
+            streamed_w = wsrc.bytes if wsrc is not None and wsrc.remote is not None else 0
+            wsrc = _Weights(man, gpack, full=full)  # W8 from disk from here on (checked again per linear)
+            fpack_dir = mdir / FACTORY_PACK_DIR
+            timings["factory_pack"] = time.perf_counter() - t2
+
         # ---- hint
         t1 = time.perf_counter()
         store: Any = None
@@ -710,7 +848,9 @@ def provision(model: str, *, session: Any = None, cache_dir: str | Path, progres
         if any(e.row_norm_sq_max is None for e in man.linears):  # older packs: norms from the checked weights
             wsrc = wsrc or weights()
             _ensure_norm_sidecar(gpack, wsrc)
-        if full is not None and not keep_full_pack:
+        if full is not None and fpack_dir is not None and Path(full.root) == fpack_dir:
+            full.close()  # the factory pack stays
+        elif full is not None and not keep_full_pack:
             full.close()
             shutil.rmtree(full.root, ignore_errors=True)
         gpack.close()
@@ -718,7 +858,7 @@ def provision(model: str, *, session: Any = None, cache_dir: str | Path, progres
         "artifacts": sum(p.stat().st_size for p in pack_dir.rglob("*") if p.is_file()),
         "hint": int(store.nbytes) if store is not None else 0,
         "downloaded": int((remote.bytes if remote is not None else 0) + stats["h_bytes"]),
-        "weights_streamed": int(wsrc.bytes) if wsrc is not None else 0,
+        "weights_streamed": int(streamed_w + (wsrc.bytes if wsrc is not None and wsrc.remote is not None else 0)),
         "h_streamed": int(stats["h_bytes"]),
     }
     timings["total"] = time.perf_counter() - t_start
@@ -728,5 +868,5 @@ def provision(model: str, *, session: Any = None, cache_dir: str | Path, progres
     return ProvisionedModel(name=man.name, fingerprint=fp, factory_fingerprint=ffp, pack_dir=pack_dir,
                             tokenizer_dir=pack_dir / TOKENIZER_DIR, manifest=man, hint_root=hint_root,
                             hint_store=store, hint_key_file=key_file, hint_source=hint_source,
-                            masked_head=masked_head, sizes=sizes, timings=timings)
+                            masked_head=masked_head, sizes=sizes, timings=timings, factory_pack_dir=fpack_dir)
 

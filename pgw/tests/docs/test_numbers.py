@@ -200,5 +200,7 @@ def test_docs_dir_has_no_stray_files() -> None:
     allowed = {".md", ".json", ".py"}
     for p in DOCS.rglob("*"):
         if p.is_file() and "__pycache__" not in p.parts:
-            assert p.suffix in allowed, f"unexpected file in docs/: {p.relative_to(DOCS)}"
+            # the design system's reference screenshots (docs/design/README.md) are the only binary files
+            shot = p.suffix == ".png" and p.relative_to(DOCS).parts[:2] == ("design", "screenshots")
+            assert p.suffix in allowed or shot, f"unexpected file in docs/: {p.relative_to(DOCS)}"
     assert Path(DOCS / "tools" / "pgw_sizing.py").is_file()

@@ -107,6 +107,25 @@ _NON_FIELD_ENV = {
     "PGW_HEMASK_HINT_PREFETCH",  # env switch read by pgw.hemask.devmm (double-buffered hint stream)
     "PGW_HEMASK_GPU_HINT_STALE_S",  # env knob read by pgw.hemask.devmm (hint cache keeps hints in use)
     "PGW_API_KEY",  # SDK key read by the client library (pgw.sdk, docs/sdk)
+    "PGW_CACHE_DIR",  # client library options (pgw.sdk.options.SDKOptions / pgw.sdk.cache), docs/sdk
+    "PGW_STATE_DIR",
+    "PGW_HINT",
+    "PGW_MASK_SCHEME",
+    "PGW_MASK_WORKERS",
+    "PGW_MASK_STORE_GB",
+    "PGW_SDK_LOG",
+    "PGW_PLATFORM_ENABLED",  # developer console on the provider (pgw.platform.PlatformSettings)
+    "PGW_PLATFORM_ACCOUNTS_URL",
+    "PGW_PLATFORM_ACCOUNTS_TOKEN_FILE",
+    "PGW_PLATFORM_OIDC",
+    "PGW_PLATFORM_OIDC_ORG",
+    "PGW_TRIP_FAST",  # native trip / decode stack switches the SDK sets (pgw.sdk.engine.NATIVE_ENV)
+    "PGW_TRIP_NATIVE",
+    "PGW_TRIP_DRIVER",
+    "PGW_DECODE_NATIVE",
+    "PGW_TRIP_DECRYPT_AHEAD",
+    "PGW_LANE_SPIN_AUTO_US",
+    "PGW_LANE_WAIT_PREFETCH",
     "PGW_NATIVE",  # native-extension switch read by pgw.core.native, pgw.hemask.ntt, pgw.hemask.pks_native
     "PGW_NTT",  # native NTT switch read by pgw.hemask.ntt
     "PGW_PKS_NATIVE",  # native pks-v3 switch read by pgw.hemask.pks_native

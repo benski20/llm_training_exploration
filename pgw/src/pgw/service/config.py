@@ -248,6 +248,11 @@ class ServiceSettings(PGWSettings):
         "revoked by another process is refused within this interval)",
     )
     accounts_flush_s: float = Field(5.0, gt=0, le=300, description="How often metered usage is written to accounts_db")
+    accounts_request_log_days: int = Field(
+        30, ge=0, le=400, description="Days the content-free request log (time, key, model, token counts, latency, "
+        "status, the client's integrity verdict; reported by the client library, never any content) is kept; "
+        "0 = do not record it",
+    )
     sdk_enrolls_per_key_per_hour: int = Field(
         60, ge=1, description="Successful POST /pgw/v1/sdk/enroll calls per SDK key per hour (each one makes a new "
         "installation); failed attempts are limited per address by enrollment_rate_limit_per_minute",

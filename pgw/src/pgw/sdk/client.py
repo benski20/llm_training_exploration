@@ -137,6 +137,25 @@ def _build_request(kwargs: dict[str, Any]) -> Any:
         raise BadRequestError(f"invalid request{(' (' + loc + ')') if loc else ''}: {first['msg']}") from exc
 
 
+def _request_timeout(kwargs: dict[str, Any]) -> float | None:
+    """``create(timeout=...)``: seconds (a number, or an ``httpx.Timeout``-like object: its largest phase), or
+    ``None`` for the client's default. The whole request must finish within it."""
+    t = kwargs.get("timeout")
+    if t is None:
+        return None
+    if isinstance(t, bool):
+        raise BadRequestError("timeout must be a number of seconds")
+    if not isinstance(t, int | float):
+        parts = [getattr(t, k, None) for k in ("connect", "read", "write", "pool")]
+        nums = [float(p) for p in parts if isinstance(p, int | float) and not isinstance(p, bool)]
+        if not nums:
+            return None
+        t = max(nums)
+    if not t > 0:
+        raise BadRequestError("timeout must be positive")
+    return float(t)
+
+
 def _conversation(kwargs: dict[str, Any]) -> str | None:
     """Conversation id for exact prefix reuse: ``extra_body={"conversation_id": ...}`` or the gateway's header."""
     eb = kwargs.get("extra_body") or {}
@@ -198,14 +217,15 @@ class _SyncStream:
 
     _END = object()
 
-    def __init__(self, engine: Any, req: Any, conversation: str | None, timeout_s: float):
+    def __init__(self, engine: Any, req: Any, conversation: str | None, timeout_s: float,
+                 request_timeout_s: float | None = None):
         self._q: queue.Queue[Any] = queue.Queue()
         self._timeout_s = timeout_s
         self._done = False
 
         async def pump() -> None:
             try:
-                async for c in engine.chat_stream(req, conversation=conversation):
+                async for c in engine.chat_stream(req, conversation=conversation, timeout_s=request_timeout_s):
                     self._q.put(c)
             except BaseException as exc:
                 self._q.put(exc if isinstance(exc, Exception) else from_pgw_error(exc))
@@ -268,12 +288,16 @@ class _Completions:
         o = self._owner
         o._check_open()
         conv = _conversation(kwargs)
+        rto = _request_timeout(kwargs)
         req = _build_request(_strip_conversation(kwargs))
         eng = o._engine
         if req.stream:
-            return _SyncStream(eng, req, conv, o.options.timeout_s + o.options.ready_timeout_s)
+            return _SyncStream(eng, req, conv, rto if rto is not None else o.options.timeout_s
+                               + o.options.ready_timeout_s, rto)
         try:
-            return eng.call(eng.chat(req, conversation=conv))  # type: ignore[no-any-return]
+            # the engine enforces the budget; the extra second only covers handing the result back
+            return eng.call(eng.chat(req, conversation=conv, timeout_s=rto),  # type: ignore[no-any-return]
+                            timeout_s=rto + 1.0 if rto is not None else None)
         except PGWAPIError:
             raise
         except Exception as exc:
@@ -361,11 +385,13 @@ class _AsyncStream:
 
     _END = object()
 
-    def __init__(self, engine: Any, req: Any, conversation: str | None, timeout_s: float):
+    def __init__(self, engine: Any, req: Any, conversation: str | None, timeout_s: float,
+                 request_timeout_s: float | None = None):
         self._engine = engine
         self._req = req
         self._conv = conversation
         self._timeout_s = timeout_s
+        self._rto = request_timeout_s
         self._q: asyncio.Queue[Any] | None = None
         self._fut: Any = None
         self._done = False
@@ -382,7 +408,7 @@ class _AsyncStream:
 
         async def pump() -> None:
             try:
-                async for c in self._engine.chat_stream(self._req, conversation=self._conv):
+                async for c in self._engine.chat_stream(self._req, conversation=self._conv, timeout_s=self._rto):
                     put(c)
             except BaseException as exc:
                 put(exc if isinstance(exc, Exception) else from_pgw_error(exc))
@@ -439,11 +465,13 @@ class _AsyncCompletions:
         o = self._owner
         o._check_open()
         conv = _conversation(kwargs)
+        rto = _request_timeout(kwargs)
         req = _build_request(_strip_conversation(kwargs))
         eng = o._engine
         if req.stream:
-            return _AsyncStream(eng, req, conv, o.options.timeout_s + o.options.ready_timeout_s)
-        fut = eng.submit(eng.chat(req, conversation=conv))
+            return _AsyncStream(eng, req, conv, rto if rto is not None else o.options.timeout_s
+                                + o.options.ready_timeout_s, rto)
+        fut = eng.submit(eng.chat(req, conversation=conv, timeout_s=rto))
         try:
             return await asyncio.wrap_future(fut)
         except asyncio.CancelledError:

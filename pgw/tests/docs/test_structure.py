@@ -106,8 +106,10 @@ def test_example_hosts_use_reserved_or_internal_names(docs: dict[str, str]) -> N
     package_indexes = ("download.pytorch.org",)
     for rel, text in docs.items():
         for host in re.findall(r"https?://([a-zA-Z0-9.-]+)", text):
-            assert host.endswith(allowed_suffixes) or host in ("localhost", "127.0.0.1", *public_idps,
-                                                               *package_indexes), (
+            # RFC 5737 documentation addresses are reserved too (the SDK key test vector uses 203.0.113.7)
+            doc_ip = host.startswith(("192.0.2.", "198.51.100.", "203.0.113."))
+            assert doc_ip or host.endswith(allowed_suffixes) or host in ("localhost", "127.0.0.1", *public_idps,
+                                                                         *package_indexes), (
                 f"{rel}: example URL with a real-looking host {host}")
 
 

@@ -88,7 +88,8 @@ PROVIDER_TUNING_ENV: dict[str, str] = {
     "PGW_SERVICE_MASKGEN_V3": "true",
 }
 #: Prefixes ``PGW_RUNPOD_SERVICE_ENV`` (launch.py --service-env) may set; nothing else (no PATH, LD_PRELOAD, ...).
-EXTRA_ENV_PREFIXES = ("PGW_SERVICE_", "PGW_LOG_", "OMP_", "MKL_", "CUDA_")
+#: ``PGW_PLATFORM_ENABLED=1`` mounts the developer console at /platform (sign-in with an organisation admin token).
+EXTRA_ENV_PREFIXES = ("PGW_SERVICE_", "PGW_LOG_", "PGW_PLATFORM_", "OMP_", "MKL_", "CUDA_")
 #: Settings the launcher's overrides may not change (identity, TLS, accounts: the boot owns them).
 PROTECTED_SETTINGS = frozenset({
     "PGW_SERVICE_TLS__CERT_FILE", "PGW_SERVICE_TLS__KEY_FILE", "PGW_SERVICE_TLS__CA_FILE", "PGW_SERVICE_PUBLIC_URL",
@@ -284,6 +285,9 @@ def service_env(*, data: Path, pki: dict[str, Path], packs: list[Path], public_u
         "PGW_SERVICE_CLIENT_CERT_VALIDITY_DAYS": "30",
         "PGW_SERVICE_ACCOUNTS_DB": str(state / "accounts.db"),
         "PGW_SERVICE_SDK_KEY_ENV": key_env,
+        # client provisioning (/pgw/v1/provision/...): the SDK's default provisioner downloads the weight-free gateway
+        # pack and the fingerprint-checked int8 weights from here (public artifacts; authenticated tenants only)
+        "PGW_SERVICE_PROVISION": "true",
         **PROVIDER_TUNING_ENV,
     }
     if lane_public_port is not None:

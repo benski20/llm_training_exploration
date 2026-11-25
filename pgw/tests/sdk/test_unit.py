@@ -156,7 +156,7 @@ def test_client_needs_a_valid_key_and_does_no_io(tmp_path: Path, monkeypatch: py
         OpenAI(cache_dir=tmp_path / "c", state_dir=tmp_path / "s")
     with pytest.raises(E.AuthenticationError):
         OpenAI(api_key="sk-not-a-pgw-key", cache_dir=tmp_path / "c", state_dir=tmp_path / "s")
-    key = SdkKey.new("https://gpu.example.com", bytes(32 * [7])).encode()
+    key = SdkKey.new("live", "https://gpu.example.com", bytes(32 * [7])).encode()
     monkeypatch.setenv("PGW_API_KEY", key)
     c = OpenAI(cache_dir=tmp_path / "c", state_dir=tmp_path / "s", base_url="https://ignored.example.com",
                organization="ignored", timeout=12, max_retries=0, mask_workers=2)
@@ -188,7 +188,7 @@ def test_library_is_silent_by_default() -> None:
     """No output on stdout or stderr from creating a client and failing a request (logs only when asked)."""
     code = ("import pgw, logging\n"
             "from pgw.sdk.keys import SdkKey\n"
-            "k = SdkKey.new('http://127.0.0.1:9', None, env='dev').encode()\n"
+            "k = SdkKey.new('dev', 'http://127.0.0.1:9', None).encode()\n"
             "c = pgw.OpenAI(api_key=k, cache_dir='{d}/c', state_dir='{d}/s', max_retries=0)\n"
             "try:\n    c.models.list()\nexcept pgw.sdk.APIConnectionError:\n    pass\n"
             "logging.getLogger('pgw.sdk.test').warning('not shown')\n"
@@ -272,26 +272,88 @@ def test_provisioning_adapter(tmp_path: Path) -> None:
             adapt(bad, model="m")
 
 
-def test_default_provisioner_is_resolved_by_name(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    import importlib
+def _fake_session(tmp_path: Path, entry: dict[str, Any]) -> Any:
+    from pydantic import SecretStr
 
-    from pgw.sdk import provisioning
+    return SimpleNamespace(service_url="https://gpu.example.com", token=lambda: SecretStr("tok"), ca_file=None,
+                           client_cert_file=None, client_key_file=None,
+                           model_entry=lambda m: entry if m == entry["name"] else None)
+
+
+def _fake_provision(calls: list[Any], tmp_path: Path) -> Any:
+    def provision(model: str, **kw: Any) -> Any:
+        calls.append((model, {k: v for k, v in kw.items() if k not in ("session", "progress")}))
+        fp = kw["expected_fingerprint"]
+        return SimpleNamespace(fingerprint=fp, pack_dir=tmp_path / "pack", hint_store=None, hint_root=None,
+                               hint_key_file=None, factory_pack_dir=tmp_path / "factory-pack", close=lambda: None)
+
+    return provision
+
+
+def test_provider_provisioner_pins_and_defaults(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """The default provisioner is the real pgw.provision.client.provision, with the library's fingerprint pins,
+    hint="local" (the factory builds the hint) and a factory pack."""
+    import pgw.provision.client as pc
+    from pgw.core.errors import FingerprintMismatchError
+    from pgw.sdk.options import SDKOptions
+    from pgw.sdk.provisioning import PINNED_MODELS, ProviderProvisioner, default_provisioner
+
+    assert set(PINNED_MODELS) == {"qwen2.5-0.5b-instruct", "qwen2.5-1.5b-instruct", "qwen2.5-3b-instruct",
+                                  "qwen2.5-7b-instruct"}
+    calls: list[Any] = []
+    monkeypatch.setattr(pc, "provision", _fake_provision(calls, tmp_path))
+    pin = PINNED_MODELS["qwen2.5-0.5b-instruct"]
+    entry = {"name": "qwen2.5-0.5b-instruct", "fingerprint": pin.fingerprint}
+    prov = default_provisioner(SDKOptions())
+    assert isinstance(prov, ProviderProvisioner) and prov.hint == "local"
+    p = prov("qwen2.5-0.5b-instruct", session=_fake_session(tmp_path, entry), cache_dir=tmp_path / "models",
+             masked_head=True)
+    assert p.fingerprint == pin.fingerprint and p.factory_pack_path == tmp_path / "factory-pack" and p.hint_dir is None
+    (model, kw), = calls
+    assert kw == {"cache_dir": tmp_path, "expected_fingerprint": pin.fingerprint, "masked_head": True,
+                  "factory_pack": True, "hint": "none"}
+    # opt-in provider-built hint
+    calls.clear()
+    ProviderProvisioner(hint="provider")("qwen2.5-0.5b-instruct", session=_fake_session(tmp_path, entry),
+                                         cache_dir=tmp_path / "models")
+    assert calls[0][1]["hint"] == "provider"
+    # a provider serving another pack under a pinned name is refused before any download
+    calls.clear()
+    bad = {"name": "qwen2.5-0.5b-instruct", "fingerprint": "ab" * 32}
+    with pytest.raises(FingerprintMismatchError, match="pins"):
+        prov("qwen2.5-0.5b-instruct", session=_fake_session(tmp_path, bad), cache_dir=tmp_path)
+    assert calls == []
+    # an explicit pin (custom pack) is honoured
+    p = ProviderProvisioner(fingerprints={"qwen2.5-0.5b-instruct": "ab" * 32})(
+        "qwen2.5-0.5b-instruct", session=_fake_session(tmp_path, bad), cache_dir=tmp_path)
+    assert p.fingerprint == "ab" * 32
+    with pytest.raises(ValueError, match="64 hex"):
+        SDKOptions(model_fingerprints={"x": "nope"}).validate()
+
+
+def test_provider_provisioner_public_check_for_unbaked_pins(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """3B / 7B: pinned by checkpoint commit; the first provisioning re-derives the pack from the public checkpoint
+    (source="hf") and the result is remembered; a provider packing another revision is refused."""
+    import pgw.provision.client as pc
+    from pgw.core.errors import FingerprintMismatchError
+    from pgw.sdk.provisioning import PINNED_MODELS, ProviderProvisioner
 
     calls: list[Any] = []
-    mod = SimpleNamespace(provision=lambda model, **kw: calls.append((model, kw)) or {"ok": 1})
-    real_import = importlib.import_module
-    monkeypatch.setattr(provisioning.importlib, "import_module",
-                        lambda name: mod if name == "pgw.provision.client" else real_import(name))
-    out = provisioning.default_provisioner()("qwen2.5-7b-instruct", session="S", cache_dir=tmp_path, progress=None)
-    assert out == {"ok": 1} and calls == [("qwen2.5-7b-instruct", {"session": "S", "cache_dir": tmp_path,
-                                                                   "progress": None})]
-
-    def missing(name: str) -> Any:
-        raise ImportError(name)
-
-    monkeypatch.setattr(provisioning.importlib, "import_module", missing)
-    with pytest.raises(PGWError, match="LocalPackProvisioner"):
-        provisioning.default_provisioner()("m", session=None, cache_dir=tmp_path)
+    monkeypatch.setattr(pc, "provision", _fake_provision(calls, tmp_path))
+    pin = PINNED_MODELS["qwen2.5-7b-instruct"]
+    assert pin.fingerprint is None
+    entry = {"name": "qwen2.5-7b-instruct", "fingerprint": "cd" * 32, "hf_repo": pin.hf_repo, "revision": pin.revision}
+    prov = ProviderProvisioner()
+    prov("qwen2.5-7b-instruct", session=_fake_session(tmp_path, entry), cache_dir=tmp_path)
+    kw = calls[0][1]
+    assert kw["source"] == "hf" and kw["hf_repo"] == pin.hf_repo and kw["hf_revision"] == pin.revision
+    assert kw["expected_fingerprint"] == "cd" * 32
+    calls.clear()
+    prov("qwen2.5-7b-instruct", session=_fake_session(tmp_path, entry), cache_dir=tmp_path)
+    assert "source" not in calls[0][1]  # checked once, remembered in the cache
+    other = {**entry, "revision": "0" * 40}
+    with pytest.raises(FingerprintMismatchError, match="revision"):
+        prov("qwen2.5-7b-instruct", session=_fake_session(tmp_path, other), cache_dir=tmp_path)
 
 
 def test_local_pack_provisioner_checks_the_fingerprint(sdk_pack_dir: Path, tmp_path: Path) -> None:
@@ -456,7 +518,7 @@ def test_cli_status_and_doctor(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
     r = runner.invoke(cli, ["sdk", "status", "--json", "--no-masks", "--cache-dir", str(tmp_path / "c"),
                             "--state-dir", str(tmp_path / "s")])
     assert json.loads(r.output)["sessions"][0]["key_id"] == "0123456789abcdef"
-    key = SdkKey.new("https://gpu.example.com", bytes(32 * [1])).encode()
+    key = SdkKey.new("live", "https://gpu.example.com", bytes(32 * [1])).encode()
     monkeypatch.setenv("PGW_API_KEY", key)
     r = runner.invoke(cli, ["sdk", "doctor", "--json", "--cache-dir", str(tmp_path / "c"),
                             "--state-dir", str(tmp_path / "s")])
@@ -465,3 +527,85 @@ def test_cli_status_and_doctor(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
     monkeypatch.setenv("PGW_API_KEY", key[:-6])
     r = runner.invoke(cli, ["sdk", "doctor", "--cache-dir", str(tmp_path / "c"), "--state-dir", str(tmp_path / "s")])
     assert r.exit_code == 1 and "[fail] api key" in r.output and key[:-6] not in r.output
+
+
+# ---- per-request timeout, shielded start-up, request reports -------------------------------------------
+def test_create_timeout_bounds_the_request_and_reports_without_content(tmp_path: Path) -> None:
+    import asyncio as aio
+    import time
+
+    from pgw import OpenAI
+    from pgw.sdk.client import _request_timeout
+
+    assert _request_timeout({}) is None and _request_timeout({"timeout": 2}) == 2.0
+    assert _request_timeout({"timeout": SimpleNamespace(connect=1.0, read=5.0, write=None, pool=None)}) == 5.0
+    with pytest.raises(E.BadRequestError):
+        _request_timeout({"timeout": 0})
+    key = SdkKey.new("live", "https://gpu.example.com", bytes(32 * [3])).encode()
+    c = OpenAI(api_key=key, cache_dir=tmp_path / "c", state_dir=tmp_path / "s", timeout=300)
+    eng = c._engine
+
+    async def slow(req: Any, *, conversation: Any = None, meta: Any = None, timeout_s: Any = None) -> Any:
+        meta["model"] = "qwen2.5-0.5b-instruct"
+        meta["prompt_tokens"] = 5
+        await aio.sleep(30)
+        yield None, None
+
+    eng._chat_events = slow
+    msgs = [{"role": "user", "content": "secret prompt"}]
+    t0 = time.monotonic()
+    with pytest.raises(E.APITimeoutError):
+        c.chat.completions.create(model="qwen2.5-0.5b-instruct", messages=msgs, timeout=0.5)
+    with pytest.raises(E.APITimeoutError):
+        list(c.chat.completions.create(model="qwen2.5-0.5b-instruct", messages=msgs, stream=True, timeout=0.5))
+    assert time.monotonic() - t0 < 10
+    deadline = time.monotonic() + 5
+    while len(eng.reporter._q) < 2 and time.monotonic() < deadline:  # the cancelled stream reports asynchronously
+        time.sleep(0.05)
+    recs = list(eng.reporter._q)
+    assert [r["status"] for r in recs] == ["error", "error"] and [r["stream"] for r in recs] == [False, True]
+    assert recs[0]["error_code"] == "deadline_exceeded" and recs[1]["error_code"] in ("deadline_exceeded", "cancelled")
+    assert all(r["checks_ok"] is False for r in recs)
+    assert "secret" not in json.dumps(recs) and set(recs[0]) == {
+        "ts", "model", "status", "error_code", "prompt_tokens", "completion_tokens", "latency_ms", "ttft_ms",
+        "stream", "checks_ok"}
+    eng.reporter.enabled = False  # nothing to send it to
+    c.close()
+
+
+def test_a_short_timeout_does_not_cancel_model_start_up(tmp_path: Path) -> None:
+    import asyncio as aio
+
+    from pgw.sdk.engine import Engine
+    from pgw.sdk.options import SDKOptions
+
+    key = SdkKey.new("live", "https://gpu.example.com", bytes(32 * [4]))
+    eng = Engine(key, SDKOptions(cache_dir=tmp_path / "c", state_dir=tmp_path / "s", usage_reports=False))
+    starts: list[str] = []
+
+    async def start(h: Any) -> None:
+        starts.append(h.name)
+        await aio.sleep(1.0)
+        h.state = "ready"
+
+    eng._start_model = start  # type: ignore[method-assign]
+
+    async def run() -> str:
+        with pytest.raises(TimeoutError):
+            await aio.wait_for(eng.ensure_model("qwen2.5-0.5b-instruct"), timeout=0.1)  # the caller gives up
+        h = await eng.ensure_model("qwen2.5-0.5b-instruct")  # the same start-up, not a new one
+        return h.state
+
+    try:
+        assert eng.call(run(), timeout_s=30) == "ready" and starts == ["qwen2.5-0.5b-instruct"]
+    finally:
+        eng.close()
+
+
+def test_fused2_tables_live_in_modelpack() -> None:
+    """The service derives fused2 lane tables without the engine; the engine re-exports the same objects."""
+    import pgw.engine.fused2 as ef
+    import pgw.modelpack.fused2_weights as mf
+
+    for n in ("F2Linear", "Fused2Weights", "migration_multipliers", "select_gateway_columns", "hf_float_linears"):
+        assert getattr(ef, n) is getattr(mf, n)

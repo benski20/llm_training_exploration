@@ -50,9 +50,18 @@ An unrelated package called `pgw` exists on PyPI and uses the same import name. 
 ### The first request takes minutes
 
 Expected once per machine and model: enrollment, model preparation and mask setup run before the first
-answer ([Quickstart](quickstart.md#4-first-call)). Later starts reuse the cache. If every start is slow,
-the cache directory is not persistent (for example a container without a volume); see
-[Configuration](configuration.md#cache-directory).
+answer ([Quickstart](quickstart.md#4-first-call)): at 7B on 4 cores, a one-time download of about 6.5 GB of public
+weights and about 20-30 minutes of CPU for the mask setup. `pgw sdk status` shows where it is. Later starts reuse
+the cache. If every start is slow, the cache directory is not persistent (for example a container without a
+volume); see [Configuration](configuration.md#cache-directory).
+
+A request with a short `timeout` during that first preparation fails with a timeout but does not stop the
+preparation; the next request continues where it is.
+
+### `integrity_check_failed` before the first answer, mentioning a fingerprint
+
+The service serves a model build other than the one this library pins (`FingerprintMismatchError`). Nothing was
+used. Tell us; do not override the pin with `model_fingerprints` unless you have checked the build yourself.
 
 ### Enrollment fails with a certificate or TLS error
 
@@ -75,7 +84,7 @@ The model id is misspelled or not enabled for your key. Valid ids are in [Suppor
 
 Per-token time is dominated by round trips to our GPU ([Concepts](concepts.md#why-your-application-should-run-near-our-gpu)).
 
-1. Confirm your process runs in the same data center as our GPU. A machine in another region adds seconds
+1. Confirm your process runs in the same data center as our GPU (a requirement, not a tuning hint). A machine in another region adds seconds
    per token.
 2. Give the process more vCPUs; check that nothing else saturates the CPU (`top`).
 3. Reuse one client per process; concurrent requests on one client are batched.

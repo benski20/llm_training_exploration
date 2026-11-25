@@ -145,12 +145,19 @@ def badge(text: str, tone: str = "neutral", *, dot: bool = False, title: str | N
 
 
 def private_pill(verified: bool, private: bool = True) -> str:
-    """The request log's privacy column: ``Private · verified`` (or what is not true about the request)."""
+    """The request log's privacy column: ``Private · checked`` (or what is not true about the request).
+
+    ``verified`` is the client library's report that every integrity check of the request passed: results are
+    checked in the customer's process (the provider only sees masked data and cannot check them), so the pill says
+    "checked client-side" rather than claiming a provider-side verification."""
     if private and verified:
-        return (f'<span class="pill pill-ok" title="Masked in your process; every result passed its integrity '
-                f'check">{icon("lock", 12)}Private<span class="pill-sep" aria-hidden="true">·</span>verified</span>')
+        return (f'<span class="pill pill-ok" title="Masked in your process; your client reported that every result '
+                f'passed its integrity check (checked client-side; the provider cannot check results itself)">'
+                f'{icon("lock", 12)}Private<span class="pill-sep" aria-hidden="true">·</span>checked client-side'
+                f'</span>')
     if private:
-        return (f'<span class="pill" title="Masked in your process; the request ended before a verified result">'
+        return (f'<span class="pill" title="Masked in your process; the client did not report a fully checked '
+                f'result (the request failed or ended early)">'
                 f'{icon("lock", 12)}Private<span class="pill-sep" aria-hidden="true">·</span>not completed</span>')
     return f'<span class="pill pill-warn">{icon("alert", 12)}Not private</span>'
 

@@ -26,8 +26,10 @@ bit-identical to the pinned reference; every new mode defaults off unless proven
 ## Interfaces (keep these names; payload details are the owner's, documented in this file's appendix)
 
 1. **SDK key.** `pgw_<env>_<base32>`: encodes the provider URL, the provider CA SHA-256 (pinned, as in an
-   enrollment code) and a reusable, revocable credential. Parsed by `pgw.sdk.keys.parse_key` (SDK agent);
-   issued and checked by the provider (`pgw.service.accounts`, provider agent). `PGW_API_KEY` env var works.
+   enrollment code) and a reusable, revocable credential. One format and one codec (`pgw.enroll.sdk_key`, A1):
+   issued and checked by the provider (`pgw.service.accounts`), parsed on the client by `pgw.sdk.keys.parse_key`
+   (a wrapper of `SDKKey.parse` that also accepts pasted keys with whitespace, upper case or 0/1/8 look-alikes).
+   `PGW_API_KEY` env var works.
 2. **Session bootstrap.** On first use the SDK reuses the enrollment machinery (`pgw.enroll`): CA pinned
    from the key, client key generated locally, `POST /pgw/v1/sdk/enroll` authenticated by the SDK key,
    returns what `pgw.enroll` writes today (service token, client cert, models.json). Cached under the
@@ -65,13 +67,16 @@ check  = SHA-256("pgw-sdk-key-v1" | env | 0x00 | everything before it)[:4]
   accepted for `http://` to a loopback host only (tests).
 * `key_id`: public, shown as `sk_<16 hex>` (listings, audit, usage). `secret`: 192 bits; the provider stores only
   `SHA-256("pgw-sdk-key-secret-v1" | key_id | secret)` and compares in constant time.
-* `pgw.sdk.keys.parse_key` should wrap `pgw.enroll.sdk_key.SDKKey.parse(text) -> SDKKey(env, service_url,
-  ca_sha256, key_id, secret)` (raises `SDKKeyError`, a `ConfigError`, whose message never contains the key).
-  `str()`/`repr()` of an `SDKKey` never show the secret.
+* `pgw.sdk.keys.parse_key` wraps `pgw.enroll.sdk_key.SDKKey.parse(text) -> SDKKey(env, service_url,
+  ca_sha256, key_id, secret)` and raises `pgw.sdk.keys.SdkKeyError` (a `SDKKeyError`, code `unauthenticated`:
+  `AuthenticationError` at the API surface) whose message never contains the key; `pgw.sdk.keys.SdkKey` is
+  `SDKKey`. `str()`/`repr()` of an `SDKKey` never show the secret. Views: `key_id_str` (`sk_...`), `key_id_hex`,
+  `digest`, `bearer()`.
 * Test vector: `SDKKey("test", "https://203.0.113.7:22443", bytes(range(32)), bytes.fromhex("0011223344556677"),
   bytes(range(100, 124))).encode()` ==
   `pgw_test_aeaacaqdaqcqmbyibefawdanbyhraeiscmkbkfqxdamrugy4dupb6aareizuivlgo5sgkzthnbuwu23mnvxg64drojzxi5lwo54hs6t3nb2hi4dthixs6mrqgmxdalrrgezs4nz2gizdinbtpqytwli`
-  (stored digest `93825b55e599ec56935c715e19e9f1fe0dd0f1109564917224c183bbd5cb9ca3`).
+  (stored digest `93825b55e599ec56935c715e19e9f1fe0dd0f1109564917224c183bbd5cb9ca3`; checked in
+  `tests/sdk/test_keys.py` and `tests/service/test_accounts.py`).
 * The key is sent only as `Authorization: Bearer <whole key>` and only on the two SDK routes below, over the
   pinned TLS. Never in a URL, a log line or a file other than the SDK's own 0600 cache.
 
@@ -90,13 +95,15 @@ Enabled when the provider sets `PGW_SERVICE_ACCOUNTS_DB` (SQLite, WAL). Request 
   client-issuing CA (as in `/pgw/v1/enroll`).
 * `models` (optional): the subset wanted; default every served model in the key's scope.
 
-200 reply (`Cache-Control: no-store`): exactly what `POST /pgw/v1/enroll` returns today, plus `sdk`:
+200 reply (`Cache-Control: no-store`): exactly what `POST /pgw/v1/enroll` returns today, plus `sdk`, `lane` and a
+`masked_head` flag per model:
 
 ```json
 {"tenant": "sdk.<16 hex>", "service_token": "pgwt-...", "ca_bundle_pem": "-----BEGIN CERTIFICATE-----...",
- "service_url": "https://...",
+ "service_url": "https://gpu.example.com",
  "models": [{"name": "...", "fingerprint": "...", "ring": "...", "rings": ["..."], "hf_repo": "...",
-             "revision": "...", "license": "...", "plain_dtype": "...", "pack_name": "..."}],
+             "revision": "...", "license": "...", "plain_dtype": "...", "pack_name": "...", "masked_head": true}],
+ "lane": {"transport": "tcp", "port": 8444},
  "client_cert_pem": "... (only when a CSR was sent and signed)", "client_cert_cn": "pgw-gw.sdk.<hex>.<name>",
  "sdk": {"key_id": "sk_<16 hex>", "org_id": "acme", "installation_id": "in_<12 hex>", "env": "live",
          "models_scope": ["qwen2.5-7b-instruct"],
@@ -105,7 +112,12 @@ Enabled when the provider sets `PGW_SERVICE_ACCOUNTS_DB` (SQLite, WAL). Request 
          "expires_at": null}}
 ```
 
-(`models_scope` `[]` = every served model; limits `null` = none; `expires_at` unix seconds or `null`.)
+(`models_scope` `[]` = every served model; limits `null` = none; `expires_at` unix seconds or `null`.
+`masked_head`: the service also serves `head_fingerprint(fingerprint)` (`PGW_SERVICE_MASKED_HEAD=also`).
+`lane`: the service's TCP+TLS trip lane as clients reach it (`lane_advertised_port`, else the listening
+`lane_port`) when `PGW_SERVICE_LANE=tcp` is running, else `null`; the SDK then uses `lane="tls"` and allows
+`https://<service host>:<port>` in its egress list. The SDK sends `gateway_name` (accepted alias of
+`installation_name`), `client_name` and `sdk_version`; unknown fields are ignored.)
 
 `pgw.enroll.client.enroll_with_sdk_key(key, config_dir, installation_name=..., models=..., request_client_cert=True)`
 does the whole flow (pin, local key + CSR, POST, write `secrets/service_token` 0600, `service-ca.pem`,
@@ -147,6 +159,26 @@ speculative rows included); `maskgen_cols` / `maskgen_requests` = encrypted mask
 columns; the provider cannot see slots); bytes = masked payload bytes. Days are UTC. Usage reaches the database
 every few seconds (`PGW_SERVICE_ACCOUNTS_FLUSH_S`, 5), so the last seconds may be missing.
 
+### A3b. `POST /pgw/v1/sdk/report` (content-free request records; integration)
+
+Authenticated like `/pgw/v1/compute` (the installation's service token and/or client certificate; SDK tenants
+only). Body `{"requests": [record, ...]}` (at most 256, 64 KiB), sent in batches by `pgw.sdk.reports.Reporter`
+(`usage_reports=True`, the default; never delays or fails a request):
+
+```json
+{"ts": 1764100000.0, "model": "qwen2.5-7b-instruct", "status": "ok|error", "error_code": null,
+ "prompt_tokens": 31, "completion_tokens": 200, "latency_ms": 8123.4, "ttft_ms": 412.0, "stream": true,
+ "checks_ok": true}
+```
+
+Parsed by allow-list (`pgw.service.accounts._parse_report`; anything else is dropped, so no content can be stored);
+a model outside the key's scope or a malformed record is dropped. Each record adds to the key's usage
+(`requests`, `prompt_tokens`, `completion_tokens`, `errors`, `checks_ok`) and, unless
+`PGW_SERVICE_ACCOUNTS_REQUEST_LOG_DAYS=0` (default 30), to the request log. Reply `{"accepted": n}`. The provider
+already sees these counts and timings in the masked traffic (rows per trip, trips, arrival times); the report only
+attributes them to requests. `checks_ok` is the client's statement that every integrity check of the request
+passed: the provider cannot check a result itself, so the console labels it "checked client-side".
+
 ### A4. Admin API (provider agent; off unless `PGW_SERVICE_ACCOUNTS_ADMIN_API=true`; for the console agent)
 
 `Authorization: Bearer <admin token>` (`pgwa-...`, created with `pgw service admin-token create [--org ORG]` and
@@ -164,6 +196,8 @@ created with `--org` sees and changes only that organisation (403 otherwise); a 
 | `GET /pgw/v1/admin/orgs/{org}/installations` | `?key_id=` | `{"installations": [inst]}` |
 | `GET /pgw/v1/admin/orgs/{org}/usage` | `?since=YYYY-MM-DD&until=YYYY-MM-DD&key_id=` | `{"usage": [usage row + "key_id"]}` |
 | `GET /pgw/v1/admin/orgs/{org}/audit` | `?limit=100&before=<id>` | `{"events": [event]}` |
+| `GET /pgw/v1/admin/orgs/{org}/requests` | `?limit=50&before=<id>&key_id=&model=&status=` | `{"requests": [request], "next_before": id or null}` (newest first) |
+| `GET /pgw/v1/admin/orgs/{org}/models` | | `{"models": [{"id", "name", "status", "context_length", "description"}]}` (what the service serves) |
 | `POST /pgw/v1/admin/attest` (no auth) | `{"nonce": "<64 hex>"}` | `{"ca_sha256": hex, "macs": [hex]}` |
 
 ```text
@@ -173,6 +207,11 @@ key   = {"key_id", "org_id", "name", "env", "models", "created_at", "expires_at"
 inst  = {"installation_id", "key_id", "name", "tenant", "token_id", "cert_serial", "created_at", "revoked_at",
          "client"}
 event = {"id", "ts", "event", "org_id", "key_id", "actor", "client", "detail": {...}}   (never a secret)
+usage = {"day", "key_id", "model", "trips", "rows", "tokens", "maskgen_cols", "maskgen_requests", "bytes_in",
+         "bytes_out"}  + when the client reported requests that day:
+        {"requests", "prompt_tokens", "completion_tokens", "errors", "verified", "reported_by": "client"}
+request = {"id", "ts", "key_id", "model", "status", "error_code", "prompt_tokens", "completion_tokens",
+           "latency_ms", "ttft_ms", "stream", "private": true, "verified", "verification": "client-reported"}
 ```
 
 Audit events: `org.created`, `org.disabled`, `key.created`, `key.revoked`, `sdk.enroll.ok`, `sdk.enroll.failed`
@@ -189,7 +228,7 @@ sends the token, that the TLS endpoint it reached holds the provider CA:
 from pgw.provision.client import provision, ProvisionedModel
 from pgw.provision.session import ProvisionSession
 
-session = ProvisionSession(base_url="https://provider:8443", token="<service token>",   # from the SDK bootstrap
+session = ProvisionSession(base_url="https://gpu.example.com:8443", token="<service token>",   # from the SDK bootstrap
                            ca_file=..., client_cert_file=..., client_key_file=...)      # all optional but base_url
 pm = provision("qwen2.5-7b-instruct",            # model name (resolved via GET .../models) or a 64-hex fingerprint
                session=session, cache_dir=Path("~/.cache/pgw"),
@@ -199,7 +238,8 @@ pm = provision("qwen2.5-7b-instruct",            # model name (resolved via GET 
                masked_head=True,                 # hint/store keyed by head_fingerprint(fp), head linear included
                source="provider",                # artifacts from the provider | "hf" (download HF + pack locally)
                hf_repo=None, hf_revision=None,   # source="hf": hub id or local checkpoint dir; packing parameters
-               hf_name=None, hf_plain_dtype=None)  # default to the pinned manifest's (fetched from the provider)
+               hf_name=None, hf_plain_dtype=None,  # default to the pinned manifest's (fetched from the provider)
+               factory_pack=False)               # also keep the full pack (int8 weights) for the client's factory
 ```
 
 Errors: `IntegrityError` (a chunk, an object or a hint operand failed its check; nothing is stored),
@@ -217,13 +257,14 @@ automatically: retry (fresh seeds and challenges) or pass `hint="local"`.
 | `pack_dir` | `Path` | weight-free gateway pack: `manifest.json`, the plain safetensors, `linear-meta.safetensors` (every linear's scale/bias) and `tokenizer/`; open with `pm.open_pack()` |
 | `tokenizer_dir` | `Path` | `pack_dir / "tokenizer"` |
 | `manifest` | `pgw.modelpack.Manifest` | verified against `fingerprint` |
-| `hint_root` | `Path \| None` | `PKSHintStore` root (`PKSHintStore.open(hint_root, factory_fingerprint, mac_key=...)`) |
-| `hint_store` | `PKSHintStore \| None` | opened store (holds the shared store lock; `close()` releases it) |
-| `hint_key_file` | `Path \| None` | customer key that MACs the store's `meta.json` (`<cache_dir>/keys/pks-hint.key`, 0600) |
-| `hint_source` | `"provider-verified" \| "local" \| None` | how the hint was obtained |
+| `hint_root` | `Path` or `None` | `PKSHintStore` root (`PKSHintStore.open(hint_root, factory_fingerprint, mac_key=...)`) |
+| `hint_store` | `PKSHintStore` or `None` | opened store (holds the shared store lock; `close()` releases it) |
+| `hint_key_file` | `Path` or `None` | customer key that MACs the store's `meta.json` (`<cache_dir>/keys/pks-hint.key`, 0600) |
+| `hint_source` | `"provider-verified"`, `"local"` or `None` | how the hint was obtained |
 | `masked_head` | `bool` | |
 | `sizes` | `dict[str, int]` | bytes: `artifacts`, `hint`, `downloaded`, `weights_streamed`, `h_streamed` |
-| `timings` | `dict[str, float]` | seconds per stage (`artifacts`, `hint`) |
+| `timings` | `dict[str, float]` | seconds per stage (`artifacts`, `factory_pack`, `hint`) |
+| `factory_pack_dir` | `Path` or `None` | with `factory_pack=True`: `models/<fp[:16]>/factory-pack`, a full `ModelPack` (same fingerprint) for the background mask factory, built once from the fingerprint-checked `W8` (or kept from `source="hf"`); the hint check / local build then read `W8` from it |
 
 `pm.open_pack()` returns a `pgw.provision.pack.GatewayPack`: a `ModelPack` (same `fingerprint`, `arch`,
 `linear_specs()`, `load_plain`, `load_linear_meta`, `load_tensor`, `tokenizer_dir`, `manifest`) whose `load_linear`
@@ -244,10 +285,10 @@ bearer service token and/or verified client certificate, `PGW-Protocol: 1`; erro
 
 | method, path | request | response |
 |---|---|---|
-| `GET /pgw/v1/provision/models` | - | `{"models": [{"name", "fingerprint", "masked_head": bool, "hint_build": bool, "device": "cuda"\|"cpu"}]}` |
+| `GET /pgw/v1/provision/models` | - | `{"models": [{"name", "fingerprint", "masked_head": bool, "hint_build": bool, "device": "cuda" or "cpu"}]}` |
 | `GET /pgw/v1/provision/<fp>/manifest` | - | provisioning manifest (below) |
 | `GET /pgw/v1/provision/<fp>/object?id=<id>&chunk=<i>` | - | raw bytes of chunk `i` of object `id` (`application/octet-stream`, header `PGW-Chunk-Sha256`) |
-| `POST /pgw/v1/provision/<fp>/hint` | `{"a_seed": <64 hex>, "masked_head": bool, "linears": [keys] \| null}` | `{"job": str, "scheme": "pks-v3", "form": "h56", "rows_per_chunk": int, "device": str, "linears": [{"key", "m", "n", "chunks"}]}` |
+| `POST /pgw/v1/provision/<fp>/hint` | `{"a_seed": <64 hex>, "masked_head": bool, "linears": [keys] or null}` | `{"job": str, "scheme": "pks-v3", "form": "h56", "rows_per_chunk": int, "device": str, "linears": [{"key", "m", "n", "chunks"}]}` |
 | `GET /pgw/v1/provision/hint/<job>/h?linear=<key>&chunk=<i>` | - | rows `[i R, min(m, (i+1) R))` of `H = W8 A(a_seed) mod 2^56`, 7 bytes little endian per entry, row major (`rows x 4096 x 7`) |
 | `DELETE /pgw/v1/provision/hint/<job>` | - | `{"ok": true}` |
 
@@ -295,24 +336,25 @@ scoped to the organisation of the signed-in session; no organisation id is taken
 * keys: `GET/POST /orgs/{org}/keys` (`{"key": "pgw_...", "record": key}`, the key shown once),
   `POST /orgs/{org}/keys/{key_id}/revoke`; usage: `GET /orgs/{org}/usage?since&until` (tokens and trips per key,
   model and UTC day); audit: `GET /orgs/{org}/audit`.
-* Not in A4 yet; the platform degrades gracefully (a dash, "Request log not available"):
+* Implemented in A4 since the integration (the platform still degrades gracefully against an older provider: a
+  dash, "Request log not available"):
   1. `GET /orgs/{org}/models` -> `{"models": [{"id", "name", "status": "available|degraded|unavailable|preview",
      "params", "context_length", "description", "ttft_ms", "tokens_per_s"}]}` (404 -> empty Models page).
   2. `GET /orgs/{org}/requests?limit&before&key_id&model&status` -> `{"requests": [{"id", "ts", "key_id", "model",
      "status": "ok|error", "verified": bool, "private": bool, "latency_ms", "ttft_ms", "prompt_tokens",
      "completion_tokens", "stream", "error_code"}], "next_before"}`, newest first: **metadata only, never content**
      (the platform parses by allow-list and drops any other field).
-  3. Usage rows may add `requests`, `prompt_tokens`, `completion_tokens`, `verified`, `errors` (the client library
-     verifies results, so it would report these, e.g. with its usage flush). Without them the platform shows
-     tokens and compute round trips and says requests and verification are counted in the client.
+  3. Usage rows add `requests`, `prompt_tokens`, `completion_tokens`, `verified`, `errors` when the client library
+     reported requests that day (A3b). Without them the platform shows tokens and compute round trips and says
+     requests and checks are counted in the client. `verified` is client-reported: pages say "checked
+     client-side", never that the provider verified anything.
 
-Mounting on the provider service (provider agent's call, one line in `pgw.service.app.create_app`):
-
-```python
-from pgw.platform import PlatformSettings, mount_platform
-if PlatformSettings().enabled:                     # PGW_PLATFORM_ENABLED=1
-    mount_platform(app, accounts_client)           # an AccountsClient (in process, or HttpAccountsClient)
-```
+Mounting on the provider service (`pgw.service.app._mount_platform`, called by `create_app`): with
+`PGW_PLATFORM_ENABLED=1` the console is mounted at `/platform` on
+`pgw.service.platform_accounts.ServiceAccountsClient` (the same store and runtime as the admin API: sign-in with an
+organisation admin token, `pgw service admin-token create --org ORG`), or, with `PGW_PLATFORM_ACCOUNTS_URL` (+
+`_TOKEN_FILE`, `_CA_FILE`), on `HttpAccountsClient` against another provider's admin API. Enabling it without
+accounts (`PGW_SERVICE_ACCOUNTS_DB`) or an accounts URL is a configuration error.
 
 ### Packaging (packaging agent)
 - Distribution `pgw-sdk` (`pgw` on PyPI is an unrelated project), import name `pgw`, version from
@@ -321,30 +363,20 @@ if PlatformSettings().enabled:                     # PGW_PLATFORM_ENABLED=1
   to extras (`gateway`, `service`, `factory`, ...). `pgw-sdk[client]` is an alias of the base install.
 - Native extensions stay top-level modules `pgw_fast`, `pgw_ntt`, `pgw_pks` (setup.py, setuptools-rust);
   `PGW_REQUIRE_NATIVE=1` makes their build mandatory (CI, releases).
-- CLI: `pgw doctor` reports the native extensions (check `native`). An `sdk` subcommand group of the CLI is the SDK agent's
-  call; docs use `pgw doctor` / `pgw version` until it exists (docs tests resolve every documented command).
+- CLI: `pgw doctor` reports the native extensions (check `native`); `pgw sdk status` / `pgw sdk doctor [--online]`
+  (the SDK's group) are documented in `docs/sdk/configuration.md` (docs tests resolve every documented command).
 - Release smoke test `scripts/smoke_installed.py --require-sdk` imports `from pgw import OpenAI, AsyncOpenAI`
   from the installed wheel; `examples/` and `tests/packaging/test_examples.py` assume the OpenAI surface
   (`chat.completions.create`, attribute access, sync/async streaming, `stream_options`, `usage`).
-- Client options documented in `docs/sdk/configuration.md`: `api_key` / `PGW_API_KEY`, `cache_dir`,
-  `mask_scheme` (`"pks-v3"` default, `"mlwe"`, `"plain"`), `hint` (`"local"`); model ids
-  `qwen2.5-{0.5b,1.5b,3b,7b}-instruct`. Owners: correct the page if the implementation differs.
+- Client options documented in `docs/sdk/configuration.md` (the full `SDKOptions` set: `api_key` / `PGW_API_KEY`,
+  `timeout` (also per request: `create(timeout=...)`), `cache_dir`, `state_dir`, `mask_scheme` (`"pks-v3"`
+  default), `hint` (`"local"` default, `"provider"` opt-in), `model_fingerprints`, `usage_reports`, ...); model ids
+  `qwen2.5-{0.5b,1.5b,3b,7b}-instruct`.
 
-### A1. SDK key (SDK agent; `pgw.sdk.keys`) — provider issues with `SdkKey.new(...).encode()`
+### A1 (SDK side). Superseded by A1 above
 
-`pgw_<env>_<body>`; `env` = `[a-z0-9]{1,16}` (`live`, `test`, ...). `body` = lowercase RFC 4648 base32, no padding, of
-
-```
-version (1 byte = 1) | ca_sha256 (32) | key_id (8) | secret (24) | provider URL (UTF-8, <= 200 B) | checksum (5)
-checksum = SHA-256("pgw-sdk-key-v1" | 0x00 | env | 0x00 | everything before it)[:5]
-```
-
-* `ca_sha256`: SHA-256 of the DER of the CA that issued the provider's TLS certificate (same pin as enrollment
-  codes, `pgw.service` `enrollment_ca_file`). 32 zero bytes only for `http://` loopback.
-* `key_id` (16 hex via `SdkKey.key_id_hex`): public, stable; the provider's record key (revocation, metering, logs).
-* The provider stores only `SdkKey.secret_sha256()` and compares in constant time. The SDK never prints the key.
-* Provider side: `pgw.sdk.keys.parse_key(token)` on the bearer value; refuse unknown / revoked `key_id` or a
-  secret hash mismatch with **401**.
+The SDK's own key format (5-byte checksum) was dropped at integration: there is one format and one codec,
+`pgw.enroll.sdk_key` (A1 above, stdlib only, with its published test vector); `pgw.sdk.keys.parse_key` wraps it.
 
 ### A2. `POST /pgw/v1/sdk/enroll` (consumed by `pgw.sdk.session`; provider agent implements)
 
@@ -380,33 +412,43 @@ Response 200 (same fields as `POST /pgw/v1/enroll`, plus `masked_head` per model
   Error body `{"error": {"code", "message"}}`.
 * Re-enrollment: the SDK enrolls again (same key) when the cached service token is refused (401 at connect) or the
   provider adds a model; the provider should issue a fresh token each time (old tokens may stay valid until revoked).
-* A reference implementation used by the SDK tests is `tests/sdk/provider_main.py::_add_sdk_route` (reuses
-  `pgw.enroll.service` token issuing and CSR signing).
+* The SDK tests run against the real implementation (A2 above): `tests/sdk/provider_main.py` starts the real
+  service with accounts, the admin API, provisioning and the console; keys are created and revoked through the
+  admin API. The provider's reply carries `lane` and per-model `masked_head` as described here.
 
-### A3. Provisioning (SDK side of interface 3; provisioning agent implements `pgw.provision.client.provision`)
+### A3. Provisioning (SDK side of interface 3; as integrated)
 
-Called by name (`pgw.sdk.provisioning.PROVISION_FUNCTION = "pgw.provision.client:provision"`), in a worker thread,
-once per process and model, with the model's canonical name:
+The default provisioner is `pgw.sdk.provisioning.ProviderProvisioner` (built from `SDKOptions`: `hint`,
+`model_fingerprints`), a layer over the real `pgw.provision.client.provision` (A5), called in a worker thread once
+per process and model:
 
 ```python
-provision(model: str, *, session: pgw.sdk.session.Session, cache_dir: Path, progress: Callable[[str], None] | None)
+provision(model, *, session: pgw.sdk.session.Session, cache_dir: Path, progress: Callable[[str], None] | None,
+          masked_head: bool)   # masked_head is passed to provisioners that accept it
 ```
 
-* `session` attributes: `service_url`, `token()` (`SecretStr`), `token_file`, `ca_file` (pinned CA PEM or None),
-  `client_cert_file` / `client_key_file` (or None), `models`, `model_entry(name)`, `tenant`, `key_id`, and
-  `http_client(timeout_s=...)` (a blocking `httpx.Client` to the provider: CA pinned, client cert presented,
-  bearer token set). Use these for `/pgw/v1/provision/...`.
-* `cache_dir` = `<cache>/models` (0700; shared by all keys and processes on the host: lock your own files).
-* Return any object (or mapping) with: `fingerprint` (64 hex; must equal the enrollment entry's, else the SDK raises
-  `IntegrityError`), `pack_path` (alias `pack_dir` / `path`: a directory `ModelPack.open(verify="full",
-  expected_fingerprint=fp)` accepts — the gateway re-verifies it at every start; the factory opens it with
-  `components=("linears",)`), optional `hint_dir` (alias `hint_root` or `hint_store.root`: the root passed as
-  `he_hint_dir`, i.e. `PKSHintStore.open(hint_dir, fp)` must find it), optional `hint_key_file`, optional `name`,
-  `source`. Without `hint_dir` the factory builds the pks-v3 hint locally under `<cache>/models/<fp16>/hint`.
-* With the masked LM head the factory opens `MaskedHeadPack(pack)` and needs the head's hint too (derived
-  fingerprint); a provisioned hint store that holds only the base linears is completed locally by the factory.
+* **Pins.** The provider's catalog is never trusted alone. `PINNED_MODELS` pins every supported model to its public
+  checkpoint (repo, commit = `deploy/runpod/pod_boot.MODELS`) and, where derived for the release, its pack
+  fingerprint (0.5B `915e55c1...`, 1.5B `81bb7adc...`: `scripts/pin_model_fingerprints.py`, i.e. `pgw pack <repo>
+  --revision <commit> --name <model>` with default parameters, from the public checkpoints in the local HF cache;
+  the 0.5B pin is re-derived and checked by `tests/sdk/test_e2e_product.py` when the checkpoint is cached). A
+  provider serving another fingerprint is refused (`FingerprintMismatchError`) before any download. 3B / 7B have no
+  baked fingerprint yet (their checkpoints were not available offline at integration): the entry's
+  `hf_repo`/`revision` must equal the pin, and the first provisioning runs `provision(source="hf", hf_repo=...,
+  hf_revision=...)`, which packs the public checkpoint locally and requires the provider's fingerprint; the result
+  is remembered in `models/<fp16>/public-check.json`. `SDKOptions.model_fingerprints` adds or replaces pins (custom
+  packs; tests with the tiny model).
+* **Hint.** `hint="local"` (default; decision: the provider-built path streams ~44 GB of `H` at 7B):
+  `provision(hint="none")` and the background factory builds the pks-v3 hint from the factory pack
+  (`models/<fp16>/hint`). `hint="provider"`: `provision(hint="provider")`, checked against `W8` from the factory
+  pack.
+* **Packs.** The in-process gateway opens the weight-free gateway pack (`pack_path`; `pgw.gateway.runtime` opens a
+  directory with `linear-meta.safetensors` as a `GatewayPack`, full verification); the factory opens the factory
+  pack (`factory_pack_path`, a full `ModelPack` with the same fingerprint, verified in full by the factory).
+* `cache_dir` passed to the provisioner is `<cache>/models`; `provision` is called with `<cache>` (its own
+  `models/<fp16>/...` and `keys/pks-hint.key` layout).
 * Raise `pgw.core.errors.ConfigError` / `IntegrityError` / `FingerprintMismatchError` on failures; the SDK maps
-  them to its typed errors.
+  them to its typed errors. `LocalPackProvisioner` (full packs on disk) stays for air-gapped installs and tests.
 
 ### A4. SDK defaults other agents should know (SDK agent)
 

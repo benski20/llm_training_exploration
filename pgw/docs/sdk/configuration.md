@@ -10,9 +10,20 @@ behaviour of the OpenAI client it replaces.
 | option | default | meaning |
 |---|---|---|
 | `api_key` | `PGW_API_KEY` from the environment | your SDK key (`pgw_<environment>_...`). It carries the provider address, the pinned certificate authority of our service and a revocable credential |
-| `cache_dir` | a per-user cache directory | where enrollment credentials and model data are kept ([below](#cache-directory)) |
+| `timeout` | 600 s | budget of one request in seconds (queueing and the wait for masks included). `create(timeout=...)` sets it for one request; the first request of a model additionally waits up to `ready_timeout_s` for the one-time preparation unless you pass `timeout` to `create` |
+| `max_retries` | 2 | retries after a transport failure, only before the first token |
+| `cache_dir` | `PGW_CACHE_DIR`, else `~/.cache/pgw` | where enrollment credentials, model data and the mask stock are kept ([below](#cache-directory)) |
+| `state_dir` | `PGW_STATE_DIR`, else `~/.local/state/pgw` | the mask store's key and rollback counter (keep it next to the cache, on a persistent volume) |
 | `mask_scheme` | `"pks-v3"` | how one-time masks are generated: `"pks-v3"`, `"mlwe"` or `"plain"` ([Concepts](concepts.md#mask-schemes)) |
-| `hint` | prepared with our help, verified in your process | `"local"` builds the one-time mask setup entirely on your machine (slower first start, no data from us) |
+| `hint` | `"local"` | how the one-time `pks-v3` setup is built: `"local"` builds it on your machine from the public weights (about 20-30 min of CPU at 7B on 4 cores, once; then cached); `"provider"` lets our GPU compute the expensive part for seeds your process chose, and your process accepts it only after a check (faster on few cores, but it downloads about 44 GB at 7B) |
+| `mask_workers` | a quarter of the CPUs (1 to 8) | background mask-generation processes per model (low priority) |
+| `mask_store_gb` | 8 | disk budget of the mask stock per model |
+| `masked_head` | `"auto"` | the model's output layer as one more masked step on our GPU when we serve it (`"on"`, `"off"`) |
+| `prefix_cache` | `"auto"` | exact reuse of the previous turn of a conversation (`extra_body={"conversation_id": ...}`) when the output layer runs in your process |
+| `lane` | `"auto"` | our fast connection for the per-token round trips when the service offers it (`"stream"`, `"off"`) |
+| `model_fingerprints` | `{}` | extra or replacement fingerprint pins `{model: fingerprint}`. The library pins every supported model itself and refuses a service that serves anything else; set this only for a custom model build you checked yourself |
+| `usage_reports` | `True` | after each request, send the service a record without content (model, token counts, latency, status, whether every check passed) for your organisation's console. The service sees the same counts and timing in the masked traffic anyway |
+| `log_level` | `PGW_SDK_LOG`, else silent | structured (JSON) logs on stderr at this level |
 
 There is no `base_url`: the provider address comes from the key. Use one client per process and share it
 between threads or tasks; it is safe for concurrent use and batches concurrent requests.
@@ -44,6 +55,13 @@ silently ignored.
 | variable | default | meaning |
 |---|---|---|
 | `PGW_API_KEY` | none | your SDK key, used when `api_key` is not passed |
+| `PGW_CACHE_DIR` | `~/.cache/pgw` | cache directory (`cache_dir`) |
+| `PGW_STATE_DIR` | `~/.local/state/pgw` | state directory (`state_dir`) |
+| `PGW_HINT` | `local` | `hint` |
+| `PGW_MASK_SCHEME` | `pks-v3` | `mask_scheme` |
+| `PGW_MASK_WORKERS` | a quarter of the CPUs | `mask_workers` |
+| `PGW_MASK_STORE_GB` | `8` | `mask_store_gb` |
+| `PGW_SDK_LOG` | unset | `log_level` |
 | `PGW_NATIVE` | `1` | `0` disables all native extensions (pure-Python path: same results, much slower). For diagnosis only |
 | `PGW_NTT` | `1` | `0` disables only the native NTT products of mask generation |
 | `PGW_PKS_NATIVE` | `1` | `0` disables only the native `pks-v3` kernels |
@@ -56,9 +74,18 @@ The cache directory holds:
 * **Enrollment credentials**: your client certificate and private key, created on your machine, and the
   service token. Files are created with owner-only permissions (0600). Treat the directory like an SSH key
   directory: do not share it, do not bake it into container images, do not copy it between machines.
-* **Model data**: tokenizer, chat template, the small plaintext parts of the model and the model fingerprint.
-  All of it is public and is verified against the model fingerprint.
-* **Mask setup**: the one-time material for mask generation (about 2 GB at 7B with `pks-v3`).
+* **Model data for your process**: tokenizer, chat template and the small plaintext parts of the model
+  (embeddings, norms, per-row scales). No weights of the model's layers: those stay on our GPU. All of it is
+  public and is checked against the model fingerprint the library pins (about 0.6 GB at 0.5B, 4.4 GB at 7B).
+* **The public int8 weights, for mask generation only**: the background mask processes need them for their
+  private check values and to build the one-time setup; they are downloaded once from us and checked against
+  the same fingerprint (about 6.5 GB at 7B). The process that handles your requests never loads them.
+* **Mask setup**: the one-time material for mask generation (about 2.4 GB at 7B with `pks-v3`).
+* **Mask stock**: masks prepared ahead of use, up to `mask_store_gb` (8 GB) per model.
+
+First use of a model, once per machine: enrollment (seconds), the model data and the weights (about 11 GB at
+7B, mostly the 6.5 GB of int8 weights), then the mask setup (about 20-30 min of CPU at 7B on 4 cores with the
+default `hint="local"`). Later starts reuse everything and take seconds.
 
 Plan the disk per model with [Supported models](models.md#resources-per-model). Deleting the directory is
 safe: the next start enrolls again and prepares the model again. In containers, mount the cache directory
@@ -79,7 +106,12 @@ logging.getLogger("pgw").setLevel(logging.INFO)
 The `pgw` command installed with the package is for diagnosis:
 
 ```bash
-pgw version          # library and protocol version
-pgw doctor           # environment, native extensions, exact arithmetic self-test
-pgw doctor --json    # the same as JSON, for support requests
+pgw version                # library and protocol version
+pgw doctor                 # environment, native extensions, exact arithmetic self-test
+pgw doctor --json          # the same as JSON, for support requests
+pgw sdk status             # enrolled keys, prepared models, mask stock, last integrity check (no network)
+pgw sdk doctor             # the key's format, the cache and state directories, the mask workers
+pgw sdk doctor --online    # also contact the service and check its certificate authority against the key
 ```
+
+None of them prints your key or your service token.

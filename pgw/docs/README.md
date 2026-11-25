@@ -38,6 +38,7 @@ Client library (`pip install pgw-sdk`, `from pgw import OpenAI`: the gateway run
 | Pilot customers | [Pilot hand-off](sdk/pilot-handoff.md) | one page: what you get, five-minute setup on RunPod, what to test, privacy promise |
 | Everyone | [Changelog](sdk/changelog.md) | client library releases |
 | Maintainers | [Build contract](sdk/CONTRACT.md) | internal: interfaces between the client library's components |
+| Designers, maintainers | [Design system](design/README.md) | the shared console and platform design system, reference screenshots |
 
 Tools and data:
 

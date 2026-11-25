@@ -100,6 +100,11 @@ def _print_status(rep: dict[str, Any]) -> None:
                        f"{m.get('integrity_failures', 0)} failure(s)"
                        + (f", last failure {_age(m.get('last_integrity_failure_at'))}"
                           if m.get("last_integrity_failure_at") else ""))
+            if m.get("state") not in ("ready", None) and m.get("progress"):
+                click.echo(f"    preparing: {m['progress']}")
+            if m.get("state") == "ready" and m.get("masks_available") in (0, None) and models:
+                click.echo("    (no masks yet: on first use the background factory prepares the one-time mask setup;"
+                           " see the factory line)")
             if m.get("error"):
                 click.echo(f"    error: {m['error']}")
         for fp, f in sorted((s.get("factories") or {}).items()):

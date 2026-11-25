@@ -2,7 +2,9 @@
 
 Each example uses only `pgw-sdk` (plus FastAPI for the web example) and the OpenAI-style interface.
 Set your key first: `export PGW_API_KEY=pgw_...`. Change the model with `PGW_EXAMPLE_MODEL`
-(default `qwen2.5-7b-instruct`).
+(default `qwen2.5-7b-instruct`). Run them in the same data center as our GPU service. The first run of a model
+prepares it once (for 7B: about 6.5 GB of public weights to download and about 20-30 minutes of CPU on 4 cores;
+`pgw sdk status` shows the progress); later runs start in seconds.
 
 | file | what it shows | run |
 |---|---|---|

@@ -48,6 +48,7 @@ _ENV_RE = re.compile(r"^[a-z][a-z0-9]{0,15}$")
 _KEY_RE = re.compile(r"^pgw_([a-z][a-z0-9]{0,15})_([a-z2-7]+)$")
 _KEY_ID_RE = re.compile(r"^sk_([0-9a-f]{16})$")
 _MIN_BODY = 1 + _FP_BYTES + KEY_ID_BYTES + SECRET_BYTES + len("http://a")
+_MAX_URL_BYTES = 200
 
 
 class SDKKeyError(ConfigError):
@@ -102,6 +103,8 @@ class SDKKey:
         if not isinstance(self.env, str) or not _ENV_RE.fullmatch(self.env):
             raise ConfigError("SDK key env must match [a-z][a-z0-9]{0,15}")
         object.__setattr__(self, "service_url", validate_service_url(self.service_url))
+        if len(self.service_url.encode("utf-8")) > _MAX_URL_BYTES:
+            raise ConfigError(f"provider URL is longer than {_MAX_URL_BYTES} bytes")
         if len(self.ca_sha256) != _FP_BYTES:
             raise ConfigError("ca_sha256 must be 32 bytes")
         if len(self.key_id) != KEY_ID_BYTES:
@@ -133,6 +136,11 @@ class SDKKey:
         return format_key_id(self.key_id)
 
     @property
+    def key_id_hex(self) -> str:
+        """The public key id as 16 lowercase hex digits (cache directory names, logs)."""
+        return self.key_id.hex()
+
+    @property
     def digest(self) -> bytes:
         """The stored form of the secret (:func:`secret_digest`)."""
         return secret_digest(self.key_id, self.secret)
@@ -143,8 +151,14 @@ class SDKKey:
         raw = body + _checksum(self.env, body)
         return f"{SDK_KEY_PREFIX}{self.env}_" + base64.b32encode(raw).decode("ascii").rstrip("=").lower()
 
+    def bearer(self) -> str:
+        """The ``Authorization`` header value (``Bearer <the whole key>``); only for the two SDK routes."""
+        return "Bearer " + self.encode()
+
     def __str__(self) -> str:  # never print the secret by accident
         return f"SDKKey(env={self.env!r}, key_id={self.key_id_str}, service_url={self.service_url!r})"
+
+    __repr__ = __str__
 
     @classmethod
     def parse(cls, text: str) -> SDKKey:

@@ -82,6 +82,8 @@ class SDKOptions:
         mask_target_slots / mask_low_water_slots: Explicit stock target / refill threshold (slots).
         mask_segment_slots: Slots per factory segment (small: masks become usable sooner).
         mask_wait_s: How long a request waits for masks when the stock is empty before failing (back-pressure).
+            During a model's first fill on a host (the factory still building its one-time setup) a request without
+            an explicit ``timeout`` waits up to ``ready_timeout_s`` instead.
         factory: Run the background mask factory (``False``: consume existing stock only).
         lane: ``"auto"`` (the provider's TCP+TLS trip lane when offered, else the blocking WebSocket stream lane),
             ``"stream"`` or ``"off"`` (the async stream channel only).
@@ -92,6 +94,16 @@ class SDKOptions:
         prefix_cache: Exact conversation prefix reuse (the KV cache of the previous turn, in RAM). ``"auto"``
             (default): on when the masked LM head is not used (the engine proves prefix reuse exact only with the
             gateway's own head); ``True``: on, and the masked head off; ``False``: off.
+        hint: How the pks-v3 hint is obtained on first use of a model [``PGW_HINT``]: ``"local"`` (default; the
+            background factory builds it from the fingerprint-checked public weights: one-time, about 20-30 min of
+            CPU at 7B on 4 cores, then cached) or ``"provider"`` (opt-in; the provider computes the expensive part
+            and the client verifies it with a >= 40-bit check; streams about 44 GB at 7B).
+        model_fingerprints: Extra or replacement pack fingerprint pins ``{model: fingerprint}``. The library pins
+            every supported model (``pgw.sdk.provisioning.PINNED_MODELS``) and refuses a provider serving another
+            pack; set this only for a custom pack you have checked yourself.
+        usage_reports: Send the provider a content-free record of each finished request (model, token counts,
+            latency, status, whether every integrity check passed) for the developer console's request log. The
+            provider already sees the same counts and timing in the masked traffic; never any content.
         max_concurrent: Requests generating at once per model.
         log_level: Enable the library's structured (JSON) logs on stderr at this level [``PGW_SDK_LOG``]; ``None``
             = silent (records still reach handlers the application configures).
@@ -116,6 +128,9 @@ class SDKOptions:
     native: bool = True
     masked_head: Literal["auto", "on", "off"] = "auto"
     prefix_cache: bool | Literal["auto"] = "auto"
+    hint: Literal["local", "provider"] = "local"
+    model_fingerprints: dict[str, str] = field(default_factory=dict)
+    usage_reports: bool = True
     max_concurrent: int = 8
     log_level: str | None = None
     extra: dict[str, Any] = field(default_factory=dict)
@@ -135,6 +150,9 @@ class SDKOptions:
         if w is not None:
             base["mask_workers"] = w
         base["mask_store_gb"] = _env_float("PGW_MASK_STORE_GB", cls.mask_store_gb)
+        hint = os.environ.get("PGW_HINT", "").strip()
+        if hint:
+            base["hint"] = hint
         lvl = os.environ.get("PGW_SDK_LOG", "").strip()
         if lvl:
             base["log_level"] = lvl
@@ -154,6 +172,11 @@ class SDKOptions:
         if self.prefix_cache is True and self.masked_head == "on":
             raise ValueError("prefix_cache=True and masked_head='on' do not combine (prefix reuse is proven exact "
                              "with the gateway's own LM head only)")
+        if self.hint not in ("local", "provider"):
+            raise ValueError("hint must be 'local' or 'provider'")
+        for m, fp in (self.model_fingerprints or {}).items():
+            if not isinstance(fp, str) or not re.fullmatch(r"[0-9a-f]{64}", fp.lower()):
+                raise ValueError(f"model_fingerprints[{m!r}] must be 64 hex digits")
         if self.masked_head not in ("auto", "on", "off"):
             raise ValueError("masked_head must be 'auto', 'on' or 'off'")
         if self.mask_workers is not None and not 1 <= self.mask_workers <= 64:

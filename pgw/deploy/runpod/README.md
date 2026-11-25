@@ -91,7 +91,12 @@ packs, PKI and keys across pods, use a network volume: `--network-volume pgw-pro
   `PGW_SERVICE_LANE_ADVERTISED_PORT`), decode graphs at the highest stream priority, the masked LM head served
   (`also`), maskgen wire v3 for the SDK's pks-v3 factory (pending external review; v1/v2 stay served). Not carried
   over: the UDS and shared-memory lanes (same host only), UDS zero-copy, and the unproven spin/lock knobs; try them
-  per run with `--service-env PGW_SERVICE_LANE_READ_SPIN_US=2000` etc.
+  per run with `--service-env PGW_SERVICE_LANE_READ_SPIN_US=2000` etc.;
+* client provisioning on (`PGW_SERVICE_PROVISION=true`): the SDK downloads the weight-free gateway pack and the
+  fingerprint-checked int8 weights for its mask factory from `/pgw/v1/provision/...` (public artifacts);
+* the developer console (`/platform`: keys, usage, the content-free request log) is off by default; turn it on with
+  `--service-env PGW_PLATFORM_ENABLED=1` and sign in with an organisation admin token
+  (`pgw service admin-token create --org ORG` on the pod).
 
 ## Bootstrap trust
 

@@ -61,7 +61,7 @@ def ca(pki: dict[str, Any]) -> tuple[str, bytes]:
 
 def test_enroll_writes_private_files_and_is_reused(tmp_path: Path, ca: tuple[str, bytes]) -> None:
     pem, fp = ca
-    key = SdkKey.new(URL, fp)
+    key = SdkKey.new("live", URL, fp)
     prov = FakeProvider(pem, lane={"transport": "tcp", "port": 8444})
     lay = CacheLayout(tmp_path / "c", tmp_path / "s")
     s = ensure_session(key, lay, transport=prov.transport, client_name="host-1")
@@ -81,13 +81,13 @@ def test_enroll_writes_private_files_and_is_reused(tmp_path: Path, ca: tuple[str
     assert len(prov.enrolls) == 1 and again.token_file == s.token_file  # reused, not enrolled again
     forced = ensure_session(key, lay, transport=prov.transport, force=True)
     assert len(prov.enrolls) == 2 and forced.token().get_secret_value() == "tok-2"
-    other = SdkKey.new(URL, fp)
+    other = SdkKey.new("live", URL, fp)
     assert load_session(other, lay) is None  # another key never reads this session
 
 
 def test_concurrent_first_use_enrolls_once(tmp_path: Path, ca: tuple[str, bytes]) -> None:
     pem, fp = ca
-    key = SdkKey.new(URL, fp)
+    key = SdkKey.new("live", URL, fp)
     prov = FakeProvider(pem)
     lay = CacheLayout(tmp_path / "c", tmp_path / "s")
     out: list[Any] = []
@@ -102,7 +102,7 @@ def test_concurrent_first_use_enrolls_once(tmp_path: Path, ca: tuple[str, bytes]
 
 def test_ca_pin_mismatch_sends_nothing(tmp_path: Path, ca: tuple[str, bytes]) -> None:
     pem, _ = ca
-    key = SdkKey.new(URL, b"\x01" * 32)
+    key = SdkKey.new("live", URL, b"\x01" * 32)
     prov = FakeProvider(pem)
     with pytest.raises(E.IntegrityError, match="does not match"):
         ensure_session(key, CacheLayout(tmp_path / "c", tmp_path / "s"), transport=prov.transport)
@@ -115,7 +115,7 @@ def test_ca_pin_mismatch_sends_nothing(tmp_path: Path, ca: tuple[str, bytes]) ->
 def test_refusals_map_to_typed_errors(tmp_path: Path, ca: tuple[str, bytes], status: int,
                                       cls: type[E.PGWAPIError]) -> None:
     pem, fp = ca
-    key = SdkKey.new(URL, fp)
+    key = SdkKey.new("live", URL, fp)
     with pytest.raises(cls) as ei:
         ensure_session(key, CacheLayout(tmp_path / "c", tmp_path / "s"), transport=FakeProvider(pem, status=status)
                        .transport)
@@ -124,7 +124,7 @@ def test_refusals_map_to_typed_errors(tmp_path: Path, ca: tuple[str, bytes], sta
 
 
 def test_no_client_cert_and_unpinned_loopback(tmp_path: Path) -> None:
-    key = parse_key(SdkKey.new("http://127.0.0.1:9000", None, env="dev").encode())
+    key = parse_key(SdkKey.new("dev", "http://127.0.0.1:9000", None).encode())
     prov = FakeProvider("", cert=False)
 
     def handler(req: httpx.Request) -> httpx.Response:
@@ -141,6 +141,6 @@ def test_unreachable_provider(tmp_path: Path) -> None:
     def handler(req: httpx.Request) -> httpx.Response:
         raise httpx.ConnectError("refused")
 
-    key = SdkKey.new(URL, b"\x02" * 32)
+    key = SdkKey.new("live", URL, b"\x02" * 32)
     with pytest.raises(E.APIConnectionError):
         ensure_session(key, CacheLayout(tmp_path / "c", tmp_path / "s"), transport=httpx.MockTransport(handler))
