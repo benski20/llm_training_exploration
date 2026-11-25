@@ -92,9 +92,9 @@ def _print_status(rep: dict[str, Any]) -> None:
         models = (s.get("status") or {}).get("models") or {}
         for name, m in sorted(models.items()):
             prov = m.get("provisioned") or {}
-            click.echo(f"  {name}: {m.get('state')}  provisioned={'yes (' + prov.get('source', '?') + ')' if prov else 'no'}"
-                       f"  masks={m.get('masks_available', '?')}  lane={m.get('lane', '?')}  "
-                       f"masked_head={m.get('masked_head')}")
+            provd = f"yes ({prov.get('source', '?')})" if prov else "no"
+            click.echo(f"  {name}: {m.get('state')}  provisioned={provd}  masks={m.get('masks_available', '?')}  "
+                       f"lane={m.get('lane', '?')}  masked_head={m.get('masked_head')}")
             click.echo(f"    integrity: last check ok {_age(m.get('last_integrity_check_ok_at'))}, "
                        f"{m.get('verified_requests', 0)} verified request(s), "
                        f"{m.get('integrity_failures', 0)} failure(s)"
@@ -118,7 +118,8 @@ def _print_status(rep: dict[str, Any]) -> None:
 
 
 @sdk_group.command("status")
-@click.option("--cache-dir", type=click.Path(path_type=Path), default=None, help="Default: PGW_CACHE_DIR or ~/.cache/pgw")
+@click.option("--cache-dir", type=click.Path(path_type=Path), default=None,
+              help="Default: PGW_CACHE_DIR or ~/.cache/pgw")
 @click.option("--state-dir", type=click.Path(path_type=Path), default=None, help="Default: PGW_STATE_DIR")
 @click.option("--no-masks", is_flag=True, help="Do not open the mask stores (faster)")
 @click.option("--json", "as_json", is_flag=True, help="Machine-readable output")
@@ -178,9 +179,8 @@ def doctor_report(cache_dir: Path | None = None, state_dir: Path | None = None, 
     while not probe.exists() and probe != probe.parent:
         probe = probe.parent
     free = shutil.disk_usage(probe).free
-    checks.append(_check("disk", free > 4 << 30 if free < 20 << 30 else True,
-                         f"{free / 2**30:.1f} GiB free at {probe} (models and masks need several GiB)")
-                  if free >= 4 << 30 else _check("disk", None, f"only {free / 2**30:.1f} GiB free at {probe}"))
+    checks.append(_check("disk", True if free >= 8 << 30 else None,
+                         f"{free / 2**30:.1f} GiB free at {probe} (models and the mask stock need several GiB)"))
     key_text = api_key if api_key is not None else os.environ.get("PGW_API_KEY")
     key = None
     if key_text:
@@ -188,8 +188,9 @@ def doctor_report(cache_dir: Path | None = None, state_dir: Path | None = None, 
 
         try:
             key = parse_key(key_text)
-            checks.append(_check("api key", True, f"valid format: key id {key.key_id_hex}, provider {key.service_url}, "
-                                 f"CA {'pinned ' + key.ca_fingerprint_hex[:16] + '...' if key.pinned else 'not pinned'}"))
+            pin = f"pinned {key.ca_fingerprint_hex[:16]}..." if key.pinned else "not pinned"
+            checks.append(_check("api key", True,
+                                 f"valid format: key id {key.key_id_hex}, provider {key.service_url}, CA {pin}"))
         except Exception as exc:
             checks.append(_check("api key", False, getattr(exc, "message", "invalid key")))
     else:

@@ -148,6 +148,11 @@ class FactoryProcess:
         self._mu = threading.Lock()
         self.starts = 0
         self.last_exit: int | None = None
+        #: The child's last error line (``error [code]: message``; no secrets) and consecutive failed exits.
+        self.last_error: str | None = None
+        self.failures = 0
+        self._started_at = 0.0
+        self._next_start = 0.0
 
     @property
     def log_file(self) -> Path:
@@ -189,10 +194,20 @@ class FactoryProcess:
                 return  # another process on this host runs this model's factory
             p = self._proc
             if p is not None and p.poll() is None:
+                if time.monotonic() - self._started_at > 120:
+                    self.failures = 0  # has been running for a while: healthy
                 return
             if p is not None:
+                self._proc = None
                 self.last_exit = p.returncode
-                log.warning("mask factory for %s exited with code %s; restarting", self.plan.model, p.returncode)
+                self.last_error = _last_error_line(self.log_file) or f"exit code {p.returncode}"
+                self.failures += 1
+                delay = min(300.0, self.poll_s * 2 ** min(self.failures - 1, 8))
+                self._next_start = time.monotonic() + delay
+                log.warning("mask factory for %s exited with code %s (%s); restarting in %.0fs", self.plan.model,
+                            p.returncode, self.last_error, delay)
+            if time.monotonic() < self._next_start:
+                return
             self._spawn()
 
     def _spawn(self) -> None:
@@ -202,12 +217,13 @@ class FactoryProcess:
                 lf.unlink()
         fd = os.open(lf, os.O_WRONLY | os.O_CREAT | os.O_APPEND | getattr(os, "O_CLOEXEC", 0), 0o600)
         try:
-            self._proc = subprocess.Popen(  # noqa: S603 - our own module, fixed arguments
+            self._proc = subprocess.Popen(
                 [sys.executable, "-m", "pgw.sdk._factory_child"], env=_child_env(self.plan),
                 stdin=subprocess.DEVNULL, stdout=fd, stderr=fd, close_fds=True, cwd=str(self.plan.state_dir))
         finally:
             os.close(fd)
         self.starts += 1
+        self._started_at = time.monotonic()
         log.info("mask factory for %s started (pid %d, %d worker(s), scheme %s)", self.plan.model, self._proc.pid,
                  self.plan.workers, self.plan.scheme)
 
@@ -232,10 +248,23 @@ class FactoryProcess:
     def state(self) -> dict[str, Any]:
         """Factory state for status displays (``factory-state.json`` of the child, halt flag; no secrets)."""
         out: dict[str, Any] = {"owner": self.owner, "running": self.running, "starts": self.starts,
+                               "consecutive_failures": self.failures, "last_child_error": self.last_error,
                                "workers": self.plan.workers, "scheme": self.plan.scheme,
                                "target_slots": self.plan.target_slots, "low_water_slots": self.plan.low_water_slots}
         out.update(read_factory_state(self.plan.state_dir))
         return out
+
+
+def _last_error_line(log_file: Path) -> str | None:
+    """The last ``error [...]`` line the factory CLI printed (its error messages carry no secrets)."""
+    try:
+        with log_file.open("rb") as fh:
+            fh.seek(max(0, log_file.stat().st_size - 8192))
+            tail = fh.read().decode("utf-8", "replace")
+    except OSError:
+        return None
+    lines = [ln.strip() for ln in tail.splitlines() if ln.startswith("error [")]
+    return lines[-1][:500] if lines else None
 
 
 def read_factory_state(state_dir: Path) -> dict[str, Any]:

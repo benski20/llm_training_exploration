@@ -22,8 +22,8 @@ def _die_with_parent(parent: int) -> None:
 
             libc = ctypes.CDLL(None, use_errno=True)
             libc.prctl(1, int(signal.SIGTERM), 0, 0, 0)  # PR_SET_PDEATHSIG
-        except Exception:  # pragma: no cover - platform dependent
-            pass
+        except Exception:  # pragma: no cover - platform dependent (the watch thread below still runs)
+            parent = parent or os.getppid()
     if parent and os.getppid() != parent:  # the parent died before the prctl took effect
         os._exit(0)
 

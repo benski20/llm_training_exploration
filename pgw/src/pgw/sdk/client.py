@@ -207,7 +207,7 @@ class _SyncStream:
             try:
                 async for c in engine.chat_stream(req, conversation=conversation):
                     self._q.put(c)
-            except BaseException as exc:  # noqa: BLE001 - handed to the consumer
+            except BaseException as exc:
                 self._q.put(exc if isinstance(exc, Exception) else from_pgw_error(exc))
                 if not isinstance(exc, Exception):
                     raise
@@ -384,7 +384,7 @@ class _AsyncStream:
             try:
                 async for c in self._engine.chat_stream(self._req, conversation=self._conv):
                     put(c)
-            except BaseException as exc:  # noqa: BLE001 - handed to the consumer
+            except BaseException as exc:
                 put(exc if isinstance(exc, Exception) else from_pgw_error(exc))
                 if not isinstance(exc, Exception):
                     raise
@@ -445,7 +445,7 @@ class _AsyncCompletions:
             return _AsyncStream(eng, req, conv, o.options.timeout_s + o.options.ready_timeout_s)
         fut = eng.submit(eng.chat(req, conversation=conv))
         try:
-            return await asyncio.wrap_future(fut)  # type: ignore[no-any-return]
+            return await asyncio.wrap_future(fut)
         except asyncio.CancelledError:
             fut.cancel()
             raise

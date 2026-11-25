@@ -75,14 +75,13 @@ def _server_leaf(ca: tuple[Any, Any]) -> tuple[bytes, bytes]:
                               serialization.NoEncryption()))
 
 
-@pytest.fixture(scope="session")
-def pki(tmp_path_factory: pytest.TempPathFactory) -> dict[str, Path | bytes]:
+def make_pki(d: Path) -> dict[str, Any]:
+    """Provider CA + server certificate for 127.0.0.1 + client-issuing CA, as files under ``d``."""
     from cryptography.hazmat.primitives import serialization
 
-    d = tmp_path_factory.mktemp("sdk-pki")
     ca, client_ca = _ca("provider-ca"), _ca("client-issuing-ca")
     srv_pem, srv_key = _server_leaf(ca)
-    out: dict[str, Path | bytes] = {}
+    out: dict[str, Any] = {}
     files = {"ca.pem": ca[0].public_bytes(serialization.Encoding.PEM), "server.pem": srv_pem, "server.key": srv_key,
              "client-ca.pem": client_ca[0].public_bytes(serialization.Encoding.PEM),
              "client-ca.key": client_ca[1].private_bytes(serialization.Encoding.PEM,
@@ -94,6 +93,11 @@ def pki(tmp_path_factory: pytest.TempPathFactory) -> dict[str, Path | bytes]:
         out[name] = d / name
     out["ca_sha256"] = hashlib.sha256(ca[0].public_bytes(serialization.Encoding.DER)).digest()
     return out
+
+
+@pytest.fixture(scope="session")
+def pki(tmp_path_factory: pytest.TempPathFactory) -> dict[str, Any]:
+    return make_pki(tmp_path_factory.mktemp("sdk-pki"))
 
 
 @pytest.fixture(scope="session")
@@ -189,7 +193,7 @@ def start_provider(root: Path, pack_dir: Path, pki: dict[str, Any], *, extra_env
     env.update(extra_env or {})
     log = root / "provider.log"
     fh = log.open("ab")
-    proc = subprocess.Popen([sys.executable, "-m", "tests.sdk.provider_main"], env=env, cwd=str(ROOT),  # noqa: S603
+    proc = subprocess.Popen([sys.executable, "-m", "tests.sdk.provider_main"], env=env, cwd=str(ROOT),
                             stdout=fh, stderr=subprocess.STDOUT)
     fh.close()
     prov = Provider(url, proc, log, keys_file, tamper, pki["ca_sha256"], lane_port, pack_dir)
@@ -216,6 +220,26 @@ def stop_provider(p: Provider) -> None:
         except subprocess.TimeoutExpired:  # pragma: no cover
             p.proc.kill()
             p.proc.wait(timeout=10)
+
+
+@pytest.fixture(autouse=True, scope="module")
+def _restore_native_env() -> Iterator[None]:
+    """Clients set the native-stack switches process-wide (``setdefault``); keep them out of other test modules."""
+    from pgw.sdk.engine import NATIVE_ENV
+
+    from pgw.maskstore import store as _store
+
+    saved = {k: os.environ.get(k) for k in NATIVE_ENV}
+    ahead = _store.TRIP_DECRYPT_AHEAD
+    try:
+        yield
+    finally:
+        _store.TRIP_DECRYPT_AHEAD = ahead
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
 
 
 @pytest.fixture(scope="module")

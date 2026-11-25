@@ -262,3 +262,105 @@ def test_wrong_ca_pin_is_refused_before_anything_is_sent(provider: Provider, tmp
     c.close()
     assert not (tmp_path / "pin" / "cache" / "sessions").exists() or not any(
         (tmp_path / "pin" / "cache" / "sessions").glob("*/secrets/service_token"))
+
+
+def test_pks_v3_factory_default_scheme(provider: Provider, tmp_path: Path) -> None:
+    """The default mask scheme: pks-v3 masks from the provider (encrypted; the provider learns nothing about them),
+    self-checked by the factory, p31 segments; the answer is bit-identical to the plaintext reference."""
+    key = provider.new_key()
+    # masked_head off: the tiny model's 260-token head is not a pks-v3 shape (out_features % 32); real Qwen2.5
+    # vocabularies (151936) are
+    c = _client(provider, key, tmp_path, mask_scheme="pks-v3", mask_target_slots=200, mask_low_water_slots=100,
+                masked_head="off")
+    try:
+        t0 = time.monotonic()
+        r = c.chat.completions.create(model=MODEL, messages=PROMPT, **GREEDY)
+        dt_s = time.monotonic() - t0
+        ref = _reference(provider.pack_dir, GREEDY, head_mode="gateway")
+        assert r.to_dict()["choices"][0]["logprobs"]["content"] == ref["choices"][0]["logprobs"]["content"]
+        st = c.status()["models"][MODEL]
+        assert st["factory"]["scheme"] == "pks-v3" and st["factory"]["owner"] is True
+        assert not st["factory"]["halted"] and not st["factory"].get("provider_integrity_failures")
+        hint_dirs = list((tmp_path / "cache" / "models").glob("*/hint/*pks-v3*"))
+        assert hint_dirs, "the pks-v3 hint was built locally"
+        print(f"\npks-v3: first answer after {dt_s:.1f}s (hint build + first encrypted segment)")
+    finally:
+        c.close()
+
+
+def test_a_failing_factory_is_reported_not_waited_out(provider: Provider, tmp_path: Path) -> None:
+    """pks-v3 with the masked head on the tiny model: the factory refuses the head's shape. The request fails with
+    NotReadyError naming the factory's error after a few restarts instead of hanging for mask_wait_s."""
+    from pgw.sdk import NotReadyError
+
+    c = _client(provider, provider.new_key(), tmp_path, mask_scheme="pks-v3", mask_wait_s=600)
+    try:
+        t0 = time.monotonic()
+        with pytest.raises(NotReadyError, match=r"mask factory is failing: .*pks-v3 needs"):
+            c.chat.completions.create(model=MODEL, messages=PROMPT, **GREEDY)
+        assert time.monotonic() - t0 < 300
+        f = c.status()["models"][MODEL]["factory"]
+        assert f["consecutive_failures"] >= 3 and "pks-v3" in f["last_child_error"]
+    finally:
+        c.close()
+
+
+def test_back_pressure_without_masks(provider: Provider, tmp_path: Path) -> None:
+    """No factory and an empty stock: the request waits mask_wait_s for masks, then fails as not ready (nothing was
+    sent to the provider)."""
+    from pgw.sdk import NotReadyError
+
+    c = _client(provider, provider.new_key(), tmp_path, factory=False, mask_wait_s=1.5)
+    try:
+        t0 = time.monotonic()
+        with pytest.raises(NotReadyError, match="factory is off"):
+            c.chat.completions.create(model=MODEL, messages=PROMPT, **GREEDY)
+        assert 1.0 < time.monotonic() - t0 < 60
+    finally:
+        c.close()
+
+
+_MP_CODE = """
+import json, sys
+sys.path[:0] = [sys.argv[4], sys.argv[5]]
+from pgw import OpenAI
+from pgw.sdk import LocalPackProvisioner
+root = sys.argv[2]
+c = OpenAI(api_key=sys.argv[1], cache_dir=root + "/cache", state_dir=root + "/state", mask_scheme="plain",
+           mask_workers=1, mask_target_slots=400, mask_low_water_slots=200, mask_segment_slots=128,
+           provisioner=LocalPackProvisioner({"qwen2.5-0.5b-instruct": sys.argv[3]}))
+r = c.chat.completions.create(model="qwen2.5-0.5b-instruct", messages=[{"role": "user", "content": "Hi"}],
+                              temperature=0, max_tokens=6, logprobs=True, extra_body={"ignore_eos": True})
+f = c.status()["models"]["qwen2.5-0.5b-instruct"]["factory"]
+c.close()
+print(json.dumps({"lp": r.to_dict()["choices"][0]["logprobs"]["content"], "owner": f["owner"]}))
+"""
+
+
+def test_processes_share_session_store_and_factory(provider: Provider, tmp_path: Path) -> None:
+    """Two processes with the same key and cache directory: one enrollment, one mask store, one factory owner."""
+    import os
+    import subprocess
+    import sys
+
+    from tests.sdk.conftest import ROOT
+
+    key = provider.new_key(tenant="mp-test")
+    args = [sys.executable, "-c", _MP_CODE, key, str(tmp_path), str(provider.pack_dir), str(ROOT / "src"), str(ROOT)]
+    env = {k: v for k, v in os.environ.items() if not k.startswith("PGW_")}
+    procs = [subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)  # noqa: S603
+             for _ in range(2)]
+    outs = []
+    for p in procs:
+        out, err = p.communicate(timeout=600)
+        assert p.returncode == 0, err[-3000:]
+        assert err == "", err[-3000:]  # silent library
+        outs.append(json.loads(out))
+    assert outs[0]["lp"] == outs[1]["lp"]
+    assert sorted(o["owner"] for o in outs) == [False, True] or all(o["owner"] for o in outs)  # never two at once
+    sessions = list((tmp_path / "cache" / "sessions").iterdir())
+    assert len(sessions) == 1
+    lines = (Path(provider.log.parent) / "secrets" / "tokens").read_text().splitlines()
+    assert sum(ln.startswith("mp-test:") for ln in lines) == 1  # enrolled once for both processes
+    meta = json.loads((sessions[0] / "enrollment.json").read_text())
+    assert meta["key_id"] == sessions[0].name

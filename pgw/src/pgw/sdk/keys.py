@@ -148,7 +148,7 @@ def parse_key(text: str | None) -> SdkKey:
     parts = s.split("_")
     if len(parts) != 3 or parts[0].lower() != KEY_PREFIX:
         raise SdkKeyError("this is not a PGW SDK key (it should look like pgw_live_...)")
-    env, b32 = parts[1].lower(), parts[2].upper().translate(str.maketrans({"0": "O", "1": "I", "8": "B"}))
+    env, b32 = parts[1].lower(), parts[2].upper().translate(str.maketrans("018", "OIB"))
     if not _ENV_RE.fullmatch(env):
         raise SdkKeyError("the PGW SDK key has an invalid environment label")
     if not b32 or not re.fullmatch(r"[A-Z2-7]+", b32):

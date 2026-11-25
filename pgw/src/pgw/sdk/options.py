@@ -36,7 +36,7 @@ def canonical_model(name: str) -> str:
         UnsupportedModelError: not one of :data:`SUPPORTED_MODELS`.
     """
     if not isinstance(name, str) or not name.strip():
-        raise UnsupportedModelError("model is required (one of: " + ", ".join(SUPPORTED_MODELS) + ")")
+        raise UnsupportedModelError("model is required (supported: " + ", ".join(SUPPORTED_MODELS) + ")")
     n = name.strip().lower()
     n = re.sub(r"^(qwen/)", "", n)
     if n in SUPPORTED_MODELS:
@@ -86,6 +86,7 @@ class SDKOptions:
         lane: ``"auto"`` (the provider's TCP+TLS trip lane when offered, else the blocking WebSocket stream lane),
             ``"stream"`` or ``"off"`` (the async stream channel only).
         native: The native trip / decode drivers (the measured stack; exact). ``False``: the Python trip path.
+            Process-wide (environment switches read when a model starts): the first client's choice applies.
         masked_head: ``"auto"`` (the int8 LM head as a masked linear when the provider serves it), ``"on"``
             (required), ``"off"``.
         prefix_cache: Exact conversation prefix reuse (the KV cache of the previous turn, in RAM). ``"auto"``

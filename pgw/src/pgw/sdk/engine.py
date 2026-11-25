@@ -35,10 +35,12 @@ from typing import Any, TypeVar
 from pgw.core.errors import (
     AuthError,
     ErrorCode,
-    IntegrityError as CoreIntegrityError,
     MaskExhaustedError,
     PGWError,
     ServiceUnavailableError,
+)
+from pgw.core.errors import (
+    IntegrityError as CoreIntegrityError,
 )
 from pgw.gateway.safety import BreakerOpenError
 from pgw.sdk import types as T
@@ -82,17 +84,20 @@ _RETRY_CODES = frozenset({str(ErrorCode.BACKEND_UNAVAILABLE), str(ErrorCode.DEAD
                           str(ErrorCode.UNAVAILABLE)})
 
 
-def apply_native_env() -> None:
-    """Turn on the native trip / decode stack for runtimes built from now on (``setdefault``)."""
+def apply_native_env(on: bool = True) -> None:
+    """Choose the native trip / decode stack for runtimes built from now on (``setdefault``: process-wide, so the
+    first client's choice, or an explicit environment value, applies to every client of the process)."""
     for k, v in NATIVE_ENV.items():
-        os.environ.setdefault(k, v)
+        os.environ.setdefault(k, v if on else "0")
+    if not on:
+        return
     if os.environ.get("PGW_TRIP_DECRYPT_AHEAD", "") in ("1", "true", "yes", "on"):
         try:  # read by the mask store at import: also correct an import that happened before this call
             from pgw.maskstore import store as _store
 
             _store.TRIP_DECRYPT_AHEAD = True
         except Exception:  # pragma: no cover - defensive
-            pass
+            log.debug("mask store decrypt-ahead flag not set", exc_info=True)
 
 
 @dataclass
@@ -179,6 +184,8 @@ class Engine:
         self._session_lock: asyncio.Lock | None = None
         self._settings: Any = None
         self._status_lock = threading.Lock()
+        self._gc_stop = threading.Event()
+        self._gc_thread: threading.Thread | None = None
 
     # ---- event loop ----------------------------------------------------------------------------
     def _ensure_loop(self) -> asyncio.AbstractEventLoop:
@@ -258,7 +265,8 @@ class Engine:
             prime_check=None, pack_verify="full", mask_reservation="incremental", mask_chunk_slots=8,
             default_max_tokens=512, max_tokens_limit=32768, maskstore_gc_interval_s=0,
             dashboard_enabled=False, console_enabled=False, setup_mode=False,
-            config_dir=self.layout.session_dir(self.key.key_id_hex), data_dir=self.layout.session_dir(self.key.key_id_hex),
+            config_dir=self.layout.session_dir(self.key.key_id_hex),
+            data_dir=self.layout.session_dir(self.key.key_id_hex),
         )
 
     def _open_store(self) -> Any:
@@ -278,6 +286,26 @@ class Engine:
                                      counter_file=sdir / "masks.counter", allow_no_external_counter=False,
                                      low_water_slots=64)
         return open_store(settings)
+
+    def _start_gc(self, interval_s: float = 300.0) -> None:
+        """Mask store housekeeping (shred consumed segments, close dead leases) in a daemon thread, at start and
+        every ``interval_s``. Every process sharing the store may run it (the store serializes it)."""
+        if self._gc_thread is not None:
+            return
+
+        def loop() -> None:
+            while not self._gc_stop.is_set():
+                store = self.store
+                if store is None:
+                    return
+                try:
+                    store.gc()
+                except Exception as exc:  # never kill the thread
+                    log.warning("mask store gc failed: %s", getattr(exc, "message", type(exc).__name__))
+                self._gc_stop.wait(interval_s)
+
+        self._gc_thread = threading.Thread(target=loop, name="pgw-sdk-gc", daemon=True)
+        self._gc_thread.start()
 
     # ---- models --------------------------------------------------------------------------------
     async def list_models(self) -> list[str]:
@@ -346,12 +374,12 @@ class Engine:
         h.provisioned = prov
         if self.store is None:
             self.store = await asyncio.to_thread(self._open_store)
+            self._start_gc()
         if self._settings is None:
             self._settings = self._gateway_settings(session)
         h.ring = self._pick_ring(entry)
         h.masked_head = await self._decide_masked_head(session, prov.fingerprint)
-        if self.options.native:
-            apply_native_env()
+        apply_native_env(self.options.native)
         cfg = self._model_config(h, session, prov)
         self._settings.validate_policy([cfg])
         h.state = "connecting"
@@ -529,9 +557,14 @@ class Engine:
         while True:
             try:
                 return (await rt.open_sessions([ids], params, request_id=rid, prefix_key=prefix_key))[0]
-            except MaskExhaustedError:
-                if time.monotonic() + delay > mask_deadline:
-                    raise
+            except MaskExhaustedError as exc:
+                fac = h.factory
+                broken = fac is not None and fac.owner and fac.failures >= 3 and fac.last_error
+                if broken or time.monotonic() + delay > mask_deadline:
+                    why = f"; the mask factory is failing: {fac.last_error}" if broken and fac is not None else (
+                        "" if self.options.factory else "; the background mask factory is off (factory=False)")
+                    raise NotReadyError(f"no masks in stock for model {h.name!r} after waiting{why}",
+                                        code=str(exc.code), request_id=rid) from exc
             except BreakerOpenError as exc:  # blocked after an integrity failure: hard error, never waited out
                 raise IntegrityError(f"model {h.name!r} is blocked after an integrity failure of the provider "
                                      f"({exc.message}); call reset_integrity_breaker() after investigating",
@@ -753,6 +786,10 @@ class Engine:
             self._write_status()
             loop.call_soon_threadsafe(loop.stop)
             thread.join(timeout=10)
+        self._gc_stop.set()
+        gct, self._gc_thread = self._gc_thread, None
+        if gct is not None:
+            gct.join(timeout=30)
         if self.store is not None:
             with contextlib.suppress(Exception):
                 self.store.close()
