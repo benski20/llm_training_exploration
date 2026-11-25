@@ -28,7 +28,7 @@ from pgw.service.auth import hash_token
 from pgw.service.config import ServiceSettings
 from pgw.service.server import serve_async
 
-TOKEN = "provision-test-token-0123456789abcdef"
+TOKEN = "provision-test-token-0123456789abcdef"  # noqa: S105 - test credential
 
 
 def _free_port() -> int:

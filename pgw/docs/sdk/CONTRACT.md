@@ -66,8 +66,15 @@ pm = provision("qwen2.5-7b-instruct",            # model name (resolved via GET 
                hint="provider",                  # "provider" (provider-built, client-verified) | "local" | "none"
                expected_fingerprint=None,        # pin; default: the session's catalog entry (see trust note)
                masked_head=True,                 # hint/store keyed by head_fingerprint(fp), head linear included
-               source="provider")                # artifacts from the provider | "hf" (download HF + pack locally)
+               source="provider",                # artifacts from the provider | "hf" (download HF + pack locally)
+               hf_repo=None, hf_revision=None,   # source="hf": hub id or local checkpoint dir; packing parameters
+               hf_name=None, hf_plain_dtype=None)  # default to the pinned manifest's (fetched from the provider)
 ```
+
+Errors: `IntegrityError` (a chunk, an object or a hint operand failed its check; nothing is stored),
+`FingerprintMismatchError` (the pin and what was served / derived differ), `ModelNotFoundError`,
+`ServiceUnavailableError` (provider unreachable after retries), `ConfigError`. A failed hint check is not retried
+automatically: retry (fresh seeds and challenges) or pass `hint="local"`.
 
 `ProvisionedModel` (frozen dataclass):
 
@@ -127,6 +134,12 @@ check (soundness error `<= 2^-41`: 42 binary challenge columns on each side), th
 rest locally (`switch_hint`, key switch) and writes the same `PKSHintStore` a local build writes (bit-identical
 hint files for the same seeds). The final key-switched hint itself is not checkable cheaply (two exact roundings
 between `W8` and it); see `research/reviews/pks-v3-provider-hint.md`.
+
+Optional (opt-in) hint streaming: `pgw.provision.streaming.StreamingHintStore.open(hint_root, factory_fingerprint,
+source, mac_key=..., cache_bytes=...)` is a drop-in for the `PKSHintStore` the factory backend reads, with the hint
+files in customer storage (`offload(store, dest)`; `DirectorySource` / `HttpRangeSource`) and an LRU of whole linears;
+every fetched linear is checked against the HMAC'd local `meta.json`. It re-reads the whole hint once per segment
+when the cache is smaller than the hint (about 55 MB/s at 7B and 25 slots/s): for disk-constrained hosts only.
 
 Trust note: `expected_fingerprint` is the integrity anchor. Without it the catalog's fingerprint (provider-asserted,
 like the enrolled `models.json`) is used; `source="hf"` re-derives the pack from the public checkpoint and checks that

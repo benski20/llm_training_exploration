@@ -321,6 +321,9 @@ class _Weights:
         self.man, self.gpack, self.remote, self.full = man, gpack, remote, full
         self.objs = {o.id: o for o in weight_objects(man)}
         self.bytes = 0
+        #: ``row_norm_sq_max`` of every linear fetched (for packs without it in the manifest: the gateway's sidecar)
+        self.record_norms = any(e.row_norm_sq_max is None for e in man.linears)
+        self.norms: dict[str, int] = {}
 
     def get(self, key: str) -> np.ndarray:
         from pgw.core.types import LinearKind
@@ -344,6 +347,12 @@ class _Weights:
             if (w == -128).any():
                 raise IntegrityError(f"{key}: int8 weight contains -128")
         self.bytes += int(w.nbytes)
+        if self.record_norms:
+            import torch
+
+            from pgw.modelpack.loader import row_norm_sq_max
+
+            self.norms[key] = row_norm_sq_max(torch.from_numpy(w))
         return w
 
 
@@ -377,7 +386,8 @@ def _ensure_norm_sidecar(gpack: GatewayPack, weights: _Weights) -> None:
         return
     if _read_norm_sidecar(gpack, gpack.root) is not None:
         return
-    norms = {e.id: row_norm_sq_max(torch.from_numpy(weights.get(e.id))) for e in gpack.manifest.linears}
+    norms = {e.id: (weights.norms[e.id] if e.id in weights.norms
+                    else row_norm_sq_max(torch.from_numpy(weights.get(e.id)))) for e in gpack.manifest.linears}
     _write_norm_sidecar(gpack, norms, gpack.root)
 
 
@@ -664,19 +674,20 @@ def provision(model: str, *, session: Any = None, cache_dir: str | Path, progres
         timings["artifacts"] = time.perf_counter() - t0
 
         def weights() -> _Weights:
-            nonlocal remote
+            nonlocal remote, full
+            if full is None and (session is None or source == "hf"):
+                if not hf_repo:
+                    raise ConfigError("the weights are needed (hint build) but there is no provider session and no "
+                                      "hf_repo")
+                full = _full_from_hf(hf_repo, man, fp, mdir, name=hf_name, revision=hf_revision,
+                                     plain_dtype=hf_plain_dtype)
             if full is not None:
                 return _Weights(man, gpack, full=full)
-            if source == "hf":
-                raise ConfigError("weights needed but the public-source pack is gone; re-run with source='hf'")
             if remote is None:
                 remote = _Remote(session, fp)
             return _Weights(man, gpack, remote=remote)
 
         wsrc: _Weights | None = None
-        if any(e.row_norm_sq_max is None for e in man.linears):
-            wsrc = wsrc or weights()
-            _ensure_norm_sidecar(gpack, wsrc)
 
         # ---- hint
         t1 = time.perf_counter()
@@ -696,6 +707,9 @@ def provision(model: str, *, session: Any = None, cache_dir: str | Path, progres
             hint_source = str(store.meta.get("source", "local"))
         timings["hint"] = time.perf_counter() - t1
         timings["verify"] = stats["verify_s"]
+        if any(e.row_norm_sq_max is None for e in man.linears):  # older packs: norms from the checked weights
+            wsrc = wsrc or weights()
+            _ensure_norm_sidecar(gpack, wsrc)
         if full is not None and not keep_full_pack:
             full.close()
             shutil.rmtree(full.root, ignore_errors=True)
