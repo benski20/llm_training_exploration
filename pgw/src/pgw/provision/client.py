@@ -609,15 +609,18 @@ def provision(model: str, *, session: Any = None, cache_dir: str | Path, progres
         if fp is not None and fp != model:
             raise FingerprintMismatchError("model fingerprint and expected_fingerprint differ")
         fp = model
-    if fp is None:
-        if session is None:
-            raise ConfigError("without a provider session pass the model's fingerprint (expected_fingerprint)")
+    if not _is_fp(model) and session is not None:
         _emit(progress, "catalog")
         cat = session.get_json("/models")
         hits = [m for m in cat.get("models", []) if m.get("name") == model]
         if len(hits) != 1:
             raise ModelNotFoundError(f"the provider serves no (unique) model named {model!r}")
-        fp = validate_fingerprint(str(hits[0]["fingerprint"]))
+        served = validate_fingerprint(str(hits[0]["fingerprint"]))
+        if fp is not None and served != fp:
+            raise FingerprintMismatchError(f"the provider serves {model!r} as {served[:12]}, not the pinned {fp[:12]}")
+        fp = served
+    if fp is None:
+        raise ConfigError("without a provider session pass the model's fingerprint (expected_fingerprint)")
     from pgw.modelpack.masked_head import head_fingerprint
 
     ffp = head_fingerprint(fp) if masked_head else fp
