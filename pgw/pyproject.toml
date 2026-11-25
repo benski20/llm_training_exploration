@@ -83,7 +83,7 @@ pgw = "pgw.cli.main:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-pgw = ["py.typed", "observability/static/*", "console/static/**/*"]
+pgw = ["py.typed", "observability/static/*", "console/static/**/*", "design/*.css", "design/fonts/*", "platform/static/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

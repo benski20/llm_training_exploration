@@ -49,3 +49,41 @@ bit-identical to the pinned reference; every new mode defaults off unless proven
 - Commit messages end with the session's attribution lines; no model identifiers in commits.
 
 ## Appendix: payloads (owners fill in)
+
+### Console agent: the developer platform and what it reads
+
+The developer platform (`src/pgw/platform/`, served at `/platform/`) reads everything through
+`pgw.platform.client.AccountsClient`, a synchronous `Protocol` run on a worker thread: `authenticate(token)`,
+`principal_for_sso(sub=, email=, role=)`, `org`, `list_keys`, `create_key`, `revoke_key`, `usage(since=, until=)`,
+`requests(limit=, before=, key_id=, model=, status=)`, `models`, and optionally `audit(limit=)`. Every call is
+scoped to the organisation of the signed-in session; no organisation id is taken from a request.
+`pgw.platform.fixtures.FixtureAccounts` implements it with sample data (tests, screenshots,
+`python -m pgw.platform --demo`).
+
+`HttpAccountsClient` speaks the provider's **admin API (A4)**:
+
+* Sign-in with an organisation admin token (`pgw service admin-token create --org ORG`): `GET /orgs` with that
+  token must list exactly one, enabled organisation. Every later call uses the platform's own global admin token
+  (`PGW_PLATFORM_ACCOUNTS_URL`, `PGW_PLATFORM_ACCOUNTS_TOKEN_FILE`). SSO users (`PGW_PLATFORM_OIDC_*`, redirect
+  `.../platform/sso/callback`) belong to `PGW_PLATFORM_OIDC_ORG`.
+* keys: `GET/POST /orgs/{org}/keys` (`{"key": "pgw_...", "record": key}`, the key shown once),
+  `POST /orgs/{org}/keys/{key_id}/revoke`; usage: `GET /orgs/{org}/usage?since&until` (tokens and trips per key,
+  model and UTC day); audit: `GET /orgs/{org}/audit`.
+* Not in A4 yet; the platform degrades gracefully (a dash, "Request log not available"):
+  1. `GET /orgs/{org}/models` -> `{"models": [{"id", "name", "status": "available|degraded|unavailable|preview",
+     "params", "context_length", "description", "ttft_ms", "tokens_per_s"}]}` (404 -> empty Models page).
+  2. `GET /orgs/{org}/requests?limit&before&key_id&model&status` -> `{"requests": [{"id", "ts", "key_id", "model",
+     "status": "ok|error", "verified": bool, "private": bool, "latency_ms", "ttft_ms", "prompt_tokens",
+     "completion_tokens", "stream", "error_code"}], "next_before"}`, newest first: **metadata only, never content**
+     (the platform parses by allow-list and drops any other field).
+  3. Usage rows may add `requests`, `prompt_tokens`, `completion_tokens`, `verified`, `errors` (the client library
+     verifies results, so it would report these, e.g. with its usage flush). Without them the platform shows
+     tokens and compute round trips and says requests and verification are counted in the client.
+
+Mounting on the provider service (provider agent's call, one line in `pgw.service.app.create_app`):
+
+```python
+from pgw.platform import PlatformSettings, mount_platform
+if PlatformSettings().enabled:                     # PGW_PLATFORM_ENABLED=1
+    mount_platform(app, accounts_client)           # an AccountsClient (in process, or HttpAccountsClient)
+```
