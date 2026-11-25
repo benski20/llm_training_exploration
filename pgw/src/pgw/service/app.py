@@ -7,6 +7,8 @@ Routes (SPEC.md section 6.2):
     GET  /pgw/v1/models    ModelsResponse
     GET  /healthz          liveness;  GET /readyz  readiness (packs loaded, device OK, not draining)
     GET  /metrics          Prometheus (optionally only on a separate port, see :mod:`pgw.service.server`)
+    GET/POST/DELETE /pgw/v1/provision/...   client provisioning (when ``provision`` is set; see
+                           :mod:`pgw.service.provision`)
     GET  /pgw/v1/enroll/ca, POST /pgw/v1/enroll   gateway enrollment (when ``enrollment_file`` is set;
                            see :mod:`pgw.enroll.service`)
     POST /pgw/v1/sdk/enroll, GET /pgw/v1/sdk/usage   SDK keys (when ``accounts_db`` is set; admin API under
@@ -64,6 +66,8 @@ class ServiceState:
     _device_checked_at: float = 0.0
     #: the native trip lane (``lane != "off"``), started with the batcher
     lane: Any = None
+    #: :class:`pgw.service.provision.ProvisionService` (routes mounted always; they answer only with ``provision``)
+    provision: Any = None
     #: request-body bytes buffered at once, shared by the compute routes, ``/pgw/v1/maskgen`` and the bulk
     #: maskgen channel (``max_inflight_bytes``, at least one request's ``max_request_bytes``)
     body_budget: Any = None
@@ -280,6 +284,10 @@ def create_app(
     # The same body budget as the compute routes: a maskgen body (up to 512 MiB) counts against the service's
     # max_inflight_bytes (a request larger than the budget alone is refused with 'unavailable').
     add_maskgen_route(app, state.handler, body_budget=state.body_budget)
+    from pgw.service.provision import add_provision_routes
+
+    # Client provisioning (public artifacts and pks-v3 hint operands; answers 'unavailable' unless s.provision).
+    add_provision_routes(app, state)
     from pgw.wire.server import ComputeFastPath
 
     # Innermost middleware: compute requests skip routing and framework middleware (hot path). Any

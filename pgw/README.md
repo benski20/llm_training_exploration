@@ -65,6 +65,7 @@ curl localhost:8080/v1/chat/completions -H "Authorization: Bearer $KEY" -d '{...
 | `src/pgw/wire` | HTTP/2 + msgpack protocol |
 | `src/pgw/service` | stateless masked compute service |
 | `src/pgw/gateway` | OpenAI-compatible gateway |
+| `src/pgw/provision` | client provisioning: the gateway's non-secret artifacts (fingerprint-checked, resumable) and a provider-built, client-verified pks-v3 hint (`service/provision.py` is the provider side) |
 | `src/pgw/observability` | metrics, outbound-noise monitor, dashboard |
 | `src/pgw/cli` | `pgw` command |
 | `rust/` | `pgw-core-rs`: Rust port of the ring/PRNG/Freivalds core, cross-checked against the Python test vectors (`cargo test`) |

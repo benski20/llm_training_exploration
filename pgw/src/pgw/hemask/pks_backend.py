@@ -35,7 +35,8 @@ import os
 import shutil
 import time
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -58,7 +59,8 @@ from pgw.hemask.wire import (
     pack_bits,
 )
 
-__all__ = ["InProcessPKSProvider", "PKSHintStore", "PKSMaskBackend", "RemotePKS"]
+__all__ = ["HintLinear", "InProcessPKSProvider", "PKSHintStore", "PKSMaskBackend", "RemotePKS", "row_norm",
+           "switch_hint_fast"]
 
 log = logging.getLogger(__name__)
 
@@ -71,6 +73,44 @@ _ROW_BLOCK = 1024  # hint rows per H block during the build (bounds transient me
 def _check_shape(key: str, m: int, n: int) -> None:
     if m % PACK or n % RANK:
         raise ConfigError(f"pks-v3 needs out_features % {PACK} == 0 and in_features % {RANK} == 0; {key} is {m} x {n}")
+
+
+@dataclass
+class HintLinear:
+    """One linear for :meth:`PKSHintStore.write`: shape, its largest weight-row norm (a float, or a callable read
+    after ``blocks`` is exhausted) and the ``(r0, H rows)`` blocks of ``H = W8 A mod 2^56``."""
+
+    key: str
+    m: int
+    n: int
+    norm: float | Callable[[], float]
+    blocks: Iterable[tuple[int, np.ndarray]]
+
+
+def row_norm(w: np.ndarray) -> float:
+    """The store's ``row_norms`` entry: ``max_j ||W8_j||_2`` in float64 (exactly as the original build)."""
+    return float(np.sqrt((np.asarray(w).astype(np.float64) ** 2).sum(1)).max())
+
+
+def switch_hint_fast(h: np.ndarray, threads: int | None = None) -> np.ndarray:
+    """:func:`pgw.hemask.pks.switch_hint` on row blocks in threads (numpy releases the GIL in its ufuncs): the
+    same function on every row, so bit-identical (``tests/provision/test_hintcheck.py``)."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    h = np.asarray(h, dtype=np.uint64)
+    par = PKSParams()
+    nt = max(1, int(threads or os.cpu_count() or 1))
+    if nt == 1 or h.shape[0] < 2 * nt:
+        return pks.switch_hint(h, par)
+    out = np.empty(h.shape, dtype=np.uint64)
+    step = -(-h.shape[0] // nt)
+
+    def run(r0: int) -> None:
+        out[r0:r0 + step] = pks.switch_hint(h[r0:r0 + step], par)
+
+    with ThreadPoolExecutor(max_workers=nt) as ex:
+        list(ex.map(run, range(0, h.shape[0], step)))
+    return out
 
 
 class PKSHintStore:
@@ -142,22 +182,14 @@ class PKSHintStore:
 
     @classmethod
     def build(cls, root: Path, pack: Any, *, only: set[str] | None = None, log_every_s: float = 30.0,
-              mac_key: bytes | None = None) -> PKSHintStore:
+              mac_key: bytes | None = None, seeds: tuple[bytes, bytes] | None = None) -> PKSHintStore:
         """Compute every linear's compact hint (``only``: these linear keys) from the pack (the customer's own
-        weights) and fresh seeds."""
+        weights) and fresh seeds (``seeds = (a_seed, ks_seed)``: given ones, e.g. a provisioning comparison)."""
         from pgw.hemask.lwe import matmul_mod64
 
-        par = PKSParams()
-        final = cls.dir_for(root, pack.fingerprint)
-        tmp = final.with_name(final.name + f".building-{os.getpid()}")
-        shutil.rmtree(tmp, ignore_errors=True)
-        tmp.mkdir(parents=True)
-        a_seed, ks_seed = new_seed(), new_seed()  # customer-chosen; both public
-        k_hat = pks.ks_a(ks_seed)[None].astype(np.uint32)
-        norms: dict[str, float] = {}
-        digests: dict[str, str] = {}
-        t0 = last = time.monotonic()
-        try:
+        a_seed, ks_seed = seeds if seeds is not None else (new_seed(), new_seed())  # customer-chosen; both public
+
+        def items() -> Any:
             for lw in pack.iter_linears():
                 key = lw.id.key
                 if only is not None and key not in only:
@@ -165,23 +197,59 @@ class PKSHintStore:
                 w = lw.w8.numpy() if isinstance(lw.w8, torch.Tensor) else np.asarray(lw.w8)
                 m, n = w.shape
                 _check_shape(key, m, n)
-                norms[key] = float(np.sqrt((w.astype(np.float64) ** 2).sum(1)).max())
                 a = pks.a_mlwe_rows(pks.public_ring_rows(a_seed, n, key))
+
+                def blocks(w: np.ndarray = w, a: np.ndarray = a) -> Any:
+                    for r0 in range(0, w.shape[0], _ROW_BLOCK):
+                        yield r0, matmul_mod64(np.ascontiguousarray(w[r0:r0 + _ROW_BLOCK]), a) & _M56
+
+                yield HintLinear(key, m, n, row_norm(w), blocks())
+
+        return cls.write(root, pack.fingerprint, a_seed, ks_seed, items(), mac_key=mac_key, log_every_s=log_every_s)
+
+    @classmethod
+    def write(cls, root: Path, fingerprint: str, a_seed: bytes, ks_seed: bytes, linears: Any, *,
+              mac_key: bytes | None = None, extra_meta: dict[str, Any] | None = None,
+              log_every_s: float = 30.0) -> PKSHintStore:
+        """Write a store from ``H = W8 A mod 2^56`` row blocks (the shared tail of every build).
+
+        ``linears`` yields :class:`HintLinear` items; each item's ``blocks`` yields ``(r0, H rows)`` with row counts
+        that are multiples of 32 and may raise (e.g. a failed provider check) after its last block: then nothing
+        is renamed into place. The hint of a block is ``keyswitch(switch_hint(H), k)``, as in the original build."""
+        final = cls.dir_for(root, fingerprint)
+        tmp = final.with_name(final.name + f".building-{os.getpid()}-{uuid.uuid4().hex[:8]}")
+        shutil.rmtree(tmp, ignore_errors=True)
+        tmp.mkdir(parents=True)
+        k_hat = pks.ks_a(ks_seed)[None].astype(np.uint32)
+        norms: dict[str, float] = {}
+        digests: dict[str, str] = {}
+        t0 = last = time.monotonic()
+        try:
+            for item in linears:
+                key, m = item.key, item.m
+                _check_shape(key, m, item.n)
                 out = np.lib.format.open_memmap(tmp / f"{key}.npy", mode="w+", dtype=np.uint8,
                                                 shape=(m // PACK, 2, NR, 3))
-                for r0 in range(0, m, _ROW_BLOCK):
-                    h = matmul_mod64(np.ascontiguousarray(w[r0:r0 + _ROW_BLOCK]), a) & _M56
-                    out[r0 // PACK:(r0 + h.shape[0]) // PACK] = keyswitch(pks.switch_hint(h, par), k_hat)
+                done = 0
+                for r0, h in item.blocks:
+                    rows = int(h.shape[0])
+                    if r0 % PACK or rows % PACK or r0 + rows > m:
+                        raise ConfigError(f"{key}: hint block [{r0}, {r0 + rows}) is not 32-row aligned")
+                    out[r0 // PACK:(r0 + rows) // PACK] = keyswitch(switch_hint_fast(h), k_hat)
+                    done += rows
                     del h
+                if done != m:
+                    raise ConfigError(f"{key}: hint blocks cover {done} of {m} rows")
                 out.flush()
-                del out, a
+                del out
+                norms[key] = float(item.norm if not callable(item.norm) else item.norm())
                 digests[key] = _digest(tmp / f"{key}.npy")
                 if time.monotonic() - last > log_every_s:
                     last = time.monotonic()
                     log.info("building pks-v3 hint: %s (%.0f s)", key, last - t0)
-            meta = {"version": _STORE_VERSION, "scheme": SCHEME_ID, "nr": NR, "fingerprint": pack.fingerprint,
+            meta = {"version": _STORE_VERSION, "scheme": SCHEME_ID, "nr": NR, "fingerprint": fingerprint,
                     "a_seed": a_seed.hex(), "ks_seed": ks_seed.hex(), "row_norms": norms, "digests": digests,
-                    "created": time.time()}
+                    "created": time.time(), **(extra_meta or {})}
             if mac_key is not None:
                 meta["mac"] = _meta_mac(mac_key, meta)
             (tmp / _META).write_text(json.dumps(meta, indent=1))
@@ -192,7 +260,7 @@ class PKSHintStore:
             shutil.rmtree(tmp, ignore_errors=True)
             raise
         st = cls(final, meta)
-        log.info("pks-v3 hint for %s built in %.0f s: %.2f GB in %s", pack.fingerprint[:12], time.monotonic() - t0,
+        log.info("pks-v3 hint for %s built in %.0f s: %.2f GB in %s", fingerprint[:12], time.monotonic() - t0,
                  st.nbytes / 1e9, final)
         return st
 
