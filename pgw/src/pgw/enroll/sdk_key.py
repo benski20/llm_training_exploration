@@ -123,6 +123,11 @@ class SDKKey:
         return any(self.ca_sha256)
 
     @property
+    def ca_fingerprint_hex(self) -> str:
+        """The pinned CA fingerprint as lowercase hex."""
+        return self.ca_sha256.hex()
+
+    @property
     def key_id_str(self) -> str:
         """``sk_<16 hex>``."""
         return format_key_id(self.key_id)

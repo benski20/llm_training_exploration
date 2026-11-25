@@ -298,6 +298,8 @@ class ServiceHandler:
         self.lane_admission: Any = None
         #: lane calls served through :meth:`lane_compute` (calls without a CUDA graph)
         self.lane_requests = 0
+        #: SDK-key policy and usage metering (:class:`pgw.service.accounts.Accounts`), or ``None`` (off)
+        self.accounts: Any = None
 
     # ---- ComputeHandler protocol -------------------------------------------------------------
     def authenticate(self, authorization: str | None, client_cert_subject: str | None) -> TenantIdentity:
@@ -324,6 +326,9 @@ class ServiceHandler:
         """Evaluate every item exactly; results in request order."""
         ident: TenantIdentity | None = ctx.identity if isinstance(ctx.identity, TenantIdentity) else None
         tenant = ident.tenant_id if ident is not None else "anonymous"
+        acc = getattr(self, "accounts", None)
+        if acc is not None:
+            acc.admit(tenant, request.fingerprint, request.total_rows)
         shared = self._admit(tenant, request.total_rows, enter=True)
         st = self._tenants.get(tenant)
         if st is None:
@@ -365,6 +370,9 @@ class ServiceHandler:
         kernel call (inline on the idle device), metrics and response."""
         ident: TenantIdentity | None = ctx.identity if isinstance(ctx.identity, TenantIdentity) else None
         tenant = ident.tenant_id if ident is not None else "anonymous"
+        acc = getattr(self, "accounts", None)
+        if acc is not None:
+            acc.admit(tenant, request.fingerprint, request.total_rows)
         shared = self._admit(tenant, request.total_rows, enter=True)
         st = self._tenants.get(tenant)
         if st is None:
@@ -397,8 +405,12 @@ class ServiceHandler:
                          bt: BatchTiming) -> ComputeResponse:
         """Response (and metrics) of a one-item request whose result packs to ``data``."""
         it0 = request.items[0]
-        self.metrics.rows(tenant, it0.linear.split(".", 1)[1], int(it0.rows))
+        kind = it0.linear.split(".", 1)[1]
+        self.metrics.rows(tenant, kind, int(it0.rows))
         self.metrics.bytes_io(tenant, request.payload_bytes, len(data))
+        acc = getattr(self, "accounts", None)
+        if acc is not None:
+            acc.record_rows(tenant, request.fingerprint, {kind: int(it0.rows)}, request.payload_bytes, len(data))
         return ComputeResponse(request.request_id, (ComputeResult(it0.linear, int(it0.rows), data),), ServerTiming(
             queue_ms=round(bt.queue_ms, 3), compute_ms=round(bt.compute_ms, 3), batch_rows=bt.batch_rows))
 
@@ -429,7 +441,11 @@ class ServiceHandler:
             want = it.b_nbytes(n)  # v1: q/8 bytes per coefficient; v2: bb bits
             if len(it.b) != want:
                 raise ProtocolError(f"maskgen {it.linear}: b has {len(it.b)} bytes, expected {want}")
-        self._admit(tenant, sum(it.cols for it in request.items))
+        cols = sum(it.cols for it in request.items)
+        acc = getattr(self, "accounts", None)
+        if acc is not None:
+            acc.admit(tenant, request.fingerprint, 0)
+        self._admit(tenant, cols)
         self.inflight += 1
         self._idle.clear()
         try:
@@ -444,6 +460,9 @@ class ServiceHandler:
                 ys = await asyncio.gather(*(self._maskgen_in_slot(model.kernel(it.linear), it)
                                             for it in request.items))
             out = [MaskgenResult(it.linear, it.cols, y) for it, y in zip(request.items, ys, strict=True)]
+            if acc is not None:
+                acc.record_maskgen(tenant, str(request.fingerprint), cols, request.payload_bytes,
+                                   sum(len(r.y) for r in out))
             return MaskgenResponse(request.request_id, tuple(out))
         finally:
             self.inflight -= 1
@@ -660,6 +679,9 @@ class ServiceHandler:
         for kind, rows in kinds.items():
             self.metrics.rows(tenant, kind, rows)
         self.metrics.bytes_io(tenant, bytes_in, bytes_out)
+        acc = getattr(self, "accounts", None)
+        if acc is not None:
+            acc.record_rows(tenant, request.fingerprint, kinds, bytes_in, bytes_out)
         timing = ServerTiming(
             queue_ms=round(max((r[2].queue_ms for r in results), default=0.0), 3),
             compute_ms=round(sum(r[2].compute_ms for r in results if r[3]), 3),

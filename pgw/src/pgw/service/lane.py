@@ -513,6 +513,9 @@ class LaneManager:
         if self.svc.draining or self.state.handler.draining:
             raise ServiceUnavailableError("service is draining", details={"retry_after_s": self.settings.retry_after_s})
         tenant = getattr(identity, "tenant_id", None) or "anonymous"
+        acc = getattr(self.state.handler, "accounts", None)
+        if acc is not None:  # SDK keys: model scope, quota and row rate (pgw.service.accounts)
+            acc.admit(tenant, fingerprint, 0)
         slot = self._slot_for(fingerprint)
         t = self._tables[slot]
         ticket = secrets.token_bytes(TICKET_LEN)
@@ -524,10 +527,13 @@ class LaneManager:
                                               details={"reason": "client certificate not bindable"})
             bind = client_cert_der
         self.svc.add_ticket(ticket, tenant, slot, TICKET_TTL_S, bind)
+        if acc is not None:
+            acc.lane_opened(tenant, t.fingerprint)
         token_id = getattr(identity, "token_id", None)
         if token_id is not None and callable(getattr(identity, "still_valid", None)):
             self._identities.setdefault(tenant, {})[str(token_id)] = identity
-        where: dict[str, Any] = ({"port": int(self.svc.port), "alpn": "pgw-lane/1"} if self.transport == "tcp"
+        where: dict[str, Any] = ({"port": int(self.settings.lane_advertised_port or self.svc.port),
+                                  "alpn": "pgw-lane/1"} if self.transport == "tcp"
                                  else {"socket": str(self.settings.lane_socket)})
         return {
             "version": LANE_VERSION,
@@ -647,6 +653,10 @@ class LaneManager:
         if self.svc is None:
             return {}
         d: dict[str, Any] = self.svc.drain_stats()
+        acc = getattr(self.state.handler, "accounts", None)
+        if acc is not None:  # SDK key usage; close the lane connections of revoked or over-quota keys
+            for tenant in acc.record_lane(d):
+                self.svc.revoke_tenant(tenant)
         m = self.state.metrics
         if not m.enabled:
             return d

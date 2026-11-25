@@ -288,13 +288,16 @@ class EnrollmentService:
     """
 
     def __init__(self, settings: Any, authenticator: Any, models: Callable[[], list[dict[str, Any]]]):
-        assert settings.enrollment_file is not None and settings.tokens_file is not None
+        assert settings.tokens_file is not None
         self.settings = settings
         self.authenticator = authenticator
         self.models = models
-        self.store = EnrollmentStore(settings.enrollment_file)
+        # Without enrollment_file only the credential issuing is used (SDK keys, pgw.service.accounts).
+        self.store = EnrollmentStore(settings.enrollment_file) if settings.enrollment_file is not None else None
         self.limiter = _IPRateLimiter(settings.enrollment_rate_limit_per_minute)
-        audit_path = settings.enrollment_audit_file or Path(settings.enrollment_file).with_suffix(".audit.jsonl")
+        audit_path = settings.enrollment_audit_file or (
+            Path(settings.enrollment_file).with_suffix(".audit.jsonl") if settings.enrollment_file is not None
+            else None)
         self.audit = _Audit(audit_path)
         self.ca_pem: str | None = load_ca_pem(settings.enrollment_ca_file) if settings.enrollment_ca_file else None
         self._lock = threading.Lock()
@@ -346,6 +349,8 @@ class EnrollmentService:
                                "or ask your provider", code=ErrorCode.UNAVAILABLE)
             return models
 
+        if self.store is None:
+            raise PGWError("this service does not accept enrollment codes", code=ErrorCode.UNAVAILABLE)
         with self._lock:
             try:
                 rec, models = self.store.consume(bytes.fromhex(secret_hex), name, check)
@@ -357,34 +362,50 @@ class EnrollmentService:
             except PGWError as exc:
                 self.audit.event("enroll.failed", client=client, gateway_name=name, reason=str(exc.code))
                 raise
-            # Without a client certificate the token is marked token-only: it stays usable when the
-            # service requires mTLS for compute (require_client_cert_for_compute).
-            token, trec = _issue_token(rec.tenant, Path(s.tokens_file), token_only=not sign)
-            if self.authenticator is not None:
-                self.authenticator.add_token_hash(trec.digest_hex, rec.tenant, token_id=trec.token_id,
-                                                  token_only=trec.token_only)
-            out: dict[str, Any] = {
-                "tenant": rec.tenant, "service_token": token, "ca_bundle_pem": self.ca_pem,
-                "service_url": s.public_url, "models": models,
-            }
-            serial: int | None = None
-            if sign:
-                cn = f"pgw-gw.{rec.tenant}.{name}"[:64]
-                cert_pem, serial = sign_client_csr(str(csr), s.client_issuing_ca_cert_file,
-                                                   s.client_issuing_ca_key_file, cn, s.client_cert_validity_days)
-                out["client_cert_pem"] = cert_pem
-                out["client_cert_cn"] = cn
-                if s.mtls_tenants_file is not None:
-                    from pgw.core.fileio import write_private
-
-                    write_private(Path(s.mtls_tenants_file), f"{rec.tenant}:{cn}\n", append=True)
-                if self.authenticator is not None:
-                    self.authenticator.add_subject(cn, rec.tenant)
+            out, trec, serial, _cn = self.issue_credentials(rec.tenant, name, str(csr) if sign else None)
+            out["models"] = models
         self.audit.event("enroll.ok", client=client, gateway_name=name, enrollment_id=rec.id, tenant=rec.tenant,
                          token_id=trec.token_id,
                          cert_serial=f"{serial:x}" if serial is not None else None,
                          models=",".join(m["name"] for m in models))
         return out
+
+
+    def issue_credentials(self, tenant: str, name: str, csr: str | None,
+                          ) -> tuple[dict[str, Any], Any, int | None, str | None]:
+        """Issue a tenant service token and, for a (checked) ``csr`` with an issuing CA configured, a client
+        certificate ``CN=pgw-gw.<tenant>.<name>``; register both with the running authenticator (and the token
+        hash in ``tokens_file``, the CN in ``mtls_tenants_file``). Shared by code enrollment and SDK keys.
+
+        Returns:
+            ``(reply without "models", token record, certificate serial or None, CN or None)``.
+        """
+        s = self.settings
+        sign = csr is not None and s.client_issuing_ca_cert_file is not None
+        # Without a client certificate the token is marked token-only: it stays usable when the
+        # service requires mTLS for compute (require_client_cert_for_compute).
+        token, trec = _issue_token(tenant, Path(s.tokens_file), token_only=not sign)
+        if self.authenticator is not None:
+            self.authenticator.add_token_hash(trec.digest_hex, tenant, token_id=trec.token_id,
+                                              token_only=trec.token_only)
+        out: dict[str, Any] = {
+            "tenant": tenant, "service_token": token, "ca_bundle_pem": self.ca_pem, "service_url": s.public_url,
+        }
+        serial: int | None = None
+        cn: str | None = None
+        if sign:
+            cn = f"pgw-gw.{tenant}.{name}"[:64]
+            cert_pem, serial = sign_client_csr(str(csr), s.client_issuing_ca_cert_file,
+                                               s.client_issuing_ca_key_file, cn, s.client_cert_validity_days)
+            out["client_cert_pem"] = cert_pem
+            out["client_cert_cn"] = cn
+            if s.mtls_tenants_file is not None:
+                from pgw.core.fileio import write_private
+
+                write_private(Path(s.mtls_tenants_file), f"{tenant}:{cn}\n", append=True)
+            if self.authenticator is not None:
+                self.authenticator.add_subject(cn, tenant)
+        return out, trec, serial, cn
 
 
     def renew(self, body: Any, client: str, authorization: str | None, cert_subject: str | None,
@@ -570,6 +591,7 @@ def add_enroll_routes(app: Any, settings: Any, authenticator: Any, models: Calla
 
     app.add_route(ENROLL_CA_PATH, get_ca, methods=["GET"], include_in_schema=False)
     app.add_route(ENROLL_RENEW_PATH, post_renew, methods=["POST"], include_in_schema=False)
-    app.add_route(ENROLL_PATH, post_enroll, methods=["POST"], include_in_schema=False)
+    if svc.store is not None:  # codes need enrollment_file; SDK keys (pgw.service.accounts) only use the CA/renew
+        app.add_route(ENROLL_PATH, post_enroll, methods=["POST"], include_in_schema=False)
     app.state.pgw_enroll = svc
     return svc

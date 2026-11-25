@@ -667,6 +667,11 @@ def service_enroll_revoke(record_id: str, enrollment_file: Path | None) -> None:
     click.echo(json.dumps({"revoked": rec.id, "tenant": rec.tenant, "state": rec.state()}))
 
 
+from pgw.cli.accounts_cli import register as _register_accounts  # noqa: E402
+
+_register_accounts(service)
+
+
 @service_token.command("hash")
 @handle_errors
 def service_token_hash() -> None:

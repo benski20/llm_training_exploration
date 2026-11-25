@@ -40,6 +40,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 from pgw.core.errors import AuthError, ConfigError, ErrorCode, PGWError
 
@@ -318,6 +319,9 @@ class TenantAuthenticator:
         self._file_sig: tuple[int, int] | None = None
         self._next_check = 0.0
         self._subjects: dict[str, str] = {}
+        #: Optional extra check per tenant (SDK keys, :class:`pgw.service.accounts.Accounts`): ``check(tenant)``
+        #: raises for a refused tenant, ``active(tenant)`` re-checks long-lived channels. ``None`` = off.
+        self.tenant_gate: Any = None
         if self.tokens_file is not None:
             self._file_sig = self._signature()
             self._file = [(bytes.fromhex(r.digest_hex), r) for r in read_token_records(self.tokens_file)]
@@ -462,14 +466,22 @@ class TenantAuthenticator:
         if rec is not None and cert_tenant is not None and rec.tenant != cert_tenant:
             raise PGWError("bearer token and client certificate belong to different tenants",
                            code=ErrorCode.PERMISSION_DENIED)
+        gate = self.tenant_gate
         if rec is not None:
             if self.require_client_cert and cert_tenant is None and not rec.token_only:
                 raise PGWError("this service requires the gateway's client certificate (mTLS) for compute; the "
                                "certificate was not presented, has expired or is not registered",
                                code=ErrorCode.PERMISSION_DENIED)
-            tid = rec.token_id
-            return TenantIdentity(rec.tenant, "token", tid, lambda: self.token_valid(tid))
+            tid, tenant = rec.token_id, rec.tenant
+            if gate is not None:
+                gate.check(tenant)
+                return TenantIdentity(tenant, "token", tid, lambda: self.token_valid(tid) and gate.active(tenant))
+            return TenantIdentity(tenant, "token", tid, lambda: self.token_valid(tid))
         if cert_tenant is not None:
+            if gate is not None:
+                gate.check(cert_tenant)
+                ct = cert_tenant
+                return TenantIdentity(ct, "mtls", None, lambda: gate.active(ct))
             return TenantIdentity(cert_tenant, "mtls")
         if self.allow_unauthenticated:
             return TenantIdentity(_ANON, "anonymous")

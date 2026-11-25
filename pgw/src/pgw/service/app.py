@@ -9,6 +9,8 @@ Routes (SPEC.md section 6.2):
     GET  /metrics          Prometheus (optionally only on a separate port, see :mod:`pgw.service.server`)
     GET  /pgw/v1/enroll/ca, POST /pgw/v1/enroll   gateway enrollment (when ``enrollment_file`` is set;
                            see :mod:`pgw.enroll.service`)
+    POST /pgw/v1/sdk/enroll, GET /pgw/v1/sdk/usage   SDK keys (when ``accounts_db`` is set; admin API under
+                           /pgw/v1/admin with ``accounts_admin_api``; see :mod:`pgw.service.accounts`)
 Run with hypercorn for HTTP/2 (``pgw service serve`` / ``python -m pgw.service``).
 
 Lifecycle: on startup the app loads every configured pack (``verify="full"``, linears only) in a
@@ -65,6 +67,8 @@ class ServiceState:
     #: request-body bytes buffered at once, shared by the compute routes, ``/pgw/v1/maskgen`` and the bulk
     #: maskgen channel (``max_inflight_bytes``, at least one request's ``max_request_bytes``)
     body_budget: Any = None
+    #: SDK keys, usage metering and quotas (``accounts_db``; :mod:`pgw.service.accounts`)
+    accounts: Any = None
 
     @property
     def draining(self) -> bool:
@@ -178,7 +182,8 @@ def _build_state(
     if authenticator is None and (has_creds or not s.allow_unauthenticated):
         authenticator = TenantAuthenticator(
             s.tokens_file, allow_unauthenticated=s.allow_unauthenticated, mtls_tenants_file=s.mtls_tenants_file,
-            allow_empty=s.enrollment_file is not None, require_client_cert=s.compute_requires_client_cert,
+            allow_empty=s.enrollment_file is not None or s.accounts_db is not None,
+            require_client_cert=s.compute_requires_client_cert,
             reload_interval_s=s.tokens_reload_interval_s,
         )
     metrics = metrics or ServiceMetrics(enabled=s.metrics_enabled)
@@ -237,6 +242,8 @@ def create_app(
             log.error("failed to load model packs: %s", state.load_error)
             raise
         await state.batcher.start()
+        if state.accounts is not None:
+            state.accounts.start()
         await state.device_ok()
         if state.lane is not None:
             await state.lane.start()
@@ -291,7 +298,7 @@ def create_app(
         body, ctype = state.metrics.render()
         return Response(content=body, media_type=ctype.split(";")[0], headers={"Content-Type": ctype})
 
-    if s.enrollment_file is not None:
+    if s.enrollment_file is not None or s.accounts_db is not None:
         from pgw.enroll.service import add_enroll_routes
 
         def _served() -> list[dict[str, Any]]:
@@ -305,7 +312,21 @@ def create_app(
                 e["masked_head"] = bool(e["masked_head"] or m.base_fingerprint)
             return list(out.values())
 
-        add_enroll_routes(app, s, state.handler.authenticator, _served)
+        enroll_svc = add_enroll_routes(app, s, state.handler.authenticator, _served)
+        if s.accounts_db is not None:
+            from pgw.enroll.service import ca_fingerprint
+            from pgw.service.accounts import Accounts, AccountsStore, add_admin_routes, add_sdk_routes
+
+            acc = Accounts(AccountsStore(s.accounts_db), s, registry=state.registry,
+                           authenticator=state.handler.authenticator)
+            acc.ca_sha256 = ca_fingerprint(enroll_svc.ca_pem) if enroll_svc.ca_pem else None
+            state.accounts = acc
+            state.handler.accounts = acc
+            if state.handler.authenticator is not None:
+                state.handler.authenticator.tenant_gate = acc
+            add_sdk_routes(app, acc, enroll_svc)
+            if s.accounts_admin_api:
+                add_admin_routes(app, acc)
 
     app.add_route("/healthz", healthz, methods=["GET"], include_in_schema=False)
     app.add_route("/readyz", readyz, methods=["GET"], include_in_schema=False)
@@ -341,6 +362,8 @@ async def shutdown(state: ServiceState) -> None:
         await state.lane.stop(max(0.5, timeout - (time.monotonic() - t0)))
     remaining = max(0.0, timeout - (time.monotonic() - t0))
     await state.batcher.stop(drain=True, timeout=remaining)
+    if state.accounts is not None:
+        await asyncio.to_thread(state.accounts.stop)  # flush metered usage
     log.info("compute service stopped")
 
 

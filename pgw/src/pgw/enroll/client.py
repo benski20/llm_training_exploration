@@ -33,7 +33,8 @@ from pgw.core.fileio import atomic_write_text
 from pgw.enroll.code import EnrollmentCode
 
 __all__ = [
-    "ENROLLMENT_FILES", "CertRenewer", "EnrollResult", "EnrollmentError", "enroll_gateway", "enrollment_paths",
+    "ENROLLMENT_FILES", "CertRenewer", "EnrollResult", "EnrollmentError", "enroll_gateway", "enroll_with_sdk_key",
+    "enrollment_paths",
     "renew_client_cert",
 ]
 
@@ -182,8 +183,6 @@ def enroll_gateway(
         EnrollmentError: service unreachable, CA pin mismatch, code refused.
         ConfigError: files exist (without ``force``) or the directory is not writable.
     """
-    import httpx
-
     say = progress or (lambda msg: None)
     c = code if isinstance(code, EnrollmentCode) else EnrollmentCode.parse(code)
     config_dir = Path(config_dir)
@@ -197,6 +196,67 @@ def enroll_gateway(
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}", name):
         raise ConfigError("gateway name must match [A-Za-z0-9][A-Za-z0-9._-]{0,63}")
 
+    body: dict[str, Any] = {"secret": c.secret_hex, "gateway_name": name}
+    return _enroll_flow(c, config_dir, paths, name, "/pgw/v1/enroll", body, {}, packs_dir=packs_dir,
+                        request_client_cert=request_client_cert, transport=transport, timeout_s=timeout_s, say=say,
+                        refused="the compute service did not accept this enrollment code: it is unknown, already "
+                                "used, revoked or expired. Ask your provider for a new code.")
+
+
+def enroll_with_sdk_key(
+    key: str | Any,
+    config_dir: Path,
+    *,
+    installation_name: str | None = None,
+    models: list[str] | None = None,
+    force: bool = False,
+    packs_dir: Path | None = None,
+    request_client_cert: bool = True,
+    transport: Any = None,
+    timeout_s: float = 30.0,
+    progress: Callable[[str], None] | None = None,
+) -> EnrollResult:
+    """Enroll one installation of the client library with an SDK key (``POST /pgw/v1/sdk/enroll``).
+
+    The same flow and files as :func:`enroll_gateway` (CA pinned from the key and checked before the key is
+    sent, local client key and CSR, token 0600, ``models.json``), authenticated by the reusable key instead of a
+    single-use code. See docs/sdk/CONTRACT.md, appendix A2.
+
+    Raises:
+        SDKKeyError: the key is malformed or damaged (before any network call).
+        EnrollmentError: provider unreachable, CA pin mismatch, key refused, model outside the key's scope.
+        ConfigError: files exist (without ``force``) or the directory is not writable.
+    """
+    from pgw.enroll.sdk_key import SDKKey
+
+    say = progress or (lambda msg: None)
+    k = key if isinstance(key, SDKKey) else SDKKey.parse(str(key))
+    config_dir = Path(config_dir)
+    paths = enrollment_paths(config_dir)
+    existing = [p for p in paths.values() if p.exists()]
+    if existing and not force:
+        raise ConfigError(f"already enrolled ({existing[0]} exists); pass force=True to replace it")
+    _check_writable(config_dir)
+    name = installation_name or _default_name()
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}", name):
+        raise ConfigError("installation name must match [A-Za-z0-9][A-Za-z0-9._-]{0,63}")
+    body: dict[str, Any] = {"installation_name": name}
+    if models:
+        body["models"] = list(models)
+    return _enroll_flow(k, config_dir, paths, name, "/pgw/v1/sdk/enroll", body,
+                        {"authorization": f"Bearer {k.encode()}"}, packs_dir=packs_dir,
+                        request_client_cert=request_client_cert, transport=transport, timeout_s=timeout_s, say=say,
+                        refused="the provider did not accept this SDK key: it is invalid, revoked or expired. "
+                                "Create a new key in the console.")
+
+
+def _enroll_flow(c: Any, config_dir: Path, paths: dict[str, Path], name: str, path: str, body: dict[str, Any],
+                 headers: dict[str, str], *, packs_dir: Path | None, request_client_cert: bool, transport: Any,
+                 timeout_s: float, say: Callable[[str], None], refused: str) -> EnrollResult:
+    """Pin the CA of ``c`` (an :class:`EnrollmentCode` or :class:`pgw.enroll.sdk_key.SDKKey`), POST ``body`` to
+    ``path`` and write the credential files."""
+    import httpx
+
     say(f"Contacting {c.service_url} and checking its certificate authority")
     ca_pem = _fetch_pinned_ca(c, transport, timeout_s)
     verify: Any = False
@@ -204,23 +264,26 @@ def enroll_gateway(
         assert ca_pem is not None
         verify = ssl.create_default_context(cadata=ca_pem)  # the pinned CA only, no system trust store
     key_pem: bytes | None = None
-    body: dict[str, Any] = {"secret": c.secret_hex, "gateway_name": name}
     if request_client_cert:
         key_pem, body["csr_pem"] = _key_and_csr(name)
     say("Presenting the enrollment code")
     try:
         with _client(c, verify, transport, timeout_s) as h:
-            r = h.post("/pgw/v1/enroll", json=body)
+            r = h.post(path, json=body, headers=headers)
     except httpx.HTTPError as exc:
         raise EnrollmentError(f"enrollment request failed ({type(exc).__name__}); nothing was changed",
                               code=ErrorCode.BACKEND_UNAVAILABLE) from exc
     if r.status_code == 401:
-        raise EnrollmentError("the compute service did not accept this enrollment code: it is unknown, already "
-                              "used, revoked or expired. Ask your provider for a new code.",
-                              code=ErrorCode.UNAUTHENTICATED)
+        raise EnrollmentError(refused, code=ErrorCode.UNAUTHENTICATED)
+    if r.status_code == 403:
+        raise EnrollmentError("the provider refused: a requested model is outside this key's scope",
+                              code=ErrorCode.PERMISSION_DENIED)
     if r.status_code == 429:
-        raise EnrollmentError("too many enrollment attempts; wait a minute and try again",
-                              code=ErrorCode.RATE_LIMITED)
+        try:
+            why = str(r.json()["error"]["message"])
+        except (ValueError, KeyError, TypeError):
+            why = "too many enrollment attempts"
+        raise EnrollmentError(f"{why}; wait and try again", code=ErrorCode.RATE_LIMITED)
     if r.status_code != 200:
         try:
             msg = r.json()["error"]["message"]

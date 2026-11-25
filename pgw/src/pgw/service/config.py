@@ -215,6 +215,33 @@ class ServiceSettings(PGWSettings):
         30.0, gt=0, le=397, description="Lifetime of client certificates signed at enrollment",
     )
 
+    # ---- accounts: organisations, SDK keys, usage (pgw.service.accounts) -------------------
+    accounts_db: Path | None = Field(
+        None, description="SQLite database (WAL, 0600) of organisations, SDK keys, installations, usage and the "
+        "audit log. Setting it enables POST /pgw/v1/sdk/enroll and GET /pgw/v1/sdk/usage (SDK keys, managed with "
+        "'pgw service keys ...'); needs tokens_file and public_url (and enrollment_ca_file for an https URL)",
+    )
+    sdk_key_env: str = Field("live", pattern=r"^[a-z][a-z0-9]{0,15}$",
+                             description="Environment label written into new SDK keys (pgw_<env>_...)")
+    accounts_admin_api: bool = Field(
+        False, description="Serve the accounts admin API under /pgw/v1/admin (organisations, keys, usage, audit; "
+        "admin bearer tokens only). Off by default",
+    )
+    accounts_admin_token_sha256: list[str] = Field(
+        default_factory=list, description="SHA-256 (hex) of bootstrap admin tokens (global scope) for the admin API; "
+        "the tokens themselves are never stored. Tokens made with 'pgw service admin-token create' live in the "
+        "database instead",
+    )
+    accounts_refresh_s: float = Field(
+        2.0, gt=0, le=60, description="How often keys, revocations and quotas are re-read from accounts_db (a key "
+        "revoked by another process is refused within this interval)",
+    )
+    accounts_flush_s: float = Field(5.0, gt=0, le=300, description="How often metered usage is written to accounts_db")
+    sdk_enrolls_per_key_per_hour: int = Field(
+        60, ge=1, description="Successful POST /pgw/v1/sdk/enroll calls per SDK key per hour (each one makes a new "
+        "installation); failed attempts are limited per address by enrollment_rate_limit_per_minute",
+    )
+
     # ---- trip lane (chat-speed plan; WP-A0 scaffold) ----------------------------------------
     # Every default is today's behaviour; a value other than the default is refused while the field is
     # listed in PENDING_SPEED_SETTINGS (not built yet).
@@ -229,6 +256,12 @@ class ServiceSettings(PGWSettings):
     lane_socket: Path | None = Field(None, description="Unix domain socket path of the lane (lane = 'uds')")
     lane_port: int | None = Field(None, ge=0, le=65535, description="TCP port of the lane (lane = 'tcp'; 0 = any "
                                   "free port, announced in each ticket)")
+    lane_advertised_port: int | None = Field(
+        None, ge=1, le=65535,
+        description="Port written into lane tickets instead of the listening lane_port, for hosts that publish the "
+        "lane through a port mapping (RunPod, Docker -p): clients connect to the service URL's host "
+        "on this port. None (default) = the listening port",
+    )
     lane_max_rows: int = Field(
         8, ge=1, le=8, description="Largest rows per item the lane serves; bigger calls use the stream channel",
     )
@@ -315,6 +348,20 @@ class ServiceSettings(PGWSettings):
             if self.public_url.startswith("https://") and self.enrollment_ca_file is None:
                 raise ValueError("enrollment_file with an https public_url needs enrollment_ca_file (the CA "
                                  "gateways pin on first contact)")
+        if self.accounts_db is not None:
+            if self.tokens_file is None:
+                raise ValueError("accounts_db needs tokens_file (SDK installations get a tenant token)")
+            if self.public_url is None:
+                raise ValueError("accounts_db needs public_url (the URL written into SDK keys)")
+            if self.public_url.startswith("https://") and self.enrollment_ca_file is None:
+                raise ValueError("accounts_db with an https public_url needs enrollment_ca_file (the CA SDK keys pin)")
+        import re as _re
+
+        for h in self.accounts_admin_token_sha256:
+            if not _re.fullmatch(r"[0-9a-f]{64}", h):
+                raise ValueError("accounts_admin_token_sha256 entries must be 64 lowercase hex digits")
+        if self.accounts_admin_api and self.accounts_db is None:
+            raise ValueError("accounts_admin_api needs accounts_db")
         if self.metrics_port is not None and self.metrics_port == self.port and self.port != 0:
             raise ValueError("metrics_port must differ from port")
         for name, package in PENDING_SPEED_SETTINGS.items():
