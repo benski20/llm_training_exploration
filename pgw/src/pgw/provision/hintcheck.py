@@ -4,7 +4,7 @@ Why this form. The stored pks-v3 hint is ``c1 = ModDown(sum_l A~_l k_l) mod q1``
 2^56) mod q1)`` (:func:`pgw.hemask.pks.compact_hint`). Between ``W8`` and ``c1`` there are two exact roundings, so
 ``c1`` is not a linear function of ``W8`` and no random projection of ``c1`` can be compared with a projection of
 ``W8``: a check would need the first rounding's remainders (one 56-bit value per entry of ``H``, as large as ``H``
-itself) and a range proof for them. The expensive part of the build is the GEMM ``H = W8 A`` (90+% of the CPU
+itself) and a range proof for them. The expensive part of the build is the GEMM ``H = W8 A`` (60+% of the CPU
 time); everything after it (``switch_hint``, the key switch) is cheap and deterministic. So the provider computes
 and streams ``H``, the client checks ``H`` exactly with the test below and computes the rest itself.
 

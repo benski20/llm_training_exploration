@@ -9,8 +9,9 @@ to the pending external review of pks-v3 (question Q7 in `pks-v3-review-packet.m
 
 The pks-v3 compact hint (2.1 GB at Qwen2.5-7B) is built by the customer from its own `W8` and two seeds it draws
 (`a_seed`, `ks_seed`), before any reply secret exists (review packet section 6, adversarial review F13). On a small
-application server that build takes far too long: about 25-45 min of a 4-vCPU box at 7B (90 % of it the GEMM
-`H = W8 A`, `6.5e9 x 4096` multiply-adds mod `2^56`), about 20 min on 32 cores. The provider has the GPUs and
+application server that build takes long: about 22 min of wall time and 3000 CPU-seconds on this 4-vCPU box at 7B (60 % of the CPU
+in the GEMM `H = W8 A`, `6.5e9 x 4096` multiply-adds mod `2^56`, on a CPU with fast int8 GEMMs; more on CPUs
+without them: about 20 min on 32 cores was reported for the customer machines). The provider has the GPUs and
 the public weights, so it can compute the expensive part, but the hint-integrity rule says the customer must never
 use a hint it did not build. The goal: let the provider do the work and accept the result only if it is exactly
 what the customer would have built.
@@ -131,17 +132,26 @@ seeds and challenges) or switches to `hint="local"`. The provider endpoints are 
 (`ServiceSettings.provision`). pks-v3 itself remains pending external review; this mode adds no new assumption to
 it (one question below).
 
-## 7. Costs (measured on this 4-vCPU dev box, shared with other jobs; see `benchmarks/provision_hint_bench.py`)
+## 7. Costs (measured on this 4-vCPU AVX-512 dev box, shared with other jobs: `benchmarks/provision_hint_bench.py`)
 
-Bytes at Qwen2.5-7B (28 layers + masked head, 1.54M hint rows): `H` 44.2 GB streamed (7 bytes x 4096 per row; never
-stored), `W8` 6.5 GB streamed once (the head's `W8` is derived locally), stored hint 2.37 GB (2.1 GB without the head).
-The client CPU numbers are in section 7.1 below (filled from the benchmark). The bandwidth is the cost: at 1 Gbit/s
-the `H` stream takes about 6 min, at 10 Gbit/s (same region) under a minute; below roughly 150-300 Mbit/s a local
-build on 4-32 cores is faster, and `hint="local"` remains available.
+Qwen2.5-7B (28 layers + masked head, 1.54M hint rows), extrapolated from 2048 rows per linear kind; CPU-seconds
+(all threads) are the robust figure on a shared box, wall times are this box's:
 
-### 7.1 Measured
+| | client CPU-s | client wall (4 vCPU) | bytes in |
+|---|---|---|---|
+| local build (`hint="local"`): GEMM 1826 + switch/key switch 1203 | 3029 | ~22 min | `W8` 6.5 GB |
+| provider path: check 496 (`A X` 92, `U^T W8` 43, decode + `U^T H X` 362) + switch/key switch 1203 | 1699 | ~10 min | `W8` 6.5 GB + `H` 44.2 GB |
 
-See the table appended by the benchmark run (section 9).
+Stored hint: 2.37 GB (2.1 GB without the head). The check itself is 16 % of a local build's CPU; the client-side
+switch and key switch (identical in both paths) are now the larger part and a candidate for optimisation (native
+switch). The price is bandwidth: 44 GB of `H` (never stored, streamed through the check and the key switch). At
+1 Gbit/s that is about 6 min, at 10 Gbit/s (same region) under a minute. So the mode pays off on hosts with slow
+int8 GEMMs or few cores and a fast link; on a fast multi-core host with a slow link `hint="local"` is quicker.
+
+Measured end to end (`tests/provision/test_real_pack.py`, `PGW_PROVISION_REAL_PACK`): Qwen2.5-0.5B with the masked
+head, provider (CPU, same box) and client on loopback, load average ~10 from other jobs: 24.5 min in total (the
+provider's CPU GEMM included), 13.1 GB of `H` and 0.36 GB of `W8` streamed, 0.70 GB hint stored, gateway artifacts
+0.56 GB in 4 s; the hint files of `0.qkv`, `23.down` and the head equal a local build's with the same seeds.
 
 ## 8. Options not taken (for the reviewer and a later version)
 
@@ -153,7 +163,9 @@ See the table appended by the benchmark run (section 9).
   `c1`. The client would then receive about `2.3 x` the hint (~5 GB at 7B) and check it with prime-field Freivalds
   (mod `p0`, `p1` of `q1` and the special primes), an NTT-slot projection being rank-1 in (row, column), i.e. one pass
   over `W8`. This changes the upload ring's modulus (2^56 -> q1) and needs its own review.
-* **Streaming the final hint from remote storage** (`pgw.provision.streaming`): see section 10.
+* **Streaming the final hint** (`pgw.provision.streaming`, opt-in): from customer storage only (the provider's `H` is
+  what is verified, not the final hint), each linear checked against the HMAC'd local `meta.json`; with a cache smaller
+  than the hint every segment re-reads it (~55 MB/s at 7B and 25 slots/s).
 
 ## 9. Review question
 

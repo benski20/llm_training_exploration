@@ -352,7 +352,7 @@ class _Weights:
 
             from pgw.modelpack.loader import row_norm_sq_max
 
-            self.norms[key] = row_norm_sq_max(torch.from_numpy(w))
+            self.norms[key] = row_norm_sq_max(torch.from_numpy(np.array(w)))
         return w
 
 

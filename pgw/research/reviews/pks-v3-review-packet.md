@@ -99,7 +99,7 @@ streams and the CBD(21) sampler are unchanged.
 
 ## 9. Provider-built, client-verified hint (added 2026-11-25)
 
-The SDK lets the provider compute the expensive part of the hint, `H = W8 A mod 2^56` (90+ % of the build), for the
+The SDK lets the provider compute the expensive part of the hint, `H = W8 A mod 2^56` (the GEMM: 60 % of a local build's CPU here, more without fast int8 GEMMs), for the
 customer's freshly drawn `a_seed` (`ks_seed` never leaves the customer). The customer accepts `H` only after a 2-adic
 Freivalds check against the fingerprint-pinned `W8` (42 binary challenge columns per side, soundness error
 `<= 2^-41` against any error the provider picks), then computes `switch_hint` and the key switch itself; the stored

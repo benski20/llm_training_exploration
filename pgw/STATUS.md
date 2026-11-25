@@ -15,6 +15,30 @@ SLA pilot. Three reasons:
 2. The HSM, KMS and TPM integrations have never run against real hardware or cloud services.
 3. There has been no external security audit.
 
+## 2026-11-25 — SDK provisioning: fingerprint-checked artifacts and a provider-built, client-verified pks-v3 hint
+
+For the in-process client library (`docs/sdk/CONTRACT.md`, appendix A3). New: `src/pgw/provision/` (client),
+`src/pgw/service/provision.py` (provider, `/pgw/v1/provision/...`, off by default: `PGW_SERVICE_PROVISION`).
+- **Artifacts:** exactly what the weight-free masked-head gateway reads (manifest, plain tensors, every linear's
+  scale/bias, tokenizer), derived from the pinned manifest, fetched in chunks (resumable, per-chunk SHA-256), each
+  object checked against the manifest the fingerprint covers, written in place and renamed after a full verification;
+  `GatewayPack` (a `ModelPack` without int8 weights). Fallback `source="hf"`: download + pack locally, same pin.
+- **Hint:** the key-switched hint is not cheaply checkable (two exact roundings after the GEMM). The provider computes
+  `H = W8 A mod 2^56` (the GEMM: 60 % of a local build's CPU here, more without fast int8 GEMMs) for the client's fresh `a_seed` (`ks_seed` stays local); the client accepts
+  each linear's `H` only after a 2-adic Freivalds check against the pinned `W8` (42 binary columns per side, error
+  `<= 2^-41` for any `H` the provider picks) and computes the switch and key switch itself: the store is bit-identical
+  to a local build with the same seeds (tested). Default `hint="provider"` for the SDK (equivalence argument in
+  `research/reviews/pks-v3-provider-hint.md`, question Q7 added to the review packet); `hint="local"` stays.
+- **Costs at 7B:** client CPU 1700 CPU-s (~10 min on this 4-vCPU box) instead of 3030 CPU-s (~22 min) for a local build,
+  of which the check is 500 CPU-s; but 44.2 GB of `H` streamed (plus 6.5 GB `W8`, both never stored); stored hint
+  2.37 GB with the head. Pays off with slow int8 GEMMs / few cores and a fast link; `hint="local"` otherwise.
+- **0.5B end to end on this box:** Qwen2.5-0.5B + masked head, provider and client on loopback (CPU, load ~10):
+  24.5 min including the provider's CPU GEMM, 13.1 GB `H`, hint files equal to a local build's (spot-checked linears).
+- Optional `pgw.provision.streaming` (hint from customer storage, bounded LRU, digest-checked): opt-in; it re-reads the
+  whole hint per segment when the cache is smaller than the hint, so local disk stays the default.
+- Tests: `tests/provision/` (check soundness incl. 2^55 / structured / wrong-seed / wrong-weight errors; tampered chunk,
+  lying listing, wrong fingerprint, adversarial provider hints, resume, local and public-source fallbacks, streaming).
+
 ## 2026-11-23 — pks-v3 review fixes on the default path; pks-v3 the CPU-only demo preset (pending external review)
 
 Fixes for `research/reviews/pks-v3-adversarial-review.md` (F1, F3, F4, F6, F7, F10), now on **every** encrypted
