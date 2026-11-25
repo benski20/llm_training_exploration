@@ -70,7 +70,9 @@ def _env_names(args: str) -> list[str]:
 
 def test_every_dockerfile_is_covered() -> None:
     found = {p.name.removesuffix(".Dockerfile") for p in DOCKER.glob("*.Dockerfile")}
-    assert found == set(IMAGES)
+    # the provider images (CUDA base, root-dropping entrypoint) have their own checks:
+    # tests/deploy/test_provider_image.py
+    assert found == set(IMAGES) | {"provider", "provider-cpu"}
 
 
 @pytest.mark.parametrize("image", sorted(IMAGES))

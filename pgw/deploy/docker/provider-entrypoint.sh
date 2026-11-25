@@ -12,8 +12,9 @@ if [ "$(id -u)" = "0" ]; then
         pgw-runpod-boot) exec "$@" ;;
     esac
     data=${PGW_DATA_DIR:-/var/lib/pgw}
-    mkdir -p "$data"
-    chown 10001:10001 "$data"
+    # best effort: a read-only root filesystem (with the data directory mounted) is fine
+    mkdir -p "$data" 2>/dev/null || true
+    chown 10001:10001 "$data" 2>/dev/null || true
     exec setpriv --reuid=10001 --regid=10001 --clear-groups --inh-caps=-all --no-new-privs -- pgw-entrypoint "$@"
 fi
 exec pgw-entrypoint "$@"

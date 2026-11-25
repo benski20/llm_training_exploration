@@ -53,6 +53,7 @@ RUN --mount=type=secret,id=build_ca,required=false \
     && sh /tmp/rustup-init.sh -y --no-modify-path --profile minimal --default-toolchain "${RUST_TOOLCHAIN}" \
     && cd /src/rust && cargo fetch --locked && cd /src \
     && python rust/tools/build_fast.py --site \
+    && rm -rf /src/rust/target /opt/cargo /opt/rustup /tmp/rustup-init.sh \
     && cd / && python -c "from pgw.core import native; assert native.fast is not None, 'pgw_fast missing'; \
 print('pgw_fast', native.fast.version())"
 
