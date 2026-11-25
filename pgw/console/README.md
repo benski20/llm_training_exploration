@@ -35,7 +35,7 @@ npm run lint && npm run typecheck && npm test
 | `dev`, `dev:mock` | Vite dev server (`dev:mock` with built-in mock data); to try the app against a real gateway, build it and open the gateway's `/console/` |
 | `build` | type-check and build into `../src/pgw/console/static/` |
 | `build:mock` / `preview:mock` | mock-data build served by `vite preview` under the production CSP |
-| `screenshots` | screenshots of every page (light and dark) from the mock preview; fails on console errors |
+| `screenshots` | screenshots of every page and the setup wizard (light and dark, desktop and phone) from the mock preview into `../docs/design/screenshots/`; fails on console errors |
 | `lint`, `typecheck`, `test` | ESLint, `tsc -b`, Vitest unit tests |
 
 Rules the gateway relies on:

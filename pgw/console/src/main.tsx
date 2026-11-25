@@ -2,9 +2,8 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./App";
 import { applyInitialTheme } from "./lib/theme";
-import "./styles/tokens.css";
-import "./styles/base.css";
-import "./styles/components.css";
+// The PGW design system (tokens, fonts, components, shell), shared with the developer platform.
+import "../../src/pgw/design/pgw.css";
 import "./styles/layout.css";
 import "./styles/pages.css";
 import "./styles/setup.css";

@@ -67,6 +67,8 @@ curl localhost:8080/v1/chat/completions -H "Authorization: Bearer $KEY" -d '{...
 | `src/pgw/gateway` | OpenAI-compatible gateway |
 | `src/pgw/provision` | client provisioning: the gateway's non-secret artifacts (fingerprint-checked, resumable) and a provider-built, client-verified pks-v3 hint (`service/provision.py` is the provider side) |
 | `src/pgw/observability` | metrics, outbound-noise monitor, dashboard |
+| `src/pgw/platform` | developer platform served by the provider: sign-in, keys, usage, request log (metadata only), models, quickstart (`python -m pgw.platform --demo`) |
+| `src/pgw/design` | the shared design system (`pgw.css`, local fonts) of the platform and the console; see [docs/design](docs/design/README.md) |
 | `src/pgw/cli` | `pgw` command |
 | `rust/` | `pgw-core-rs`: Rust port of the ring/PRNG/Freivalds core, cross-checked against the Python test vectors (`cargo test`) |
 | `tests/` | per-subpackage tests; shared fixtures in `tests/conftest.py` |

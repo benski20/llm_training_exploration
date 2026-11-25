@@ -2,9 +2,7 @@
 .setup {
   min-height: 100vh;
   padding: var(--space-8) var(--space-6);
-  background:
-    radial-gradient(1000px 500px at 50% -10%, color-mix(in srgb, var(--accent) 7%, transparent), transparent 70%),
-    var(--bg);
+  background: var(--bg);
 }
 .setup-head {
   max-width: 1040px;
@@ -262,5 +260,27 @@
   .setup-estimate {
     flex-direction: column;
     align-items: flex-start;
+  }
+}
+
+/* Phone: logo above the title; the step list becomes a compact progress list (only the current step's blurb). */
+@media (max-width: 640px) {
+  .setup {
+    padding: var(--space-5) var(--space-4);
+  }
+  .setup-head {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: var(--space-3);
+    margin-bottom: var(--space-5);
+  }
+  .setup-title {
+    font-size: var(--text-lg);
+  }
+  .setup-step {
+    padding: 6px 10px;
+  }
+  .setup-step:not(.is-active) .setup-step-blurb {
+    display: none;
   }
 }
