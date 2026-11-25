@@ -15,7 +15,7 @@ crate-type = ["cdylib", "rlib"]
 pgw-core-rs = { path = "../pgw-core-rs" }
 # lane_service.rs: Python bindings of the service trip lane (chat-speed WP-A1).
 pgw-lane = { path = "../pgw-lane" }
-pyo3 = { version = "0.23", features = ["abi3-py312", "extension-module"] }
+pyo3 = { version = "0.23", features = ["abi3-py311", "extension-module"] }
 numpy = "0.23"
 # localgpu.rs: dlopen of the CUDA driver (the gateway's own GPU; builds and runs without CUDA).
 libc = "0.2"

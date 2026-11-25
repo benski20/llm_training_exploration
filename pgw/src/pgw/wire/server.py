@@ -90,6 +90,9 @@ __all__ = [
 
 log = logging.getLogger(__name__)
 
+#: Python 3.12+: start request tasks eagerly (see the websocket loop); 3.11 schedules them normally.
+_EAGER = getattr(asyncio, "eager_task_factory", None)
+
 #: ``{linear_id: (out_features m, in_features n)}`` or a resolver ``(fingerprint, ring) -> dims``.
 LinearDims = Mapping[str, tuple[int, int]] | Callable[[str, str], Mapping[str, tuple[int, int]]]
 
@@ -971,7 +974,7 @@ def create_router(
                 # Eager start: the request runs right here until its first real suspension. An idle
                 # device's decode-sized batch computes and replies without one, so a sequential
                 # caller's round trip costs no extra event-loop iteration and no task scheduling.
-                t = asyncio.eager_task_factory(loop, one(data))
+                t = _EAGER(loop, one(data)) if _EAGER is not None else loop.create_task(one(data))
                 if not t.done():
                     tasks.add(t)
                     t.add_done_callback(tasks.discard)

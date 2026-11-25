@@ -218,6 +218,7 @@ fn effective_uid() -> u32 {
 }
 
 /// The connecting process's uid (SO_PEERCRED).
+#[cfg(target_os = "linux")]
 pub fn peer_uid(s: &UnixStream) -> std::io::Result<u32> {
     let mut cred = libc::ucred { pid: 0, uid: 0, gid: 0 };
     let mut len = std::mem::size_of::<libc::ucred>() as libc::socklen_t;
@@ -235,6 +236,17 @@ pub fn peer_uid(s: &UnixStream) -> std::io::Result<u32> {
         return Err(std::io::Error::last_os_error());
     }
     Ok(cred.uid)
+}
+
+/// The connecting process's uid (getpeereid: macOS and the BSDs).
+#[cfg(not(target_os = "linux"))]
+pub fn peer_uid(s: &UnixStream) -> std::io::Result<u32> {
+    let (mut uid, mut gid): (libc::uid_t, libc::gid_t) = (0, 0);
+    // SAFETY: valid fd, out-pointers to local integers.
+    if unsafe { libc::getpeereid(s.as_raw_fd(), &mut uid, &mut gid) } != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(uid)
 }
 
 fn bind(path: &Path) -> std::io::Result<UnixListener> {

@@ -1,0 +1,18 @@
+PGW (Private Gateway) - Proprietary License
+
+Copyright (c) 2026 the PGW maintainers. All rights reserved.
+
+This software, including its source code, compiled native extensions and documentation, is
+proprietary and confidential. It is licensed, not sold. Use is permitted only under a written
+agreement (pilot, evaluation or commercial) with the PGW maintainers and only for the term and
+purposes stated there. Without such an agreement you may not use, copy, modify, distribute,
+sublicense or reverse engineer it.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING
+BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+NONINFRINGEMENT, EXCEPT AS EXPRESSLY STATED IN SUCH AN AGREEMENT. IN NO EVENT SHALL THE AUTHORS
+BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY ARISING FROM THE USE OF THE SOFTWARE, EXCEPT
+AS EXPRESSLY STATED IN SUCH AN AGREEMENT.
+
+The compiled native extensions include third-party open-source Rust crates under their own
+licenses (MIT, Apache-2.0, ISC, BSD and similar); see THIRD_PARTY_NOTICES.txt in the wheel.

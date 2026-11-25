@@ -42,7 +42,7 @@ A diff in this file means `pgw.core` changed behaviour: a protocol break for eve
 ## Python bindings (optional)
 
 Feature `python` exposes `pgw_core_rs` (`random_bytes`, `ring_uniform_rows`, `mask_activations`, `unmask_outputs`,
-`ringmm`, `freivalds_check`, `pack_ring`) via pyo3 (abi3, Python >= 3.12). They are not built by the tests:
+`ringmm`, `freivalds_check`, `pack_ring`) via pyo3 (abi3, Python >= 3.11). They are not built by the tests:
 
 ```bash
 maturin develop -m rust/pgw-core-rs/Cargo.toml --features python

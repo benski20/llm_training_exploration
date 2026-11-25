@@ -22,7 +22,7 @@ chacha20 = "0.9"
 hkdf = "0.12"
 sha2 = "0.10"
 zeroize = "1"
-pyo3 = { version = "0.23", optional = true, features = ["abi3-py312", "extension-module"] }
+pyo3 = { version = "0.23", optional = true, features = ["abi3-py311", "extension-module"] }
 
 [dev-dependencies]
 serde_json = "1"

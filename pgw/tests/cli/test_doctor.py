@@ -166,7 +166,7 @@ def test_role_extras_required(monkeypatch: pytest.MonkeyPatch) -> None:
     real = d._importable
     monkeypatch.setattr(d, "_importable", lambda m: False if m == "hypercorn" else real(m))
     c = run_doctor(role="all").get("extras")
-    assert c is not None and c.status == "warn" and "pgw[service]" in c.detail
+    assert c is not None and c.status == "warn" and "pgw-sdk[service]" in c.detail
     rep = run_doctor(role="pack")
     assert rep.get("extras").status == "ok"  # type: ignore[union-attr]
     monkeypatch.setenv("PGW_SERVICE_ALLOW_UNAUTHENTICATED", "true")
@@ -193,3 +193,13 @@ def test_maskstore_without_counter_fails_and_dev_flags_warn(tmp_path: Path, clea
     assert c is not None and c.status == "warn" and "allow_unsigned_partner_segments" in c.detail
     rep.strict = True
     assert not rep.ok
+
+
+def test_native_check_reports_each_extension(clean_env: pytest.MonkeyPatch) -> None:
+    from pgw.cli.doctor import _check_native
+
+    status, detail, data = _check_native()
+    assert set(data) == {"pgw_fast", "pgw_ntt", "pgw_pks"}
+    assert status == ("ok" if all(data.values()) else "warn")
+    assert ("loaded" in detail) if status == "ok" else ("fallback" in detail)
+    assert any(c.name == "native" for c in run_doctor().checks)
