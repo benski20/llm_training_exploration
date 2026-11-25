@@ -37,6 +37,7 @@
 //! scribbles over the segment concurrently can only change the bytes of its own call, as it could on
 //! the socket.
 
+#[cfg_attr(not(target_os = "linux"), allow(unused_imports))]
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 use std::os::unix::net::UnixStream;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
@@ -101,6 +102,7 @@ fn map(fd: RawFd, len: usize) -> std::io::Result<*mut u8> {
 
 impl Region {
     /// Service side: a new sealed memory file sized for the two capacities, mapped, header written.
+    #[cfg(target_os = "linux")]
     pub fn create(req_cap: usize, rep_cap: usize) -> std::io::Result<(OwnedFd, Region)> {
         if req_cap == 0 || rep_cap == 0 || req_cap > MAX_CAP || rep_cap > MAX_CAP {
             return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "shm capacity out of range"));
@@ -134,6 +136,7 @@ impl Region {
     }
 
     /// Client side: map a segment received from the service after checking its seals and size.
+    #[cfg(target_os = "linux")]
     pub fn attach(fd: &OwnedFd) -> std::io::Result<Region> {
         let bad = |m: &str| std::io::Error::new(std::io::ErrorKind::InvalidData, m.to_owned());
         // SAFETY: valid fd.
@@ -166,6 +169,18 @@ impl Region {
         r.req_cap = req;
         r.rep_cap = rep;
         Ok(r)
+    }
+
+    /// Non-Linux build: sealed memory files are Linux-only, so the shared-memory lane is unavailable.
+    #[cfg(not(target_os = "linux"))]
+    pub fn create(_req_cap: usize, _rep_cap: usize) -> std::io::Result<(OwnedFd, Region)> {
+        Err(unsupported())
+    }
+
+    /// Non-Linux build: see [`Region::create`].
+    #[cfg(not(target_os = "linux"))]
+    pub fn attach(_fd: &OwnedFd) -> std::io::Result<Region> {
+        Err(unsupported())
     }
 
     /// Request body capacity.
@@ -278,6 +293,7 @@ pub fn send_with_fd(sock: &UnixStream, data: &[u8], fd: RawFd) -> std::io::Resul
 
 /// Receive exactly `buf.len()` bytes; the first `recvmsg` may carry one descriptor (`SCM_RIGHTS`),
 /// which is returned. Any further descriptors are closed. Blocks (honours the socket's timeout).
+#[cfg(target_os = "linux")]
 pub fn recv_with_fd(sock: &UnixStream, buf: &mut [u8]) -> std::io::Result<Option<OwnedFd>> {
     // SAFETY: CMSG_SPACE of 4 ints (room to see and close extras).
     let space = unsafe { libc::CMSG_SPACE((4 * std::mem::size_of::<RawFd>()) as u32) } as usize;
@@ -326,6 +342,17 @@ pub fn recv_with_fd(sock: &UnixStream, buf: &mut [u8]) -> std::io::Result<Option
         got += n as usize;
     }
     Ok(out)
+}
+
+/// Non-Linux build: descriptor passing is only used by the (Linux-only) shared-memory lane.
+#[cfg(not(target_os = "linux"))]
+pub fn recv_with_fd(_sock: &UnixStream, _buf: &mut [u8]) -> std::io::Result<Option<OwnedFd>> {
+    Err(unsupported())
+}
+
+#[cfg(not(target_os = "linux"))]
+fn unsupported() -> std::io::Error {
+    std::io::Error::new(std::io::ErrorKind::Unsupported, "the shared-memory lane needs Linux (memfd seals)")
 }
 
 /// Ring the doorbell: one byte, never blocking (a full socket buffer already holds a wake-up).

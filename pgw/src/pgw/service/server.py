@@ -418,4 +418,5 @@ def serve(settings: ServiceSettings | None = None) -> None:
     s = settings or ServiceSettings()
     log.info("starting %s on %s:%d (tls=%s, mtls=%s, packs=%d, loop=%s, malloc_tuning=%s)", s.server_name, s.host,
              s.port, s.tls.enabled, s.tls.require_client_cert, len(s.packs), loop_name(), malloc_tuned)
-    asyncio.run(serve_async(s), loop_factory=new_event_loop)
+    with asyncio.Runner(loop_factory=new_event_loop) as runner:  # = asyncio.run(..., loop_factory=) on 3.11+
+        runner.run(serve_async(s))

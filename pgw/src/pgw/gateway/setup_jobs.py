@@ -49,7 +49,7 @@ def hf_hub_resolver(repo: str, revision: str | None) -> Path:
     try:
         from huggingface_hub import snapshot_download
     except ImportError as exc:  # pragma: no cover - dependency of the pack extra
-        raise ConfigError("huggingface_hub is required to download models (pip install 'pgw[pack]')") from exc
+        raise ConfigError("huggingface_hub is required to download models (pip install 'pgw-sdk[pack]')") from exc
     from pgw.modelpack.packer import _HUB_PATTERNS
 
     return Path(snapshot_download(repo, revision=revision, allow_patterns=_HUB_PATTERNS))

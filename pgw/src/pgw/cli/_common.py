@@ -143,11 +143,11 @@ def _unavailable_command(name: str, extra: str, exc: ImportError) -> click.Comma
 
     @click.command(name, context_settings={"ignore_unknown_options": True, "allow_extra_args": True,
                                            "help_option_names": []},
-                   help=f"(unavailable: install pgw[{extra}])", add_help_option=False)
+                   help=f"(unavailable: install pgw-sdk[{extra}])", add_help_option=False)
     @click.pass_context
     def _cmd(ctx: click.Context) -> None:
         click.echo(f"error [config]: 'pgw {name}' needs the '{extra}' extra (missing module: {missing}); "
-                   f"install it with: pip install 'pgw[{extra}]'", err=True)
+                   f"install it with: pip install 'pgw-sdk[{extra}]'", err=True)
         ctx.exit(EXIT_ERROR)
 
     return _cmd

@@ -17,7 +17,7 @@ default = ["python"]
 python = ["dep:pyo3", "dep:numpy"]
 
 [dependencies]
-pyo3 = { version = "0.23", features = ["abi3-py312", "extension-module"], optional = true }
+pyo3 = { version = "0.23", features = ["abi3-py311", "extension-module"], optional = true }
 numpy = { version = "0.23", optional = true }
 chacha20 = "0.9"
 zeroize = "1"

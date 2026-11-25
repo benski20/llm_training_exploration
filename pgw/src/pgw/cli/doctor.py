@@ -171,8 +171,8 @@ def _run(report: DoctorReport, name: str, fn: Callable[[], tuple[Status, str, di
 def _check_python() -> tuple[Status, str, dict[str, Any]]:
     v = sys.version_info
     data = {"version": platform.python_version(), "implementation": platform.python_implementation()}
-    if (v.major, v.minor) < (3, 12):
-        return "fail", f"Python {data['version']} < 3.12", data
+    if (v.major, v.minor) < (3, 11):
+        return "fail", f"Python {data['version']} < 3.11", data
     return "ok", f"Python {data['version']}", data
 
 
@@ -216,7 +216,7 @@ def _check_extras(roles: Iterable[str], required: bool) -> tuple[Status, str, di
             missing[role] = miss
     if not missing:
         return "ok", "all extras for " + ", ".join(roles), data
-    msg = "; ".join(f"{r}: {', '.join(m)} (pip install 'pgw[{r}]')" for r, m in missing.items())
+    msg = "; ".join(f"{r}: {', '.join(m)} (pip install 'pgw-sdk[{r}]')" for r, m in missing.items())
     return ("fail" if required else "warn"), msg, data
 
 
@@ -279,9 +279,28 @@ def _check_cuda(role: str) -> tuple[Status, str, dict[str, Any]]:
     return "ok", f"{len(devices)} CUDA device(s): " + ", ".join(str(d["name"]) for d in devices), data
 
 
+def _check_native() -> tuple[Status, str, dict[str, Any]]:
+    """Which native extensions are loaded (prebuilt in the wheels; pure-Python fallback otherwise)."""
+    from pgw.core import native as fast_mod
+    from pgw.hemask import ntt, pks_native
+
+    loaded = {"pgw_fast": fast_mod.fast is not None, "pgw_ntt": ntt.native is not None,
+              "pgw_pks": pks_native.native() is not None}
+    data: dict[str, Any] = dict(loaded)
+    missing = [k for k, ok in loaded.items() if not ok]
+    if not missing:
+        return "ok", "pgw_fast, pgw_ntt, pgw_pks loaded", data
+    off = os.environ.get("PGW_NATIVE", "1").strip().lower() in ("0", "false", "no", "off")
+    why = "disabled by PGW_NATIVE=0" if off else "not installed (sdist without Rust, or unsupported platform)"
+    return "warn", f"{', '.join(missing)} {why}: pure-Python fallback, same results, much slower", data
+
+
 def _check_gateway_gpu() -> tuple[Status, str, dict[str, Any]]:
     """Which customer-side parts run on a gateway GPU (runs the encrypted factory's device self-test)."""
-    from pgw.gateway.gpu_report import gpu_report
+    try:
+        from pgw.gateway.gpu_report import gpu_report
+    except ModuleNotFoundError as exc:  # client install: the gateway server extra is not installed
+        return "skip", f"gateway server extra not installed ({exc.name}); nothing to report", {}
 
     data = gpu_report(run_self_test=True)
     he = data["encrypted_mask_factory"]
@@ -863,6 +882,7 @@ def run_doctor(
     _run(report, "extras", lambda: _check_extras(roles, required=role != "all"))
     _run(report, "entropy", _check_entropy)
     _run(report, "selftest", lambda: _check_selftest(include_gpu))
+    _run(report, "native", _check_native)
     if role in ("all", "service", "factory"):
         _run(report, "cpu_int8", _check_cpu_int8)
     _run(report, "cuda", lambda: _check_cuda(role))

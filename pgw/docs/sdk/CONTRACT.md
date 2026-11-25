@@ -313,3 +313,19 @@ from pgw.platform import PlatformSettings, mount_platform
 if PlatformSettings().enabled:                     # PGW_PLATFORM_ENABLED=1
     mount_platform(app, accounts_client)           # an AccountsClient (in process, or HttpAccountsClient)
 ```
+
+### Packaging (packaging agent)
+- Distribution `pgw-sdk` (`pgw` on PyPI is an unrelated project), import name `pgw`, version from
+  `pgw.__version__` only. Python >= 3.11 (abi3 wheels: one per platform). Base install = the client: add any
+  new runtime dependency of `pgw.sdk` / `pgw.provision` to `[project].dependencies`; server-only packages go
+  to extras (`gateway`, `service`, `factory`, ...). `pgw-sdk[client]` is an alias of the base install.
+- Native extensions stay top-level modules `pgw_fast`, `pgw_ntt`, `pgw_pks` (setup.py, setuptools-rust);
+  `PGW_REQUIRE_NATIVE=1` makes their build mandatory (CI, releases).
+- CLI: `pgw doctor` reports the native extensions (check `native`). An `sdk` subcommand group of the CLI is the SDK agent's
+  call; docs use `pgw doctor` / `pgw version` until it exists (docs tests resolve every documented command).
+- Release smoke test `scripts/smoke_installed.py --require-sdk` imports `from pgw import OpenAI, AsyncOpenAI`
+  from the installed wheel; `examples/` and `tests/packaging/test_examples.py` assume the OpenAI surface
+  (`chat.completions.create`, attribute access, sync/async streaming, `stream_options`, `usage`).
+- Client options documented in `docs/sdk/configuration.md`: `api_key` / `PGW_API_KEY`, `cache_dir`,
+  `mask_scheme` (`"pks-v3"` default, `"mlwe"`, `"plain"`), `hint` (`"local"`); model ids
+  `qwen2.5-{0.5b,1.5b,3b,7b}-instruct`. Owners: correct the page if the implementation differs.

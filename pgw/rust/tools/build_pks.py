@@ -31,6 +31,10 @@ def main() -> int:
     tmp = dst.with_suffix(dst.suffix + ".tmp")
     shutil.copy2(lib, tmp)
     os.replace(tmp, dst)  # atomic: a running process keeps its mapped copy
+    # An editable install (setup.py) leaves e.g. pgw_fast.cpython-313-*.so, which Python would import first.
+    for stale in dst.parent.glob(dst.name.split(".")[0] + ".*"):
+        if stale != dst and stale.suffix in (".so", ".pyd"):
+            stale.unlink()
     print(f"installed {dst}")
     if "--site" in sys.argv[1:]:
         import sysconfig

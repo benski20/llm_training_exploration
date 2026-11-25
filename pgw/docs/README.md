@@ -25,6 +25,20 @@ reviewers, operators, developers and compliance teams.
 | Auditors, security teams | [Audit-readiness checklist](compliance/audit-readiness.md) | controls, evidence, owners |
 | Everyone | [Glossary](glossary.md) | terms and symbols |
 
+Client library (`pip install pgw-sdk`, `from pgw import OpenAI`: the gateway runs in the application's process):
+
+| audience | document | contents |
+|---|---|---|
+| Developers | [Quickstart](sdk/quickstart.md) | install, key, first call, streaming, async |
+| Developers, architects | [Concepts](sdk/concepts.md) | what stays private, verification, what runs where, why the application runs near the GPU |
+| Developers | [Configuration reference](sdk/configuration.md) | client options, request parameters, environment variables, cache directory |
+| Developers | [Supported models](sdk/models.md) | Qwen2.5-Instruct 0.5B-7B, limits, resources per model |
+| Developers, operators | [Troubleshooting](sdk/troubleshooting.md) | installation, first start, speed, error codes, reporting issues |
+| Security reviewers | [Security model summary](sdk/security.md) | what is and is not protected, review status (pks-v3 pending external review) |
+| Pilot customers | [Pilot hand-off](sdk/pilot-handoff.md) | one page: what you get, five-minute setup on RunPod, what to test, privacy promise |
+| Everyone | [Changelog](sdk/changelog.md) | client library releases |
+| Maintainers | [Build contract](sdk/CONTRACT.md) | internal: interfaces between the client library's components |
+
 Tools and data:
 
 * [`measurements.json`](measurements.json) is the single source of every quoted number, with its

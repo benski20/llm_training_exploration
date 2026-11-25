@@ -470,7 +470,7 @@ def service_serve(host: str | None, port: int | None, packs: tuple[Path, ...]) -
     try:
         from pgw.service import ServiceSettings, serve
     except ImportError as exc:
-        raise ConfigError(f"'pgw service serve' needs the 'service' extra (pip install 'pgw[service]'): {exc}") from exc
+        raise ConfigError(f"'pgw service serve' needs the 'service' extra (pip install 'pgw-sdk[service]'): {exc}") from exc
 
     overrides: dict[str, Any] = {}
     if host is not None:

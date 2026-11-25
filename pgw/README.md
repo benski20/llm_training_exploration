@@ -17,13 +17,31 @@ and **[docs/README.md](docs/README.md)** for the whitepaper, threat model, opera
 
 ## Install
 
+Client library (the gateway runs in the application's process; see [docs/sdk/quickstart.md](docs/sdk/quickstart.md)):
+
+```bash
+pip install pgw-sdk --extra-index-url https://download.pytorch.org/whl/cpu   # Linux: CPU build of torch
+```
+```python
+from pgw import OpenAI                  # drop-in for openai.OpenAI (also AsyncOpenAI)
+```
+
+The distribution is `pgw-sdk` (`pgw` on PyPI is an unrelated project); the import name is `pgw`. Wheels carry
+the native extensions (`pgw_fast`, `pgw_ntt`, `pgw_pks`; abi3, CPython 3.11-3.13) for Linux x86_64/aarch64
+(manylinux_2_28) and macOS arm64; elsewhere a source install falls back to pure Python (same results, slower).
+
+From a checkout (servers and development):
+
 ```bash
 pip install -e ".[dev]"          # everything + test tools
-pip install -e ".[gateway]"      # customer gateway
+pip install -e ".[gateway]"      # customer gateway as a standalone server
 pip install -e ".[service]"      # compute service
 pip install -e ".[factory]"      # mask factory
+make release-check               # build sdist + wheel, install in a fresh venv, smoke test
 ```
-Python 3.12+ and torch 2.4+ are required. On GPU hosts, install the CUDA build of torch.
+Python 3.11+ and torch 2.4+ are required. On GPU hosts, install the CUDA build of torch. An editable install
+builds the native extensions too when a Rust toolchain (1.89+) is present (`rust/tools/build_*.py` rebuild
+them in place).
 
 ## Quick check
 

@@ -1,0 +1,154 @@
+# PGW client library wheels (pgw-sdk): native extensions prebuilt, one abi3 wheel per platform.
+#
+#   build    cibuildwheel: linux x86_64 + aarch64 (manylinux_2_28, native arm runner), macOS arm64.
+#            Rust stable is installed in the build environment; PGW_REQUIRE_NATIVE=1 fails the build
+#            if any of pgw_fast / pgw_ntt / pgw_pks does not compile. Each wheel is smoke-tested.
+#   sdist    source distribution, plus a build of it without Rust (pure-Python fallback must build).
+#   test     every wheel x CPython 3.11 / 3.12 / 3.13 in a fresh venv: smoke test + native bit-identity tests.
+#   publish  only for tags pgw-v*, after manual approval of the `pypi` environment (trusted publishing).
+#
+# Configuration of cibuildwheel lives in pyproject.toml ([tool.cibuildwheel]). Local equivalent of one
+# platform: `make release-check` (scripts/release_check.sh).
+#
+# GitHub reads workflows only from the repository root's .github/workflows. While PGW lives in the `pgw/`
+# subdirectory of a larger repository, copy this file there (PGW_DIR points the jobs at the project).
+# When PGW becomes its own repository set PGW_DIR to ".".
+name: pgw-wheels
+
+on:
+  push:
+    tags: ["pgw-v*"]
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pgw-wheels-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PGW_DIR: pgw
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+
+jobs:
+  build:
+    name: wheel (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04          # linux x86_64
+          - os: ubuntu-24.04-arm      # linux aarch64 (native runner, no QEMU)
+          - os: macos-14              # macOS arm64
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+      - name: third-party notices up to date
+        working-directory: ${{ env.PGW_DIR }}
+        run: python3 scripts/third_party_notices.py --check
+      - uses: pypa/cibuildwheel@v4.3.5
+        with:
+          package-dir: ${{ env.PGW_DIR }}
+          output-dir: wheelhouse
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        with:
+          name: wheel-${{ matrix.os }}
+          path: wheelhouse/*.whl
+          if-no-files-found: error
+
+  sdist:
+    name: sdist (+ build without Rust)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
+        with:
+          python-version: "3.12"
+      - name: build sdist
+        working-directory: ${{ env.PGW_DIR }}
+        run: |
+          pip install build "setuptools>=77" wheel "setuptools-rust>=1.9" twine
+          python -m build --sdist --outdir ../dist .
+          twine check --strict ../dist/*
+      - name: sdist builds a pure-Python wheel without a Rust toolchain
+        run: |
+          mkdir nort && tar -xzf dist/*.tar.gz -C nort
+          cd nort/*/
+          env -u CARGO PATH=/usr/bin:/bin CARGO_HOME=/nonexistent RUSTUP_HOME=/nonexistent \
+            "$(which python)" -m build --wheel --no-isolation --outdir ../../nort-dist .
+          python - ../../nort-dist/*.whl <<'EOF'
+          import sys, zipfile
+          names = zipfile.ZipFile(sys.argv[1]).namelist()
+          assert "pgw/__init__.py" in names and not [n for n in names if n.endswith((".so", ".pyd"))]
+          EOF
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        with:
+          name: sdist
+          path: dist/*.tar.gz
+          if-no-files-found: error
+
+  test:
+    name: test (${{ matrix.os }}, py${{ matrix.python }})
+    needs: build
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, ubuntu-24.04-arm, macos-14]
+        python: ["3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
+        with:
+          python-version: ${{ matrix.python }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: wheel-${{ matrix.os }}
+          path: wheelhouse
+      - name: install into a fresh venv (CPU torch)
+        run: |
+          python -m venv "$RUNNER_TEMP/venv"
+          V="$RUNNER_TEMP/venv/bin"
+          "$V/pip" install --upgrade pip
+          "$V/pip" install --extra-index-url https://download.pytorch.org/whl/cpu wheelhouse/*.whl
+          if "$V/pip" list | grep -qi '^nvidia-'; then echo "CUDA libraries pulled into the client install"; exit 1; fi
+          du -sh "$("$V/python" -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])')"
+      - name: smoke test (outside the source tree)
+        run: |
+          cd "$RUNNER_TEMP"
+          "$RUNNER_TEMP/venv/bin/python" "$GITHUB_WORKSPACE/$PGW_DIR/scripts/smoke_installed.py"
+          PGW_NATIVE=0 "$RUNNER_TEMP/venv/bin/python" "$GITHUB_WORKSPACE/$PGW_DIR/scripts/smoke_installed.py" --allow-pure
+      - name: native bit-identity tests against the installed wheel
+        working-directory: ${{ env.PGW_DIR }}
+        env:
+          PGW_OFFLINE: "1"
+        run: |
+          V="$RUNNER_TEMP/venv/bin"
+          W="$(ls "$GITHUB_WORKSPACE"/wheelhouse/*.whl)"
+          "$V/pip" install --extra-index-url https://download.pytorch.org/whl/cpu "$W[service]" \
+            pytest pytest-asyncio pytest-timeout
+          "$V/python" -m pytest -q -p no:cacheprovider -o addopts="" --import-mode=importlib \
+            tests/native tests/hemask/test_ntt.py tests/hemask/test_pks.py \
+            --deselect tests/native/test_scale32_knobs.py::test_fused2_driver_with_split_and_prefetch
+
+  publish:
+    name: publish to PyPI
+    if: startsWith(github.ref, 'refs/tags/pgw-v')
+    needs: [build, sdist, test]
+    runs-on: ubuntu-24.04
+    environment: pypi            # requires manual approval; PyPI trusted publisher configured for this repo
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: tag matches pgw.__version__
+        run: |
+          v="${GITHUB_REF_NAME#pgw-v}"
+          ls dist | grep -q "pgw_sdk-${v}" || { echo "tag $GITHUB_REF_NAME does not match the built version"; exit 1; }
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist

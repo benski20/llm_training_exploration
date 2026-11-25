@@ -1,22 +1,35 @@
 [build-system]
-requires = ["setuptools>=69", "wheel"]
+# setuptools-rust compiles the three native extensions (pgw_fast, pgw_ntt, pgw_pks) into the wheel;
+# see setup.py. Without a Rust toolchain an sdist install falls back to the pure-Python path.
+requires = ["setuptools>=77", "wheel", "setuptools-rust>=1.9"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "pgw"
-version = "0.1.0"
+# Distribution name: `pgw` on PyPI belongs to an unrelated project, so we publish as `pgw-sdk`.
+# The import name stays `pgw` (`from pgw import OpenAI`).
+name = "pgw-sdk"
+dynamic = ["version"]  # single source: pgw.__version__
 description = "PGW (Private Gateway): private LLM inference over public open weights with one-time masks"
 readme = "README.md"
-requires-python = ">=3.12"
-license = { text = "Proprietary" }
+requires-python = ">=3.11"
+license = "LicenseRef-Proprietary"
+license-files = ["LICENSE", "THIRD_PARTY_NOTICES.txt"]
 authors = [{ name = "PGW maintainers" }]
 classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
+    "Programming Language :: Rust",
     "Operating System :: POSIX :: Linux",
+    "Operating System :: MacOS",
     "Typing :: Typed",
 ]
-# Core dependencies: everything pgw.core, pgw.modelpack and pgw.wire need.
+# Base install = the client library (`from pgw import OpenAI`): the in-process gateway runs on CPU.
+# torch is needed for the CPU tensor work of the gateway; install the CPU build (see docs/sdk/quickstart.md:
+# `--extra-index-url https://download.pytorch.org/whl/cpu`), the default Linux x86_64 wheel on PyPI pulls CUDA.
 dependencies = [
     "numpy>=1.26",
     "torch>=2.4",
@@ -26,12 +39,19 @@ dependencies = [
     "msgpack>=1.0.7",
     "safetensors>=0.4",
     "click>=8.1",
+    # in-process gateway: provider connection, tokenizer and chat template
+    "httpx[http2]>=0.27",
+    "transformers>=4.44",
+    "tokenizers>=0.19",
+    "jinja2>=3.1",
 ]
 
 [project.optional-dependencies]
+# Alias of the base install (kept so `pip install "pgw-sdk[client]"` works in scripts and docs).
+client = []
 # CUDA int8 GEMMs come from the CUDA build of torch; this extra adds GPU helpers only.
 gpu = ["nvidia-ml-py>=12"]
-# Customer-side OpenAI-compatible gateway (also runs the plaintext engine).
+# Customer-side OpenAI-compatible gateway as a standalone server (pgw gateway serve).
 gateway = [
     "fastapi>=0.110",
     "uvicorn[standard]>=0.29",
@@ -66,8 +86,10 @@ kms-gcp = ["google-cloud-kms>=2.21"]
 kms-azure = ["azure-identity>=1.15", "azure-keyvault-keys>=4.9"]
 # Optional Rust reference core as a Python extension (pgw/rust/pgw-core-rs, feature "python").
 rust = ["maturin>=1.5"]
+# Wheel builds and the release check (scripts/release_check.sh).
+release = ["build>=1.2", "setuptools-rust>=1.9", "auditwheel>=6; sys_platform == 'linux'", "twine>=5"]
 dev = [
-    "pgw[gateway,service,factory,pack]",
+    "pgw-sdk[gateway,service,factory,pack]",
     "pytest>=8",
     "pytest-asyncio>=0.23",
     "pytest-timeout>=2.3",
@@ -79,11 +101,38 @@ dev = [
 [project.scripts]
 pgw = "pgw.cli.main:main"
 
+[tool.setuptools.dynamic]
+version = { attr = "pgw.__version__" }
+
 [tool.setuptools.packages.find]
 where = ["src"]
 
 [tool.setuptools.package-data]
 pgw = ["py.typed", "observability/static/*", "console/static/**/*", "design/*.css", "design/fonts/*", "platform/static/*"]
+
+[tool.cibuildwheel]
+# One abi3 wheel per platform (CPython >= 3.11 stable ABI); .github/workflows/wheels.yml tests it on 3.11-3.13.
+build = "cp311-*"
+skip = "*-musllinux_*"
+build-frontend = "build"
+test-command = "python {project}/scripts/smoke_installed.py"
+
+[tool.cibuildwheel.environment]
+PGW_REQUIRE_NATIVE = "1"
+PATH = "$HOME/.cargo/bin:$PATH"
+# smoke-test install: the CPU build of torch (the default Linux x86_64 wheel pulls CUDA)
+PIP_EXTRA_INDEX_URL = "https://download.pytorch.org/whl/cpu"
+
+[tool.cibuildwheel.linux]
+manylinux-x86_64-image = "manylinux_2_28"
+manylinux-aarch64-image = "manylinux_2_28"
+before-all = "curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain stable"
+repair-wheel-command = "auditwheel repair --plat manylinux_2_28_$(uname -m) -w {dest_dir} {wheel}"
+
+[tool.cibuildwheel.macos]
+archs = ["arm64"]
+before-all = "rustup update stable && rustup default stable"
+environment = { PGW_REQUIRE_NATIVE = "1", MACOSX_DEPLOYMENT_TARGET = "11.0" }
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -103,7 +152,7 @@ filterwarnings = ["ignore::DeprecationWarning:transformers.*"]
 
 [tool.ruff]
 line-length = 120
-target-version = "py312"
+target-version = "py311"
 src = ["src", "tests"]
 
 [tool.ruff.lint]
@@ -114,7 +163,7 @@ ignore = ["S101", "N803", "N806", "N812", "UP047"]
 "tests/**" = ["E501", "S106", "B017", "S311"]
 
 [tool.mypy]
-python_version = "3.12"
+python_version = "3.11"
 strict = true
 plugins = ["pydantic.mypy"]
 ignore_missing_imports = true

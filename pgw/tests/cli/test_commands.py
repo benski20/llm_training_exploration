@@ -101,7 +101,7 @@ def test_lazy_group_missing_extra_is_reported() -> None:
     assert "ghost" in grp.list_commands(click.Context(grp))
     r = CliRunner().invoke(grp, ["ghost", "anything", "--flag"])
     assert r.exit_code == EXIT_ERROR
-    assert "pip install 'pgw[ghostly]'" in r.output
+    assert "pip install 'pgw-sdk[ghostly]'" in r.output
 
 
 def test_lazy_groups_are_the_component_groups() -> None:

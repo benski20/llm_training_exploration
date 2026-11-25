@@ -491,7 +491,7 @@ def _resolve_source(source: str | Path, revision: str | None) -> tuple[Path, Sou
     try:
         from huggingface_hub import snapshot_download
     except ImportError as exc:  # pragma: no cover - dependency of the pack extra
-        raise ConfigError("huggingface_hub is required to pack from the hub (pip install 'pgw[pack]')") from exc
+        raise ConfigError("huggingface_hub is required to pack from the hub (pip install 'pgw-sdk[pack]')") from exc
     try:
         local = Path(snapshot_download(s, revision=revision, allow_patterns=_HUB_PATTERNS))
     except Exception as exc:

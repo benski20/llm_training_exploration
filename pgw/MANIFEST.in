@@ -1,0 +1,10 @@
+# sdist contents beyond the Python package: the Rust workspace the extensions are built from.
+include LICENSE THIRD_PARTY_NOTICES.txt setup.py
+include rust/Cargo.toml rust/Cargo.lock rust/rustfmt.toml
+recursive-include rust/pgw-core-rs Cargo.toml *.rs
+recursive-include rust/pgw-fast Cargo.toml *.rs
+recursive-include rust/pgw-lane Cargo.toml *.rs
+recursive-include rust/pgw-ntt Cargo.toml *.rs
+recursive-include rust/pgw-pks Cargo.toml *.rs
+prune rust/target
+global-exclude __pycache__ *.py[cod] *.so *.pyd *.dylib
