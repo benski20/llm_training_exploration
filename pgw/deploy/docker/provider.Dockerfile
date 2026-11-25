@@ -6,7 +6,7 @@
 #   docker run --gpus all -p 8443:8443 -v pgw:/var/lib/pgw -e PGW_SERVICE_PACKS=... pgw-provider:dev   # any host
 #   (RunPod: deploy/runpod/launch.py starts it with `pgw-runpod-boot`)
 #
-# Reproducible: the base image is pinned by digest, every Python dependency (torch 2.5.1+cu124 and triton included)
+# Reproducible: the base image is pinned by digest, every Python dependency (torch 2.15.0+cu132, the measured stack's version, and triton included)
 # by version and sha256 in requirements/provider-cuda.txt (scripts/lock-requirements.sh), the Rust toolchain of the
 # native extension by version. Behind a TLS-inspecting proxy add `--secret id=build_ca,src=<CA bundle>` (optional).
 #
@@ -14,12 +14,12 @@
 # `runtime` (the venv, Python, gcc for Triton's kernel launcher stubs, no Rust, no build caches). The service runs
 # as uid 10001: the entrypoint drops root after preparing the data directory (RunPod starts containers as root).
 
-ARG CUDA_IMAGE=nvidia/cuda:12.6.3-base-ubuntu24.04@sha256:c87e78933f4c16e3272123bf2f75537306596d0fbaa395a29696a22786e5ee0e
+ARG CUDA_IMAGE=nvidia/cuda:13.2.1-base-ubuntu24.04@sha256:7be56e69d8ae7c3648b8fca009fa35980ecd9c6eefaafbff3ee8c224e0043eb5
 
 # ---------------------------------------------------------------------------------------------------- build
 FROM ${CUDA_IMAGE} AS build
 ARG RUST_TOOLCHAIN=1.89.0
-ARG TORCH_INDEX_URL=https://download.pytorch.org/whl/cu124
+ARG TORCH_INDEX_URL=https://download.pytorch.org/whl/cu132
 ARG REQUIREMENTS=requirements/provider-cuda.txt
 ENV DEBIAN_FRONTEND=noninteractive \
     PIP_NO_CACHE_DIR=1 \

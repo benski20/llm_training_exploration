@@ -5,7 +5,7 @@
 #
 #   docker build -f deploy/docker/provider-cpu.Dockerfile -t pgw-provider-cpu:dev .
 #
-# Reproducible: base image by digest, dependencies hash-locked in requirements/provider-cpu.txt (torch 2.5.1+cpu),
+# Reproducible: base image by digest, dependencies hash-locked in requirements/provider-cpu.txt (torch 2.15.0+cpu, the measured stack's version),
 # Rust toolchain by version. Optional `--secret id=build_ca,src=<CA bundle>` behind a TLS-inspecting proxy.
 
 ARG PYTHON_IMAGE=python:3.12-slim-bookworm@sha256:935c3c5b12357a7e10caa9c1e6ca5692344d97cf229832ef584be2cec9fc03df

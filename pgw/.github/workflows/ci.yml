@@ -22,7 +22,7 @@ concurrency:
 
 env:
   PGW_DIR: pgw
-  TORCH_VERSION: "2.5.1"
+  TORCH_VERSION: "2.15.0"
   PIP_DISABLE_PIP_VERSION_CHECK: "1"
   PGW_OFFLINE: "1"          # unit tests never download models; network tests run in a nightly job
 

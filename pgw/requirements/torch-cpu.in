@@ -1,2 +1,2 @@
-# torch build for CPU images (download.pytorch.org/whl/cpu)
-torch==2.5.1+cpu
+# torch build for CPU images (download.pytorch.org/whl/cpu); the measured stack's version (deploy/modal/colocated.py)
+torch==2.15.0+cpu

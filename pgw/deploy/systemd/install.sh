@@ -2,7 +2,7 @@
 # Install PGW as systemd services on a Linux VM (used by the OVA / AMI / Azure image builds too).
 #
 #   sudo deploy/systemd/install.sh --role gateway --source /path/to/pgw [--torch-index URL]
-#   sudo deploy/systemd/install.sh --role factory --wheel pgw-0.1.0-py3-none-any.whl --cuda cu124
+#   sudo deploy/systemd/install.sh --role factory --wheel pgw-0.1.0-py3-none-any.whl --cuda cu132
 #
 # Creates the `pgw` system user, a virtualenv in /opt/pgw, /etc/pgw (config, 0750) with example
 # files, /var/lib/pgw (state, 0700) and the systemd unit. It never generates or prints secrets:
@@ -13,12 +13,12 @@ ROLE=""
 SOURCE=""
 WHEEL=""
 CUDA=""
-TORCH_VERSION=${TORCH_VERSION:-2.5.1}
+TORCH_VERSION=${TORCH_VERSION:-2.15.0}
 PYTHON=${PYTHON:-python3}
 PREFIX=/opt/pgw
 HERE=$(cd "$(dirname "$0")" && pwd)
 
-usage() { echo "usage: $0 --role gateway|factory [--source DIR | --wheel FILE] [--cuda cu124]" >&2; exit 2; }
+usage() { echo "usage: $0 --role gateway|factory [--source DIR | --wheel FILE] [--cuda cu132]" >&2; exit 2; }
 
 while [ $# -gt 0 ]; do
     case "$1" in

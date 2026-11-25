@@ -7,15 +7,15 @@
 #   docker run --gpus all -v masks:/var/lib/pgw/masks -v packs:/var/lib/pgw/packs:ro pgw-factory-cuda:dev
 #
 # The torch CUDA wheels bundle the CUDA runtime; the host needs only the NVIDIA driver and the
-# NVIDIA container toolkit. TORCH_CUDA selects the wheel index (cu121, cu124).
+# NVIDIA container toolkit. TORCH_CUDA selects the wheel index (cu132: the CUDA build of torch 2.15.0, the measured stack).
 
 # Reproducible builds: the base image is pinned by digest and every Python dependency (torch included)
 # by version and sha256 in requirements/factory-cuda.txt (refresh both with scripts/lock-requirements.sh).
 ARG PYTHON_IMAGE=python:3.12-slim-bookworm@sha256:935c3c5b12357a7e10caa9c1e6ca5692344d97cf229832ef584be2cec9fc03df
 
 FROM ${PYTHON_IMAGE} AS build
-ARG TORCH_VERSION=2.5.1
-ARG TORCH_CUDA=cu124
+ARG TORCH_VERSION=2.15.0
+ARG TORCH_CUDA=cu132
 ENV PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     PYTHONDONTWRITEBYTECODE=1

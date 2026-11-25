@@ -139,7 +139,7 @@ click==8.5.1 \
     --hash=sha256:9bbfada76703fd1d784b83eea012e3e8c6a001a876543ef104fa56aaaeb072b4
     # via
     #   -c requirements/service-cuda.txt
-    #   pgw (pyproject.toml)
+    #   pgw-sdk (pyproject.toml)
     #   huggingface-hub
     #   uvicorn
 cryptography==50.0.2 \
@@ -204,13 +204,55 @@ cryptography==50.0.2 \
     --hash=sha256:fdd28f912fccfec1846a94e2e1e8f9b0012f557f0c46fe4f3eb0d7a87afcf90b
     # via
     #   -c requirements/service-cuda.txt
-    #   pgw (pyproject.toml)
+    #   pgw-sdk (pyproject.toml)
+cuda-bindings==13.5.0 \
+    --hash=sha256:08b7e8d674c3266facb00453a7e34ea7d3ea965c2f594bb728f269f45f39fbe2 \
+    --hash=sha256:0d7a5d92be00b2a618fd7c62482f6c69584fd5ac498193b236600810d7ebaf74 \
+    --hash=sha256:190553fd300936e14cd4a8c64c1127a301a99e64b31c77fb825cd1d9eee677aa \
+    --hash=sha256:2dbc7f6148fd1a66b49bf8465b78f155535eaaa344cd7675e94dd2a997892175 \
+    --hash=sha256:2e8d562f928fe0bb254b1ade02133f9f6bc5e395efd2f1fbdb8533d64bf16e1f \
+    --hash=sha256:40eadfad6ae1554f8c1aa456620a85a49a275fc902f2c6dd93ee8c488b2c5e9f \
+    --hash=sha256:4d850299e6ba1ca9caec78b3d87b6b7590ed1d6c9a404272798f40b1e19e3f24 \
+    --hash=sha256:580a2cde3a1259086420b5d5339914f408c4ef7fa4d5cfdfe057abfdbf2b134a \
+    --hash=sha256:643ed0f6aae2bec657a7ad8872a62912178c28e94bb533ce60dbc46c1c0950dc \
+    --hash=sha256:64d9c337209736eadc807a36925f11528a4815fed9869df77f259bc9341bc1e1 \
+    --hash=sha256:71c15ed97099a8ef416515d80ddd10770e0f6339234e16855a526d2896516631 \
+    --hash=sha256:81b3bb88206439c51b6b6de4fa3c5f9cfbb1d705cd4fa586dc6197e53c8adc52 \
+    --hash=sha256:8634b0c407655ef6e5a51ce6073c2dac5dfdc3e13a3169ea41491138513071f7 \
+    --hash=sha256:9046ec1bfeb2dc0ed656f0c5a11787d2c9cfda9d2c8806ebf353456abd638b16 \
+    --hash=sha256:92baf83790a1c7f33cce41d89d7e4b5bea67d683f08007c781d88d5e55a9cb33 \
+    --hash=sha256:991ace38a09fc664228209fd023d1394f5209aeee4728f14c1f7647908cb5a70 \
+    --hash=sha256:99746f2928150042191edf7952323bb22e8f104f7bcee787bd7e2001a8bba70b \
+    --hash=sha256:9b69fdaa27b1f69746bb23b7fa6a458c88dffcb4d7cf27062ad2f1b6245a18c0 \
+    --hash=sha256:a290fb4db7382bb3cfbc4485e5aa2f631f3a2f838c5d15bc00be743456e47722 \
+    --hash=sha256:a46a8cc84112d769d0f57bf3ae3fedc115cf09348f14da85a1a8200968b6f262 \
+    --hash=sha256:cf525b2c2113fdfd2b10899a3e5d280520e970aa13c6ca021e83d9d02f895ed1 \
+    --hash=sha256:d47b6f6d0398f97c82e2525eefb02e7252848e48c902824f6a6b6467a5902894 \
+    --hash=sha256:da463a68cfc0702639f4c09098581cd617284d26c905455b4aae13649ebf2cef \
+    --hash=sha256:da7fafa0eb222b980dc931281d1b53f822c34efb33e72ae14b0e1ce216232afd \
+    --hash=sha256:dc1e7af961296aec608ff5ea79144c4c6284ca71fc41a8c09424c32171361987 \
+    --hash=sha256:f1faaea572a382e903d8bfe2a066de2879d04775198c0fb28f3791bf1221b8a1 \
+    --hash=sha256:f812952466b140cb13a756d2e38709b6f6cc32afcf9ec6d16708afd8b165ff98 \
+    --hash=sha256:fb26fb0532d9bb0f5d5469493530c71fe6dce8614e20006beaa546408a97e4bc
+    # via
+    #   -c requirements/service-cuda.txt
+    #   torch
+cuda-pathfinder==1.9.1 \
+    --hash=sha256:b743c132f90ad2d1e71d43fd28f31ebcde518f943e50fd44aca62b2a80d5230d
+    # via
+    #   -c requirements/service-cuda.txt
+    #   cuda-bindings
+cuda-toolkit==13.2.2 \
+    --hash=sha256:d12edc1aad1356236a2ee10c0d794b1aff5d3e79bfeca54867c3bb8e5afd87b0
+    # via
+    #   -c requirements/service-cuda.txt
+    #   torch
 fastapi==0.163.1 \
     --hash=sha256:3d364b02a68b67292e833ff2dfed3b8dc3aeadf73e271c15316c6c166668792f \
     --hash=sha256:68f2d8050f5c3583121c0d203046cc7def5c16a7d6c43a0e7707a8ea610fe2d3
     # via
     #   -c requirements/service-cuda.txt
-    #   pgw (pyproject.toml)
+    #   pgw-sdk (pyproject.toml)
 filelock==4.2.11 \
     --hash=sha256:020e229e4bb9d410fc799c07ddf45fa217cba970278f40b30751d94f309b69e2 \
     --hash=sha256:0cb84119fb8dce17898e1f69c974d5019daa59c4d7656be390a5fa59ccced912
@@ -218,7 +260,6 @@ filelock==4.2.11 \
     #   -c requirements/service-cuda.txt
     #   huggingface-hub
     #   torch
-    #   triton
 fsspec==2026.9.0 \
     --hash=sha256:0f08147951c8cb31d844c3547d631053b127863b60be04cf06e121333ee0e2fe \
     --hash=sha256:8dd6e646e99ea382bd85f97a45e6b526a442d79423a7dc673f1e2756d05fcb5f
@@ -241,7 +282,7 @@ h2==4.4.1 \
     --hash=sha256:4e866ffb1a869ae14dd9b5e6beb5c24a13da0495ad72b65925ded182521c1516
     # via
     #   -c requirements/service-cuda.txt
-    #   pgw (pyproject.toml)
+    #   pgw-sdk (pyproject.toml)
     #   httpx
     #   hypercorn
 hf-xet==1.8.0 \
@@ -262,7 +303,9 @@ hf-xet==1.8.0 \
     --hash=sha256:c74e3751cbcdae9222c5170e8d788e83201a03dc5e5f4308a20f17a5b6023b56 \
     --hash=sha256:e00d8f60170cd3dd55d98306e41dbaf28b27ff1bcfefbfa84279d197221be83e \
     --hash=sha256:f42940869572dc2b05dfe06f4cc398c6291503e086ddc4eddfb7a6ab9409ad01
-    # via huggingface-hub
+    # via
+    #   -c requirements/service-cuda.txt
+    #   huggingface-hub
 hpack==4.2.0 \
     --hash=sha256:0895cfa3b5531fc65fe439c05eb65144f123bf7a394fcaa56aa423548d8e45c0 \
     --hash=sha256:858ac0b02280fa582b5080d68db0899c62a80375e0e5413a74970c5e518b6986
@@ -278,7 +321,9 @@ httpcore==1.0.9 \
 httpcore2==2.16.2 \
     --hash=sha256:16051ae2a42f776007543f32de9349a317b23d2cbb4e1456b4bac0e88b87419a \
     --hash=sha256:6c519d0f7b44f7269fa9bbb4d2763db395a4a2370f046d8e8e0a4b38227815d2
-    # via httpx2
+    # via
+    #   -c requirements/service-cuda.txt
+    #   httpx2
 httptools==0.9.0 \
     --hash=sha256:02bc5b3dcb6394b9d825fd62a7bfa0b2943063a3c89abc4492ad45e334a20eb5 \
     --hash=sha256:050f7ab098121873c8f13e35857f97ab60a76185c8302bde9a384939bb7c3b96 \
@@ -406,17 +451,20 @@ httpx==0.28.1 \
     --hash=sha256:d909fcccc110f8c7faf814ca82a9a4d816bc5a6dbfea25d6591d6985b8ba59ad
     # via
     #   -c requirements/service-cuda.txt
-    #   pgw (pyproject.toml)
+    #   pgw-sdk (pyproject.toml)
 httpx2==2.16.2 \
     --hash=sha256:748b615678f07d8e3b183efe81ad13b655ca88bfc56ce4589219b2d442860574 \
     --hash=sha256:f05c13aade4c45dbf1c9060647a1058f0acad62398fad96e741269edb33d46f5
-    # via huggingface-hub
+    # via
+    #   -c requirements/service-cuda.txt
+    #   huggingface-hub
 huggingface-hub==2.4.0 \
     --hash=sha256:13a6158b9e3393d9d3f248ce99074d50c2a0a1449fb9d8e2f710751e2084c188 \
     --hash=sha256:42ecfd93ede47bdd333daebbf66a32d7bfe2e18752754fe4d2d4f98a0179d801
     # via
     #   -c requirements/pack-pins.in
-    #   pgw (pyproject.toml)
+    #   -c requirements/service-cuda.txt
+    #   pgw-sdk (pyproject.toml)
     #   tokenizers
     #   transformers
 hypercorn==0.18.0 \
@@ -424,7 +472,7 @@ hypercorn==0.18.0 \
     --hash=sha256:d63267548939c46b0247dc8e5b45a9947590e35e64ee73a23c074aa3cf88e9da
     # via
     #   -c requirements/service-cuda.txt
-    #   pgw (pyproject.toml)
+    #   pgw-sdk (pyproject.toml)
 hyperframe==6.1.0 \
     --hash=sha256:b03380493a519fce58ea5af42e4a42317bf9bd425596f7a0835ffce80f1a42e5 \
     --hash=sha256:f630908a00854a7adeabd6382b43923a4c4cd4b821fcb527e6ab9e15382a3b08
@@ -443,11 +491,14 @@ jinja2==3.1.6 \
     --hash=sha256:85ece4451f492d0c13c5dd7c13a64681a86afae63a5f347908daf103ce6d2f67
     # via
     #   -c requirements/service-cuda.txt
+    #   pgw-sdk (pyproject.toml)
     #   torch
 markdown-it-py==4.3.0 \
     --hash=sha256:7aa1511a46c39138de78d9eba92ce47e63124d8003fc98b3a351909e04239efa \
     --hash=sha256:91a58fa5b72c71a40cf7177250fd767480d7a2bb3ac426ccfb76fb90305fdaaa
-    # via rich
+    # via
+    #   -c requirements/service-cuda.txt
+    #   rich
 markupsafe==3.0.4 \
     --hash=sha256:007e1ffd9bf65bb6ee96df7b258fc632a4868dd5566037986c64781f35a36e98 \
     --hash=sha256:02fa4acbc6a3fc5c693c34d4dd8c1130b7fe99cc915181b0ddd6f72aeb296002 \
@@ -606,7 +657,9 @@ markupsafe==3.0.4 \
 mdurl==0.1.2 \
     --hash=sha256:84008a41e51615a49fc9966191ff91509e3c40b939176e643fd50a5c2196b8f8 \
     --hash=sha256:bb413d29f5eea38f31dd4754dd7377d4465116fb207585f97bf925588687c1ba
-    # via markdown-it-py
+    # via
+    #   -c requirements/service-cuda.txt
+    #   markdown-it-py
 mpmath==1.3.0 \
     --hash=sha256:7a28eb2a9774d00c7bc92411c19a89209d5da7c4c9a9e227be8330a23a25b91f \
     --hash=sha256:a0b2b9fe80bbcd81a6647ff13108738cfb482d481d826cc0e02f5b35e5c88d2c
@@ -707,7 +760,7 @@ msgpack==1.2.4 \
     --hash=sha256:fb9ddbf23b8c6e89752af399fcf4daed60055e239cda44c6acfaa76d19331e8c
     # via
     #   -c requirements/service-cuda.txt
-    #   pgw (pyproject.toml)
+    #   pgw-sdk (pyproject.toml)
 networkx==3.7 \
     --hash=sha256:e3fd2c13a7814cee3746340d8d7f8598a67f16a58bf47fb7f8793fab6efca1b0 \
     --hash=sha256:fd77a511bd90f39f3d016351345b52cf5319b813bdca01de3f755d3cca62e96a
@@ -783,99 +836,125 @@ numpy==2.5.5 \
     --hash=sha256:ff5c1ab54a637c0adcdbb69ad10e5c4f1c4dedba69c0d1de383249b70c36908f
     # via
     #   -c requirements/service-cuda.txt
-    #   pgw (pyproject.toml)
+    #   pgw-sdk (pyproject.toml)
     #   transformers
-nvidia-cublas-cu12==12.4.5.8 \
-    --hash=sha256:0f8aa1706812e00b9f19dfe0cdb3999b092ccb8ca168c0db5b8ea712456fd9b3 \
-    --hash=sha256:2fc8da60df463fdefa81e323eef2e36489e1c94335b5358bcb38360adf75ac9b \
-    --hash=sha256:5a796786da89203a0657eda402bcdcec6180254a8ac22d72213abc42069522dc
+nvidia-cublas==13.4.1.3 \
+    --hash=sha256:4eb1472bf92b741e7cf24da7978dde251b58ddec2092d9f6a04f3623eb4e9a15 \
+    --hash=sha256:7e7f780caf07bde7b36b0d25bdad29e8ccbacfc4b75066907bdb601af1e6d4aa \
+    --hash=sha256:a5917cb642cfb07f4a0231ee16aec7e2e0357d8cb8b1b78a0c9c68dba3e6afc7
     # via
     #   -c requirements/service-cuda.txt
-    #   nvidia-cudnn-cu12
-    #   nvidia-cusolver-cu12
-    #   torch
-nvidia-cuda-cupti-cu12==12.4.127 \
-    --hash=sha256:5688d203301ab051449a2b1cb6690fbe90d2b372f411521c86018b950f3d7922 \
-    --hash=sha256:79279b35cf6f91da114182a5ce1864997fd52294a87a16179ce275773799458a \
-    --hash=sha256:9dec60f5ac126f7bb551c055072b69d85392b13311fcc1bcda2202d172df30fb
+    #   cuda-toolkit
+    #   nvidia-cudnn-cu13
+    #   nvidia-cusolver
+nvidia-cuda-cccl==13.3.5.0.6 \
+    --hash=sha256:6e1f96b71d582171cebd9ae1d7ffbfc726e112a0a41aef77b9ead500aad7e0a2 \
+    --hash=sha256:6f30b8076b3e69951c459c94ae190bde51924b320076ebaec376d36848b4c76e \
+    --hash=sha256:a729999ca75633c6e2c7f48804fa982e00d75e5416284d010fadf82646c1d854 \
+    --hash=sha256:d5230098fa2df5021e1a00c0c4eee41797671a91119d31e892463e5ccf3ee326
     # via
     #   -c requirements/service-cuda.txt
-    #   torch
-nvidia-cuda-nvrtc-cu12==12.4.127 \
-    --hash=sha256:0eedf14185e04b76aa05b1fea04133e59f465b6f960c0cbf4e37c3cb6b0ea198 \
-    --hash=sha256:a178759ebb095827bd30ef56598ec182b85547f1508941a3d560eb7ea1fbf338 \
-    --hash=sha256:a961b2f1d5f17b14867c619ceb99ef6fcec12e46612711bcec78eb05068a60ec
+    #   nvidia-nvshmem-cu13
+nvidia-cuda-cupti==13.2.86 \
+    --hash=sha256:10837e2910753a7726c0243aa113e2bd65c0edee6f6f3e097db1757a8eac2c9e \
+    --hash=sha256:8fa29f15dd8336181f961764d9d95236fc6b931dd0c8fcf8cd70aab0c310b586 \
+    --hash=sha256:d9a5c133f73fcb9013f3ada0da6fb54d4117618d81f3f5a0419417ea6ee829d4
     # via
     #   -c requirements/service-cuda.txt
-    #   torch
-nvidia-cuda-runtime-cu12==12.4.127 \
-    --hash=sha256:09c2e35f48359752dfa822c09918211844a3d93c100a715d79b59591130c5e1e \
-    --hash=sha256:64403288fa2136ee8e467cdc9c9427e0434110899d07c779f25b5c068934faa5 \
-    --hash=sha256:961fe0e2e716a2a1d967aab7caee97512f71767f852f67432d572e36cb3a11f3
+    #   cuda-toolkit
+nvidia-cuda-nvrtc==13.2.86 \
+    --hash=sha256:1e5d7b411a2eb83f5c71c98d58133a763fc9fa86a4241ee320c5c4782d9ad1fd \
+    --hash=sha256:8111c5130e967b78222ea2124145f8efe9ce201b752b2579a2513100a53be1c5 \
+    --hash=sha256:bf070582c2d8b03f681cea8d34a9de900d808607deb813a826ecb3a585606f9a
     # via
     #   -c requirements/service-cuda.txt
-    #   torch
-nvidia-cudnn-cu12==9.1.0.70 \
-    --hash=sha256:165764f44ef8c61fcdfdfdbe769d687e06374059fbb388b6c89ecb0e28793a6f
+    #   cuda-toolkit
+    #   nvidia-cublas
+nvidia-cuda-runtime==13.2.86 \
+    --hash=sha256:3498247680dfddce31bad102af7e3e26fc795342a3cac64722bb0fa95e7f60f0 \
+    --hash=sha256:37844957894bfdecf90243568d21a2cb251b66106915b71459a23c8e6ef2da69 \
+    --hash=sha256:b26f5dd86e67f0eb404ae679185e1c49fe546fa9a47b32dee31312f65ccfe764
     # via
     #   -c requirements/service-cuda.txt
-    #   torch
-nvidia-cufft-cu12==11.2.1.3 \
-    --hash=sha256:5dad8008fc7f92f5ddfa2101430917ce2ffacd86824914c82e28990ad7f00399 \
-    --hash=sha256:d802f4954291101186078ccbe22fc285a902136f974d369540fd4a5333d1440b \
-    --hash=sha256:f083fc24912aa410be21fa16d157fed2055dab1cc4b6934a0e03cba69eb242b9
-    # via
-    #   -c requirements/service-cuda.txt
-    #   torch
-nvidia-curand-cu12==10.3.5.147 \
-    --hash=sha256:1f173f09e3e3c76ab084aba0de819c49e56614feae5c12f69883f4ae9bb5fad9 \
-    --hash=sha256:a88f583d4e0bb643c49743469964103aa59f7f708d862c3ddb0fc07f851e3b8b \
-    --hash=sha256:f307cc191f96efe9e8f05a87096abc20d08845a841889ef78cb06924437f6771
+    #   cuda-toolkit
+nvidia-cudnn-cu13==9.26.0.51 \
+    --hash=sha256:8e37a83d7dd7c2663afcae38b1c95c5e9e7c9754f313800da95ca81439fa37f9 \
+    --hash=sha256:8e5b4f5eccff721416f70ecf4353172fc4d5cdd8ca869fe6f983a4a5b0147b20 \
+    --hash=sha256:9c976d539786698c71d6bcdbe2053b7485fae062ff7e1215d2f2ff67b1a2149a
     # via
     #   -c requirements/service-cuda.txt
     #   torch
-nvidia-cusolver-cu12==11.6.1.9 \
-    --hash=sha256:19e33fa442bcfd085b3086c4ebf7e8debc07cfe01e11513cc6d332fd918ac260 \
-    --hash=sha256:d338f155f174f90724bbde3758b7ac375a70ce8e706d70b018dd3375545fc84e \
-    --hash=sha256:e77314c9d7b694fcebc84f58989f3aa4fb4cb442f12ca1a9bde50f5e8f6d1b9c
+nvidia-cufft==12.2.0.57 \
+    --hash=sha256:1ed438568ae1088ba2c25789d10205d4104b8b140b7bd942e39a787947a0fb74 \
+    --hash=sha256:34da27fadf3979b0b042c43823f0530be8408b86df31ee0108e1ca0b621d4ef6 \
+    --hash=sha256:89b78b2b60d6ca1fb7dab7d1a4af135d69d586d18a216ca84e51db5901cd41d0
     # via
     #   -c requirements/service-cuda.txt
-    #   torch
-nvidia-cusparse-cu12==12.3.1.170 \
-    --hash=sha256:9bc90fb087bc7b4c15641521f31c0371e9a612fc2ba12c338d3ae032e6b6797f \
-    --hash=sha256:9d32f62896231ebe0480efd8a7f702e143c98cfaa0e8a76df3386c1ba2b54df3 \
-    --hash=sha256:ea4f11a2904e2a8dc4b1833cc1b5181cde564edd0d5cd33e3c168eff2d1863f1
+    #   cuda-toolkit
+nvidia-cufile==1.17.1.22 \
+    --hash=sha256:87feaf8c3ad20d3d03a01933181801ff6892bace5c8f0b1e4b48f319d3e62d36 \
+    --hash=sha256:bec33d7f1f12691dce330275246587569c2ed90b1ce43b0f94b3e1ce9268744b
     # via
     #   -c requirements/service-cuda.txt
-    #   nvidia-cusolver-cu12
+    #   cuda-toolkit
+nvidia-cusolver==12.2.0.11 \
+    --hash=sha256:364511c9974ef1fcde2ca197caebfe0994ece2cb33bc27117eeb88b8cee5c46d \
+    --hash=sha256:8be097fca28de6be0990ab216ee9b804dd51077e1d1d83acf6c9850650bdc64d \
+    --hash=sha256:fab5778f6769947389a1a6abc07e635576825a08c0ffc68c3ae7f1392c794b42
+    # via
+    #   -c requirements/service-cuda.txt
+    #   cuda-toolkit
+nvidia-cusparse==12.7.10.12 \
+    --hash=sha256:25907c75e4db1581685f06f61cc6cdecc04611765516a52373e0a18ebd69fa00 \
+    --hash=sha256:597eff2cd83e3ab1d1e3a0dce9c9c879d77cf64ec2659bfdb5af6a5d02e7aaa9 \
+    --hash=sha256:6b1e82056a0865c5b4f5da6adbebb15244e9a2b8aeea0838a9cf725e16523c53
+    # via
+    #   -c requirements/service-cuda.txt
+    #   cuda-toolkit
+    #   nvidia-cusolver
+nvidia-cusparselt-cu13==0.8.1 \
+    --hash=sha256:4dca476c50bf4780d46cd0bfbd82e2bc10a08e4fef7950917ce8d7578d22a23f \
+    --hash=sha256:786ce87568c303fadb5afcc7102d454cd3040d75f6f8626f5db460d1871f4dd0 \
+    --hash=sha256:dccbd362f91a7b9024d1f55ee9f548ac065027ff15d8c8b0db889ab3a8f31215
+    # via
+    #   -c requirements/service-cuda.txt
     #   torch
 nvidia-ml-py==13.615.71 \
     --hash=sha256:959bf4adf6fe1308e4bd739e722236b0d1ec8392e2cefad33ff70c311380b9b6 \
     --hash=sha256:bebe4e48f51b1dc75028c0815cb7bfa14a31a5bb80be70c9d980c6036953fc3d
     # via
     #   -c requirements/service-cuda.txt
-    #   pgw (pyproject.toml)
-nvidia-nccl-cu12==2.21.5 \
-    --hash=sha256:8579076d30a8c24988834445f8d633c697d42397e92ffc3f63fa26766d25e0a0
+    #   pgw-sdk (pyproject.toml)
+nvidia-nccl-cu13==2.30.7 \
+    --hash=sha256:ca786ffa5a647c75d4d1f5cc72a6c4f537947e2ba8823d7c8aaf768e7a7b9f77 \
+    --hash=sha256:cefa7fdb9710efd0f39c5f1be1d61ff6fc9a996c451265bd7fbdcf9455ed4b50
     # via
     #   -c requirements/service-cuda.txt
     #   torch
-nvidia-nvjitlink-cu12==12.4.127 \
-    --hash=sha256:06b3b9b25bf3f8af351d664978ca26a16d2c5127dbd53c0497e28d1fb9611d57 \
-    --hash=sha256:4abe7fef64914ccfa909bc2ba39739670ecc9e820c83ccc7a6ed414122599b83 \
-    --hash=sha256:fd9020c501d27d135f983c6d3e244b197a7ccad769e34df53a42e276b0e25fa1
+nvidia-nvjitlink==13.5.37 \
+    --hash=sha256:280d7cb9649704145f074b8dbde500de04ce02d0872e066e20a83c17bcaa93eb \
+    --hash=sha256:4465d4e8f2212118220b580c82523c5654f93a62906bd51d29d79bdfc12376c1 \
+    --hash=sha256:893f6f9a55b2720ed94913b5ba3332e972da8c78dfa2863d0244403dbd528ffc \
+    --hash=sha256:eb30348ae64c525180a280025dd12a089c3e2e1dc4e19cdd58f68c6edc622404
     # via
     #   -c requirements/service-cuda.txt
-    #   nvidia-cusolver-cu12
-    #   nvidia-cusparse-cu12
-    #   torch
-nvidia-nvtx-cu12==12.4.127 \
-    --hash=sha256:641dccaaa1139f3ffb0d3164b4b84f9d253397e38246a4f2f36728b48566d485 \
-    --hash=sha256:781e950d9b9f60d8241ccea575b32f5105a5baf4c2351cab5256a24869f12a1a \
-    --hash=sha256:7959ad635db13edf4fc65c06a6e9f9e55fc2f92596db928d169c0bb031e88ef3
+    #   cuda-toolkit
+    #   nvidia-cufft
+    #   nvidia-cusolver
+    #   nvidia-cusparse
+nvidia-nvshmem-cu13==3.7.2 \
+    --hash=sha256:0e748308b9e0a8a8d81859353f3e6c98fbe85a85f652a915a2ba60149a0bd124 \
+    --hash=sha256:b9a4f843c62b5dded8ad33fd6d220e007dcd39f06cee549292f5ba14ce4c235c
     # via
     #   -c requirements/service-cuda.txt
     #   torch
+nvidia-nvtx==13.2.86 \
+    --hash=sha256:1c6ae1be92fba569dd271f7b9b3056f99f5642726dc6c53d1b93ae4110c398fb \
+    --hash=sha256:7f3f430a87bb1e2db3371832d21a5c1efcf77bef7cacfd772fd71649e121cd58 \
+    --hash=sha256:968ce72baee2a01791c7d3254000eac81f24677b0b91c62d21b449a1f309c245
+    # via
+    #   -c requirements/service-cuda.txt
+    #   cuda-toolkit
 opentelemetry-api==1.45.2 \
     --hash=sha256:2cbd737377e710ee740d261c94e93fa0f08e6d037c18f17513cc0a2d94479a34 \
     --hash=sha256:d7b0008e21e5fd61cbe7a7f34ca3b6905a78ab677d9bc395e299359c75cda6b4
@@ -886,6 +965,7 @@ packaging==26.4 \
     --hash=sha256:81383611a09c1bc0b08b76e0fd5829d7c6824c65b27a6aee339da133f4233ea2 \
     --hash=sha256:c4b671c41ddb9bf26e543c37723610d28fb6bf7affc4da17cf048d419d2c062a
     # via
+    #   -c requirements/service-cuda.txt
     #   huggingface-hub
     #   transformers
 priority==2.0.0 \
@@ -899,7 +979,7 @@ prometheus-client==0.26.0 \
     --hash=sha256:fa93d06737aa02bacd05794768508bb97d2fbee28cb3bca04eaae92f0ca953d6
     # via
     #   -c requirements/service-cuda.txt
-    #   pgw (pyproject.toml)
+    #   pgw-sdk (pyproject.toml)
 pycparser==3.12 \
     --hash=sha256:a076f3f489b39b43ed13563a1dafe42447445bec2e294154ec5c57fcdda4c85e \
     --hash=sha256:f03387877eab82ce01bbdfd0ba7252ee55a90b1c708d5129e2ce915475cf1db6
@@ -911,7 +991,7 @@ pydantic==2.14.3 \
     --hash=sha256:3f7b347782ab7e4cf4c798496ae3a82787d9f21ec12676a9c564355eeef8daa8
     # via
     #   -c requirements/service-cuda.txt
-    #   pgw (pyproject.toml)
+    #   pgw-sdk (pyproject.toml)
     #   fastapi
     #   pydantic-settings
     #   typer
@@ -1064,11 +1144,13 @@ pydantic-settings==2.16.3 \
     --hash=sha256:d1db16a2d34006323a1b42c0640898da58adfbad7ec30baaa9e2b18aafc08999
     # via
     #   -c requirements/service-cuda.txt
-    #   pgw (pyproject.toml)
+    #   pgw-sdk (pyproject.toml)
 pygments==2.21.0 \
     --hash=sha256:2363c69b61c4a97c838da3b130dcd6468f4848992b21a82f2a63ec34377137d9 \
     --hash=sha256:610ca751c9bc2492b38eb9a38a7fbc93edbbb2d7182edaf34e66ae493dee5c8c
-    # via rich
+    # via
+    #   -c requirements/service-cuda.txt
+    #   rich
 python-dotenv==1.2.4 \
     --hash=sha256:42269a8a5b3fd54ffa6f3d84b18abed50064717576b4ecf03dc4a55d8aa04fdc \
     --hash=sha256:f0d53e69935a851c0dcc78f3ab7aaccd8cabef0b92382b576b824212902873c0
@@ -1270,11 +1352,15 @@ regex==2026.11.24 \
     --hash=sha256:fda07008182139d7f88ac7a743877cf84b7f1fc02424069c0a9740cec6950535 \
     --hash=sha256:fe9bb652571840bdc827202a345680eee35e85a4c71167725bf423edae7546a9 \
     --hash=sha256:ff6f55100211afc2da18821ba4cfd3186853c8c1e00ae7aba344dc6c1da83c53
-    # via transformers
+    # via
+    #   -c requirements/service-cuda.txt
+    #   transformers
 rich==15.0.0 \
     --hash=sha256:33bd4ef74232fb73fe9279a257718407f169c09b78a87ad3d296f548e27de0bb \
     --hash=sha256:edd07a4824c6b40189fb7ac9bc4c52536e9780fbbfbddf6f1e2502c31b068c36
-    # via typer
+    # via
+    #   -c requirements/service-cuda.txt
+    #   typer
 safetensors==0.8.0 \
     --hash=sha256:040070828e36dc8e122178bbbd5830ff9e97920affb84cbe0f46442497bed358 \
     --hash=sha256:096ec1a98435df7beb08853bb5aa9081a84f23d0adc67ed1a0a10550f608373f \
@@ -1295,7 +1381,7 @@ safetensors==0.8.0 \
     --hash=sha256:fd6f3f93c9a0a7cc2788ee63fb763353d4bd2e89b0751bc78fcf7dda00bea774
     # via
     #   -c requirements/service-cuda.txt
-    #   pgw (pyproject.toml)
+    #   pgw-sdk (pyproject.toml)
     #   transformers
 setuptools==84.2.1 \
     --hash=sha256:3ff8b3b5492a0aa66960f4419365a86b84e013070d4313e4d4a6894f5d64d6bc \
@@ -1306,16 +1392,18 @@ setuptools==84.2.1 \
 shellingham==1.5.4 \
     --hash=sha256:7ecfff8f2fd72616f7481040475a65b2bf8af90a56c89140852d1120324e8686 \
     --hash=sha256:8dbca0739d487e5bd35ab3ca4b36e11c4078f3a234bfce294b0a0291363404de
-    # via typer
+    # via
+    #   -c requirements/service-cuda.txt
+    #   typer
 starlette==1.10.0 \
     --hash=sha256:478c0ab3b4ced6e82719849c118fa406f0278a3499c1a898cd15cd31bdc38ce4 \
     --hash=sha256:b8399098d4c1e3522734f7235dc79b1fc967f96cf139c81e0fa30479e0685f9b
     # via
     #   -c requirements/service-cuda.txt
     #   fastapi
-sympy==1.13.1 \
-    --hash=sha256:9cebf7e04ff162015ce31c9c6c9144daa34a93bd082f54fd8f12deca4f47515f \
-    --hash=sha256:db36cdc64bf61b9b24578b6f7bab1ecdd2452cf008f34faa33776680c26d66f8
+sympy==1.14.0 \
+    --hash=sha256:d3d3fe8df1e5a0b42f0e7bdf50541697dbe7d23746e894990c030e2b05e72517 \
+    --hash=sha256:e091cc3e99d2141a0ba2847328f5479b05d94a6635cb96148ccb3f34671bd8f5
     # via
     #   -c requirements/service-cuda.txt
     #   torch
@@ -1346,25 +1434,40 @@ tokenizers==0.23.3 \
     --hash=sha256:efa3d7318406b4d115dce61ad5061953f1f44b128e79c020ce4615d763e23b6e
     # via
     #   -c requirements/pack-pins.in
+    #   -c requirements/service-cuda.txt
+    #   pgw-sdk (pyproject.toml)
     #   transformers
-torch==2.5.1+cu124 \
-    --hash=sha256:3c3f705fb125edbd77f9579fa11a138c56af8968a10fc95834cdd9fdf4f1f1a6 \
-    --hash=sha256:6b2966ede9affe2fd69e0765691ca723ec870e0c34c7761f4d5b8e318383fdaf \
-    --hash=sha256:6c8a7003ef1327479ede284b6e5ab3527d3900c2b2d401af15bcc50f2245a59f \
-    --hash=sha256:6f99d8459369cfd6661c2aee14787592fe50156a33faf9ef643ba04e42d6543f \
-    --hash=sha256:9036c4372dec409842a80965d94b7b0fb4298e0967ceb03336a42c83778faa6f \
-    --hash=sha256:9dde30f399ca22137455cca4d47140dfb7f4176e2d16a9729fc044eebfadb13a \
-    --hash=sha256:bf6484bfe5bc4f92a4a1a1bf553041505e19a911f717065330eb061afe0e14d7 \
-    --hash=sha256:d681b8be3fdc2cd41112310db3c3904f7c6a09a7ae28d042ae0af3af01c8fcda \
-    --hash=sha256:e9bebf91ede89267577911da4b0709ac6113a0cff6a1c2202c046b1ec2a51601
+torch==2.15.0+cu132 \
+    --hash=sha256:022983253b6eac844f370225c61b00b5b2b4cac46b4c7a78caabccf90fafb7e7 \
+    --hash=sha256:0afcc52839d307e8196e5581dab40741cae10f0ef59d2dc0e3ec0cd57fb66a2b \
+    --hash=sha256:10fcb607d314c1f8ffaacc435e9d181413727dd55cd29c0f7b5d443ae64781a6 \
+    --hash=sha256:14424b1514fc10a8a2352710234869c9af86a9223b582c3767b7512ec038f979 \
+    --hash=sha256:31773ed8603cb16a5545b45b5d81a9836c7450a0d9b99b3d35dd1ac8005d5f99 \
+    --hash=sha256:593e34d5a572e43a6ba5169e851c1eedb4aaab43f5338a257f0bfb30242a95fc \
+    --hash=sha256:6a8508e286b91dfd4cd47a1063f62d8d303e7178426ffbff79f074ca822fd926 \
+    --hash=sha256:77219314e3619eda23e419f1f3c2f1710ce88959966e1c670da27f29bb7e2cec \
+    --hash=sha256:7b54774dedca2a1147f1ae47451d9a8a7e88b80665fc505bf6a4f1f427d21e97 \
+    --hash=sha256:7e88f63f67b25eb889eda48fe86c3b614f67f22feecdb5841f21799aa6076d4e \
+    --hash=sha256:84936484ed0a2e55fc89f29c7e580be2eff4fb4c9c2c46c88849cf8062281f96 \
+    --hash=sha256:8fe01d27cc3e2a26563efde5b99210b835b9c00d34e24e423dd1d90096976f7e \
+    --hash=sha256:b2742d796bff9fd69e3153955852af56d1c6b0ff75d24a47f710ac1dbc4a5b47 \
+    --hash=sha256:b60517af7507441d89d1d8a1504cd56a2237d81943781090e133175930927604 \
+    --hash=sha256:b72cf81b4700684763b9439416b6cb70c0c1f1ded371a16add93349e45d81019 \
+    --hash=sha256:d189677e52622e290cdee7621c5ef38879619ac97d64193b6a93fbb484f93da9 \
+    --hash=sha256:dbbf14a00846979b1109284f268404dfcbadb2eb5073f9bf12e2260fee3df242 \
+    --hash=sha256:dd560a547eba68c18dc0339974a5cb0bb283ded223fc1b20490aee707888f5d8 \
+    --hash=sha256:eab225d21ae03c21981417fedbfda1cd3e73bf3ea51bd24fb187b77f5bf8fb28 \
+    --hash=sha256:eae9eece6dafe688bbc7afd689781b77778038c9043baae21c084261abe4f5ad \
+    --hash=sha256:f070bea62298fa4964c365b0d8788754a2f50610ea5885f7a3d1d103bb8de64b
     # via
     #   -c requirements/service-cuda.txt
-    #   -c requirements/torch-cu124.in
-    #   pgw (pyproject.toml)
+    #   -c requirements/torch-cu132.in
+    #   pgw-sdk (pyproject.toml)
 tqdm==4.70.1 \
     --hash=sha256:c293e525e6fef9c20e8728fd4612df02a0aa31bb5fe91ecd93e123b1b7bffa73 \
     --hash=sha256:cefd0eca11b2a37a3aee776544d4f4ae913f02688135b5556b8788dfa474afc4
     # via
+    #   -c requirements/service-cuda.txt
     #   huggingface-hub
     #   transformers
 transformers==5.23.0 \
@@ -1372,13 +1475,17 @@ transformers==5.23.0 \
     --hash=sha256:19d647a4d5d903a7c644ca5cde2d86efc3dde7d8c687ae7988806ff2205efa71
     # via
     #   -c requirements/pack-pins.in
-    #   pgw (pyproject.toml)
-triton==3.1.0 \
-    --hash=sha256:0f34f6e7885d1bf0eaaf7ba875a5f0ce6f3c13ba98f9503651c1e6dc6757ed5c \
-    --hash=sha256:6b0dd10a925263abbe9fa37dcde67a5e9b2383fc269fdf59f5657cac38c5d1d8 \
-    --hash=sha256:6dadaca7fc24de34e180271b5cf864c16755702e9f63a16f62df714a8099126a \
-    --hash=sha256:aafa9a20cd0d9fee523cd4504aa7131807a864cd77dcf6efe7e981f18b8c6c11 \
-    --hash=sha256:c8182f42fd8080a7d39d666814fa36c5e30cc00ea7eeeb1a2983dbb4c99a0fdc
+    #   -c requirements/service-cuda.txt
+    #   pgw-sdk (pyproject.toml)
+triton==3.9.0 \
+    --hash=sha256:1622118a038b0c6e16fa4a0305da62c8b3c15904ee1cc4d4e65846a25969e41e \
+    --hash=sha256:5542f4328472fd827dbb1ec43873364c2894682cc3f5d1c74a643762900e243e \
+    --hash=sha256:5e52ab4e2f1d64f0ac494c9aa723697b793f81a91c4cae4c36608ca0bc4267bf \
+    --hash=sha256:8d0b97b333d919e86d06a6b3c8656c27eecaf14f74c1eb64d210234603268ba2 \
+    --hash=sha256:990d43d967bbcc90f973fc17ad9cd7352e67940f41b31d94afd53b9867a3c1a1 \
+    --hash=sha256:bac2ed42a2b7aa232aeec57c2f7b0d88b61a74a29b3bf358f4cec6b20be356f6 \
+    --hash=sha256:eab30be40d412e947f3b74b20f50e4f8e07dd11439e7ddc6bd6184cabda2be79 \
+    --hash=sha256:feaaec13578ca84301d561d034cb08b3ae293d7f0b7ab6b8ddbb2d6796363716
     # via
     #   -c requirements/service-cuda.txt
     #   torch
@@ -1386,12 +1493,15 @@ truststore==0.10.5 \
     --hash=sha256:30d36967ccaded5cbb38d602c433f53600036c79d502f4533a49b60a03bbefcd \
     --hash=sha256:9aaaedaefaf06d8b206278cf8b5012bc897f485a874503501e12d776df78951c
     # via
+    #   -c requirements/service-cuda.txt
     #   httpcore2
     #   httpx2
 typer==0.29.2 \
     --hash=sha256:b1998dc5f2c3dedafa1517a9521fa944cc4dc1fadcea085d81a3b10ebcaeb075 \
     --hash=sha256:f30731f8ca758368b836b3714872e58e395cef8fcaff918c853b1969ed5274e7
-    # via transformers
+    # via
+    #   -c requirements/service-cuda.txt
+    #   transformers
 typing-extensions==4.16.0 \
     --hash=sha256:481caa481374e813c1b176ada14e97f1f67a4539ce9cfeb3f350d78d6370c2e8 \
     --hash=sha256:dc983d19a509c94dba722ee6abd33940f7c05a89e243c47e907eb4db6f1a43e5
@@ -1421,7 +1531,7 @@ uvicorn==0.54.0 \
     --hash=sha256:a2e33cbfaa0306f8e6b0c13e0cb89d7d7a2da3e62b90c66e18c33d9807b28620
     # via
     #   -c requirements/service-cuda.txt
-    #   pgw (pyproject.toml)
+    #   pgw-sdk (pyproject.toml)
 uvloop==0.23.0 \
     --hash=sha256:0305871ac712f54b62af73f943dbf21ae3ce80a44bc0f0151424484affa85645 \
     --hash=sha256:090865d8ce7a03986755a3ce711b7dd0d4b44eb14ab74368b717f3fad1180208 \

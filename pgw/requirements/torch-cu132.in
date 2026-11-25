@@ -1,0 +1,4 @@
+# torch build for CUDA images (download.pytorch.org/whl/cu132; the default CUDA build of torch 2.15.0 on PyPI)
+# The measured Modal stack ran torch 2.15.0 (deploy/modal/colocated.py); the wheels bundle the CUDA 13.2 runtime
+# (the host needs an NVIDIA driver that supports CUDA 13.2).
+torch==2.15.0+cu132

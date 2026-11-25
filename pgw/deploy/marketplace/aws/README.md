@@ -6,7 +6,7 @@ Two listings cover the customer side; the compute service stays in our AWS accou
 |---|---|---|
 | **PGW Gateway (Kubernetes)** | Container product (Helm, EKS) | `pgw-gateway` and `pgw-factory` images in the Marketplace ECR, charts from `deploy/helm` |
 | **PGW Gateway (AMI)** | AMI product (single instance) | Ubuntu 24.04 AMI built with `deploy/systemd/install.sh` (gateway + factory units) |
-| PGW Mask Factory GPU (optional) | AMI product (g4dn / g5 / g6) | `install.sh --role factory --cuda cu124`, for customers running their own factory |
+| PGW Mask Factory GPU (optional) | AMI product (g4dn / g5 / g6) | `install.sh --role factory --cuda cu132`, for customers running their own factory |
 
 ## Compute service connectivity (Topology B)
 
