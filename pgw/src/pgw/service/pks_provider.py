@@ -291,7 +291,7 @@ class PKSProvider:
         def one(part: tuple[Any, Any, int, int, Any]) -> None:
             w, const, r0, r1, dev = part
             if getattr(dev, "type", "cpu") != "cuda":
-                ring = pks_gpu.ring_rows(a_seed, n, it.linear, dev)
+                ring = pks_gpu.ring_rows_async(a_seed, n, it.linear, dev)
                 out[:, r0 // PACK:r1 // PACK] = pks_gpu.item(w, const, r1 - r0, n, ring, b, ops)
                 return
             import torch  # pragma: no cover - GPU only: each concurrent item on its own stream (as mulmod64)
@@ -301,7 +301,7 @@ class PKSProvider:
             stream = _borrow_stream(dev)
             try:
                 with torch.cuda.device(dev), torch.cuda.stream(stream):
-                    ring = pks_gpu.ring_rows(a_seed, n, it.linear, dev)
+                    ring = pks_gpu.ring_rows_async(a_seed, n, it.linear, dev)
                     out[:, r0 // PACK:r1 // PACK] = pks_gpu.item(w, const, r1 - r0, n, ring, b, ops)
                     stream.synchronize()
             finally:

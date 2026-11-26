@@ -139,7 +139,7 @@ def test_kernels_lower_for_cuda(arch: int) -> None:
         pytest.skip(f"no CUDA compiler toolchain in this Triton: {r.stderr[-300:]}")
     assert r.returncode == 0, r.stderr[-3000:]
     sizes = json.loads(r.stdout.strip().splitlines()[-1])
-    assert set(sizes) == {"fwd", "mac_inv", "tail"} and all(v > 0 for v in sizes.values())
+    assert set(sizes) == {"fwd", "fwd4", "mac_inv", "tail"} and all(v > 0 for v in sizes.values())
 
 
 def test_fused_self_test_passes() -> None:
@@ -183,6 +183,7 @@ def test_auto_selection_and_permanent_fallback(monkeypatch: pytest.MonkeyPatch) 
     assert pks_gpu.ntt_impl("cuda:0") == "torch"
     # auto with the fused kernels chosen: an error falls back to torch (same bits) and stays there
     monkeypatch.delenv("PGW_SERVICE_PKS_GPU_NTT")
+    monkeypatch.setenv("PGW_SERVICE_PKS_GPU_FWD4", "torch")  # one keyswitch call per item: the per-prime forward
     rng = np.random.default_rng(4)
     hs = torch.from_numpy(rng.integers(0, PAR.q1, (PACK, NU), dtype=np.int64)).to(DEV)
     key = str(hs.device)  # "cuda:0", not "cuda"
