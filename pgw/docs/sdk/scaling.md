@@ -29,13 +29,18 @@ client machine as the number of concurrent streams grows, how to size it, and ho
    checks, sampling over 152k logits) grows with the streams: one process tops out at about 4-5 streams at 7B-72B
    decode speeds. Above that, run several worker processes (below); they share one mask store and one factory
    (measured, tiny model, 64 streams on 4 vCPUs: 211 tokens/s in one process, 296 in four).
-4. **The fast trip lane carries one answer per call.** A lane call takes one item (one answer's rows, at most 8).
-   As soon as two answers share a decode step in one process, the batched trip carries two items and goes over
-   the WebSocket stream channel instead (correct and bit-identical, slower per trip: measured on a 4-vCPU box
-   0.35 vs 0.22 ms per idle trip, 2.2 vs 0.28 ms with busy Python threads; the benchmark below shows 280 of 312
-   trips on the lane with one stream and 1 of 345 with four). With 4L + 1 trips per token (113 at 7B, 321 at
-   72B) this costs more per-stream speed than batching saves; for the lowest latency per stream, keep few
-   streams per process and add processes; for the most tokens per core, batch.
+4. **The fast trip lane: all answers of a step in one call** (lane format 2, on in the SDK). When several answers
+   share a decode step (or a prompt has more rows than one lane call serves), the batched trip goes over the
+   TCP+TLS lane as one `multi` call: the same items, order, bytes and request id as the WebSocket channel's
+   request, under the connection's tenant (`rust/pgw-lane/src/proto.rs`). Before, any trip with two items fell
+   back to the stream channel (0.35 vs 0.22 ms per idle trip, 2.2 vs 0.28 ms with busy Python threads). Measured
+   on this 4-vCPU box (CPU provider, `benchmarks/sdk_concurrency_bench.py`, before / after): tiny at 4 streams
+   245-263 / 294-297 trips/s, 99-107 / 119-120 tokens/s, every trip on the lane (before: 1 of 633); 0.5B at 4
+   streams 156 / 179 trips/s, 4.1 / 4.7 tokens/s, at 16 streams 56 / 61 trips/s. One multi call costs the client
+   about what one single call does (`benchmarks/lane_multi_bench.py`, 0.5B gate_up, 16 answers: 0.32 ms client
+   CPU vs 1.1 ms on the stream channel and 1.5 ms for 16 parallel single calls over 16 connections). A provider
+   without format 2 (an older one, or `PGW_SERVICE_LANE_MULTI=0`) gets one item per call, as before.
+   The per-stream cost that remains with many streams is the plaintext thread (3).
 5. **Provider batching** is not a client limit: the service concatenates the rows of a trip and of concurrent
    clients (CPU kernels here; on a GPU the per-row cost is small).
 
@@ -302,7 +307,7 @@ Processes on one machine with the same key, `cache_dir` and `state_dir` share:
 
 Recommended pattern: **one client per worker process, created after the fork** (in gunicorn's `post_fork` or
 lazily on first use; a client created before a fork refuses to run in the child), `max_concurrent` 4-8 per worker
-for the most tokens per core or 1-2 for the lowest latency per stream (the fast lane, above), all on the same
+for the most tokens per core or 1-2 for the lowest latency per stream (the plaintext thread, above), all on the same
 `cache_dir` / `state_dir` on local disk. The factory's `mask_workers` count once per machine, not per worker
 (every worker passes the same value; only the owner runs them). No separate mask daemon
 is needed: the factory already runs once per machine and model. Do not share one cache directory between
@@ -334,7 +339,7 @@ def get_client():
 The service admits by tenant (one tenant per SDK key): `tenant_max_inflight` (concurrent requests),
 `tenant_rows_per_s` / `tenant_burst_rows` (token bucket on rows), the global `max_inflight_requests` (256) and
 `max_queued_rows`; a refused call gets `unavailable` with `Retry-After` and the client retries it. Each client
-process holds one lane connection set per model; a lane serves at most 8 rows per call. Size the provider by rows
+process holds one lane connection set per model; a single lane call serves at most 8 rows, a multi call up to 64 items and 256 rows. Size the provider by rows
 per second (sum of all clients' tokens/s, prompt rows included); the client side never needs changes for it.
 
 ## Measuring

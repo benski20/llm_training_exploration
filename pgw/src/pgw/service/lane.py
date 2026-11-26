@@ -5,6 +5,13 @@ The lane is a second front end next to the WebSocket stream channel for decode-s
 ``x_hat`` / ``y_hat`` bytes. It never carries anything the stream channel does not, so the provider
 learns nothing new (plan section 3); it only removes framing, msgpack and Python from the trip.
 
+Lane format 2 (``multi`` frames, ``rust/pgw-lane/src/proto.rs``; offered in every ticket unless
+``PGW_SERVICE_LANE_MULTI=0``): one frame carries the items of one batched trip, the same items in the same
+order as the stream channel's compute request, all under the connection's tenant; same-linear rows run as
+one executor call (of at most ``lane_max_rows`` rows where CUDA graphs serve, any count on the kernel path,
+as the stream channel's batcher), and the reply is the items' ``y_hat`` in order. Clients send multi
+frames only to a service that offered them.
+
 Flow:
 
 1. The gateway calls ``POST /pgw/v1/lane/open`` (same authentication as compute) with a model
@@ -76,6 +83,7 @@ __all__ = [
     "LaneStatus",
     "add_lane_routes",
     "encode_call",
+    "encode_multi",
     "encode_open",
     "lane_native_available",
     "parse_reply",
@@ -93,6 +101,11 @@ REQUEST_HEADER = struct.Struct("<4sHH16sIHHIIQ")
 REPLY_HEADER = struct.Struct("<4sHH16sIIII")
 KIND_OPEN = 1
 KIND_CALL = 2
+#: Lane format 2: the ``multi`` frame (header version 2, kind 4; body = item table + the items' ``x_hat``)
+LANE_VERSION_MULTI = 2
+KIND_MULTI = 4
+MULTI_MAX_ITEMS = 64
+MULTI_MAX_ROWS = 256
 TICKET_LEN = 32
 #: Seconds a ticket stays valid for its ``open`` frame.
 TICKET_TTL_S = 30.0
@@ -158,6 +171,17 @@ class Reply:
     compute_us: int
     retry_after_ms: int
     body_len: int
+
+
+def encode_multi(request_id: bytes, items: Sequence[tuple[int, int, bytes]], ring: int = 0,
+                 deadline_ms: int = 0) -> bytes:
+    """A lane-format-2 ``multi`` frame (tests and the reference for clients): ``items`` = ``(linear index, rows,
+    x_hat)`` in order. Header version 2, kind 4, ``linear`` = item count, ``rows`` = total rows; body = the item
+    table (``u32 linear, u16 rows, u16 0`` each) then the bodies."""
+    table = b"".join(struct.pack("<IHH", int(li), int(r), 0) for li, r, _ in items)
+    body = table + b"".join(bytes(x) for _, _, x in items)
+    return REQUEST_HEADER.pack(REQUEST_MAGIC, LANE_VERSION_MULTI, KIND_MULTI, request_id, len(items),
+                               sum(int(r) for _, r, _ in items), ring, deadline_ms, len(body), 0) + body
 
 
 def parse_reply(header: bytes) -> Reply:
@@ -272,6 +296,21 @@ def _own_lock_wanted() -> bool:
     return _flag("PGW_SERVICE_LANE_OWN_LOCK")
 
 
+def _multi_items() -> int:
+    """Lane format 2 (``multi`` frames): most items per frame this service serves and offers in its tickets.
+    ``PGW_SERVICE_LANE_MULTI`` = 0 / off: format 1 only (a multi frame is refused as a format-1 service refuses
+    it); default: 64 (clients send multi frames only when they opt in, see ``pgw.wire.service_lane``)."""
+    raw = os.environ.get("PGW_SERVICE_LANE_MULTI", "").strip().lower()
+    if raw in ("0", "off", "false", "no"):
+        return 0
+    if raw in ("", "1", "on", "true", "yes"):
+        return MULTI_MAX_ITEMS
+    try:
+        return max(0, min(MULTI_MAX_ITEMS, int(raw)))
+    except ValueError as exc:
+        raise ConfigError(f"PGW_SERVICE_LANE_MULTI must be on, off or an item count, got {raw!r}") from exc
+
+
 def _graphs_wanted() -> bool:
     """``PGW_SERVICE_LANE_GRAPHS=0`` turns CUDA-graph replay off (the lane then uses the kernel path)."""
     return os.environ.get("PGW_SERVICE_LANE_GRAPHS", "1").strip().lower() not in ("0", "false", "no", "off")
@@ -383,6 +422,12 @@ class LaneManager:
             opt["zero_copy"] = True
         if _shm_wanted() and self.transport != "tcp":
             opt["shm"] = True
+        if hasattr(fast.LaneService, "max_items") and (mi := _multi_items()):
+            opt["max_items"] = mi
+            if not use_graphs and not use_persistent:
+                # only the kernel path serves calls (it takes any row count, as the stream channel's batcher):
+                # a multi frame's same-linear run is one call; with graphs, calls of at most max_rows rows
+                opt["multi_merge_rows"] = MULTI_MAX_ROWS
         listen: dict[str, Any] = {}
         if self.transport == "tcp":
             if not hasattr(fast.LaneService, "port"):
@@ -546,7 +591,17 @@ class LaneManager:
             "rings": [r.name for r in t.rings],
             "max_rows": int(self.settings.lane_max_rows),
             "deadline_cap_ms": int(min(self.settings.max_deadline_s or 120.0, 3600.0) * 1000),
+            **self._multi_offer(),
         }
+
+    def _multi_offer(self) -> dict[str, Any]:
+        """The ticket fields of lane format 2 when this listener serves multi frames (else none: a format-1
+        ticket, which every client reads as one item per call). ``version`` stays 1 for older clients."""
+        mi = int(getattr(self.svc, "max_items", 0) or 0)
+        if not mi:
+            return {}
+        return {"versions": [LANE_VERSION, LANE_VERSION_MULTI], "max_items": mi,
+                "max_multi_rows": int(getattr(self.svc, "max_multi_rows", MULTI_MAX_ROWS))}
 
     # ---- Python executor (calls without a graph) ---------------------------------------------
     def _py_execute(self, slot: int, linear: int, ring: int, rows: int, body: bytes, tenant: str,

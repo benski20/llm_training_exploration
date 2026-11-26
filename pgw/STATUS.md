@@ -2809,3 +2809,82 @@ kept (key schedule wiped on drop, same ciphertext bytes, same nonces, constant t
   32 passed; tests/packaging 11 passed; tests/maskstore 245 passed, 2 failed (`test_ringbuf::test_crash_leaves_disk_untouched`,
   `test_ringshm::test_child_process_fills_ring_and_crash_is_reaped`: their child processes fail to start in this
   environment, and they fail the same way with the build from before this change).
+
+
+## 2026-11-26: concurrent answers on the native trip lane (lane format 2, multi calls; on in the SDK)
+
+Scope: SDK bottleneck 3 of "client library at many concurrent streams" (docs/sdk/scaling.md, item 4). The TCP+TLS
+lane carried one item per call, so every trip with two answers (and every prompt item above 8 rows) went to the
+WebSocket stream channel. Choice by measurement (`benchmarks/lane_multi_bench.py`, real SDK provider, one step = the
+rows of K answers on 0.5B `gate_up`, client CPU / provider CPU / wall per step, idle box):
+
+| K | multi call (a) | K parallel single calls on K connections (b) | K serial calls | stream channel |
+|---|---|---|---|---|
+| 4 | 0.13 / 2.9 / 4.3 ms | 0.46 / 3.7 / 5.2 ms | 0.40 / 8.6 / 12.3 ms | 0.58 / 3.7 / 5.4 ms |
+| 16 | 0.32 / 6.0 / 7.1 ms | 1.48 / 10.6 / 10.0 ms | 1.53 / 32.8 / 47.6 ms | 1.10 / 7.2 / 7.8 ms |
+
+With two busy Python threads (GIL contention) K = 4: multi 17.5 ms wall, parallel 51.6, stream 33.7; K = 16: 45,
+66, 690. (b) pays a header, TLS records, a GIL hand-off and an executor dispatch per answer on both sides; (a) pays
+them once and is what the stream channel already sends. Chosen: (a).
+
+- **Wire** (`rust/pgw-lane/src/proto.rs`, versioned): `multi` frame = header version 2, kind 4, `linear` = item
+  count (<= 64), `rows` = total (<= 256); body = item table (`u32 linear, u16 rows, u16 0`) + the items' `x_hat` in
+  order; OK reply = the items' `y_hat` in order (reply header unchanged, version 1). Version-1 frames unchanged; a
+  multi frame claiming v1 or a call claiming v2 is a bad header. Negotiation: tickets add `"versions": [1, 2]`,
+  `max_items`, `max_multi_rows` next to `"version": 1` (older clients read them as before); a client sends multi
+  frames only when offered; a format-1 service (or `PGW_SERVICE_LANE_MULTI=0`) gets one item per call and answers
+  a multi frame with `version` (fatal), as before. Fallback to the stream channel with the same request on any
+  refusal, error, Python channel or shm connection, unchanged.
+- **Provider** (`server.rs`): item table checked against the ticket's tables and the exact body length before any
+  body is read; admitted once for the total rows under the connection's tenant (one tenant per connection: no
+  mixing); consecutive same-linear rows run as one executor call (at most `max_rows` with CUDA graphs, any count on
+  the kernel path as the stream batcher does; a `Fallback` from a longer call re-splits it); one status per frame
+  (all or nothing); metering: one trip per frame, rows per call (as the stream channel). The opt-in cross-tenant
+  coalescer is untouched.
+- **Client** (`pgw-fast` `TripChannel.trip_multi`, `pgw.wire.lane` `LaneConfig.multi` / `PGW_LANE_MULTI`: off in
+  the gateway, on in the SDK's `NATIVE_ENV`): several-item requests, and one item above `max_rows` (a prompt), go in
+  one multi call; the response is the stream path's, item for item.
+- **Bug fixed on the way**: `ServiceLaneOpener.lane_open_sync` ran on the wire client's private loop, but the
+  gateway's egress transport is bound to the SDK loop: the first extra lane connection failed (`RuntimeError`) and
+  turned the lane off for 30 s. Seen as 0 of 1452 lane trips for 0.5B at N=1 before; now it runs on the loop the
+  first `lane_open` used.
+
+Privacy: the provider sees per frame exactly the stream channel's request for the same trip (request id, ring,
+deadline, the items' linear, rows and `x_hat` in order) under the same tenant; nothing is added, and the frame
+boundaries are the trip boundaries the stream channel shows. Masking, noise statistics, Freivalds / range / p31
+checks and held sampled trips run per answer in the backend as before (the lane only moves bytes); a wrong result
+inside a multi call fails that answer's checks (test). Strict speculation: rows per pass, passes, provider-metered
+trips and rows of a request are unchanged on/off (test); `spec_pass_gap_ms` pacing is above the channel; channel
+choice depends on the number of items, which the provider sees anyway, not on real vs dummy passes.
+
+Measured (4-vCPU box shared with other agents, CPU provider on the same box; every answer bit-identical to the same
+request alone; before = branch head, after = this change; tiny 64 tokens, 2 interleaved pairs; 0.5B 12 tokens):
+
+| model | N | trips/s before / after | tokens/s | lane trips before / after | client CPU ms/token | provider CPU ms/token |
+|---|---|---|---|---|---|---|
+| tiny | 1 | 420-439 / 424-429 | 45-47 / 45-46 | 568 / 600 of 600 | 3.6-4.5 / 3.4-4.4 | 6.4-6.9 / 6.7 |
+| tiny | 4 | 245-263 / 294-297 | 99-107 / 119-120 | 1 / 633 of 633 | 4.6-5.1 / 4.1 | 2.7-2.9 / 2.1 |
+| tiny | 16 | 124-127 / 127-134 | 190-195 / 195-206 | 1 / 666 of 666 | 3.4-3.6 / 3.4-3.7 | 1.1-1.2 / 0.85 |
+| 0.5B | 1 | 230 / 272 | 1.9 / 2.3 | 0 / 1452 of 1452 | 165 / 128 | 331 / 303 |
+| 0.5B | 4 | 156 / 179 (144 multi off) | 4.1 / 4.7 | 0 / 1837 | 118 / 111 | 163 / 150 |
+| 0.5B | 16 | 56 / 61 (51 multi off) | 5.9 / 6.3 | 3 / 1837 | 90 / 89 | 144 / 141 |
+
+0.5B TTFT 1.9 / 1.7 s (N=1), 5.5 / 4.6 s (N=4), 17.0 / 14.4 s (N=16): prompts now ride the lane. At 0.5B the CPU
+provider saturates, at tiny-16 the client's plaintext thread does (item 3 of the scaling list): the lane is
+no longer the limit. `sdk_trip_profile.py` (0.5B, N=1, decode): same tokens and logprobs (same hash), 97 trips per
+token, 302 vs 305 ms per token, lane I/O 84 vs 80 us per trip: the single-stream path is unchanged.
+Earlier runs in a busier window gave tiny N=1 16-27 tok/s for the new build and 36-45 for the old; three later
+interleaved pairs were equal (44-47 both): box noise, not the change.
+
+Tests: `cargo test -p pgw-lane --lib` 46 (new: frame layout and versions, item table, multi == single calls,
+same-linear merge, merge_rows and the Fallback re-split, an item cut at row boundaries, tamper: lengths, unknown
+linear, too many items, bad table, reserved bits; all or nothing; admitted once; multi off = version),
+`cargo test -p pgw-fast --lib` 75; tests/service/test_lane_multi.py 8 (TLS and UDS multi call == stream path ==
+exact product, format-1 service, Python reference encoder `encode_multi`, argument checks, LaneComputeClient
+eligibility on/off/format 1/Python channel, ticket parsing); tests/sdk/test_lane_multi.py 4 (concurrent answers
+bit-identical alone, reversed and staggered starts, streamed, and with multi off; strict speculation unchanged; a
+format-1 provider gets no multi frame; a wrong result in a multi call is caught). tests/wire 334, tests/service 502
+(+77 CUDA skips), tests/gateway 283 + 1 OOM-killed xdist worker that passes alone, tests/sdk 124 + 1 opt-in skip
+(serial). tests/docs: 20 failures not from this change (results logs missing, README index of sdk/scaling.md,
+`PGW_MASK_ADMISSION` in sdk/changelog.md). Needs a GPU run: multi calls against CUDA graphs (calls of at most 8 rows
+per same-linear run) and the persistent worker, and the lane's per-trip cost over a real NIC at 72B widths.

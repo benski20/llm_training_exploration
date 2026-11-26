@@ -273,6 +273,10 @@ class LaneTicket:
     port: int | None = None
     version: int = PROTOCOL_VERSION
     type: str = "lane_ticket"
+    #: Service lane format 2 (``rust/pgw-lane/src/proto.rs``): most items per multi call (0 = not offered:
+    #: one item per call) and most rows per multi call. Not part of the A3 msgpack ticket.
+    max_items: int = 0
+    max_multi_rows: int = 0
 
     def __repr__(self) -> str:  # the ticket is a credential: keep it out of logs and tracebacks
         return (f"LaneTicket(request_id={self.request_id!r}, lane_version={self.lane_version}, "

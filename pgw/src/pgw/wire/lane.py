@@ -483,6 +483,10 @@ class LaneConfig(BaseModel):
     retry_s: float = Field(30.0, ge=0, description="After a lane failure, use the regular path this long")
     max_channels: int = Field(4, ge=1, le=64, description="Lane connections per client (one trip at a time each)")
     transports: tuple[str, ...] = Field(("uds", "tcp"), description="Transports this client may use")
+    multi: bool = Field(False, description="Service lane format 2, opt-in (PGW_LANE_MULTI): a request of "
+                        "several items (the rows of several answers in one batched trip) goes in one multi call "
+                        "when the service's ticket offers it, instead of on the regular path. The same items, "
+                        "bytes, request id and order as the regular request; one status for the whole call")
 
 
 @dataclass
@@ -500,6 +504,9 @@ class LaneStats:
     bytes_received: int = 0
     last_rtt_s: float = 0.0
     native: bool = False
+    #: lane-format-2 multi calls served (also counted in ``trips``) and the items they carried
+    multi_trips: int = 0
+    multi_items: int = 0
 
     def _fallback(self, reason: str) -> None:
         self.fallbacks += 1
@@ -607,8 +614,10 @@ class LaneComputeClient:
     """A :class:`~pgw.wire.client.ComputeClient` that sends eligible calls on the trip lane.
 
     Eligible: one item, ``rows <= max_rows``, a known linear and ring of the ticket's model, a
-    ``uuid4().hex``-form request id and ``len(x_hat) == rows * n * K/8``. Everything else, and every lane
-    failure, goes to the wrapped client with the **same** request object (byte-identical body and id).
+    ``uuid4().hex``-form request id and ``len(x_hat) == rows * n * K/8``. With :attr:`LaneConfig.multi` and a
+    service ticket offering lane format 2 (``max_items``), also several items (the rows of several answers in
+    one batched trip) or one item of more rows than ``max_rows``, in one multi call (:meth:`_plan_multi`).
+    Everything else, and every lane failure, goes to the wrapped client with the **same** request object (byte-identical body and id).
     After a failure that breaks the lane (connection error, closing status, refused hello, failed
     ``lane_open``) the lane is off for :attr:`LaneConfig.retry_s`. A failure seen on a lane that has since
     been replaced never touches the newer one. A UDS ticket is accepted only from a service on this host
@@ -854,13 +863,142 @@ class LaneComputeClient:
             return request.deadline_ms / 1000.0
         return float(getattr(self._client.config, "request_timeout_s", 60.0))
 
+    def _multi_shaped(self, request: ComputeRequest) -> bool:
+        """Several items, or one item of more rows than a single call serves (a prompt's rows)."""
+        if len(request.items) != 1:
+            return True
+        lane = self._lane
+        return lane is not None and int(request.items[0].rows) > int(lane.ticket.max_rows)
+
+    def _lane_shaped(self, request: ComputeRequest) -> bool:
+        """One item, or several with multi calls on: worth opening a lane for."""
+        return len(request.items) == 1 or (self.lane_config.multi and len(request.items) > 1)
+
     def _ensure_open_sync(self, request: ComputeRequest) -> None:
         if (self._lane is None and not self._closed and time.monotonic() >= self._off_until
-                and len(request.items) == 1):
+                and self._lane_shaped(request)):
             self.open_sync(request.fingerprint, request.ring, if_needed=True)
+
+    def _plan_multi(self, request: ComputeRequest) -> tuple[_Lane | None, str, tuple[Any, ...]]:
+        """Eligibility of a request for one multi call (lane format 2): multi on, offered by the ticket for this
+        many items and rows (``max_multi_rows`` in all; an item may have more rows than one single call serves,
+        such as a prompt's), every item a known linear with the exact ``x_hat`` length, a uuid4-hex request id,
+        the ticket's model and ring."""
+        lane = self._lane
+        if lane is None:
+            return None, "off", ()
+        items = request.items
+        t = lane.ticket
+        if not self.lane_config.multi or not 1 <= len(items) <= int(getattr(t, "max_items", 0) or 0):
+            return None, "ineligible:items", ()
+        rid = request_id_bytes(request.request_id)
+        if rid is None:
+            return None, "ineligible:request_id", ()
+        if request.fingerprint != t.fingerprint:
+            return None, "ineligible:fingerprint", ()
+        ring_ix = lane.rings.get(request.ring)
+        if ring_ix is None:
+            return None, "ineligible:table", ()
+        nb = RingParams.from_name(request.ring).k // 8
+        lins: list[int] = []
+        rows: list[int] = []
+        bodies: list[Any] = []
+        out_len = total = 0
+        for it in items:
+            lin = lane.linears.get(it.linear)
+            if lin is None:
+                return None, "ineligible:table", ()
+            r = int(it.rows)
+            if r < 1:
+                return None, "ineligible:rows", ()
+            lin_ix, m, n = lin
+            if len(it.x_hat) != r * n * nb:
+                return None, "ineligible:length", ()
+            lins.append(lin_ix)
+            rows.append(r)
+            bodies.append(it.x_hat)
+            out_len += r * m * nb
+            total += r
+        if total > int(getattr(t, "max_multi_rows", 0) or 0):
+            return None, "ineligible:rows", ()
+        deadline = request.deadline_ms if request.deadline_ms is not None else 0
+        if not 0 <= deadline <= _U32:
+            return None, "ineligible:deadline", ()
+        return lane, "", (ring_ix, lins, rows, rid, deadline, bodies, out_len, nb)
+
+    def _try_lane_multi(self, request: ComputeRequest) -> ComputeResponse | None:
+        """The lane attempt of a several-item request (one multi call): the response, or ``None`` (the caller
+        sends the same request on the regular path). Same pool, refusal, error and cool-down handling as
+        :meth:`_try_lane`."""
+        lane, reason, plan = self._plan_multi(request)
+        if lane is None:
+            self.lane_stats._fallback(reason)
+            return None
+        ring_ix, lins, rows, rid, deadline, bodies, out_len, nb = plan
+        timeout = self._timeout(request)
+        try:
+            got = self._acquire(lane, timeout)
+        except Exception as exc:  # opening a connection failed: the lane is down for a while
+            self._drop_lane(cool_down=True, only=lane)
+            self.lane_stats._fallback(f"error:{type(exc).__name__}")
+            return None
+        if got is None:
+            with self._cv:
+                spent = self._lane is lane and self._count == 0 and time.monotonic() >= lane.expires
+            if spent:
+                self._drop_lane(only=lane)
+                self.lane_stats._fallback("expired")
+            else:
+                self.lane_stats._fallback("busy:pool")
+            return None
+        ch, gen = got
+        if not hasattr(ch, "trip_multi") or str(getattr(ch, "transport", "")) == "shm":
+            # a channel without multi calls (the Python UDS channel, an older extension) or on the shm segment
+            self._release(ch, gen)
+            self.lane_stats._fallback("ineligible:channel")
+            return None
+        buf = bytearray(out_len)
+        t0 = time.monotonic()
+        try:
+            status, compute_us = ch.trip_multi(ring_ix, lins, rows, rid, deadline, bodies, buf, timeout)
+        except Exception as exc:  # broken connection, timeout, protocol violation: channel closed
+            self._release(ch, gen)
+            self._drop_lane(cool_down=True, only=lane)
+            self.lane_stats._fallback(f"error:{type(exc).__name__}")
+            return None
+        self.lane_stats.trips += 1
+        self.lane_stats.bytes_sent += 48 + 8 * len(rows) + sum(len(b) for b in bodies)
+        self.lane_stats.last_rtt_s = time.monotonic() - t0
+        self._release(ch, gen)
+        if status != Status.OK:
+            name = Status(status).name if status in Status._value2member_map_ else str(status)
+            if status in CLOSING_STATUSES:
+                self._drop_lane(cool_down=True, only=lane)
+            self.lane_stats._fallback(f"status:{name}")
+            return None
+        self.lane_stats.multi_trips += 1
+        self.lane_stats.multi_items += len(rows)
+        self.lane_stats.bytes_received += 40 + out_len
+        view = memoryview(buf)
+        results = []
+        off = 0
+        for it in request.items:
+            r = int(it.rows)
+            m = self._lane_m(lane, it.linear)
+            n_out = r * m * nb
+            results.append(ComputeResult(it.linear, r, view[off:off + n_out]))
+            off += n_out
+        return ComputeResponse(request.request_id, tuple(results),  # type: ignore[arg-type]
+                               ServerTiming(0.0, compute_us / 1000.0, sum(rows)))
+
+    @staticmethod
+    def _lane_m(lane: _Lane, linear: str) -> int:
+        return int(lane.linears[linear][1])
 
     def _try_lane(self, request: ComputeRequest, out: Any | None) -> ComputeResponse | None:
         """The lane attempt: the response, or ``None`` (the caller falls back with the same request)."""
+        if self.lane_config.multi and self._multi_shaped(request):
+            return self._try_lane_multi(request)  # ``out`` is for one item: the multi reply has its own buffer
         lane, reason, plan = self._plan(request)
         if lane is None:
             self.lane_stats._fallback(reason)
@@ -1071,7 +1209,7 @@ class LaneComputeClient:
     async def compute(self, request: ComputeRequest) -> ComputeResponse:
         """Async compute: the lane trip runs in a worker thread; else the wrapped client."""
         if (self._lane is None and not self._closed and time.monotonic() >= self._off_until
-                and len(request.items) == 1):
+                and self._lane_shaped(request)):
             await self.open(request.fingerprint, request.ring, if_needed=True)
         if self._lane is not None:
             resp = await asyncio.to_thread(self._try_lane, request, None)

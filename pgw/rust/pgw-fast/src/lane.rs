@@ -401,10 +401,16 @@ mod chan {
         /// Header and body: one `writev` on a socket; on TLS both are sealed into records straight from the
         /// caller's buffers (no plaintext copy) and the records go out with vectored socket writes.
         fn send(&mut self, hdr: &[u8], body: &[u8], _scratch: &mut Vec<u8>) -> io::Result<()> {
+            self.send_parts(&[hdr, body])
+        }
+
+        /// [`Conn::send`] of any number of parts (a `multi` frame: header, item table, the items' bodies),
+        /// in order, with the same vectored writes.
+        fn send_parts(&mut self, parts: &[&[u8]]) -> io::Result<()> {
             match self {
-                Conn::Uds(s) => write_all_vectored(s, hdr, body),
+                Conn::Uds(s) => write_all_parts(s, parts),
                 Conn::Tls(s) => {
-                    let mut bufs = [IoSlice::new(hdr), IoSlice::new(body)];
+                    let mut bufs: Vec<IoSlice<'_>> = parts.iter().map(|p| IoSlice::new(p)).collect();
                     let mut slices: &mut [IoSlice<'_>] = &mut bufs;
                     while !slices.is_empty() && slices.iter().any(|b| !b.is_empty()) {
                         let n = s.conn.writer().write_vectored(slices)?;
@@ -483,7 +489,11 @@ mod chan {
     }
 
     fn write_all_vectored<W: Write>(w: &mut W, a: &[u8], b: &[u8]) -> io::Result<()> {
-        let mut bufs = [IoSlice::new(a), IoSlice::new(b)];
+        write_all_parts(w, &[a, b])
+    }
+
+    fn write_all_parts<W: Write>(w: &mut W, parts: &[&[u8]]) -> io::Result<()> {
+        let mut bufs: Vec<IoSlice<'_>> = parts.iter().map(|p| IoSlice::new(p)).collect();
         let mut slices: &mut [IoSlice<'_>] = &mut bufs;
         while !slices.is_empty() {
             match w.write_vectored(slices) {
@@ -1188,6 +1198,124 @@ mod chan {
             Ok((status::OK, r.compute_us))
         }
 
+        /// One lane-format-2 `multi` call (service framing on a socket, never shm): the items of one batched
+        /// trip (an item may have more rows than one `call` serves; all items at most `MAX_MULTI_ROWS`),
+        /// `items[i] = (linear index, rows)` with `bodies[i]` its `x_hat`, in one frame (48-byte header
+        /// version 2, the 8-byte item table, the bodies in order); `out` receives the items' `y_hat` in
+        /// order (its length must be exactly the reply's). Returns `(status, compute_us)`; any error closes
+        /// the channel, as does a closing status.
+        #[allow(clippy::too_many_arguments)]
+        pub fn trip_multi(
+            &mut self,
+            ring: u16,
+            items: &[(u32, u16)],
+            request_id: [u8; 16],
+            deadline_ms: u32,
+            bodies: &[&[u8]],
+            out: &mut [u8],
+            timeout: Duration,
+        ) -> Result<(u8, u32), LaneError> {
+            let res = self.trip_multi_inner(ring, items, request_id, deadline_ms, bodies, out, timeout);
+            match &res {
+                Ok((s, _)) if status::closing(*s) => self.close(),
+                Err(_) => self.close(),
+                _ => {}
+            }
+            res
+        }
+
+        #[allow(clippy::too_many_arguments)]
+        fn trip_multi_inner(
+            &mut self,
+            ring: u16,
+            items: &[(u32, u16)],
+            request_id: [u8; 16],
+            deadline_ms: u32,
+            bodies: &[&[u8]],
+            out: &mut [u8],
+            timeout: Duration,
+        ) -> Result<(u8, u32), LaneError> {
+            if self.conn.is_none() {
+                return Err(LaneError::Closed);
+            }
+            if self.framing != Framing::Service || self.shm.is_some() {
+                return Err(LaneError::Protocol("multi calls need a service-lane socket connection".into()));
+            }
+            let n = items.len();
+            if n == 0 || n > usize::from(pgw_lane::proto::MAX_ITEMS) || bodies.len() != n {
+                return Err(LaneError::Protocol("multi call: bad item count".into()));
+            }
+            let mut total: u32 = 0;
+            let mut table = Vec::with_capacity(n * pgw_lane::proto::ITEM_LEN);
+            let mut its = Vec::with_capacity(n);
+            for &(linear, rows) in items {
+                if rows == 0 {
+                    return Err(LaneError::Protocol("multi call: an item without rows".into()));
+                }
+                total += u32::from(rows);
+                its.push(pgw_lane::proto::Item { linear, rows });
+            }
+            if total > u32::from(pgw_lane::proto::MAX_MULTI_ROWS) {
+                return Err(LaneError::Protocol("multi call: too many rows".into()));
+            }
+            pgw_lane::proto::encode_items(&its, &mut table);
+            let body_len: u64 = table.len() as u64 + bodies.iter().map(|b| b.len() as u64).sum::<u64>();
+            let body_len = u32::try_from(body_len).map_err(|_| LaneError::Protocol("multi call too large".into()))?;
+            let start = Instant::now();
+            let deadline = start + timeout;
+            let hdr = SvcRequest {
+                kind: SvcKind::Multi,
+                request_id,
+                linear: n as u32,
+                rows: total as u16,
+                ring,
+                deadline_ms,
+                body_len,
+            }
+            .encode();
+            let mut parts: Vec<&[u8]> = Vec::with_capacity(n + 2);
+            parts.push(&hdr);
+            parts.push(&table);
+            parts.extend_from_slice(bodies);
+            self.set_nb(false)?;
+            let rto = self.read_to;
+            let wto = Some(match self.write_to {
+                Some(t) if t <= timeout && t * 10 >= timeout * 9 => t,
+                _ => timeout.max(Duration::from_millis(1)),
+            });
+            self.timeouts(rto, wto)?;
+            let conn = self.conn.as_mut().ok_or(LaneError::Closed)?;
+            conn.send_parts(&parts)?;
+            super::wait_prefetch::run();
+            let sent = Instant::now();
+            // the adaptive spin learns multi calls under their own key: (first linear | bit 31, total rows)
+            let key = items[0].0 | 0x8000_0000;
+            let spin = self.spin_for(key, total as u16);
+            let spin_until = if spin.is_zero() { None } else { Some(sent + spin) };
+            let mut rb = [0u8; SVC_REPLY_LEN];
+            let blocked = self.read_hybrid(&mut rb, spin_until, deadline)?;
+            let waited = sent.elapsed();
+            let r = SvcReply::parse(&rb).ok_or_else(|| LaneError::Protocol("not a lane reply".into()))?;
+            if r.request_id != request_id {
+                return Err(LaneError::Protocol("reply does not answer the request".into()));
+            }
+            if r.status.code() != 0 {
+                if r.body_len != 0 {
+                    return Err(LaneError::Protocol("refusal with a body".into()));
+                }
+                return Ok((map_service_status(r.status.code()), r.compute_us));
+            }
+            if r.body_len as usize != out.len() {
+                return Err(LaneError::Protocol("reply body has the wrong length".into()));
+            }
+            let spin_left = self.body_spin(spin_until);
+            self.read_hybrid(out, spin_left, deadline)?;
+            self.set_nb(false)?;
+            self.learn(key, total as u16, waited);
+            self.account(spin, waited, start.elapsed(), blocked, r.queue_us, r.compute_us);
+            Ok((status::OK, r.compute_us))
+        }
+
         /// One service-lane call through the shm segment: the same header and body bytes as on the
         /// socket, written into the segment; the reply header and body read back from it.
         fn trip_shm(
@@ -1470,6 +1598,68 @@ mod chan {
                 ch.trip(&h, src, dst, to)
             });
             drop(bb);
+            drop(ob);
+            res.map_err(to_py)
+        }
+
+        /// Lane format 2 (service framing on a socket): one `multi` call carrying the items of one batched
+        /// trip. `linears[i]`, `rows[i]`, `bodies[i]` (bytes-like, `x_hat`) describe item `i`; `out` (writable,
+        /// exactly the reply's size) receives the items' `y_hat` in order. Returns `(status, compute_us)`.
+        /// GIL released throughout. Raises `OSError` / `ValueError` (the channel is then closed).
+        #[pyo3(signature = (ring, linears, rows, request_id, deadline_ms, bodies, out, timeout_s))]
+        #[allow(clippy::too_many_arguments)]
+        fn trip_multi(
+            &self,
+            py: Python<'_>,
+            ring: u16,
+            linears: Vec<u32>,
+            rows: Vec<u16>,
+            request_id: &[u8],
+            deadline_ms: u32,
+            bodies: Vec<Bound<'_, PyAny>>,
+            out: &Bound<'_, PyAny>,
+            timeout_s: f64,
+        ) -> PyResult<(u8, u32)> {
+            let rid = rid_of(request_id)?;
+            let to = secs(timeout_s)?;
+            if linears.len() != rows.len() || linears.len() != bodies.len() || linears.is_empty() {
+                return Err(PyValueError::new_err("linears, rows and bodies must have the same (non-zero) length"));
+            }
+            let ob = PyBuffer::<u8>::get(out).map_err(|_| PyTypeError::new_err("out must be a writable buffer"))?;
+            if !ob.is_c_contiguous() || ob.readonly() {
+                return Err(PyValueError::new_err("out must be a writable C-contiguous buffer"));
+            }
+            let olen = ob.len_bytes();
+            let op = ob.buf_ptr() as usize;
+            let mut bufs = Vec::with_capacity(bodies.len());
+            for b in &bodies {
+                let bb =
+                    PyBuffer::<u8>::get(b).map_err(|_| PyTypeError::new_err("bodies must be bytes-like objects"))?;
+                if !bb.is_c_contiguous() {
+                    return Err(PyValueError::new_err("bodies must be C-contiguous"));
+                }
+                let (bp, blen) = (bb.buf_ptr() as usize, bb.len_bytes());
+                // `src` and `dst` below must not alias (a `&[u8]` and a `&mut [u8]` over shared bytes is UB)
+                if blen > 0 && olen > 0 && bp < op.saturating_add(olen) && op < bp.saturating_add(blen) {
+                    return Err(PyValueError::new_err("bodies and out must not overlap"));
+                }
+                bufs.push(bb);
+            }
+            // SAFETY: as in `trip`: every buffer is a C-contiguous export held until this function returns
+            // (`bufs`, `ob`), so the memory stays valid and cannot be resized; `out` is writable and overlaps
+            // no body.
+            let srcs: Vec<&[u8]> = bufs
+                .iter()
+                .map(|bb| unsafe { std::slice::from_raw_parts(bb.buf_ptr().cast::<u8>(), bb.len_bytes()) })
+                .collect();
+            let dst: &mut [u8] = unsafe { std::slice::from_raw_parts_mut(ob.buf_ptr().cast::<u8>(), olen) };
+            let items: Vec<(u32, u16)> = linears.into_iter().zip(rows).collect();
+            let res = py.allow_threads(|| {
+                let mut ch = self.inner.lock().unwrap_or_else(|p| p.into_inner());
+                ch.trip_multi(ring, &items, rid, deadline_ms, &srcs, dst, to)
+            });
+            drop(srcs);
+            drop(bufs);
             drop(ob);
             res.map_err(to_py)
         }

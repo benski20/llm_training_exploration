@@ -417,6 +417,12 @@ Response 200 (same fields as `POST /pgw/v1/enroll`, plus `masked_head` per model
 * `lane` (optional): the service's TCP+TLS trip lane (`PGW_SERVICE_LANE=tcp`, `lane_port`). The SDK adds
   `https://<service host>:<port>` to its egress allowlist and uses `lane = "tls"`; without it it uses the
   blocking WebSocket stream lane (`lane = "stream"`). `null` / absent = no lane.
+  Lane format 2: a `POST /pgw/v1/lane/open` reply that has `"versions": [1, 2]`, `"max_items"` and
+  `"max_multi_rows"` (next to `"version": 1`) offers `multi` frames (`rust/pgw-lane/src/proto.rs`): the SDK then
+  sends the items of a batched trip (the rows of several concurrent answers, a prompt's rows) in one lane call,
+  the same items, order, bytes and request id as the stream channel's compute request. A reply without
+  `versions` (format 1) gets one item per call; several-item trips then take the stream lane.
+  `PGW_SERVICE_LANE_MULTI=0` makes a service answer format 1.
 * `masked_head` is informational: the SDK decides the masked LM head from the service's `GET /pgw/v1/models`
   (the derived fingerprint `pgw.modelpack.masked_head.head_fingerprint(fp)` must be served:
   `PGW_SERVICE_MASKED_HEAD=also`).
