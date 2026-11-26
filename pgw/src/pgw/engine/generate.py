@@ -751,7 +751,8 @@ class FeatureHeadDrafter(BuiltinDrafter):
         self.target_vocab = target_vocab if target_vocab is not None else int(embed.shape[0])
         self.draft_vocab = None
         self.stats = {"calls": 0.0, "steps": 0.0, "ms": 0.0, "lookup_chains": 0.0}
-        if kernel == "auto":
+        auto = kernel == "auto"
+        if auto:
             from pgw.engine.backends import NativeInt8DraftBackend
 
             kernel = "native_int8" if ring is not None and NativeInt8DraftBackend.available() else "float"
@@ -763,12 +764,33 @@ class FeatureHeadDrafter(BuiltinDrafter):
         self._lin: dict[str, Callable[[torch.Tensor], torch.Tensor]] | None = None
         if kernel == "native_int8":
             self._lin = self._native_linears(ring, int8 or {}, threads)
+            if auto:  # keep the native kernel only where it is the faster one (it reads a quarter of the bytes,
+                # but the float32 products win on some CPUs and head sizes): a few timed steps of each at load
+                native_s = self._time_steps()
+                lin, self._lin = self._lin, None
+                float_s = self._time_steps()
+                if native_s < float_s:
+                    self._lin = lin
+                else:
+                    self.kernel = "float"
         # the full-vocabulary row the reduced logits are scattered into: one reused buffer (only the V
         # entries are rewritten per row; a fresh 0.6 MB row per step costs ~1 ms in page faults on a 7B vocab)
         self._buf = torch.full((int(self.target_vocab),), float("-inf"))
         self._keep = self.vocab < int(self.target_vocab)
         self._all_kept = bool(self._keep.all())
         self._vocab_kept = self.vocab[self._keep]
+
+    def _time_steps(self, n: int = 5) -> float:
+        """Median seconds of one head step (2 rows) on the current kernel."""
+        f = torch.zeros(2, int(self.w_out.shape[0]))
+        toks = [int(self.vocab[0])] * 2
+        self._step(f, toks)  # warm-up
+        times = []
+        for _ in range(n):
+            t0 = time.perf_counter()
+            self._step(f, toks)
+            times.append(time.perf_counter() - t0)
+        return sorted(times)[n // 2]
 
     def _native_linears(self, ring: Any, int8: dict[str, tuple[torch.Tensor, torch.Tensor]],
                         threads: int) -> dict[str, Callable[[torch.Tensor], torch.Tensor]]:
