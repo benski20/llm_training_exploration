@@ -958,7 +958,7 @@ class Engine:
                         ticket = asyncio.Event()
                         waiters.append(ticket)
                     fac = h.factory
-                    if fac is not None and fac.plan.demand_file is not None and self.options.factory:
+                    if fac is not None and getattr(fac.plan, "demand_file", None) is not None and self.options.factory:
                         # the factory refills only below its low-water mark: ask it for what this request waits for
                         want = int(exc.details.get("entitled") or exc.details.get("needed") or 0)
                         write_demand(fac.plan.demand_file, want + int(exc.details.get("promised") or 0))

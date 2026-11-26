@@ -51,7 +51,7 @@ def test_cached_session_with_a_replaced_or_missing_ca_is_not_used(tmp_path: Path
     pem, other, fp = _pems(pki)
     key = SdkKey.new("live", URL, fp)
     lay = CacheLayout(tmp_path / "c", tmp_path / "s")
-    s = ensure_session(key, lay, transport=FakeProvider(pem).transport, client_name="host-1")
+    s = ensure_session(key, lay, transport=FakeProvider(pem, cert=False).transport, client_name="host-1")
     assert load_session(key, lay) is not None and s.ca_file is not None
     s.ca_file.write_text(pem + other)  # an extra trust anchor
     assert load_session(key, lay) is None
@@ -59,7 +59,7 @@ def test_cached_session_with_a_replaced_or_missing_ca_is_not_used(tmp_path: Path
     assert load_session(key, lay) is None
     s.ca_file.unlink()  # before: the session fell back to the system trust store
     assert load_session(key, lay) is None
-    again = ensure_session(key, lay, transport=FakeProvider(pem).transport, client_name="host-1")
+    again = ensure_session(key, lay, transport=FakeProvider(pem, cert=False).transport, client_name="host-1")
     assert again.ca_file is not None and pinned_ca(again.ca_file.read_text())[0] == fp
 
 
