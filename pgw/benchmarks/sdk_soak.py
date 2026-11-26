@@ -102,7 +102,14 @@ def main() -> None:
     ap.add_argument("--concurrency", type=int, default=4)
     ap.add_argument("--out", type=Path, default=Path("soak.jsonl"))
     ap.add_argument("--work", type=Path, default=None)
+    ap.add_argument("--tracemalloc", action="store_true",
+                    help="print the Python allocations that grew most since the second sample, at every sample")
     args = ap.parse_args()
+    if args.tracemalloc:
+        import tracemalloc
+
+        tracemalloc.start(12)
+    base_snap: Any = None
 
     from tests.conftest import _save_tiny
     from tests.sdk.chaos import ChaosProxy
@@ -238,6 +245,16 @@ def main() -> None:
             if time.monotonic() >= next_sample:
                 next_sample += args.sample_s
                 gc.collect()
+                if args.tracemalloc:
+                    snap = tracemalloc.take_snapshot().filter_traces([tracemalloc.Filter(False, tracemalloc.__file__)])
+                    if base_snap is None and rnd > 1:
+                        base_snap = snap
+                    elif base_snap is not None:
+                        top = snap.compare_to(base_snap, "traceback")[:6]
+                        for st in top:
+                            print(f"  +{st.size_diff / 1024:.0f} KiB ({st.count_diff:+d} blocks)", flush=True)
+                            for line in st.traceback.format()[-8:]:
+                                print("     " + line, flush=True)
                 st = c.status()["models"][MODEL]
                 kids = [s for s in (_proc_stats(p) for p in _descendants(me)) if s]
                 with mu:

@@ -103,8 +103,19 @@ within a few seconds.
   are not run. Handle SIGTERM (`signal.signal(signal.SIGTERM, lambda *a: sys.exit(0))`) or call `close()` to get
   them.
 
-## Soak (2026-11-26, this repository's `benchmarks/sdk_soak.py`)
+## Soak (2026-11-26, `benchmarks/sdk_soak.py`)
 
-33 minutes on a 4-vCPU box, tiny model, default mask scheme (pks-v3), real service on loopback behind the
-fault-injection proxy, all connections cut every 5 minutes: see STATUS.md for the numbers (requests, errors, client
-RSS, file descriptors and threads over time, child processes after `close()`).
+31 minutes on a 4-vCPU box: tiny model, default mask scheme (pks-v3, masked head off), real service on loopback
+behind the fault-injection proxy, every connection cut every 5 minutes. Per round: 4 sequential requests (greedy,
+one in three streamed), 1 seeded sampled request, 4 concurrent requests from threads, 1 stream dropped after 3
+chunks, 1 `AsyncOpenAI` opened and closed with one request and one stream whose consumer task is cancelled.
+
+* 517 rounds: 5,170 answers, 517 dropped and 517 cancelled streams, 517 async clients, 6 faults; **0 errors, 0
+  answers differing from the first one**.
+* Client process: RSS 422 MB at 10 min, 406 / 412 / 414 / 420 MB at 15 / 20 / 25 / 31 min (the first minute
+  includes warm-up at 547 MB); open file descriptors 26-48 with no trend (15 after `close()`); OS threads 45-47.
+  The slow RSS drift is the masked backend's soundness caches, which are capped (65,536 entries each).
+* Mask factory process: RSS 387-490 MB, 25-26 file descriptors, 5-7 threads, never restarted.
+* Mask store on disk: segments 2-6 MB (bounded by the stock target); its state database grows by about 2 KB per
+  request (closed reservation records, kept 30 days: `PGW_MASKSTORE_AUDIT_RETENTION_DAYS`).
+* `close()` 0.44 s; no child process left afterwards.
