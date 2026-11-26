@@ -218,11 +218,21 @@ def phase_memory(model: str, cpu: bool, eager_rows: int, masked_head: bool, forc
     b2 = mem.reset()
     t0 = time.perf_counter()
     a = rng.integers(0, 1 << 56, (n, a_cols), dtype=np.uint64)
-    if not cpu:
-        big.mulmod64(a, 7)
+    h = big.mulmod64(a, 7) if not cpu else rng.integers(0, 1 << 56, (m, a_cols), dtype=np.uint64)
     stage["pks_hint_build"] = {"linear": big.linear, "cols": a_cols, "s": round(time.perf_counter() - t0, 2),
                                "peak_delta_gib": round((mem.peak() - b2) / G, 3)}
     del a
+    # the provider's host-side modulus switch of that hint (PKSProvider.switched_hint; numpy, one thread)
+    from pgw.hemask import pks as _pks
+
+    rows = min(len(h), 8192)
+    t0 = time.perf_counter()
+    _pks.switch_hint(np.asarray(h[:rows], dtype=np.uint64) & np.uint64((1 << 56) - 1), _pks.PKSParams())
+    dt = time.perf_counter() - t0
+    stage["pks_switch_hint_host"] = {"rows_timed": rows, "s": round(dt, 2),
+                                     "s_whole_linear": round(dt * len(h) / rows, 1),
+                                     "hint_gb_per_seed_model": round(sum(mm for _, mm, _ in lins) * 4096 * 8 / 1e9, 1)}
+    del h
     try:
         from pgw.hemask import pks
         from pgw.hemask.pks import NR, NU, RANK, D, PKSParams
