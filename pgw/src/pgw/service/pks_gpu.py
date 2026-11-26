@@ -8,10 +8,19 @@ path bit for bit; it runs on any torch device (the tests run it on the CPU).
 :func:`item` computes a whole item on the device: the provider-side hint rows (``W8 A``, switched to ``q1``), the
 item's ``y = W8 b`` and the key switch, row block by row block, so the ``m x 4096`` hint is never cached or copied
 (used by ``PKSProvider`` when the model's hints do not fit its cache; self-tested by :func:`item_self_test`).
+
+The key switch's NTTs run either as eager torch operators or as the fused Triton kernels of
+:mod:`pgw.service.pks_ntt` (one read and one write per transform), chosen by ``PGW_SERVICE_PKS_GPU_NTT``
+(:func:`ntt_mode`): ``auto`` (default) uses the fused kernels on CUDA devices once :func:`fused_self_test` matched the
+torch path bit for bit there, and falls back to torch for good on any mismatch or error; ``torch`` and ``fused``
+force one.
 """
 
 from __future__ import annotations
 
+import logging
+import os
+import threading
 from functools import cache
 from typing import Any
 
@@ -21,9 +30,11 @@ import torch
 from pgw.hemask import pks
 from pgw.hemask.pks import NR, NU, PACK, RANK, D, PKSParams
 
-__all__ = ["item", "item_bytes", "item_rows", "item_self_test", "keyswitch", "ring_rows", "self_test"]
+__all__ = ["fused_self_test", "item", "item_bytes", "item_rows", "item_self_test", "keyswitch", "ntt_impl", "ntt_mode",
+           "ring_rows", "self_test"]
 
 _PAR = PKSParams()
+log = logging.getLogger(__name__)
 
 
 @cache
@@ -173,7 +184,7 @@ def keyswitch(hs: np.ndarray, ops: np.ndarray, y: np.ndarray, dev: Any, *, work_
     nb, groups = m // PACK, ops.shape[0]
     budget = _work_bytes() if work_bytes is None else int(work_bytes)
     step = max(1, budget // _block_bytes(groups))
-    ops_t = torch.from_numpy(np.ascontiguousarray(ops).astype(np.int64)).to(dev)
+    ops_t = _Keys(torch.from_numpy(np.ascontiguousarray(ops).astype(np.int64)).to(dev))
     if step >= nb:
         return _keyswitch_rows(hs, ops_t, y, dev)
     out = np.empty((groups, nb, NR), dtype=np.uint64)
@@ -184,15 +195,104 @@ def keyswitch(hs: np.ndarray, ops: np.ndarray, y: np.ndarray, dev: Any, *, work_
     return out
 
 
-def _keyswitch_rows(hs: np.ndarray, ops_t: torch.Tensor, y: np.ndarray, dev: Any) -> np.ndarray:
+def _keyswitch_rows(hs: np.ndarray, ops_t: _Keys, y: np.ndarray, dev: Any) -> np.ndarray:
     hs_t = torch.from_numpy(np.ascontiguousarray(hs).view(np.int64)).to(dev)
     y_t = torch.from_numpy(np.ascontiguousarray(y & np.uint64((1 << 56) - 1)).view(np.int64)).to(dev)
     return _keyswitch_t(hs_t, ops_t, y_t).cpu().numpy().astype(np.uint64)
 
 
-def _keyswitch_t(hs_t: torch.Tensor, ops_t: torch.Tensor, y_t: torch.Tensor) -> torch.Tensor:
+# ---- NTT implementation choice (PGW_SERVICE_PKS_GPU_NTT) -----------------------------------------------------
+
+
+def ntt_mode() -> str:
+    """``PGW_SERVICE_PKS_GPU_NTT``: ``auto`` (default), ``torch`` or ``fused``."""
+    raw = os.environ.get("PGW_SERVICE_PKS_GPU_NTT", "").strip().lower()
+    if raw in ("", "auto"):
+        return "auto"
+    if raw in ("torch", "0", "off", "false", "no"):
+        return "torch"
+    if raw in ("fused", "triton", "1", "on", "true", "yes"):
+        return "fused"
+    raise ValueError(f"PGW_SERVICE_PKS_GPU_NTT={raw!r}: use auto, torch or fused")
+
+
+_ntt_lock = threading.Lock()
+#: Per device (``str(device)``): ``"fused"`` once its self-test passed under ``auto``, ``"torch"`` for good after a
+#: failed self-test or any error of the fused kernels.
+_ntt_choice: dict[str, str] = {}
+
+
+def ntt_impl(dev: Any) -> str:
+    """The NTT implementation the key switch uses on ``dev`` now: ``"fused"`` or ``"torch"``. Under ``auto`` the
+    first call on a CUDA device runs :func:`fused_self_test` there (other devices use torch)."""
+    mode = ntt_mode()
+    if mode != "auto":
+        return mode
+    dev = torch.device(dev)
+    key = str(dev)
+    with _ntt_lock:
+        got = _ntt_choice.get(key)
+        if got is None:
+            got = "torch"
+            if dev.type == "cuda":
+                try:
+                    fused_self_test(dev)
+                    got = "fused"
+                except Exception as e:
+                    log.warning("pks-v3 fused NTT unavailable on %s, using torch: %r", key, e)
+            _ntt_choice[key] = got
+        return got
+
+
+def _ntt_fallback(dev: Any, err: BaseException) -> None:
+    key = str(torch.device(dev))
+    log.warning("pks-v3 fused NTT failed on %s, using torch from now on: %r", key, err)
+    with _ntt_lock:
+        _ntt_choice[key] = "torch"
+
+
+class _Keys:
+    """An item's reply keys on the device: ``t`` ``(G, 4, 16, 8192)`` int64 and, made on first use by the fused
+    kernels, their ``(4, G, 16, 8192)`` uint32 per-prime copy."""
+
+    __slots__ = ("_u", "t")
+
+    def __init__(self, t: torch.Tensor):
+        self.t = t
+        self._u: torch.Tensor | None = None
+
+    @property
+    def shape(self) -> torch.Size:
+        return self.t.shape
+
+    def u32(self) -> torch.Tensor:
+        if self._u is None:
+            from pgw.service import pks_ntt
+
+            self._u = pks_ntt.ops_u32(self.t)
+        return self._u
+
+
+def _keyswitch_t(hs_t: torch.Tensor, ops_t: _Keys | torch.Tensor, y_t: torch.Tensor) -> torch.Tensor:
     """The key switch of whole reply ciphertexts on ``hs_t``'s device: ``hs_t`` ``(R, 4096)`` int64 in ``[0, q1)``
-    (switched hint rows), ``y_t`` ``(R, 256 G)`` int64 below ``2^56``; returns ``(G, R/32, 8192)`` int64."""
+    (switched hint rows), ``y_t`` ``(R, 256 G)`` int64 below ``2^56``; returns ``(G, R/32, 8192)`` int64. Uses the
+    fused NTT kernels when :func:`ntt_impl` says so (bit-identical), else :func:`_keyswitch_torch`."""
+    keys = ops_t if isinstance(ops_t, _Keys) else _Keys(ops_t)
+    dev = hs_t.device
+    if ntt_impl(dev) == "fused":
+        try:
+            from pgw.service import pks_ntt
+
+            return pks_ntt.keyswitch(hs_t, keys.u32(), y_t)
+        except Exception as e:
+            if ntt_mode() == "fused":
+                raise
+            _ntt_fallback(dev, e)
+    return _keyswitch_torch(hs_t, keys.t, y_t)
+
+
+def _keyswitch_torch(hs_t: torch.Tensor, ops_t: torch.Tensor, y_t: torch.Tensor) -> torch.Tensor:
+    """:func:`_keyswitch_t` with eager torch NTTs (:func:`_fwd`, :func:`_inv`)."""
     q1, pm = _PAR.q1, _PAR.pmod
     m = hs_t.shape[0]
     nb, groups = m // PACK, ops_t.shape[0]
@@ -338,7 +438,7 @@ def item(w: torch.Tensor, const: torch.Tensor, m: int, n: int, ring_t: torch.Ten
     if m % PACK or n % RANK or b.shape[0] != n or cols != D * groups or w.shape[0] < m or np_ < n:
         raise ValueError("pks-v3 device item: bad shapes")
     q1 = _PAR.q1
-    ops_t = torch.from_numpy(np.ascontiguousarray(ops).astype(np.int64)).to(dev)
+    ops_t = _Keys(torch.from_numpy(np.ascontiguousarray(ops).astype(np.int64)).to(dev))
     src = _a_source(ring_t)
     step = COL_BLOCK // D
     aplanes = [planes_of(a_columns(src, l0, l0 + step), np_) for l0 in range(0, RANK, step)]
@@ -410,3 +510,45 @@ def self_test(dev: Any, seed: int = 7) -> None:
     want = cpu(hs, ops, y)
     if not np.array_equal(got, want):
         raise RuntimeError("pks-v3 device key switch does not match the CPU path")
+
+
+def _edge_hint_rows(rng: np.random.Generator, m: int) -> np.ndarray:
+    """``(m, 4096)`` switched hint rows in ``[0, q1)``: random, with the centring boundary, ``0``, ``q1 - 1`` and the
+    24-bit split boundaries of the fused input reduction in the first rows, and two whole rows at ``0`` / ``q1 - 1``."""
+    q1 = _PAR.q1
+    hs = rng.integers(0, q1, (m, NU), dtype=np.uint64)
+    edge = np.array([0, 1, q1 - 1, q1 - 2, (q1 - 1) // 2, (q1 + 1) // 2, (q1 + 3) // 2, (1 << 24) - 1, 1 << 24,
+                     (1 << 24) + 1, *pks.QP, *(p - 1 for p in pks.QP), *(2 * p for p in pks.Q1)], dtype=np.uint64)
+    hs[0, :edge.size] = edge
+    hs[2] = 0
+    hs[3] = q1 - 1
+    return hs
+
+
+def fused_self_test(dev: Any, seed: int = 11) -> None:
+    """Raise unless the fused key switch (:func:`pgw.service.pks_ntt.keyswitch`) on ``dev`` equals the torch path
+    (:func:`_keyswitch_torch`) bit for bit: 96 rows (3 reply ciphertexts) x 2 groups of public random data with edge
+    values (hint rows at ``0``, ``q1 - 1`` and the centring boundary, ``y`` at ``0`` and ``2^56 - 1``, keys at ``0``
+    and ``p - 1``)."""
+    from pgw.service import pks_ntt
+
+    dev = torch.device(dev)
+    rng = np.random.default_rng(seed)
+    m, groups = 3 * PACK, 2
+    hs = _edge_hint_rows(rng, m)
+    y = rng.integers(0, 1 << 56, (m, D * groups), dtype=np.uint64)
+    y[0, :6] = [0, 1, (1 << 56) - 1, (1 << 55) - 1, 1 << 55, (1 << 55) + 1]
+    y[1] = (1 << 56) - 1
+    y[2] = 0
+    ops = np.stack([np.stack([rng.integers(0, p, (RANK, NR), dtype=np.int64) for p in pks.QP]) for _ in range(groups)])
+    for k, p in enumerate(pks.QP):
+        ops[0, k, 0] = p - 1
+        ops[1, k, 1] = 0
+        ops[1, k, 2, :4] = [0, 1, p - 1, p - 2]
+    hs_t = torch.from_numpy(hs.view(np.int64)).to(dev)
+    y_t = torch.from_numpy(y.view(np.int64)).to(dev)
+    keys = _Keys(torch.from_numpy(ops).to(dev))
+    got = pks_ntt.keyswitch(hs_t, keys.u32(), y_t)
+    want = _keyswitch_torch(hs_t, keys.t, y_t)
+    if not torch.equal(got.cpu(), want.cpu()):
+        raise RuntimeError("pks-v3 fused NTT key switch does not match the torch path")
