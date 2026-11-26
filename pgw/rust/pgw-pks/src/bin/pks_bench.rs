@@ -112,7 +112,7 @@ fn main() {
             let ops: Vec<u32> = (0..groups * 4 * RANK * NR).map(|i| (g.next() % cx.qp[(i / (RANK * NR)) % 4].p as u64) as u32).collect();
             let y: Vec<u64> = (0..size * groups * D).map(|_| g.next() & ((1 << 56) - 1)).collect();
             let mut out = vec![0u64; groups * (size / PACK) * NR];
-            let it = KsItem { hs: &hs, m: size, ops: &ops, groups, y: Some(&y), yb: 36 };
+            let it = KsItem { hs: &hs, m: size, ops: &ops, groups, y: Some(&y), yb: 36, raw: false };
             let (s, c) = time(1, || kernel::keyswitch(isa, &it, &mut out, threads).unwrap());
             let per = (size * groups * D) as f64;
             println!(

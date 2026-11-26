@@ -47,7 +47,7 @@ from pgw.core.errors import ConfigError, ErrorCode, IntegrityError, PGWError
 from pgw.core.prng import new_seed
 from pgw.hemask import pks
 from pgw.hemask.pks import NR, PACK, RANK, SCHEME_ID, D, PKSParams
-from pgw.hemask.pks_native import Customer, keyswitch
+from pgw.hemask.pks_native import Customer
 from pgw.hemask.wire import (
     MASKGEN_PATH,
     V3_B_BITS,
@@ -59,14 +59,14 @@ from pgw.hemask.wire import (
     pack_bits,
 )
 
-__all__ = ["HintLinear", "InProcessPKSProvider", "PKSHintStore", "PKSMaskBackend", "RemotePKS", "row_norm",
+__all__ = ["HintBuild", "HintLinear", "InProcessPKSProvider", "PKSHintStore", "PKSMaskBackend", "RemotePKS", "row_norm",
            "switch_hint_fast"]
 
 log = logging.getLogger(__name__)
 
 _META = "meta.json"
 _STORE_VERSION = 1
-_M56 = np.uint64((1 << 56) - 1)
+
 _ROW_BLOCK = 1024  # hint rows per H block during the build (bounds transient memory: 1024 x 4096 x 8 B)
 
 
@@ -100,6 +100,12 @@ def switch_hint_fast(h: np.ndarray, threads: int | None = None) -> np.ndarray:
     h = np.asarray(h, dtype=np.uint64)
     par = PKSParams()
     nt = max(1, int(threads or os.cpu_count() or 1))
+    from pgw.hemask.pks_native import native
+
+    nat = native()
+    if nat is not None and hasattr(nat, "switch_hint") and h.ndim == 2:  # same values (tests/hemask/test_hint_build)
+        out_n: np.ndarray = nat.switch_hint(np.ascontiguousarray(h), nt)
+        return out_n
     if nt == 1 or h.shape[0] < 2 * nt:
         return pks.switch_hint(h, par)
     out = np.empty(h.shape, dtype=np.uint64)
@@ -185,7 +191,7 @@ class PKSHintStore:
               mac_key: bytes | None = None, seeds: tuple[bytes, bytes] | None = None) -> PKSHintStore:
         """Compute every linear's compact hint (``only``: these linear keys) from the pack (the customer's own
         weights) and fresh seeds (``seeds = (a_seed, ks_seed)``: given ones, e.g. a provisioning comparison)."""
-        from pgw.hemask.lwe import matmul_mod64
+        from pgw.hemask.hint_gemm import HintGemm
 
         a_seed, ks_seed = seeds if seeds is not None else (new_seed(), new_seed())  # customer-chosen; both public
 
@@ -197,11 +203,14 @@ class PKSHintStore:
                 w = lw.w8.numpy() if isinstance(lw.w8, torch.Tensor) else np.asarray(lw.w8)
                 m, n = w.shape
                 _check_shape(key, m, n)
-                a = pks.a_mlwe_rows(pks.public_ring_rows(a_seed, n, key))
 
-                def blocks(w: np.ndarray = w, a: np.ndarray = a) -> Any:
-                    for r0 in range(0, w.shape[0], _ROW_BLOCK):
-                        yield r0, matmul_mod64(np.ascontiguousarray(w[r0:r0 + _ROW_BLOCK]), a) & _M56
+                def blocks(w: np.ndarray = w, key: str = key, n: int = n) -> Any:
+                    gemm = HintGemm(a_seed, n, key)  # A's byte planes once per linear
+                    try:
+                        for r0 in range(0, w.shape[0], _ROW_BLOCK):
+                            yield r0, gemm(w[r0:r0 + _ROW_BLOCK])
+                    finally:
+                        gemm.close()
 
                 yield HintLinear(key, m, n, row_norm(w), blocks())
 
@@ -216,53 +225,14 @@ class PKSHintStore:
         ``linears`` yields :class:`HintLinear` items; each item's ``blocks`` yields ``(r0, H rows)`` with row counts
         that are multiples of 32 and may raise (e.g. a failed provider check) after its last block: then nothing
         is renamed into place. The hint of a block is ``keyswitch(switch_hint(H), k)``, as in the original build."""
-        final = cls.dir_for(root, fingerprint)
-        tmp = final.with_name(final.name + f".building-{os.getpid()}-{uuid.uuid4().hex[:8]}")
-        shutil.rmtree(tmp, ignore_errors=True)
-        tmp.mkdir(parents=True)
-        k_hat = pks.ks_a(ks_seed)[None].astype(np.uint32)
-        norms: dict[str, float] = {}
-        digests: dict[str, str] = {}
-        t0 = last = time.monotonic()
+        hb = HintBuild(root, fingerprint, mac_key=mac_key, seeds=(a_seed, ks_seed), resumable=False)
         try:
             for item in linears:
-                key, m = item.key, item.m
-                _check_shape(key, m, item.n)
-                out = np.lib.format.open_memmap(tmp / f"{key}.npy", mode="w+", dtype=np.uint8,
-                                                shape=(m // PACK, 2, NR, 3))
-                done = 0
-                for r0, h in item.blocks:
-                    rows = int(h.shape[0])
-                    if r0 % PACK or rows % PACK or r0 + rows > m:
-                        raise ConfigError(f"{key}: hint block [{r0}, {r0 + rows}) is not 32-row aligned")
-                    out[r0 // PACK:(r0 + rows) // PACK] = keyswitch(switch_hint_fast(h), k_hat)
-                    done += rows
-                    del h
-                if done != m:
-                    raise ConfigError(f"{key}: hint blocks cover {done} of {m} rows")
-                out.flush()
-                del out
-                norms[key] = float(item.norm if not callable(item.norm) else item.norm())
-                digests[key] = _digest(tmp / f"{key}.npy")
-                if time.monotonic() - last > log_every_s:
-                    last = time.monotonic()
-                    log.info("building pks-v3 hint: %s (%.0f s)", key, last - t0)
-            meta = {"version": _STORE_VERSION, "scheme": SCHEME_ID, "nr": NR, "fingerprint": fingerprint,
-                    "a_seed": a_seed.hex(), "ks_seed": ks_seed.hex(), "row_norms": norms, "digests": digests,
-                    "created": time.time(), **(extra_meta or {})}
-            if mac_key is not None:
-                meta["mac"] = _meta_mac(mac_key, meta)
-            (tmp / _META).write_text(json.dumps(meta, indent=1))
-            if final.exists():
-                shutil.rmtree(final)
-            tmp.rename(final)
+                hb.add(item, log_every_s=log_every_s)
+            return hb.finish(extra_meta=extra_meta)
         except BaseException:
-            shutil.rmtree(tmp, ignore_errors=True)
+            hb.abort()
             raise
-        st = cls(final, meta)
-        log.info("pks-v3 hint for %s built in %.0f s: %.2f GB in %s", fingerprint[:12], time.monotonic() - t0,
-                 st.nbytes / 1e9, final)
-        return st
 
     @classmethod
     def open_or_build(cls, root: Path, pack: Any, *, only: set[str] | None = None,
@@ -311,6 +281,169 @@ class PKSHintStore:
         return sum(p.stat().st_size for p in self.path.glob("*.npy"))
 
 
+_PARTIAL = "partial.json"
+
+
+class HintBuild:
+    """Writes a hint store one linear at a time, then ``meta.json`` and the rename into place
+    (:meth:`PKSHintStore.write` is this with ``resumable=False``; same files and metadata).
+
+    * ``resumable=False``: a private temporary directory, removed by :meth:`abort`.
+    * ``resumable=True`` (needs ``mac_key``; the one-time ``pgw sdk prepare`` / provisioning build of a large model):
+      the directory ``<store>.partial`` survives an interruption. ``partial.json`` holds the seeds and, per finished
+      linear, its file's SHA-256 and row norm, authenticated with HMAC-SHA256 under the customer's hint key (its own
+      domain label, so it can never pass as a ``meta.json``). The next build with the same key and fingerprint
+      continues from it: every finished linear's file is re-hashed and must equal its authenticated digest (else it
+      is rebuilt), and the authenticated seeds are reused. A state that does not verify (another key, edited,
+      another fingerprint or format) is discarded and the build starts afresh with new seeds. A linear's file is
+      written under a temporary name and renamed only after it is complete and flushed, so a crash never leaves a
+      half-written file listed as done. The store becomes visible (``meta.json``, rename) only after every linear,
+      exactly as a one-shot build: the hint exists before any reply secret, as the hint-integrity rule requires.
+
+    The caller holds the store's exclusive lock (:func:`pgw.provision.client._build_store`)."""
+
+    def __init__(self, root: Path, fingerprint: str, *, mac_key: bytes | None = None,
+                 seeds: tuple[bytes, bytes] | None = None, resumable: bool = False):
+        self.final = PKSHintStore.dir_for(root, fingerprint)
+        self.fingerprint = fingerprint
+        self.mac_key = None if mac_key is None else bytes(mac_key)
+        self.resumable = bool(resumable and mac_key is not None)
+        self.norms: dict[str, float] = {}
+        self.digests: dict[str, str] = {}
+        state: dict[str, Any] | None = None
+        if self.resumable:
+            self.dir = self.final.with_name(self.final.name + ".partial")
+            state = self._load_state() if seeds is None else None
+            if state is None:
+                shutil.rmtree(self.dir, ignore_errors=True)
+        else:
+            self.dir = self.final.with_name(self.final.name + f".building-{os.getpid()}-{uuid.uuid4().hex[:8]}")
+            shutil.rmtree(self.dir, ignore_errors=True)
+        self.dir.mkdir(parents=True, exist_ok=True)
+        self.resumed = 0
+        if state is not None:
+            self.a_seed, self.ks_seed = bytes.fromhex(state["a_seed"]), bytes.fromhex(state["ks_seed"])
+            for key, d in state["done"].items():
+                p = self.dir / f"{key}.npy"
+                if p.is_file() and hmac.compare_digest(_digest(p), str(d["digest"])):
+                    self.norms[key], self.digests[key] = float(d["norm"]), str(d["digest"])
+                else:
+                    log.warning("pks-v3 hint build: %s in %s does not match its recorded digest; rebuilding it",
+                                key, self.dir)
+                    p.unlink(missing_ok=True)
+            self.resumed = len(self.digests)
+            if self.resumed:
+                log.info("pks-v3 hint build: resuming %s with %d finished linear(s)", self.dir, self.resumed)
+        else:
+            self.a_seed, self.ks_seed = seeds if seeds is not None else (new_seed(), new_seed())
+        self._save_state()
+        self.k_hat = pks.ks_a(self.ks_seed)[None].astype(np.uint32)
+        self.t0 = self._last = time.monotonic()
+
+    # ---- resumable state ------------------------------------------------------------------------
+    def _state(self) -> dict[str, Any]:
+        return {"version": _STORE_VERSION, "scheme": SCHEME_ID, "nr": NR, "fingerprint": self.fingerprint,
+                "a_seed": self.a_seed.hex(), "ks_seed": self.ks_seed.hex(),
+                "done": {k: {"digest": self.digests[k], "norm": self.norms[k]} for k in self.digests}}
+
+    def _load_state(self) -> dict[str, Any] | None:
+        try:
+            st = json.loads((self.dir / _PARTIAL).read_text())
+        except (OSError, ValueError):
+            return None
+        assert self.mac_key is not None
+        want = st.get("mac") if isinstance(st, dict) else None
+        if not isinstance(want, str) or not hmac.compare_digest(want, _meta_mac(self.mac_key, st, _PARTIAL_DOMAIN)):
+            log.warning("pks-v3 hint build state %s is not authenticated by the hint key: starting afresh", self.dir)
+            return None
+        if (st.get("version"), st.get("scheme"), st.get("nr"), st.get("fingerprint")) != (
+                _STORE_VERSION, SCHEME_ID, NR, self.fingerprint) or not isinstance(st.get("done"), dict):
+            return None
+        out: dict[str, Any] = st
+        return out
+
+    def _save_state(self) -> None:
+        if not self.resumable:
+            return
+        assert self.mac_key is not None
+        st = self._state()
+        st["mac"] = _meta_mac(self.mac_key, st, _PARTIAL_DOMAIN)
+        tmp = self.dir / f".{_PARTIAL}.tmp"
+        with open(tmp, "w") as f:
+            f.write(json.dumps(st, indent=1))
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, self.dir / _PARTIAL)
+
+    # ---- building -------------------------------------------------------------------------------
+    def done(self, key: str) -> bool:
+        return key in self.digests
+
+    def add(self, item: HintLinear, *, log_every_s: float = 30.0) -> None:
+        """Compute and store one linear's hint from its ``H`` blocks (skipped when already done)."""
+        from pgw.hemask.hint_gemm import hint_rows
+
+        key, m = item.key, item.m
+        if key in self.digests:
+            close = getattr(item.blocks, "close", None)
+            if close is not None:
+                close()
+            return
+        _check_shape(key, m, item.n)
+        part = self.dir / f"{key}.npy.tmp"
+        out = np.lib.format.open_memmap(part, mode="w+", dtype=np.uint8, shape=(m // PACK, 2, NR, 3))
+        done = 0
+        for r0, h in item.blocks:
+            rows = int(h.shape[0])
+            if r0 % PACK or rows % PACK or r0 + rows > m:
+                raise ConfigError(f"{key}: hint block [{r0}, {r0 + rows}) is not 32-row aligned")
+            out[r0 // PACK:(r0 + rows) // PACK] = hint_rows(h, self.k_hat)  # keyswitch(switch_hint(H), k)
+            done += rows
+            del h
+        if done != m:
+            raise ConfigError(f"{key}: hint blocks cover {done} of {m} rows")
+        out.flush()
+        del out
+        if self.resumable:
+            with open(part, "rb") as f:
+                os.fsync(f.fileno())
+        os.replace(part, self.dir / f"{key}.npy")
+        self.norms[key] = float(item.norm if not callable(item.norm) else item.norm())
+        self.digests[key] = _digest(self.dir / f"{key}.npy")
+        self._save_state()
+        if time.monotonic() - self._last > log_every_s:
+            self._last = time.monotonic()
+            log.info("building pks-v3 hint: %s (%.0f s)", key, self._last - self.t0)
+
+    def finish(self, *, keys: Iterable[str] | None = None, extra_meta: dict[str, Any] | None = None
+               ) -> PKSHintStore:
+        """``meta.json`` (HMAC'd with ``mac_key``) and the rename into place; ``keys``: every one must be done."""
+        missing = sorted(set(keys or ()) - set(self.digests))
+        if missing:
+            raise ConfigError(f"pks-v3 hint build is missing {missing[:3]}")
+        meta = {"version": _STORE_VERSION, "scheme": SCHEME_ID, "nr": NR, "fingerprint": self.fingerprint,
+                "a_seed": self.a_seed.hex(), "ks_seed": self.ks_seed.hex(), "row_norms": dict(self.norms),
+                "digests": dict(self.digests), "created": time.time(), **(extra_meta or {})}
+        if self.mac_key is not None:
+            meta["mac"] = _meta_mac(self.mac_key, meta)
+        (self.dir / _PARTIAL).unlink(missing_ok=True)
+        (self.dir / _META).write_text(json.dumps(meta, indent=1))
+        if self.final.exists():
+            shutil.rmtree(self.final)
+        self.dir.rename(self.final)
+        st = PKSHintStore(self.final, meta)
+        log.info("pks-v3 hint for %s built in %.0f s: %.2f GB in %s", self.fingerprint[:12],
+                 time.monotonic() - self.t0, st.nbytes / 1e9, self.final)
+        return st
+
+    def abort(self, *, discard: bool | None = None) -> None:
+        """Remove the build directory (default: unless resumable; a resumable build is kept for the next run)."""
+        for p in self.dir.glob("*.npy.tmp"):
+            p.unlink(missing_ok=True)
+        if discard if discard is not None else not self.resumable:
+            shutil.rmtree(self.dir, ignore_errors=True)
+
+
 def _kind(spec: Any) -> str:
     k = getattr(spec.id, "kind", None)
     return str(getattr(k, "value", k or ""))
@@ -321,10 +454,15 @@ def linear_keys(pack: Any, skip_kinds: frozenset[str] | set[str] = frozenset()) 
     return {s.id.key for s in pack.linear_specs() if _kind(s) not in skip_kinds}
 
 
-def _meta_mac(key: bytes, meta: dict[str, Any]) -> str:
-    """HMAC-SHA256 of ``meta`` (without ``mac``) in canonical JSON under the customer's hint key."""
+_META_DOMAIN = b"pgw-pks-hint-meta\0"
+_PARTIAL_DOMAIN = b"pgw-pks-hint-partial\0"
+
+
+def _meta_mac(key: bytes, meta: dict[str, Any], domain: bytes = _META_DOMAIN) -> str:
+    """HMAC-SHA256 of ``meta`` (without ``mac``) in canonical JSON under the customer's hint key (``domain``:
+    ``meta.json``, or a resumable build's ``partial.json``)."""
     body = json.dumps({k: v for k, v in meta.items() if k != "mac"}, sort_keys=True, separators=(",", ":"))
-    return hmac.new(bytes(key), b"pgw-pks-hint-meta\0" + body.encode(), hashlib.sha256).hexdigest()
+    return hmac.new(bytes(key), domain + body.encode(), hashlib.sha256).hexdigest()
 
 
 def _digest(path: Path) -> str:
