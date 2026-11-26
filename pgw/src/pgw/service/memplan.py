@@ -48,6 +48,7 @@ from pgw.core.ringmm import (
 __all__ = [
     "GPUS",
     "MODELS",
+    "check_fit",
     "GpuSpec",
     "MemConfig",
     "MemPlan",
@@ -448,6 +449,35 @@ def plan_table(models: Sequence[str], gpus: Sequence[str], cfg: MemConfig | None
                             f"| {s['peak_serving_gib']} | {s['capacity_gib']} | {s['headroom_gib']} "
                             f"| {'yes' if s['fits'] else '**no**'} |")
     return "\n".join(rows)
+
+
+def gpu_spec_of(device: object) -> GpuSpec:  # pragma: no cover - GPU only
+    """The :class:`GpuSpec` of a live CUDA device (its reported capacity; Triton's int8 dot needs cc >= 8.0)."""
+    import torch
+
+    props = torch.cuda.get_device_properties(device)  # type: ignore[arg-type]
+    tc = int(props.major) >= 8
+    return GpuSpec(str(props.name), int(props.total_memory), tc, 16 if tc else 1, "live device")
+
+
+def check_fit(model: str, linears: Sequence[tuple[str, int, int]], gpu: GpuSpec, cfg: MemConfig,
+              resident: Sequence[int] = ()) -> str | None:
+    """``None`` if ``linears`` fit on the device(s) next to ``resident`` bytes already allocated per device
+    (index-aligned with the plan's devices), else a one-line explanation with the planned breakdown."""
+    p = plan(model, linears, gpu, cfg)
+    worst = None
+    for d in p.devices:
+        extra = resident[d.device] if d.device < len(resident) else 0
+        over = d.peak + extra - gpu.total_bytes
+        if over > 0 and (worst is None or over > worst[0]):
+            worst = (over, d, extra)
+    if worst is None:
+        return None
+    over, d, extra = worst
+    parts = ", ".join(f"{k} {v / GIB:.2f}" for k, v in {**d.steady, **d.load, **d.serving}.items() if v >= 0.05 * GIB)
+    return (f"model {model} is planned to need {(d.peak + extra) / GIB:.2f} GiB on device {d.device} "
+            f"({gpu.name}, {gpu.total_bytes / GIB:.2f} GiB; already allocated {extra / GIB:.2f} GiB): "
+            f"{over / GIB:.2f} GiB short [GiB: {parts}]; see python -m pgw.service.memplan")
 
 
 def max_fitting(model: str, gpu: str, cfg: MemConfig, field_name: str, candidates: Sequence[int]) -> int | None:

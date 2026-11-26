@@ -94,6 +94,15 @@ def test_legacy_core_model_matches_measured_allocations() -> None:
         assert 0.8 * model <= t.peak <= 1.25 * model, (k, b, t.peak, model)
 
 
+def test_check_fit_message() -> None:
+    """The registry's advisory pre-load check: None when the plan fits, else the shortfall and the breakdown."""
+    lins = MODELS["qwen2.5-7b"].linears(True)
+    assert mp.check_fit("7b", lins, GPUS["t4"], MemConfig()) is None
+    msg = mp.check_fit("7b", lins, GPUS["t4"], MemConfig(), resident=[int(10 * GIB)])
+    assert msg is not None and "short" in msg and "weights" in msg and "Tesla T4" in msg
+    assert mp.check_fit("7b", lins, GPUS["t4"], MemConfig(rev="run1")) is not None
+
+
 def test_cli_table_and_json(capsys: pytest.CaptureFixture[str]) -> None:
     assert mp.main(["--model", "qwen2.5-7b", "--gpu", "t4", "--gpu", "h100-80", "--tp", "1,2"]) == 0
     out = capsys.readouterr().out
