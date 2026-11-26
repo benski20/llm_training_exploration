@@ -71,6 +71,6 @@ def test_sdist_manifest_covers_the_rust_workspace() -> None:
 def test_third_party_notices_cover_linked_crates() -> None:
     text = (ROOT / "THIRD_PARTY_NOTICES.txt").read_text()
     lock = (ROOT / "rust/Cargo.lock").read_text()
-    for crate in ("pyo3", "numpy", "rustls", "ring", "aes-gcm", "chacha20", "zeroize"):
+    for crate in ("pyo3", "numpy", "rustls", "ring", "aws-lc-rs", "aws-lc-sys", "chacha20", "zeroize"):
         ver = re.search(rf'name = "{re.escape(crate)}"\nversion = "([^"]+)"', lock)
         assert ver and f"{crate} {ver.group(1)} " in text, crate
