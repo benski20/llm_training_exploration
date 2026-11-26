@@ -337,6 +337,34 @@ def test_feature_head_file_strict_exact(qwen_pack: InMemoryPack, tiny_tokenizer:
     assert proposed and set(proposed) <= set(vocab)
 
 
+@pytest.mark.parametrize("params", PARAMS, ids=["greedy", "seeded"])
+def test_feature_head_with_lookup_strict_exact(qwen_pack: InMemoryPack, tiny_tokenizer: ChatTokenizer, tmp_path: Any,
+                                               params: SamplingParams) -> None:
+    """Head + prompt lookup (``lookup``: a full-chain lookup match replaces the head's drafts): bit-identical to
+    plain decoding, R rows on every decode pass, the head's steps unchanged (it runs on every pass either way),
+    and the lookup does take over on a repetitive prompt."""
+    from pgw.engine.generate import FeatureHeadDrafter
+
+    rows = 3
+    prompt = LONG * 3
+    base = Generator(_plain(qwen_pack, True), tiny_tokenizer).generate(prompt, params)
+    model, client = _masked(qwen_pack, True)
+    _head_file(model, tmp_path / "head.pt")
+    head = FeatureHeadDrafter.from_file(tmp_path / "head.pt", model.embed_tokens.to(torch.float32),
+                                        target_vocab=int(model.arch.vocab_size), kernel="float", lookup=4,
+                                        lookup_min_n=2)
+    gen = Generator(model, tiny_tokenizer, spec_rows=rows, spec_strict=True, spec_mask_rows=rows, drafter=head)
+    res = LocalMaskReservation(qwen_pack, DEFAULT_RING, gen.mask_rows_needed(len(prompt), params.max_tokens))
+    out = gen.generate(prompt, params, session=res)
+    assert out.token_ids == base.token_ids and out.text == base.text and out.logprobs == base.logprobs
+    passes = [int(x.shape[0]) for k, x in client.received if k == "0.qkv"]
+    assert passes[0] == len(prompt) and all(n == rows for n in passes[1:])
+    assert len(passes) == out.completion_tokens
+    assert head.stats["steps"] == (rows - 1) * (out.completion_tokens - 1)
+    if params.temperature == 0:  # the tiny random model's greedy answer repeats the prompt: lookup takes over
+        assert head.stats["lookup_chains"] > 0
+
+
 def test_feature_head_file_checks(qwen_pack: InMemoryPack, tmp_path: Any) -> None:
     from pgw.engine.generate import FeatureHeadDrafter
 

@@ -710,7 +710,8 @@ class FeatureHeadDrafter(BuiltinDrafter):
     def __init__(self, weights: dict[str, torch.Tensor], embed: torch.Tensor, vocab: Sequence[int], *,
                  target_vocab: int | None = None, kernel: str = "float", ring: Any = None,
                  int8: dict[str, tuple[torch.Tensor, torch.Tensor]] | None = None, threads: int = 1,
-                 in_scale: tuple[torch.Tensor, torch.Tensor] | None = None):
+                 in_scale: tuple[torch.Tensor, torch.Tensor] | None = None, lookup: int = 0,
+                 lookup_min_n: int = 3):
         """``weights``: float ``w_in`` (d, 2H), ``b_in``, ``w1``, ``b1``, ``w2``, ``b2``, ``w_out`` (H, d) and
         optionally ``u`` (V, d), the reduced-vocabulary LM head ``H_V W_out`` (default ``E_V W_out``: right
         for a tied target only). ``kernel``: ``"float"`` (float32 products), ``"native_int8"`` (int8 per-row
@@ -718,8 +719,11 @@ class FeatureHeadDrafter(BuiltinDrafter):
         needs ``ring``) or ``"auto"`` (native when available, else float). ``int8``: per-row int8 weights and
         scales to use as they are (the file's), else they are quantized from ``weights``. ``in_scale``: the
         per-column input scales (feature half, token half) of a v2 file; then ``int8``'s ``w_in_f`` / ``w_in_e``
-        are in the scaled input space (``w_in`` in ``weights`` is the folded float product either way). Drafts
-        are proposals only: the kernel changes speed and acceptance, never the outputs."""
+        are in the scaled input space (``w_in`` in ``weights`` is the folded float product either way).
+        ``lookup``: also run prompt lookup (n-grams of ``lookup`` down to ``lookup_min_n`` tokens, the fixed-work
+        search) on every chain job, and propose its continuation instead of the head's when it fills the whole
+        chain (copy-heavy text: code edits, quotes, rewrites). The head runs either way (the same work per pass).
+        Drafts are proposals only: the kernel and the lookup change speed and acceptance, never the outputs."""
         f32 = torch.float32
         if kernel not in self.KERNELS:
             raise ConfigError(f"FeatureHeadDrafter kernel must be one of {self.KERNELS}")
@@ -742,11 +746,11 @@ class FeatureHeadDrafter(BuiltinDrafter):
         else:
             self.u = (embed[self.vocab].to(f32) @ self.w_out).contiguous()  # (V, d)
         self.model = None
-        self.lookup = 0
-        self.lookup_min_n = 3
+        self.lookup = int(lookup)
+        self.lookup_min_n = int(lookup_min_n)
         self.target_vocab = target_vocab if target_vocab is not None else int(embed.shape[0])
         self.draft_vocab = None
-        self.stats = {"calls": 0.0, "steps": 0.0, "ms": 0.0}
+        self.stats = {"calls": 0.0, "steps": 0.0, "ms": 0.0, "lookup_chains": 0.0}
         if kernel == "auto":
             from pgw.engine.backends import NativeInt8DraftBackend
 
@@ -794,7 +798,7 @@ class FeatureHeadDrafter(BuiltinDrafter):
 
     @classmethod
     def from_file(cls, path: Any, embed: torch.Tensor, *, target_vocab: int | None = None, kernel: str = "auto",
-                  ring: Any = None, threads: int = 1) -> FeatureHeadDrafter:
+                  ring: Any = None, threads: int = 1, lookup: int = 0, lookup_min_n: int = 3) -> FeatureHeadDrafter:
         """Load a trained head (``benchmarks/feature_head_train.py``: int8 per-row weights and scales, float
         biases, the reduced vocabulary and ``U = H_V W_out``). Checked against the target's hidden size."""
         blob = torch.load(path, map_location="cpu", weights_only=True)
@@ -821,7 +825,7 @@ class FeatureHeadDrafter(BuiltinDrafter):
         if any(int(t) < 0 or int(t) >= tv for t in blob["vocab"]):
             raise ConfigError(f"{path}: vocabulary ids outside the target's vocabulary")
         return cls(w, embed, blob["vocab"], target_vocab=tv, kernel=kernel, ring=ring, int8=q8, threads=threads,
-                   in_scale=in_scale)
+                   in_scale=in_scale, lookup=lookup, lookup_min_n=lookup_min_n)
 
     def nbytes_per_step(self, bytes_per_weight: int = 1) -> int:
         """Weights read by one draft step (int8: 1 byte per weight)."""
@@ -868,6 +872,13 @@ class FeatureHeadDrafter(BuiltinDrafter):
         t0 = time.perf_counter()
         try:
             self._head_steps(live)
+            if self.lookup:
+                for j in live:  # every chain job searched (fixed work); a full-length match replaces the head's
+                    if j.tree is None:
+                        prop = self._lookup(list(j.context), j.k)
+                        if len(prop) == j.k:
+                            j.out = [int(t) for t in prop]
+                            self.stats["lookup_chains"] += 1
         except Exception:
             log.warning("draft head failed; no drafts for %d sequence(s)", len(live), exc_info=True)
             for j in live:

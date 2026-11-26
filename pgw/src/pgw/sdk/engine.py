@@ -718,14 +718,15 @@ class Engine:
             "head_mode": "provider_int8" if h.masked_head else "gateway",
             "prefix_cache": "conversation" if self._prefix_on(h) else "off",
         }
-        kw.update(self._spec_config())
+        kw.update(self._spec_config(h.name))
         return GatewayModelConfig(**kw)
 
-    def _spec_config(self) -> dict[str, Any]:
+    def _spec_config(self, model: str | None = None) -> dict[str, Any]:
         """Strict speculation (``speculation``, opt-in): fixed ``spec_rows`` rows per verify pass, strict pass
         count (dummy passes after the answer), masked filler rows. The prompt-lookup draft proposes whenever a
         context match of at least 2 tokens exists: the rows are fixed, so a rejected proposal costs nothing more
-        than the filler row it replaces."""
+        than the filler row it replaces. ``"draft_head"``: ``draft_head_path``, else the head pinned for
+        ``model`` (``pgw.sdk.draft_heads``: shipped file or cache copy checked against its SHA-256)."""
         o = self.options
         if o.speculation == "off":
             return {}
@@ -735,7 +736,14 @@ class Engine:
         if o.speculation == "lookup":
             kw.update(spec_lookup=4, spec_lookup_min_n=2)
         else:
-            kw.update(draft_backend="feature_head", draft_head_path=o.draft_head_path)
+            path = o.draft_head_path
+            if path is None:
+                from pgw.sdk.draft_heads import resolve_draft_head
+
+                layout = getattr(self, "layout", None)
+                path = resolve_draft_head(str(model), cache_dir=None if layout is None else layout.models_dir)
+            # the head drafts; a prompt-lookup match that fills the whole chain replaces its drafts
+            kw.update(draft_backend="feature_head", draft_head_path=path, spec_lookup=4, spec_lookup_min_n=2)
         return kw
 
     def _prefix_on(self, h: ModelHandle) -> bool:

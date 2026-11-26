@@ -1,0 +1,47 @@
+[   0.3m] loading prompts
+[   0.5m] prompts: train 60000, eval chat 200, eval code 120
+[   0.5m] loading Qwen/Qwen2.5-0.5B-Instruct
+[transformers] `torch_dtype` is deprecated! Use `dtype` instead!
+
+[   0.6m] model loaded (cuda)
+[   1.2m] eval chat: 179/179 answers, 40880 tokens, 1134 tok/s (batch 114, prompt 131)
+[   1.2m] eval chat: 179 answers, 0 with non-finite features; sample: 'The estimated value of the 1.57kg lump of ambergris discovered by the couple in Lancashire is around £50,000.<|im_end|>'
+[   1.5m] eval code: 120/120 answers, 22376 tokens, 1442 tok/s (batch 120, prompt 120)
+[   1.5m] eval code: 120 answers, 0 with non-finite features; sample: "The provided Python function `binsearch` is designed to find the index of a given element `x` in a sorted array `arr`. The function uses a binary search algorithm to achieve this. Here's a step-by-step explanation of how the algorithm works:\n\n1. **Initialization**:\n   -"
+[   6.8m] train: 987/55841 answers, 281855 tokens, 983 tok/s (batch 192, prompt 112)
+[   9.9m] train: 1947/55841 answers, 515388 tokens, 1095 tok/s (batch 192, prompt 43)
+[  11.3m] train: 2370/55841 answers, 614846 tokens, 1112 tok/s (batch 39, prompt 35)
+[  14.6m] train: 2931/55841 answers, 764646 tokens, 1018 tok/s (batch 192, prompt 56, sampled)
+[  17.0m] train: 3321/55841 answers, 852018 tokens, 953 tok/s (batch 108, prompt 303)
+[  19.3m] train: 3862/55841 answers, 1024118 tokens, 992 tok/s (batch 192, prompt 122)
+[  22.4m] train: 4822/55841 answers, 1274950 tokens, 1043 tok/s (batch 192, prompt 45)
+[  26.6m] train: 5761/55841 answers, 1525141 tokens, 1034 tok/s (batch 192, prompt 126, sampled)
+[  31.7m] train: 6766/55841 answers, 1783601 tokens, 1002 tok/s (batch 192, prompt 143)
+[  35.0m] train: 7726/55841 answers, 2043236 tokens, 1033 tok/s (batch 192, prompt 49)
+[  38.8m] train: 8668/55841 answers, 2277630 tokens, 1034 tok/s (batch 123, prompt 266, sampled)
+[  42.0m] train: 9280/55841 answers, 2436850 tokens, 1017 tok/s (batch 64, prompt 508)
+[  44.7m] train: deadline after 9806 answers
+[  44.7m] training rows 2578922 from 9787 answers (store full: False)
+[  45.8m] d256_v16384 {'epoch': 0, 'loss': 9.6367, 'val_top1_by_depth': [0.4144, 0.3474, 0.317], 'steps': 2401, 's': 63.4}
+[  46.8m] d384_v32768 {'epoch': 0, 'loss': 9.6766, 'val_top1_by_depth': [0.4288, 0.3586, 0.3275], 'steps': 2401, 's': 120.6}
+[  46.9m] d256_v16384 {'epoch': 1, 'loss': 7.3982, 'val_top1_by_depth': [0.4307, 0.365, 0.3366], 'steps': 2401, 's': 126.1}
+[  47.9m] d256_v16384 {'epoch': 2, 'loss': 7.0872, 'val_top1_by_depth': [0.4412, 0.3735, 0.3435], 'steps': 2401, 's': 188.7}
+[  48.8m] d384_v32768 {'epoch': 1, 'loss': 7.3594, 'val_top1_by_depth': [0.4471, 0.371, 0.3364], 'steps': 2401, 's': 244.4}
+[  48.9m] d256_v16384 {'epoch': 3, 'loss': 6.8803, 'val_top1_by_depth': [0.4472, 0.3799, 0.3513], 'steps': 2401, 's': 251.4}
+[  50.0m] d256_v16384 {'epoch': 4, 'loss': 6.6812, 'val_top1_by_depth': [0.4523, 0.3863, 0.3581], 'steps': 2401, 's': 314.4}
+[  50.9m] d384_v32768 {'epoch': 2, 'loss': 6.9922, 'val_top1_by_depth': [0.4571, 0.3837, 0.3494], 'steps': 2401, 's': 370.7}
+[  51.0m] d256_v16384 {'epoch': 5, 'loss': 6.4839, 'val_top1_by_depth': [0.4597, 0.396, 0.3682], 'steps': 2401, 's': 377.3}
+[  52.1m] d256_v16384 {'epoch': 6, 'loss': 6.2938, 'val_top1_by_depth': [0.4687, 0.4026, 0.3756], 'steps': 2401, 's': 440.8}
+[  53.1m] d384_v32768 {'epoch': 3, 'loss': 6.7207, 'val_top1_by_depth': [0.4648, 0.3904, 0.3555], 'steps': 2401, 's': 497.9}
+[  53.2m] d256_v16384 {'epoch': 7, 'loss': 6.1284, 'val_top1_by_depth': [0.472, 0.4089, 0.3844], 'steps': 2401, 's': 504.1}
+[  54.2m] d256_v16384 {'epoch': 8, 'loss': 6.0005, 'val_top1_by_depth': [0.4745, 0.4111, 0.3875], 'steps': 2401, 's': 567.5}
+[  55.2m] d384_v32768 {'epoch': 4, 'loss': 6.4491, 'val_top1_by_depth': [0.4752, 0.4013, 0.369], 'steps': 2401, 's': 625.4}
+[  55.3m] d256_v16384 {'epoch': 9, 'loss': 5.9234, 'val_top1_by_depth': [0.4745, 0.4124, 0.3868], 'steps': 2401, 's': 630.8}
+[  55.4m] d256_v16384: {"chat": {"alpha_d1": 0.47745755632539744, "positions": 40701, "alpha_by_depth": [0.4775, 0.4623, 0.486, 0.5012, 0.5176, 0.5576], "tau_R2": 1.4556, "tau_R3": 1.6466, "tau_R4": 1.7221}, "code": {"alpha_d1": 0.4914180445722502, "positions": 22256, "alpha_by_depth": [0.4914, 0.4668, 0.4801, 0.4719, 0.4707, 0.4684], "tau_R2": 1.4643, "tau_R3": 1.6598, "tau_R4": 1.7366}}
+[  57.3m] d384_v32768 {'epoch': 5, 'loss': 6.171, 'val_top1_by_depth': [0.4836, 0.4114, 0.3798], 'steps': 2401, 's': 752.0}
+[  59.4m] d384_v32768 {'epoch': 6, 'loss': 5.9014, 'val_top1_by_depth': [0.4908, 0.4211, 0.3893], 'steps': 2401, 's': 877.4}
+[  61.5m] d384_v32768 {'epoch': 7, 'loss': 5.6646, 'val_top1_by_depth': [0.4968, 0.4261, 0.3985], 'steps': 2401, 's': 1003.0}
+[  63.6m] d384_v32768 {'epoch': 8, 'loss': 5.4823, 'val_top1_by_depth': [0.5002, 0.431, 0.4029], 'steps': 2401, 's': 1128.2}
+[  65.6m] d384_v32768 {'epoch': 9, 'loss': 5.3715, 'val_top1_by_depth': [0.5007, 0.4313, 0.4034], 'steps': 2401, 's': 1253.4}
+[  65.8m] d384_v32768: {"chat": {"alpha_d1": 0.5042873639468318, "positions": 40701, "alpha_by_depth": [0.5043, 0.4814, 0.5025, 0.5109, 0.5194, 0.549], "tau_R2": 1.4829, "tau_R3": 1.6939, "tau_R4": 1.7837}, "code": {"alpha_d1": 0.5279475197699497, "positions": 22256, "alpha_by_depth": [0.5279, 0.4992, 0.5033, 0.4686, 0.4397, 0.4559], "tau_R2": 1.4973, "tau_R3": 1.7216, "tau_R4": 1.817}}
+[  65.8m] done

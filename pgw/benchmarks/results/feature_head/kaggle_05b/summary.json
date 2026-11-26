@@ -1,0 +1,356 @@
+{
+ "target": "Qwen/Qwen2.5-0.5B-Instruct",
+ "revision": "7ae557604adf67be50417f59c2c2f167def9a775",
+ "args": {
+  "target": "Qwen/Qwen2.5-0.5B-Instruct",
+  "revision": "7ae557604adf67be50417f59c2c2f167def9a775",
+  "device": "cuda",
+  "dtype": "float16",
+  "n_train": 60000,
+  "mix": [
+   0.6,
+   0.25,
+   0.15
+  ],
+  "n_eval_chat": 200,
+  "n_eval_code": 120,
+  "sample_frac": 0.25,
+  "max_new": 384,
+  "eval_max_new": 256,
+  "max_prompt": 512,
+  "gen_batch": 192,
+  "kv_tokens": 200000,
+  "prefill_tokens": 32768,
+  "max_rows": 8000000,
+  "configs": "256:16384,384:32768",
+  "epochs": 10,
+  "batch": 1024,
+  "lr": 0.001,
+  "wd": 0.01,
+  "noise": 0.05,
+  "reg": 0.5,
+  "unroll": 3,
+  "depth": 7,
+  "budget_min": 105.0,
+  "gen_share": 0.42,
+  "max_memory": null,
+  "out": "/kaggle/working/out"
+ },
+ "train_rows": 2578922,
+ "train_answers": 9787,
+ "windows_train": 2458552,
+ "windows_val": 81222,
+ "eval": {
+  "chat": {
+   "answers": 179,
+   "tokens": 40880
+  },
+  "code": {
+   "answers": 120,
+   "tokens": 22376
+  }
+ },
+ "configs": {
+  "d256_v16384": {
+   "vocab_coverage_train_labels": 0.9730495810508728,
+   "training": {
+    "history": [
+     {
+      "epoch": 0,
+      "loss": 9.6367,
+      "val_top1_by_depth": [
+       0.4144,
+       0.3474,
+       0.317
+      ],
+      "steps": 2401,
+      "s": 63.4
+     },
+     {
+      "epoch": 1,
+      "loss": 7.3982,
+      "val_top1_by_depth": [
+       0.4307,
+       0.365,
+       0.3366
+      ],
+      "steps": 2401,
+      "s": 126.1
+     },
+     {
+      "epoch": 2,
+      "loss": 7.0872,
+      "val_top1_by_depth": [
+       0.4412,
+       0.3735,
+       0.3435
+      ],
+      "steps": 2401,
+      "s": 188.7
+     },
+     {
+      "epoch": 3,
+      "loss": 6.8803,
+      "val_top1_by_depth": [
+       0.4472,
+       0.3799,
+       0.3513
+      ],
+      "steps": 2401,
+      "s": 251.4
+     },
+     {
+      "epoch": 4,
+      "loss": 6.6812,
+      "val_top1_by_depth": [
+       0.4523,
+       0.3863,
+       0.3581
+      ],
+      "steps": 2401,
+      "s": 314.4
+     },
+     {
+      "epoch": 5,
+      "loss": 6.4839,
+      "val_top1_by_depth": [
+       0.4597,
+       0.396,
+       0.3682
+      ],
+      "steps": 2401,
+      "s": 377.3
+     },
+     {
+      "epoch": 6,
+      "loss": 6.2938,
+      "val_top1_by_depth": [
+       0.4687,
+       0.4026,
+       0.3756
+      ],
+      "steps": 2401,
+      "s": 440.8
+     },
+     {
+      "epoch": 7,
+      "loss": 6.1284,
+      "val_top1_by_depth": [
+       0.472,
+       0.4089,
+       0.3844
+      ],
+      "steps": 2401,
+      "s": 504.1
+     },
+     {
+      "epoch": 8,
+      "loss": 6.0005,
+      "val_top1_by_depth": [
+       0.4745,
+       0.4111,
+       0.3875
+      ],
+      "steps": 2401,
+      "s": 567.5
+     },
+     {
+      "epoch": 9,
+      "loss": 5.9234,
+      "val_top1_by_depth": [
+       0.4745,
+       0.4124,
+       0.3868
+      ],
+      "steps": 2401,
+      "s": 630.8
+     }
+    ],
+    "best_val_top1_d1": 0.47451430559158325
+   },
+   "file_bytes": 5288953,
+   "weights_per_step": 5144576,
+   "chat": {
+    "alpha_d1": 0.47745755632539744,
+    "positions": 40701,
+    "alpha_by_depth": [
+     0.4775,
+     0.4623,
+     0.486,
+     0.5012,
+     0.5176,
+     0.5576
+    ],
+    "tau_R2": 1.4556,
+    "tau_R3": 1.6466,
+    "tau_R4": 1.7221
+   },
+   "code": {
+    "alpha_d1": 0.4914180445722502,
+    "positions": 22256,
+    "alpha_by_depth": [
+     0.4914,
+     0.4668,
+     0.4801,
+     0.4719,
+     0.4707,
+     0.4684
+    ],
+    "tau_R2": 1.4643,
+    "tau_R3": 1.6598,
+    "tau_R4": 1.7366
+   }
+  },
+  "d384_v32768": {
+   "vocab_coverage_train_labels": 0.997442364692688,
+   "training": {
+    "history": [
+     {
+      "epoch": 0,
+      "loss": 9.6766,
+      "val_top1_by_depth": [
+       0.4288,
+       0.3586,
+       0.3275
+      ],
+      "steps": 2401,
+      "s": 120.6
+     },
+     {
+      "epoch": 1,
+      "loss": 7.3594,
+      "val_top1_by_depth": [
+       0.4471,
+       0.371,
+       0.3364
+      ],
+      "steps": 2401,
+      "s": 244.4
+     },
+     {
+      "epoch": 2,
+      "loss": 6.9922,
+      "val_top1_by_depth": [
+       0.4571,
+       0.3837,
+       0.3494
+      ],
+      "steps": 2401,
+      "s": 370.7
+     },
+     {
+      "epoch": 3,
+      "loss": 6.7207,
+      "val_top1_by_depth": [
+       0.4648,
+       0.3904,
+       0.3555
+      ],
+      "steps": 2401,
+      "s": 497.9
+     },
+     {
+      "epoch": 4,
+      "loss": 6.4491,
+      "val_top1_by_depth": [
+       0.4752,
+       0.4013,
+       0.369
+      ],
+      "steps": 2401,
+      "s": 625.4
+     },
+     {
+      "epoch": 5,
+      "loss": 6.171,
+      "val_top1_by_depth": [
+       0.4836,
+       0.4114,
+       0.3798
+      ],
+      "steps": 2401,
+      "s": 752.0
+     },
+     {
+      "epoch": 6,
+      "loss": 5.9014,
+      "val_top1_by_depth": [
+       0.4908,
+       0.4211,
+       0.3893
+      ],
+      "steps": 2401,
+      "s": 877.4
+     },
+     {
+      "epoch": 7,
+      "loss": 5.6646,
+      "val_top1_by_depth": [
+       0.4968,
+       0.4261,
+       0.3985
+      ],
+      "steps": 2401,
+      "s": 1003.0
+     },
+     {
+      "epoch": 8,
+      "loss": 5.4823,
+      "val_top1_by_depth": [
+       0.5002,
+       0.431,
+       0.4029
+      ],
+      "steps": 2401,
+      "s": 1128.2
+     },
+     {
+      "epoch": 9,
+      "loss": 5.3715,
+      "val_top1_by_depth": [
+       0.5007,
+       0.4313,
+       0.4034
+      ],
+      "steps": 2401,
+      "s": 1253.4
+     }
+    ],
+    "best_val_top1_d1": 0.5007017850875854
+   },
+   "file_bytes": 14477433,
+   "weights_per_step": 14204928,
+   "chat": {
+    "alpha_d1": 0.5042873639468318,
+    "positions": 40701,
+    "alpha_by_depth": [
+     0.5043,
+     0.4814,
+     0.5025,
+     0.5109,
+     0.5194,
+     0.549
+    ],
+    "tau_R2": 1.4829,
+    "tau_R3": 1.6939,
+    "tau_R4": 1.7837
+   },
+   "code": {
+    "alpha_d1": 0.5279475197699497,
+    "positions": 22256,
+    "alpha_by_depth": [
+     0.5279,
+     0.4992,
+     0.5033,
+     0.4686,
+     0.4397,
+     0.4559
+    ],
+    "tau_R2": 1.4973,
+    "tau_R3": 1.7216,
+    "tau_R4": 1.817
+   }
+  }
+ },
+ "minutes": 65.8
+}

@@ -1,0 +1,720 @@
+{
+ "args": {
+  "configs": "off,head:2,head:3,head:4,lookup:3",
+  "head": "None",
+  "chat": "6",
+  "code": "4",
+  "tokens": "96",
+  "pack": "None",
+  "model": "qwen2.5-0.5b-instruct",
+  "provider_device": "cpu",
+  "stock_s": "0.0",
+  "opt": "[]",
+  "work": "None",
+  "json": "../.scratch/bench05b.json"
+ },
+ "configs": {
+  "off": [
+   {
+    "kind": "chat",
+    "tokens": 34,
+    "ttft_s": 2.0083662110046134,
+    "decode_tok_s": 3.1681494073932255,
+    "spec_passes": 0.0,
+    "spec_accepted": 0.0,
+    "tokens_per_pass": 1.0,
+    "identical_to_off": true
+   },
+   {
+    "kind": "code",
+    "tokens": 96,
+    "ttft_s": 3.406748843000969,
+    "decode_tok_s": 3.2092124978732057,
+    "spec_passes": 0.0,
+    "spec_accepted": 0.0,
+    "tokens_per_pass": 1.0,
+    "identical_to_off": true
+   },
+   {
+    "kind": "chat",
+    "tokens": 96,
+    "ttft_s": 3.0274351779953577,
+    "decode_tok_s": 3.1973841580645876,
+    "spec_passes": 0.0,
+    "spec_accepted": 0.0,
+    "tokens_per_pass": 1.0,
+    "identical_to_off": true
+   },
+   {
+    "kind": "chat",
+    "tokens": 96,
+    "ttft_s": 2.5614561869952013,
+    "decode_tok_s": 3.243865127201725,
+    "spec_passes": 0.0,
+    "spec_accepted": 0.0,
+    "tokens_per_pass": 1.0,
+    "identical_to_off": true
+   },
+   {
+    "kind": "chat",
+    "tokens": 96,
+    "ttft_s": 1.8038614190008957,
+    "decode_tok_s": 3.2304377959082546,
+    "spec_passes": 0.0,
+    "spec_accepted": 0.0,
+    "tokens_per_pass": 1.0,
+    "identical_to_off": true
+   },
+   {
+    "kind": "chat",
+    "tokens": 63,
+    "ttft_s": 5.893729447998339,
+    "decode_tok_s": 3.062516163599339,
+    "spec_passes": 0.0,
+    "spec_accepted": 0.0,
+    "tokens_per_pass": 1.0,
+    "identical_to_off": true
+   },
+   {
+    "kind": "chat",
+    "tokens": 96,
+    "ttft_s": 2.508832765997795,
+    "decode_tok_s": 3.3155151179289826,
+    "spec_passes": 0.0,
+    "spec_accepted": 0.0,
+    "tokens_per_pass": 1.0,
+    "identical_to_off": true
+   },
+   {
+    "kind": "chat",
+    "tokens": 96,
+    "ttft_s": 2.952907070000947,
+    "decode_tok_s": 3.260530626604843,
+    "spec_passes": 0.0,
+    "spec_accepted": 0.0,
+    "tokens_per_pass": 1.0,
+    "identical_to_off": true
+   },
+   {
+    "kind": "code",
+    "tokens": 96,
+    "ttft_s": 1.6302528440064634,
+    "decode_tok_s": 3.2777745862375385,
+    "spec_passes": 0.0,
+    "spec_accepted": 0.0,
+    "tokens_per_pass": 1.0,
+    "identical_to_off": true
+   },
+   {
+    "kind": "code",
+    "tokens": 96,
+    "ttft_s": 1.546361615000933,
+    "decode_tok_s": 3.248492764113597,
+    "spec_passes": 0.0,
+    "spec_accepted": 0.0,
+    "tokens_per_pass": 1.0,
+    "identical_to_off": true
+   },
+   {
+    "kind": "code",
+    "tokens": 29,
+    "ttft_s": 1.6781596270011505,
+    "decode_tok_s": 3.2408485563462666,
+    "spec_passes": 0.0,
+    "spec_accepted": 0.0,
+    "tokens_per_pass": 1.0,
+    "identical_to_off": true
+   },
+   {
+    "kind": "code",
+    "tokens": 96,
+    "ttft_s": 1.9594898479990661,
+    "decode_tok_s": 3.160500659881202,
+    "spec_passes": 0.0,
+    "spec_accepted": 0.0,
+    "tokens_per_pass": 1.0,
+    "identical_to_off": true
+   }
+  ],
+  "head:2": [
+   {
+    "kind": "chat",
+    "tokens": 34,
+    "ttft_s": 6.907802581001306,
+    "decode_tok_s": 3.341224002022573,
+    "spec_passes": 26.0,
+    "spec_accepted": 8.0,
+    "tokens_per_pass": 1.3076923076923077,
+    "identical_to_off": true
+   },
+   {
+    "kind": "code",
+    "tokens": 96,
+    "ttft_s": 3.762991180999961,
+    "decode_tok_s": 4.248123304342513,
+    "spec_passes": 57.0,
+    "spec_accepted": 38.0,
+    "tokens_per_pass": 1.6666666666666667,
+    "identical_to_off": true
+   },
+   {
+    "kind": "chat",
+    "tokens": 96,
+    "ttft_s": 3.091314314995543,
+    "decode_tok_s": 4.3222620773940506,
+    "spec_passes": 58.0,
+    "spec_accepted": 37.0,
+    "tokens_per_pass": 1.6379310344827587,
+    "identical_to_off": true
+   },
+   {
+    "kind": "chat",
+    "tokens": 96,
+    "ttft_s": 3.2165087570028845,
+    "decode_tok_s": 3.3874874948801885,
+    "spec_passes": 70.0,
+    "spec_accepted": 25.0,
+    "tokens_per_pass": 1.3571428571428572,
+    "identical_to_off": true
+   },
+   {
+    "kind": "chat",
+    "tokens": 96,
+    "ttft_s": 1.9533134360026452,
+    "decode_tok_s": 3.8412554201676863,
+    "spec_passes": 60.0,
+    "spec_accepted": 35.0,
+    "tokens_per_pass": 1.5833333333333333,
+    "identical_to_off": true
+   },
+   {
+    "kind": "chat",
+    "tokens": 63,
+    "ttft_s": 6.2968685570012894,
+    "decode_tok_s": 3.6370644528203866,
+    "spec_passes": 42.0,
+    "spec_accepted": 21.0,
+    "tokens_per_pass": 1.5,
+    "identical_to_off": true
+   },
+   {
+    "kind": "chat",
+    "tokens": 96,
+    "ttft_s": 2.9759553909971146,
+    "decode_tok_s": 3.8430661379318134,
+    "spec_passes": 62.0,
+    "spec_accepted": 33.0,
+    "tokens_per_pass": 1.532258064516129,
+    "identical_to_off": true
+   },
+   {
+    "kind": "chat",
+    "tokens": 96,
+    "ttft_s": 3.2657839489984326,
+    "decode_tok_s": 4.10612490677563,
+    "spec_passes": 61.0,
+    "spec_accepted": 34.0,
+    "tokens_per_pass": 1.5573770491803278,
+    "identical_to_off": true
+   },
+   {
+    "kind": "code",
+    "tokens": 96,
+    "ttft_s": 1.7385995029981132,
+    "decode_tok_s": 3.7230205836648875,
+    "spec_passes": 67.0,
+    "spec_accepted": 28.0,
+    "tokens_per_pass": 1.4179104477611941,
+    "identical_to_off": true
+   },
+   {
+    "kind": "code",
+    "tokens": 96,
+    "ttft_s": 1.5939989239996066,
+    "decode_tok_s": 3.854143666510736,
+    "spec_passes": 63.0,
+    "spec_accepted": 32.0,
+    "tokens_per_pass": 1.507936507936508,
+    "identical_to_off": true
+   },
+   {
+    "kind": "code",
+    "tokens": 29,
+    "ttft_s": 1.8321874899993418,
+    "decode_tok_s": 3.258300548664062,
+    "spec_passes": 22.0,
+    "spec_accepted": 7.0,
+    "tokens_per_pass": 1.3181818181818181,
+    "identical_to_off": true
+   },
+   {
+    "kind": "code",
+    "tokens": 96,
+    "ttft_s": 1.833578331003082,
+    "decode_tok_s": 3.691711340611518,
+    "spec_passes": 63.0,
+    "spec_accepted": 32.0,
+    "tokens_per_pass": 1.507936507936508,
+    "identical_to_off": true
+   }
+  ],
+  "head:3": [
+   {
+    "kind": "chat",
+    "tokens": 34,
+    "ttft_s": 7.796381066000322,
+    "decode_tok_s": 3.1638960044888353,
+    "spec_passes": 24.0,
+    "spec_accepted": 10.0,
+    "tokens_per_pass": 1.4166666666666667,
+    "identical_to_off": true
+   },
+   {
+    "kind": "code",
+    "tokens": 96,
+    "ttft_s": 3.797013628005516,
+    "decode_tok_s": 4.895788586088704,
+    "spec_passes": 45.0,
+    "spec_accepted": 50.0,
+    "tokens_per_pass": 2.111111111111111,
+    "identical_to_off": true
+   },
+   {
+    "kind": "chat",
+    "tokens": 96,
+    "ttft_s": 3.1902567349970923,
+    "decode_tok_s": 5.17223921191297,
+    "spec_passes": 45.0,
+    "spec_accepted": 50.0,
+    "tokens_per_pass": 2.111111111111111,
+    "identical_to_off": true
+   },
+   {
+    "kind": "chat",
+    "tokens": 96,
+    "ttft_s": 2.5599308909950196,
+    "decode_tok_s": 3.4207461566589634,
+    "spec_passes": 64.0,
+    "spec_accepted": 31.0,
+    "tokens_per_pass": 1.484375,
+    "identical_to_off": true
+   },
+   {
+    "kind": "chat",
+    "tokens": 96,
+    "ttft_s": 2.019296441001643,
+    "decode_tok_s": 4.528989032240914,
+    "spec_passes": 48.0,
+    "spec_accepted": 47.0,
+    "tokens_per_pass": 1.9791666666666667,
+    "identical_to_off": true
+   },
+   {
+    "kind": "chat",
+    "tokens": 63,
+    "ttft_s": 6.154213354995591,
+    "decode_tok_s": 4.183110382213505,
+    "spec_passes": 34.0,
+    "spec_accepted": 29.0,
+    "tokens_per_pass": 1.8529411764705883,
+    "identical_to_off": true
+   },
+   {
+    "kind": "chat",
+    "tokens": 96,
+    "ttft_s": 3.0067015349995927,
+    "decode_tok_s": 3.9274696105765483,
+    "spec_passes": 56.0,
+    "spec_accepted": 39.0,
+    "tokens_per_pass": 1.6964285714285714,
+    "identical_to_off": true
+   },
+   {
+    "kind": "chat",
+    "tokens": 96,
+    "ttft_s": 3.436816934001399,
+    "decode_tok_s": 4.185271243662547,
+    "spec_passes": 52.0,
+    "spec_accepted": 43.0,
+    "tokens_per_pass": 1.8269230769230769,
+    "identical_to_off": true
+   },
+   {
+    "kind": "code",
+    "tokens": 96,
+    "ttft_s": 1.9597444249957334,
+    "decode_tok_s": 3.5746183068190858,
+    "spec_passes": 61.0,
+    "spec_accepted": 34.0,
+    "tokens_per_pass": 1.5573770491803278,
+    "identical_to_off": true
+   },
+   {
+    "kind": "code",
+    "tokens": 96,
+    "ttft_s": 1.6833475100065698,
+    "decode_tok_s": 4.1090502736235806,
+    "spec_passes": 51.0,
+    "spec_accepted": 44.0,
+    "tokens_per_pass": 1.8627450980392157,
+    "identical_to_off": true
+   },
+   {
+    "kind": "code",
+    "tokens": 29,
+    "ttft_s": 2.08045888000197,
+    "decode_tok_s": 3.3845735089983484,
+    "spec_passes": 20.0,
+    "spec_accepted": 9.0,
+    "tokens_per_pass": 1.45,
+    "identical_to_off": true
+   },
+   {
+    "kind": "code",
+    "tokens": 96,
+    "ttft_s": 2.17605560899392,
+    "decode_tok_s": 3.710673623996552,
+    "spec_passes": 58.0,
+    "spec_accepted": 37.0,
+    "tokens_per_pass": 1.6379310344827587,
+    "identical_to_off": true
+   }
+  ],
+  "head:4": [
+   {
+    "kind": "chat",
+    "tokens": 34,
+    "ttft_s": 13.096899386997393,
+    "decode_tok_s": 2.8956653928402867,
+    "spec_passes": 23.0,
+    "spec_accepted": 11.0,
+    "tokens_per_pass": 1.4782608695652173,
+    "identical_to_off": true
+   },
+   {
+    "kind": "code",
+    "tokens": 96,
+    "ttft_s": 3.825346575002186,
+    "decode_tok_s": 5.211822757249249,
+    "spec_passes": 37.0,
+    "spec_accepted": 58.0,
+    "tokens_per_pass": 2.5675675675675675,
+    "identical_to_off": true
+   },
+   {
+    "kind": "chat",
+    "tokens": 96,
+    "ttft_s": 3.031149873000686,
+    "decode_tok_s": 5.315539221044803,
+    "spec_passes": 39.0,
+    "spec_accepted": 56.0,
+    "tokens_per_pass": 2.4358974358974357,
+    "identical_to_off": true
+   },
+   {
+    "kind": "chat",
+    "tokens": 96,
+    "ttft_s": 2.643878859002143,
+    "decode_tok_s": 3.1913870576263057,
+    "spec_passes": 64.0,
+    "spec_accepted": 31.0,
+    "tokens_per_pass": 1.484375,
+    "identical_to_off": true
+   },
+   {
+    "kind": "chat",
+    "tokens": 96,
+    "ttft_s": 1.8231874909979524,
+    "decode_tok_s": 5.581337580012513,
+    "spec_passes": 38.0,
+    "spec_accepted": 57.0,
+    "tokens_per_pass": 2.5,
+    "identical_to_off": true
+   },
+   {
+    "kind": "chat",
+    "tokens": 63,
+    "ttft_s": 4.936253523999767,
+    "decode_tok_s": 4.398872865113348,
+    "spec_passes": 32.0,
+    "spec_accepted": 31.0,
+    "tokens_per_pass": 1.96875,
+    "identical_to_off": true
+   },
+   {
+    "kind": "chat",
+    "tokens": 96,
+    "ttft_s": 2.734302580996882,
+    "decode_tok_s": 4.037664441162143,
+    "spec_passes": 51.0,
+    "spec_accepted": 44.0,
+    "tokens_per_pass": 1.8627450980392157,
+    "identical_to_off": true
+   },
+   {
+    "kind": "chat",
+    "tokens": 96,
+    "ttft_s": 2.991381314001046,
+    "decode_tok_s": 4.772163428762566,
+    "spec_passes": 47.0,
+    "spec_accepted": 48.0,
+    "tokens_per_pass": 2.021276595744681,
+    "identical_to_off": true
+   },
+   {
+    "kind": "code",
+    "tokens": 96,
+    "ttft_s": 1.68268060599803,
+    "decode_tok_s": 3.576635926772316,
+    "spec_passes": 60.0,
+    "spec_accepted": 35.0,
+    "tokens_per_pass": 1.5833333333333333,
+    "identical_to_off": true
+   },
+   {
+    "kind": "code",
+    "tokens": 96,
+    "ttft_s": 1.523932556003274,
+    "decode_tok_s": 4.4340298447241056,
+    "spec_passes": 48.0,
+    "spec_accepted": 47.0,
+    "tokens_per_pass": 1.9791666666666667,
+    "identical_to_off": true
+   },
+   {
+    "kind": "code",
+    "tokens": 29,
+    "ttft_s": 1.9262657709987252,
+    "decode_tok_s": 3.1674306220473087,
+    "spec_passes": 20.0,
+    "spec_accepted": 9.0,
+    "tokens_per_pass": 1.45,
+    "identical_to_off": true
+   },
+   {
+    "kind": "code",
+    "tokens": 96,
+    "ttft_s": 2.045842860999983,
+    "decode_tok_s": 3.9194040396973375,
+    "spec_passes": 55.0,
+    "spec_accepted": 40.0,
+    "tokens_per_pass": 1.7272727272727273,
+    "identical_to_off": true
+   }
+  ],
+  "lookup:3": [
+   {
+    "kind": "chat",
+    "tokens": 34,
+    "ttft_s": 6.078331382996112,
+    "decode_tok_s": 2.5275216854042983,
+    "spec_passes": 34.0,
+    "spec_accepted": 0.0,
+    "tokens_per_pass": 1.0,
+    "identical_to_off": true
+   },
+   {
+    "kind": "code",
+    "tokens": 96,
+    "ttft_s": 3.7829335429996718,
+    "decode_tok_s": 4.987383232365462,
+    "spec_passes": 48.0,
+    "spec_accepted": 47.0,
+    "tokens_per_pass": 1.9791666666666667,
+    "identical_to_off": true
+   },
+   {
+    "kind": "chat",
+    "tokens": 96,
+    "ttft_s": 2.787821746998816,
+    "decode_tok_s": 3.794200854326225,
+    "spec_passes": 69.0,
+    "spec_accepted": 26.0,
+    "tokens_per_pass": 1.3768115942028984,
+    "identical_to_off": true
+   },
+   {
+    "kind": "chat",
+    "tokens": 96,
+    "ttft_s": 2.6571827629959444,
+    "decode_tok_s": 2.915624924072951,
+    "spec_passes": 88.0,
+    "spec_accepted": 7.0,
+    "tokens_per_pass": 1.0795454545454546,
+    "identical_to_off": true
+   },
+   {
+    "kind": "chat",
+    "tokens": 96,
+    "ttft_s": 1.9783267540042289,
+    "decode_tok_s": 2.7104870442130626,
+    "spec_passes": 90.0,
+    "spec_accepted": 5.0,
+    "tokens_per_pass": 1.0555555555555556,
+    "identical_to_off": true
+   },
+   {
+    "kind": "chat",
+    "tokens": 63,
+    "ttft_s": 5.343757490001735,
+    "decode_tok_s": 3.5542464970669796,
+    "spec_passes": 45.0,
+    "spec_accepted": 18.0,
+    "tokens_per_pass": 1.4,
+    "identical_to_off": true
+   },
+   {
+    "kind": "chat",
+    "tokens": 96,
+    "ttft_s": 2.7588575789995957,
+    "decode_tok_s": 2.8230905743435484,
+    "spec_passes": 87.0,
+    "spec_accepted": 8.0,
+    "tokens_per_pass": 1.0919540229885059,
+    "identical_to_off": true
+   },
+   {
+    "kind": "chat",
+    "tokens": 96,
+    "ttft_s": 3.2536566510025295,
+    "decode_tok_s": 3.2990890936782105,
+    "spec_passes": 74.0,
+    "spec_accepted": 21.0,
+    "tokens_per_pass": 1.2837837837837838,
+    "identical_to_off": true
+   },
+   {
+    "kind": "code",
+    "tokens": 96,
+    "ttft_s": 1.9143453830038197,
+    "decode_tok_s": 3.0194871814692776,
+    "spec_passes": 81.0,
+    "spec_accepted": 14.0,
+    "tokens_per_pass": 1.1728395061728396,
+    "identical_to_off": true
+   },
+   {
+    "kind": "code",
+    "tokens": 96,
+    "ttft_s": 1.7928835139973671,
+    "decode_tok_s": 2.7606668373950076,
+    "spec_passes": 88.0,
+    "spec_accepted": 7.0,
+    "tokens_per_pass": 1.0795454545454546,
+    "identical_to_off": true
+   },
+   {
+    "kind": "code",
+    "tokens": 29,
+    "ttft_s": 1.712687099003233,
+    "decode_tok_s": 2.770856255819062,
+    "spec_passes": 28.0,
+    "spec_accepted": 1.0,
+    "tokens_per_pass": 1.0357142857142858,
+    "identical_to_off": true
+   },
+   {
+    "kind": "code",
+    "tokens": 96,
+    "ttft_s": 1.7044481420016382,
+    "decode_tok_s": 2.711714640633084,
+    "spec_passes": 91.0,
+    "spec_accepted": 4.0,
+    "tokens_per_pass": 1.043956043956044,
+    "identical_to_off": true
+   }
+  ]
+ },
+ "summary": {
+  "off": {
+   "chat": {
+    "prompts": 7,
+    "tokens": 577,
+    "tokens_per_pass": 1.0,
+    "decode_tok_s_median": 3.23,
+    "decode_tok_s_pooled": 3.223,
+    "all_identical_to_off": true
+   },
+   "code": {
+    "prompts": 5,
+    "tokens": 413,
+    "tokens_per_pass": 1.0,
+    "decode_tok_s_median": 3.241,
+    "decode_tok_s_pooled": 3.225,
+    "all_identical_to_off": true
+   }
+  },
+  "head:2": {
+   "chat": {
+    "prompts": 7,
+    "tokens": 577,
+    "tokens_per_pass": 1.509,
+    "decode_tok_s_median": 3.841,
+    "decode_tok_s_pooled": 3.812,
+    "all_identical_to_off": true
+   },
+   "code": {
+    "prompts": 5,
+    "tokens": 413,
+    "tokens_per_pass": 1.504,
+    "decode_tok_s_median": 3.723,
+    "decode_tok_s_pooled": 3.818,
+    "all_identical_to_off": true
+   }
+  },
+  "head:3": {
+   "chat": {
+    "prompts": 7,
+    "tokens": 577,
+    "tokens_per_pass": 1.771,
+    "decode_tok_s_median": 4.183,
+    "decode_tok_s_pooled": 4.093,
+    "all_identical_to_off": true
+   },
+   "code": {
+    "prompts": 5,
+    "tokens": 413,
+    "tokens_per_pass": 1.74,
+    "decode_tok_s_median": 3.711,
+    "decode_tok_s_pooled": 3.962,
+    "all_identical_to_off": true
+   }
+  },
+  "head:4": {
+   "chat": {
+    "prompts": 7,
+    "tokens": 577,
+    "tokens_per_pass": 1.946,
+    "decode_tok_s_median": 4.399,
+    "decode_tok_s_pooled": 4.267,
+    "all_identical_to_off": true
+   },
+   "code": {
+    "prompts": 5,
+    "tokens": 413,
+    "tokens_per_pass": 1.859,
+    "decode_tok_s_median": 3.919,
+    "decode_tok_s_pooled": 4.109,
+    "all_identical_to_off": true
+   }
+  },
+  "lookup:3": {
+   "chat": {
+    "prompts": 7,
+    "tokens": 577,
+    "tokens_per_pass": 1.175,
+    "decode_tok_s_median": 2.916,
+    "decode_tok_s_pooled": 3.071,
+    "all_identical_to_off": true
+   },
+   "code": {
+    "prompts": 5,
+    "tokens": 413,
+    "tokens_per_pass": 1.217,
+    "decode_tok_s_median": 2.771,
+    "decode_tok_s_pooled": 3.137,
+    "all_identical_to_off": true
+   }
+  }
+ }
+}
