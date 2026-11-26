@@ -896,6 +896,37 @@ JOBS["pgw-sdk-pins"] = {"gpu": False, "exclude": ["tests", "benchmarks", "rust",
 ]}
 
 
+# Pins of the large release models (14B / 32B / 72B) with the shard-wise packer (pgw.modelpack.shardwise): one
+# checkpoint shard on disk at a time, hash only (no pack written), so 72B needs ~4.5 GB of scratch (9 GB with one
+# shard prefetched) instead of 145 GB + 75 GB. One kernel per model (each under 3 h). 14B also writes the pack
+# shard-wise, verifies it in full and compares it file by file with pack_checkpoint on the whole checkpoint.
+def _pin_step(tag: str, model: str, extra: str, timeout: int) -> dict:
+    return {"kind": "shell", "name": f"pin_{tag}",
+            "cmd": f"mkdir -p /tmp/pinwork && HF_XET_CHUNK_CACHE_SIZE_BYTES=0 PYTHONPATH=src "
+                   f"python scripts/pin_model_fingerprints.py {model} "
+                   f"{extra} --work /tmp/pinwork > /tmp/pin_{tag}.out; rc=$?; "
+                   f"cat /tmp/pin_{tag}.out >> /kaggle/working/pins.jsonl; cat /tmp/pin_{tag}.out; df -h /tmp; "
+                   f"du -sh ~/.cache/huggingface 2>/dev/null; {_HF_DROP}; exit $rc", "timeout": timeout}
+
+
+def _large_pin_job(tag: str, model: str, steps: list[dict]) -> dict:
+    return {**JOBS["pgw-sdk-pins"], "steps": [
+        {"kind": "shell", "name": "cpu_info", "cmd": "nproc; free -g; df -h / /tmp /kaggle/working; "
+         "python -c 'import huggingface_hub as h; print(h.__version__)'", "timeout": 60},
+        {"kind": "shell", "name": f"plan_{tag}", "cmd": f"PYTHONPATH=src python scripts/pin_model_fingerprints.py "
+         f"{model} --plan --prefetch 1 | tee -a /kaggle/working/plans.jsonl", "timeout": 600},
+        *steps]}
+
+
+JOBS["pgw-sdk-pins-14b"] = _large_pin_job("14b", "qwen2.5-14b-instruct", [
+    _pin_step("14b", "qwen2.5-14b-instruct", "--prefetch 1", 3600),
+    _pin_step("14b_write", "qwen2.5-14b-instruct", "--write-pack --compare-packer", 5400)])
+JOBS["pgw-sdk-pins-32b"] = _large_pin_job("32b", "qwen2.5-32b-instruct", [
+    _pin_step("32b", "qwen2.5-32b-instruct", "--prefetch 1", 7200)])
+JOBS["pgw-sdk-pins-72b"] = _large_pin_job("72b", "qwen2.5-72b-instruct", [
+    _pin_step("72b", "qwen2.5-72b-instruct", "--prefetch 1", 10200)])
+
+
 # The client library end to end on a T4 (benchmarks/sdk_e2e_gpu.py): provider service on CUDA, ``from pgw import
 # OpenAI`` with the defaults (pks-v3, hint built locally) on loopback, empty cache; provisioning, first answer, TTFT,
 # steady tokens/s, streaming, multi-turn, revocation, every answer checked bit for bit against the gateway path.

@@ -80,9 +80,13 @@ class ModelPin:
 #: ``scripts/pin_model_fingerprints.py`` (the repository's pack tool on the public checkpoints at these commits). All
 #: four on a Kaggle CPU kernel (2026-11-26, results/kaggle/sdk-pins-format2), 0.5B and 1.5B also on the integration
 #: box (identical); the same run reproduced each format-1 pin (2026-11-25) and checked the format-1 and format-2
-#: packs load bit-identical float32 tensors. A pin without a fingerprint (a future model) is
-#: checked by re-deriving the pack from the public checkpoint on first provisioning. The commits are the provider's
-#: (deploy/runpod/pod_boot.MODELS).
+#: packs load bit-identical float32 tensors. 14B / 32B / 72B (pinned ahead of ``SUPPORTED_MODELS``, so their first
+#: use needs no checkpoint either): one Kaggle CPU kernel each (2026-11-26, results/kaggle/sdk-pins-{14b,32b,72b}) with
+#: the shard-wise packer (:mod:`pgw.modelpack.shardwise`, hash only; byte-identical to ``pack_checkpoint``, at 14B
+#: also written, verified in full and compared file by file with ``pack_checkpoint`` on the whole checkpoint). A pin
+#: without a fingerprint (a future model) is checked by re-deriving the pack from the public checkpoint on first
+#: provisioning (shard by shard). The commits are the provider's (deploy/runpod/pod_boot.MODELS) where it has the
+#: model; 14B and 72B: the hub's main at derivation time.
 PINNED_MODELS: dict[str, ModelPin] = {
     "qwen2.5-0.5b-instruct": ModelPin("Qwen/Qwen2.5-0.5B-Instruct", "7ae557604adf67be50417f59c2c2f167def9a775",
                                       "d773a502fb976d45070332cbd4222ee30bc971d14c7f9c56a317805c230c0b44"),
@@ -92,6 +96,12 @@ PINNED_MODELS: dict[str, ModelPin] = {
                                     "0ec0b8b24b2bc59632d9530e1bfd749b082c101f82c5ff819f8e8c5ff4d8d752"),
     "qwen2.5-7b-instruct": ModelPin("Qwen/Qwen2.5-7B-Instruct", "a09a35458c702b33eeacc393d103063234e8bc28",
                                     "f7c6fb4f5f8fbc5e4149972c07afdc749de8e5f9adc604d30edb7eb94b834b67"),
+    "qwen2.5-14b-instruct": ModelPin("Qwen/Qwen2.5-14B-Instruct", "cf98f3b3bbb457ad9e2bb7baf9a0125b6b88caa8",
+                                     "d4afbe77ff07ee3e0b9fc2f1c2074930e2f8acfd358b73d3e4cdc5329c34c0b4"),
+    "qwen2.5-32b-instruct": ModelPin("Qwen/Qwen2.5-32B-Instruct", "5ede1c97bbab6ce5cda5812749b4c0bdf79b18dd",
+                                     "a4cf6ba9ac2b654fdd8a14b850a792772d7f3f918d671b0b6a124b01020dd372"),
+    "qwen2.5-72b-instruct": ModelPin("Qwen/Qwen2.5-72B-Instruct", "495f39366efef23836d0cfae4fbe635880d2be31",
+                                     "5e8001c02d7903a66f56d01f99890d56bff3bc5373eeaa451b80ceb0b98ab02f"),
 }
 
 

@@ -299,7 +299,8 @@ def test_provider_provisioner_pins_and_defaults(monkeypatch: pytest.MonkeyPatch,
     from pgw.sdk.provisioning import PINNED_MODELS, ProviderProvisioner, default_provisioner
 
     assert set(PINNED_MODELS) == {"qwen2.5-0.5b-instruct", "qwen2.5-1.5b-instruct", "qwen2.5-3b-instruct",
-                                  "qwen2.5-7b-instruct"}
+                                  "qwen2.5-7b-instruct", "qwen2.5-14b-instruct", "qwen2.5-32b-instruct",
+                                  "qwen2.5-72b-instruct"}
     calls: list[Any] = []
     monkeypatch.setattr(pc, "provision", _fake_provision(calls, tmp_path))
     pin = PINNED_MODELS["qwen2.5-0.5b-instruct"]
@@ -331,13 +332,17 @@ def test_provider_provisioner_pins_and_defaults(monkeypatch: pytest.MonkeyPatch,
         SDKOptions(model_fingerprints={"x": "nope"}).validate()
 
 
-#: The release's pack fingerprints, pack format 2 (scripts/pin_model_fingerprints.py on a Kaggle CPU kernel,
-#: results/kaggle/sdk-pins-format2; 0.5B / 1.5B also on the integration box, identical).
+#: The release's pack fingerprints, pack format 2 (scripts/pin_model_fingerprints.py on Kaggle CPU kernels:
+#: results/kaggle/sdk-pins-format2 for 0.5B-7B, 0.5B / 1.5B also on the integration box, identical;
+#: results/kaggle/sdk-pins-{14b,32b,72b} for the larger ones, with the shard-wise packer).
 RELEASE_FINGERPRINTS = {
     "qwen2.5-0.5b-instruct": "d773a502fb976d45070332cbd4222ee30bc971d14c7f9c56a317805c230c0b44",
     "qwen2.5-1.5b-instruct": "3d198de49e61c32b43150c237c0fad0f1ec062f0a355df75d64706bbac8d70d9",
     "qwen2.5-3b-instruct": "0ec0b8b24b2bc59632d9530e1bfd749b082c101f82c5ff819f8e8c5ff4d8d752",
     "qwen2.5-7b-instruct": "f7c6fb4f5f8fbc5e4149972c07afdc749de8e5f9adc604d30edb7eb94b834b67",
+    "qwen2.5-14b-instruct": "d4afbe77ff07ee3e0b9fc2f1c2074930e2f8acfd358b73d3e4cdc5329c34c0b4",
+    "qwen2.5-32b-instruct": "a4cf6ba9ac2b654fdd8a14b850a792772d7f3f918d671b0b6a124b01020dd372",
+    "qwen2.5-72b-instruct": "5e8001c02d7903a66f56d01f99890d56bff3bc5373eeaa451b80ceb0b98ab02f",
 }
 
 
@@ -350,16 +355,19 @@ def test_every_release_model_has_a_baked_fingerprint(monkeypatch: pytest.MonkeyP
     from pgw.sdk.provisioning import PINNED_MODELS, ProviderProvisioner
 
     assert {m: p.fingerprint for m, p in PINNED_MODELS.items()} == RELEASE_FINGERPRINTS
-    assert set(SUPPORTED_MODELS) == set(PINNED_MODELS)
+    # the supported models, and the larger ones pinned ahead of support (their first use never needs the checkpoint)
+    assert set(SUPPORTED_MODELS) <= set(PINNED_MODELS)
     pod_boot = Path(__file__).resolve().parents[2] / "deploy" / "runpod" / "pod_boot.py"
     if pod_boot.is_file():
         src = pod_boot.read_text()
-        for p in PINNED_MODELS.values():
-            assert f'("{p.hf_repo}", "{p.revision}")' in src
+        for m, p in PINNED_MODELS.items():
+            if m in SUPPORTED_MODELS or f'"{p.hf_repo}"' in src:  # the provider image's commit, where it has one
+                assert f'("{p.hf_repo}", "{p.revision}")' in src
     calls: list[Any] = []
     monkeypatch.setattr(pc, "provision", _fake_provision(calls, tmp_path))
     prov = ProviderProvisioner()
-    for m in ("qwen2.5-3b-instruct", "qwen2.5-7b-instruct"):
+    for m in ("qwen2.5-3b-instruct", "qwen2.5-7b-instruct", "qwen2.5-14b-instruct", "qwen2.5-32b-instruct",
+              "qwen2.5-72b-instruct"):
         entry = {"name": m, "fingerprint": RELEASE_FINGERPRINTS[m]}
         prov(m, session=_fake_session(tmp_path, entry), cache_dir=tmp_path)
         assert "source" not in calls[-1][1] and calls[-1][1]["expected_fingerprint"] == RELEASE_FINGERPRINTS[m]

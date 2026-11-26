@@ -3358,3 +3358,71 @@ Validated without RunPod:
 * the client SDK bench's CPU smoke.
 
 The unverified RunPod API details are listed in the runbook.
+
+## 2026-11-26: shard-wise streaming packer; baked pins for Qwen2.5-14B / 32B / 72B (first use without the checkpoint)
+
+Goal: SDK first use at 14B-72B without downloading the whole bfloat16 checkpoint (15 / 29 / 65 / 145 GB at 7B / 14B /
+32B / 72B, peak disk to match). Two parts: a packer that holds one checkpoint shard at a time, and baked format-2 pins
+for the three larger models so that clients never re-derive them.
+
+- **`pgw.modelpack.shardwise.stream_pack_checkpoint`** (new). Plans the whole pack from the safetensors *headers*
+  (hub range requests via `get_safetensors_metadata`, or local files; all shape / dtype / index checks of
+  `pack_checkpoint` up front), then walks the shards in order: fetch one (`hf_hub_download` into the work dir), pack
+  every linear group and plain tensor whose inputs are now all present, copy the tensors still needed by a group
+  that continues in a later shard into a spill file, delete the shard. Output files are planned once (same names,
+  header bytes and offsets as `pack_checkpoint`) and filled in any order (`st_io.SafetensorsRandomWriter`);
+  `out_dir=None` only hashes (pins). Quantization runs over row blocks of at most 64 M elements
+  (`quantize_weight_rows` is per row, so the bits are the whole-matrix ones; a unit test checks this across part
+  boundaries and a zero row). Resumable: `state.json` (per item: SHA-256 digests, `row_norm_sq_max`; finished
+  shards; spill files) is written after the item's bytes are fsynced, under a digest of the whole plan; a changed
+  plan starts over. The pack is assembled from the recorded digests, so an edited work dir yields a pack that fails
+  full verification (tested). A checkpoint already complete in the local HF cache is read in place. `prefetch=1`
+  overlaps the next download (one more shard on disk). `plan_summary()` gives the sizes from the headers alone.
+- **Exactness** (`tests/modelpack/test_shardwise.py`, 18 tests): every pack file byte-identical to `pack_checkpoint`
+  and the manifest equal except `created_at`; the hash-only manifest is equal too. Cases: the tiny Qwen2 (tied head,
+  q/k/v biases) virtually resharded 1 / 3 / 7 ways round-robin (almost every group straddles shards); a bfloat16
+  copy with tied and untied head, format 2 and format 1, as real shard files fetched and deleted one by one (never
+  two present); the tiny Llama; the hub path with `huggingface_hub` replaced by a local repo (one download at a time,
+  same manifest as `pack_checkpoint("org/tiny")` including `source`); the masked head (`MaskedHeadPack` W8, scales,
+  head fingerprint) identical tied and untied; **Qwen2.5-0.5B** (resharded like the hub, spill used): written pack
+  byte-identical, release pin `d773a502...` and format-1 pin `915e55c1...` reproduced; **Qwen2.5-1.5B** (round-robin
+  into 5 virtual shards): byte-identical, pins `3d198de4...` and format-1 `81bb7adc...` reproduced. Also: resume
+  after an interruption (write and hash-only), plan change, index mismatch and NaN rejections.
+  On Kaggle at **14B**: hash-only, shard-wise write + `verify="full"`, and `pack_checkpoint` on the whole checkpoint
+  give the same fingerprint, the same manifest and byte-identical files (`results/kaggle/sdk-pins-14b`).
+- **Uses**: `pgw.provision.client._full_from_hf` (the `source="hf"` public check of an unbaked pin, and
+  `weight_source(hf_repo=...)` for `factory_weights="stream"` with `factory_weights_source="hf"`) packs shard by
+  shard into `models/<fp16>/hf-stream` (resumable), then verifies the pack in full against the pin as before; a pack
+  that misses the pin is now deleted instead of left behind. `tests/provision/test_shardwise_provision.py` (3): one
+  shard on disk at a time on both paths, factory pack verified, a changed checkpoint refused with nothing installed.
+  `scripts/pin_model_fingerprints.py`: shard-wise hash-only by default; `--write-pack` (write + full verify),
+  `--compare-packer` (+ `pack_checkpoint`, files compared), `--prefetch`, `--plan`; `--compare-format1` unchanged
+  (whole-checkpoint packer). Kaggle jobs `pgw-sdk-pins-{14b,32b,72b}` in `benchmarks/kaggle/build.py`.
+- **New pins** (`PINNED_MODELS`, docs/sdk/models.md, CONTRACT.md A3), pack format 2, one Kaggle CPU kernel each
+  (4 vCPU, 31 GB), pushed one at a time through the REST API once the other agents' kernels had finished:
+  14B `d4afbe77ff07...` @ `cf98f3b3` (hub main), 32B `a4cf6ba9ac2b...` @ `5ede1c97` (the provider image's commit),
+  72B `5e8001c02d79...` @ `495f3936` (hub main). 32B / 72B were derived hash-only; their exactness rests on the
+  packer tests above and the 14B file-by-file comparison, not on a second packer run at that size.
+- **Measured, shard-wise hash-only with one shard prefetched** (Kaggle CPU; 0.5B / 1.5B on this box, cached, read in
+  place):
+
+  | | checkpoint | shards | peak scratch disk | spill peak | peak RSS anon (ru_maxrss) | time (download overlapped) |
+  |---|---|---|---|---|---|---|
+  | 0.5B | 0.99 GB | 1 | 0 (read in place) | 0 | 0.36 GB (2.0) | 27 s |
+  | 1.5B | 3.1 GB | 1 | 0 (read in place) | 0 | 1.11 GB (4.6) | 56 s |
+  | 14B | 29.5 GB | 8 | 8.1 GB | 0.14 GB | 4.4 GB (8.3) | 12.1 min |
+  | 32B | 65.5 GB | 17 | 8.4 GB | 0.57 GB | 4.2 GB (8.0) | 23.9 min |
+  | 72B | 145.4 GB | 37 | 8.5 GB | 0.48 GB | 6.2 GB (10.8) | 53.3 min |
+
+  Without prefetch the scratch peak is one shard plus the spill: 4.1 / 4.2 / 4.5 GB (header plan). `ru_maxrss` counts
+  the memory-mapped shard pages read; RssAnon is the process's own memory (largest item: the 2.5 GB bfloat16
+  `embed_tokens` at 72B). Time is quantization-bound on 4 vCPUs (2-11 min of it is download, overlapped). With the
+  pack written (the client's `source="hf"` path, 14B measured): peak 18.9 GB = one shard + the 16.3 GB pack, 13.7 min;
+  the whole-checkpoint path needed 29.5 + 16.3 GB. Client disk for an unbaked pin is now about 4 GB plus the int8
+  pack (8.7 / 16 / 34 / 75 GB at 7B / 14B / 32B / 72B) instead of the checkpoint plus the pack.
+- **Not changed**: `SUPPORTED_MODELS` (the SDK still accepts 0.5B-7B only; 14B-72B are pinned ahead of support, and
+  the test now requires `SUPPORTED_MODELS` to be a subset of the pins). The `pgw pack` CLI still uses
+  `pack_checkpoint`. Verification against pins is unchanged (full).
+- Tests (one dir at a time, absolute `PYTHONPATH`): tests/modelpack 128 passed / 1 skipped (CUDA); tests/provision
+  55 / 1; tests/sdk/test_unit.py 47, test_e2e_product + test_prepare 8 / 1 opt-in skip; tests/docs: only the earlier
+  failures (test_numbers logs, README index, `PGW_MASK_ADMISSION`).

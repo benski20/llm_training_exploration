@@ -1,0 +1,27 @@
+{"qwen2.5-72b-instruct": {"hf_repo": "Qwen/Qwen2.5-72B-Instruct", "revision": "495f39366efef23836d0cfae4fbe635880d2be31", "format": 2, "packer": "shardwise (hash only)", "stats": {"shards": 37, "fetched_gb": 145.413, "peak_scratch_gb": 8.487, "spill_peak_gb": 0.484, "peak_rss_gb": 10.769, "peak_rss_anon_gb": 6.219, "fetch_s": 638.2, "compute_s": 3176.7, "seconds": 3195.5}, "fingerprint": "5e8001c02d7903a66f56d01f99890d56bff3bc5373eeaa451b80ceb0b98ab02f", "baked": null, "matches": null}}
+Filesystem      Size  Used Avail Use% Mounted on
+overlay         8.0T  5.6T  2.5T  70% /
+3.9M	/root/.cache/huggingface
+
+---stderr---
+Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+
+Parse safetensors files:   0%|          | 0/37 [00:00<?, ?it/s]
+Parse safetensors files:   3%|▎         | 1/37 [00:00<00:23,  1.55it/s]
+Parse safetensors files:   8%|▊         | 3/37 [00:00<00:07,  4.71it/s]
+Parse safetensors files:  14%|█▎        | 5/37 [00:00<00:04,  7.26it/s]
+Parse safetensors files:  22%|██▏       | 8/37 [00:01<00:02,  9.78it/s]
+Parse safetensors files:  27%|██▋       | 10/37 [00:01<00:02,  9.65it/s]
+Parse safetensors files:  32%|███▏      | 12/37 [00:01<00:03,  7.12it/s]
+Parse safetensors files:  38%|███▊      | 14/37 [00:01<00:02,  8.87it/s]
+Parse safetensors files:  43%|████▎     | 16/37 [00:02<00:02,  9.69it/s]
+Parse safetensors files:  49%|████▊     | 18/37 [00:02<00:01, 10.25it/s]
+Parse safetensors files:  54%|█████▍    | 20/37 [00:02<00:02,  7.41it/s]
+Parse safetensors files:  59%|█████▉    | 22/37 [00:02<00:01,  8.40it/s]
+Parse safetensors files:  65%|██████▍   | 24/37 [00:02<00:01, 10.06it/s]
+Parse safetensors files:  70%|███████   | 26/37 [00:03<00:01, 10.62it/s]
+Parse safetensors files:  76%|███████▌  | 28/37 [00:03<00:01,  8.98it/s]
+Parse safetensors files:  81%|████████  | 30/37 [00:03<00:00,  8.09it/s]
+Parse safetensors files:  89%|████████▉ | 33/37 [00:03<00:00, 10.49it/s]
+Parse safetensors files:  95%|█████████▍| 35/37 [00:04<00:00,  9.97it/s]
+Parse safetensors files: 100%|██████████| 37/37 [00:04<00:00,  8.94it/s]

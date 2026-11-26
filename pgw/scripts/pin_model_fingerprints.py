@@ -5,16 +5,28 @@ For each model, packs the public Hugging Face checkpoint at the pinned commit ex
 (``pgw pack <repo> <dir> --name <model> --revision <commit>``, default packing parameters: pack format 2), prints
 the fingerprint and removes the pack. Compare with (or paste into) ``PINNED_MODELS``.
 
-    PYTHONPATH=src python scripts/pin_model_fingerprints.py                       # every release model
-    PYTHONPATH=src python scripts/pin_model_fingerprints.py qwen2.5-7b-instruct   # one model
-    HF_HUB_OFFLINE=1 PYTHONPATH=src python scripts/pin_model_fingerprints.py      # checkpoints already cached
-    PYTHONPATH=src python scripts/pin_model_fingerprints.py --compare-format1     # + the exactness evidence
+The default packer is the shard-wise one (:func:`pgw.modelpack.shardwise.stream_pack_checkpoint`): one checkpoint
+shard on disk at a time (download, pack, delete), in hash-only mode (the manifest and fingerprint are computed from
+the bytes the pack would hold; nothing is written), so 72B needs about 4.5 GB of scratch disk instead of 145 GB for
+the checkpoint plus 75 GB for the pack. It is byte-identical to ``pack_checkpoint`` (tests/modelpack/test_shardwise.py).
 
-``--compare-format1`` also packs the checkpoint in format 1 (``plain_dtype="float32"``, the packs pinned before
-2026-11-26), checks that it reproduces the format-1 pin (:data:`FORMAT1_PINS`: same bytes as the old packer), and
-compares the two packs: the dtype of each plain tensor in the checkpoint and in the format-2 pack, every plain
-tensor as loaded (float32) bit for bit, and every linear tensor entry (dtype, shape, SHA-256). Needs disk for two
-packs at a time (about 2 GB at 0.5B, 22 GB at 7B).
+    PYTHONPATH=src python scripts/pin_model_fingerprints.py                       # every release model
+    PYTHONPATH=src python scripts/pin_model_fingerprints.py qwen2.5-72b-instruct  # one model
+    HF_HUB_OFFLINE=1 PYTHONPATH=src python scripts/pin_model_fingerprints.py      # checkpoints already cached
+    PYTHONPATH=src python scripts/pin_model_fingerprints.py --plan qwen2.5-72b-instruct   # sizes from the headers
+    PYTHONPATH=src python scripts/pin_model_fingerprints.py --write-pack ...      # write the pack, verify in full
+    PYTHONPATH=src python scripts/pin_model_fingerprints.py --compare-packer ...  # + pack_checkpoint, same bytes
+    PYTHONPATH=src python scripts/pin_model_fingerprints.py --compare-format1     # + the format-2 exactness evidence
+
+``--write-pack`` writes the pack shard-wise and opens it with ``verify="full"`` (every byte re-hashed). Needs disk
+for one shard plus the pack. ``--compare-packer`` also packs the whole checkpoint with ``pack_checkpoint`` and
+requires every file byte-identical and the same manifest (needs the whole checkpoint plus two packs).
+
+``--compare-format1`` (whole-checkpoint packer) also packs the checkpoint in format 1 (``plain_dtype="float32"``,
+the packs pinned before 2026-11-26), checks that it reproduces the format-1 pin (:data:`FORMAT1_PINS`: same bytes
+as the old packer), and compares the two packs: the dtype of each plain tensor in the checkpoint and in the format-2
+pack, every plain tensor as loaded (float32) bit for bit, and every linear tensor entry (dtype, shape, SHA-256).
+Needs disk for two packs at a time (about 2 GB at 0.5B, 22 GB at 7B).
 """
 
 from __future__ import annotations
@@ -72,14 +84,41 @@ def _compare(p1: Any, p2: Any, ckpt: Path) -> dict[str, Any]:
     }
 
 
+def _digests(root: Path) -> dict[str, str]:
+    import hashlib
+
+    out = {}
+    for p in sorted(root.rglob("*")):
+        if p.is_file() and p.name != "manifest.json":
+            h = hashlib.sha256()
+            with open(p, "rb") as f:
+                while b := f.read(8 << 20):
+                    h.update(b)
+            out[str(p.relative_to(root))] = h.hexdigest()
+    return out
+
+
+def _gb(x: float) -> float:
+    return round(float(x) / 1e9, 3)
+
+
 def main() -> int:
-    from pgw.modelpack import ModelPack, pack_checkpoint
+    from pgw.modelpack import Manifest, ModelPack, pack_checkpoint
     from pgw.modelpack.packer import _resolve_source
+    from pgw.modelpack.shardwise import plan_summary, stream_pack_checkpoint
     from pgw.sdk.provisioning import PINNED_MODELS
 
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("models", nargs="*", default=sorted(PINNED_MODELS), help="model names (default: all)")
     ap.add_argument("--work", type=Path, default=None, help="scratch directory (default: a temporary one)")
+    ap.add_argument("--packer", choices=("shardwise", "whole"), default="shardwise",
+                    help="shard-wise streaming packer (default) or pack_checkpoint on the whole checkpoint")
+    ap.add_argument("--write-pack", action="store_true",
+                    help="shard-wise: write the pack and verify it in full (default: hash only, nothing written)")
+    ap.add_argument("--compare-packer", action="store_true",
+                    help="also pack with pack_checkpoint (whole checkpoint) and require byte-identical files")
+    ap.add_argument("--prefetch", type=int, default=0, help="shard-wise: shards downloaded ahead (disk: +1 shard)")
+    ap.add_argument("--plan", action="store_true", help="only print the header-only plan (sizes; no download)")
     ap.add_argument("--compare-format1", action="store_true",
                     help="also pack format 1, check it against FORMAT1_PINS and compare the packs bit for bit")
     args = ap.parse_args()
@@ -89,10 +128,46 @@ def main() -> int:
         work = Path(tempfile.mkdtemp(prefix="pgw-pin-", dir=args.work))
         rec: dict[str, Any] = {"hf_repo": pin.hf_repo, "revision": pin.revision}
         try:
-            pack_checkpoint(pin.hf_repo, work / "pack", name=name, revision=pin.revision)
-            with ModelPack.open(work / "pack", verify="full") as p:
-                fp = p.fingerprint
-                rec["format"] = p.manifest.version
+            if args.plan:
+                s = plan_summary(pin.hf_repo, work_dir=work / "plan", revision=pin.revision, prefetch=args.prefetch)
+                print(json.dumps({name: {k: (_gb(v) if k.endswith("bytes") else v) for k, v in s.items()
+                                         if k != "shards"} | {"shards": len(s["shards"])}}), flush=True)
+                continue
+            if args.packer == "whole" or args.compare_format1:
+                pack_checkpoint(pin.hf_repo, work / "pack", name=name, revision=pin.revision)
+                with ModelPack.open(work / "pack", verify="full") as p:
+                    fp = p.fingerprint
+                    rec["format"] = p.manifest.version
+                rec["packer"] = "whole"
+            else:
+                res = stream_pack_checkpoint(pin.hf_repo, work / "pack" if args.write_pack else None,
+                                             work_dir=work / "stream", name=name, revision=pin.revision,
+                                             prefetch=args.prefetch)
+                fp = res.fingerprint
+                rec["format"] = res.manifest.version
+                rec["packer"] = "shardwise" + ("" if args.write_pack else " (hash only)")
+                st = res.stats
+                rec["stats"] = {"shards": st["shards"], "fetched_gb": _gb(st["fetched_bytes"]),
+                                "peak_scratch_gb": _gb(st["peak_work_bytes"]),
+                                "spill_peak_gb": _gb(st["spill_peak_bytes"]),
+                                "peak_rss_gb": _gb(st["peak_rss_bytes"]),
+                                "peak_rss_anon_gb": _gb(st["peak_rss_anon_bytes"]),
+                                "fetch_s": round(st["fetch_s"], 1), "compute_s": round(st["compute_s"], 1),
+                                "seconds": round(st["seconds"], 1)}
+                if args.write_pack:
+                    with ModelPack.open(work / "pack", verify="full", expected_fingerprint=fp) as p:
+                        rec["verified_full"] = p.fingerprint == fp
+                if args.compare_packer:
+                    stream_dig = _digests(work / "pack") if args.write_pack else None
+                    stream_man = json.loads(res.manifest.to_json())
+                    shutil.rmtree(work / "pack", ignore_errors=True)
+                    pack_checkpoint(pin.hf_repo, work / "whole", name=name, revision=pin.revision)
+                    whole = json.loads(Manifest.from_file(work / "whole" / "manifest.json").to_json())
+                    stream_man.pop("created_at", None), whole.pop("created_at", None)
+                    rec["compare_packer"] = {
+                        "manifest_identical": stream_man == whole,
+                        "files_identical": (stream_dig == _digests(work / "whole")) if stream_dig is not None
+                        else None}
             if args.compare_format1:
                 pack_checkpoint(pin.hf_repo, work / "pack1", name=name, revision=pin.revision, plain_dtype="float32")
                 ckpt, _ = _resolve_source(pin.hf_repo, pin.revision)
@@ -108,6 +183,8 @@ def main() -> int:
         out[name] = rec
         print(json.dumps({name: rec}), flush=True)
     bad = any(v["matches"] is False or v.get("format1_matches_old_pin") is False
+              or v.get("verified_full") is False
+              or (v.get("compare_packer") and False in v["compare_packer"].values())
               or (v.get("exactness") and not (v["exactness"]["all_plain_bit_identical_f32"]
                                               and v["exactness"]["linear_entries_identical"]))
               for v in out.values())

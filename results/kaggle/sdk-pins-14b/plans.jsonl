@@ -1,0 +1,1 @@
+{"qwen2.5-14b-instruct": {"repo": "Qwen/Qwen2.5-14B-Instruct", "revision": "cf98f3b3bbb457ad9e2bb7baf9a0125b6b88caa8", "layers": 48, "tie_word_embeddings": false, "checkpoint_bytes": 29.54, "max_shard_bytes": 3.995, "max_spill_bytes": 0.142, "peak_scratch_bytes": 8.132, "output_bytes": 16.338, "largest_item": "plain:embed_tokens", "largest_item_input_bytes": 1.557, "shards": 8}}
