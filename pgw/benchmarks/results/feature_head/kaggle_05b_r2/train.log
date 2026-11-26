@@ -1,0 +1,37 @@
+[   0.3m] loading prompts
+[   0.5m] prompts: train 60000, eval chat 200, eval code 120
+[   0.5m] loading Qwen/Qwen2.5-0.5B-Instruct
+[transformers] `torch_dtype` is deprecated! Use `dtype` instead!
+
+[   0.7m] model loaded (cuda)
+[   1.3m] eval chat: 179/179 answers, 40880 tokens, 1101 tok/s (batch 114, prompt 131)
+[   1.3m] eval chat: 179 answers, 0 with non-finite features; sample: 'The estimated value of the 1.57kg lump of ambergris discovered by the couple in Lancashire is around £50,000.<|im_end|>'
+[   1.6m] eval code: 120/120 answers, 27692 tokens, 1493 tok/s (batch 120, prompt 169)
+[   1.6m] eval code: 120 answers, 0 with non-finite features; sample: "To sort a list of lists by a given index of the inner list, you can use the `sorted()` function in Python. The `sorted()` function sorts the list of lists based on the specified index. Here's how you can implement this:\n\n```python\ndef sort_by_index(lst, index"
+[   7.3m] train: 967/55175 answers, 281416 tokens, 927 tok/s (batch 192, prompt 126)
+[  10.8m] train: 1927/55175 answers, 594653 tokens, 1163 tok/s (batch 192, prompt 49)
+[  13.4m] train: 2472/55175 answers, 746481 tokens, 1111 tok/s (batch 119, prompt 274, sampled)
+[  16.5m] train: 3048/55175 answers, 934603 tokens, 1094 tok/s (batch 192, prompt 52, sampled)
+[  18.6m] train: 3325/55175 answers, 1002850 tokens, 1025 tok/s (batch 108, prompt 302)
+[  21.0m] train: 3853/55175 answers, 1166837 tokens, 1036 tok/s (batch 192, prompt 139)
+[  24.6m] train: 4813/55175 answers, 1484453 tokens, 1105 tok/s (batch 192, prompt 59)
+[  30.1m] train: 5935/55175 answers, 1829434 tokens, 1095 tok/s (batch 192, prompt 105, sampled)
+[  33.7m] train: 6506/55175 answers, 1982538 tokens, 1049 tok/s (batch 128, prompt 255)
+[  35.4m] train: 6874/55175 answers, 2096633 tokens, 1053 tok/s (batch 192, prompt 150)
+[  39.2m] train: 7834/55175 answers, 2412377 tokens, 1089 tok/s (batch 192, prompt 79)
+[  41.4m] train: 8516/55175 answers, 2618691 tokens, 1115 tok/s (batch 106, prompt 39)
+[  45.0m] train: deadline after 9094 answers
+[  45.0m] training rows 2800386 from 9094 answers (store full: False)
+[  46.2m] d256_v16384 {'epoch': 0, 'loss': 9.6834, 'val_top1_by_depth': [0.3951, 0.3346, 0.3069], 'steps': 2608, 's': 68.2}
+[  47.3m] d256_v16384 {'epoch': 1, 'loss': 7.4328, 'val_top1_by_depth': [0.4088, 0.345, 0.3161], 'steps': 2608, 's': 136.2}
+[  48.5m] d256_v16384 {'epoch': 2, 'loss': 7.1312, 'val_top1_by_depth': [0.4168, 0.3532, 0.3226], 'steps': 2608, 's': 204.0}
+[  49.6m] d256_v16384 {'epoch': 3, 'loss': 6.9234, 'val_top1_by_depth': [0.4268, 0.3616, 0.3324], 'steps': 2608, 's': 271.7}
+[  50.7m] d256_v16384 {'epoch': 4, 'loss': 6.7224, 'val_top1_by_depth': [0.4338, 0.3684, 0.3372], 'steps': 2608, 's': 339.7}
+[  51.9m] d256_v16384 {'epoch': 5, 'loss': 6.5225, 'val_top1_by_depth': [0.44, 0.3758, 0.3487], 'steps': 2608, 's': 408.0}
+[  53.0m] d256_v16384 {'epoch': 6, 'loss': 6.3307, 'val_top1_by_depth': [0.4425, 0.3815, 0.3545], 'steps': 2608, 's': 476.0}
+[  54.1m] d256_v16384 {'epoch': 7, 'loss': 6.1637, 'val_top1_by_depth': [0.4486, 0.3871, 0.3621], 'steps': 2608, 's': 544.3}
+[  55.3m] d256_v16384 {'epoch': 8, 'loss': 6.0349, 'val_top1_by_depth': [0.4511, 0.391, 0.3654], 'steps': 2608, 's': 612.7}
+[  56.4m] d256_v16384 {'epoch': 9, 'loss': 5.9571, 'val_top1_by_depth': [0.4511, 0.3916, 0.3661], 'steps': 2608, 's': 681.4}
+[  56.5m] d256_v16384: {"chat": {"alpha_d1": 0.47151175646790006, "positions": 40701, "alpha_by_depth": [0.4715, 0.4575, 0.4799, 0.4965, 0.5204, 0.5454], "tau_R2": 1.4527, "tau_R3": 1.6363, "tau_R4": 1.7074}, "code": {"alpha_d1": 0.5586827216016248, "positions": 27572, "alpha_by_depth": [0.5587, 0.5141, 0.5197, 0.4811, 0.469, 0.4283], "tau_R2": 1.525, "tau_R3": 1.7617, "tau_R4": 1.8684}}
+[  56.6m] cmp0 (qwen2.5-0.5b-instruct-d256-v16384.pgwhead): {"chat": {"alpha_d1": 0.47745755632539744, "positions": 40701, "alpha_by_depth": [0.4775, 0.4623, 0.486, 0.5012, 0.5176, 0.5576], "tau_R2": 1.4556, "tau_R3": 1.6466, "tau_R4": 1.7221}, "code": {"alpha_d1": 0.4643841578412883, "positions": 27572, "alpha_by_depth": [0.4644, 0.4395, 0.4222, 0.4007, 0.3742, 0.4153], "tau_R2": 1.4326, "tau_R3": 1.6096, "tau_R4": 1.6661}}
+[  56.6m] done

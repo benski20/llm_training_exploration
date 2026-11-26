@@ -1,0 +1,38 @@
+[   0.3m] loading prompts
+[   0.4m] prompts: train 30000, eval chat 200, eval code 120
+[   0.4m] loading Qwen/Qwen2.5-7B-Instruct
+[transformers] `torch_dtype` is deprecated! Use `dtype` instead!
+
+Fetching 4 files:  25%|██▌       | 1/4 [01:02<03:07, 62.45s/it]
+Fetching 4 files:  75%|███████▌  | 3/4 [01:13<00:20, 20.13s/it]
+Fetching 4 files: 100%|██████████| 4/4 [01:13<00:00, 18.28s/it]
+
+Loading weights:   0%|          | 1/339 [00:11<1:04:27, 11.44s/it]
+Loading weights:   1%|          | 2/339 [00:11<26:48,  4.77s/it]  
+[   2.2m] model loaded ({'model.embed_tokens': 0, 'model.layers.0': 0, 'model.layers.1': 0, 'model.layers.2': 0, 'model.layers.3': 0, 'model.layers.4': 0, 'model.layers.5': 0, 'model.layers.6': 0, 'model.layers.7': 0, 'model.layers.8': 0, 'model.layers.9': 0, 'model.layers.10': 0, 'model.layers.11': 0, 'model.layers.12': 0, 'model.layers.13': 1, 'model.layers.14': 1, 'model.layers.15': 1, 'model.layers.16': 1, 'model.layers.17': 1, 'model.layers.18': 1, 'model.layers.19': 1, 'model.layers.20': 1, 'model.layers.21': 1, 'model.layers.22': 1, 'model.layers.23': 1, 'model.layers.24': 1, 'model.layers.25': 1, 'model.layers.26': 1, 'model.layers.27': 1, 'model.norm': 1, 'model.rotary_emb': 1, 'lm_head': 1})
+[   5.5m] eval chat: 179/179 answers, 42214 tokens, 220 tok/s (batch 8, prompt 41)
+[   5.5m] eval chat: 179 answers, 0 with non-finite features; sample: 'The estimated value of the 1.57kg lump of ambergris discovered by the couple in Lancashire is around £50,000.<|im_end|>'
+[   7.1m] eval code: 120/120 answers, 28292 tokens, 285 tok/s (batch 48, prompt 68)
+[   7.1m] eval code: 120 answers, 0 with non-finite features; sample: "To sort a list of lists by a given index of the inner list, you can use Python's `sorted` function with a custom key. The key function will extract the value at the specified index from each inner list. Here's how you can implement this:\n\n```python\ndef index_on_inner"
+[  21.0m] train: 505/27572 answers, 163595 tokens, 203 tok/s (batch 96, prompt 121)
+[  29.2m] train: 985/27572 answers, 330552 tokens, 255 tok/s (batch 96, prompt 47)
+[  40.0m] train: 1469/27572 answers, 493719 tokens, 253 tok/s (batch 96, prompt 94, sampled)
+[  42.5m] train: 1560/27572 answers, 519946 tokens, 248 tok/s (batch 24, prompt 506)
+[  61.7m] train: 2460/27572 answers, 824682 tokens, 254 tok/s (batch 96, prompt 52)
+[  72.0m] train: 2933/27572 answers, 984248 tokens, 255 tok/s (batch 96, prompt 123, sampled)
+[  84.8m] train: 3416/27572 answers, 1135304 tokens, 245 tok/s (batch 84, prompt 145)
+[  93.6m] train: 3893/27572 answers, 1306687 tokens, 253 tok/s (batch 96, prompt 74)
+[  96.6m] train: deadline after 4085 answers
+[  96.6m] training rows 1375929 from 4084 answers (store full: False)
+  sched.step()
+[  97.7m] d384_v16384 {'epoch': 0, 'loss': 10.3428, 'val_top1_by_depth': [0.3796, 0.2864, 0.2514], 'steps': 1287, 's': 59.1}
+[  98.7m] d384_v16384 {'epoch': 1, 'loss': 7.9907, 'val_top1_by_depth': [0.402, 0.3083, 0.2693], 'steps': 1287, 's': 117.7}
+[  99.6m] d384_v16384 {'epoch': 2, 'loss': 7.2648, 'val_top1_by_depth': [0.4207, 0.3238, 0.2862], 'steps': 1287, 's': 176.4}
+[ 100.6m] d384_v16384 {'epoch': 3, 'loss': 6.5952, 'val_top1_by_depth': [0.4357, 0.3387, 0.3], 'steps': 1287, 's': 235.0}
+[ 101.6m] d384_v16384 {'epoch': 4, 'loss': 5.8712, 'val_top1_by_depth': [0.4504, 0.355, 0.3151], 'steps': 1287, 's': 293.6}
+[ 102.6m] d384_v16384 {'epoch': 5, 'loss': 5.1622, 'val_top1_by_depth': [0.4613, 0.371, 0.3356], 'steps': 1287, 's': 352.3}
+[ 103.6m] d384_v16384 {'epoch': 6, 'loss': 4.5864, 'val_top1_by_depth': [0.4675, 0.3791, 0.3435], 'steps': 1287, 's': 411.0}
+[ 104.5m] d384_v16384 {'epoch': 7, 'loss': 4.2423, 'val_top1_by_depth': [0.4687, 0.3804, 0.3452], 'steps': 1287, 's': 469.7}
+[ 104.7m] d384_v16384: {"chat": {"alpha_d1": 0.46708695135006545, "positions": 42035, "alpha_by_depth": [0.4671, 0.4391, 0.4453, 0.4341, 0.4378, 0.468], "tau_R2": 1.4376, "tau_R3": 1.6067, "tau_R4": 1.6681}, "code": {"alpha_d1": 0.6352406644895641, "positions": 28172, "alpha_by_depth": [0.6352, 0.5775, 0.5753, 0.5362, 0.5066, 0.5191], "tau_R2": 1.5919, "tau_R3": 1.8758, "tau_R4": 2.0038}}
+[ 104.8m] cmp0 (qwen2.5-7b-instruct-d384-v16384.pgwhead): {"chat": {"alpha_d1": 0.4743190198643987, "positions": 42035, "alpha_by_depth": [0.4743, 0.4403, 0.4379, 0.4297, 0.4324, 0.4454], "tau_R2": 1.447, "tau_R3": 1.6204, "tau_R4": 1.6849}, "code": {"alpha_d1": 0.5062118415447963, "positions": 28172, "alpha_by_depth": [0.5062, 0.4214, 0.4166, 0.3957, 0.3764, 0.3279], "tau_R2": 1.4665, "tau_R3": 1.6291, "tau_R4": 1.6827}}
+[ 104.8m] done

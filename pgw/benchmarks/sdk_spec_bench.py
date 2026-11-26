@@ -4,10 +4,10 @@
 Starts the SDK tests' provider (real ``pgw service``: TLS, TCP+TLS trip lane, masked LM head, accounts; the real
 Qwen2.5-0.5B-Instruct pack) and, per configuration (``off``, ``head:R``, ``lookup:R``), one ``pgw.OpenAI`` client
 in this process that answers the same held-out prompts (the distillation's evaluation prompts, never trained on:
-open chat from UltraChat ``test_sft``, code requests from Alpaca, plus the two prompts of ``sdk_trip_profile.py``)
-greedily, streamed. Per prompt and configuration: generated tokens, decode tok/s (first to last token), real
-passes and accepted drafts (the generator's ``spec_stats``), and the tokens and logprobs, which must equal the
-``off`` configuration's bit for bit.
+open chat from UltraChat ``test_sft``, code problems from MBPP ``test``, plus the two prompts of
+``sdk_trip_profile.py``) greedily, streamed. Per prompt and configuration: generated tokens, decode tok/s (first to
+last token), real passes and accepted drafts (the generator's ``spec_stats``), and the tokens and logprobs, which
+must equal the ``off`` configuration's bit for bit.
 
     PYTHONPATH=src:. python benchmarks/sdk_spec_bench.py --head path/to/head.pgwhead \\
         --configs off,head:2,head:3,head:4,lookup:3 --chat 6 --code 4 --tokens 96 --json out.json

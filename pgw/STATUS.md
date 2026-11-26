@@ -35,7 +35,8 @@ in the application's process against our provider service. Defaults:
 Opt-in:
 * the client KV prefix cache with the masked LM head (`prefix_cache=True`; cached prompt prefixes take no trips
   rows and no masks, bit-identical; the provider can tell a hit: see the last 2026-11-26 section);
-* strict speculation (`speculation="lookup" | "draft_head"`);
+* strict speculation (`speculation="lookup" | "draft_head"`; the shipped heads are trained on commercially usable
+  prompt data only: see the last 2026-11-26 section);
 * `mask_admission="overcommit"`;
 * the weight-free factory (`factory_weights="stream"`).
 
@@ -3755,7 +3756,8 @@ End-to-end speed (`benchmarks/sdk_spec_bench.py`, greedy, streamed; every answer
   H100 provider, RTT 0.2 ms: off 16.6 tok/s, draft head 19.6 / 18.7 / 16.9 at R = 2 / 3 / 4; 32B 6.5 -> 7.7
   (R = 2), 72B 5.0 -> 5.7 (32B/72B with the 7B tau: no head trained there).
 
-Shipping: the heads are package data (`src/pgw/sdk/draft_heads/*.pgwhead`, 16.5 MB together; in the repo, not
+*Superseded by the next section: these heads were trained on Alpaca (non-commercial) and Dolly prompts; they are
+replaced by `-r2` heads trained without them.* Shipping: the heads are package data (`src/pgw/sdk/draft_heads/*.pgwhead`, 16.5 MB together; in the repo, not
 LFS: small, and a pip install from git keeps working), pinned in `pgw.sdk.draft_heads.PINNED_DRAFT_HEADS` (file,
 SHA-256, size, target checkpoint = the SDK's model pin). `speculation="draft_head"` without `draft_head_path`
 resolves the pinned head: the shipped file (a hash mismatch refuses), else a cache copy, else a mirror
@@ -3780,3 +3782,73 @@ Open: alpha ~0.48 is the MLP head's level (EAGLE's ~0.8 needs attention over pas
 faster generator than HF generate on T4s. The training prompts include Alpaca (CC BY-NC 4.0): retrain without it
 (`--mix 0.8,0,0.2`) if that licence matters for the shipped heads. Kaggle: the 7B head kernel started 3 s after
 another agent's CPU pin kernel (both checked idle before pushing).
+
+## 2026-11-26: draft heads retrained on commercially usable prompt data only (0.5B, 7B; `-r2`, pinned)
+
+Why: the heads shipped earlier today were distilled on prompts that included Stanford Alpaca (CC BY-NC 4.0,
+non-commercial) and Dolly 15k (CC BY-SA 3.0). Their held-out code set was also Alpaca. pgw is a commercial
+product, so both heads were retrained without that data. The old files are removed from the package (they remain in
+git history only).
+
+**Data** (Hugging Face Hub, pinned revisions; table, attribution and notes in `src/pgw/sdk/draft_heads/README.md`,
+which ships next to the heads; each head file also records the list under `training_data`):
+* training prompts: UltraChat 200k `train_sft` first user turns, 75% (MIT, `8049631c`); OpenAssistant OASST2 root
+  prompts, all languages, 15% (Apache-2.0, `179dd21f`); StarCoder2 Self-OSS-Instruct instructions, code, 10%
+  (ODC-By 1.0, `356bb069`);
+* held out: chat = 200 UltraChat `test_sft` prompts (unchanged); code = 120 MBPP `full/test` problems (CC BY 4.0,
+  `4bb6404f`; evaluation only).
+
+Dolly was dropped as well, not kept. CC BY-SA allows commercial use, but whether trained weights are "adapted
+material" is unsettled, and share-alike would then apply to the shipped files. OASST2 (Apache-2.0, human-written)
+replaces it. The datasets give prompts only: the target answers them itself, and no dataset text is stored in a
+head. UltraChat's turns were written by gpt-3.5-turbo (dataset MIT; recorded as a note).
+
+**Runs** (Kaggle T4 x 2, one kernel at a time, our kernel list checked idle before each push; same sizes as before;
+`benchmarks/kaggle/build_head.py`, which now trains only the shipped size and evaluates the old head on the same
+held-out answers via `--compare-heads`, from a temporary private dataset):
+* 0.5B d256 V16384: 2.80M rows from 9,094 answers, 57 min;
+* 7B d384 V16384: 1.38M rows from 4,084 answers, 105 min.
+
+Results: `benchmarks/results/feature_head/kaggle_{05b,7b}_r2/`.
+
+**Old vs new on the same held-out answers.** Alpha is depth-1 top-1. Tokens per pass are head + prompt lookup
+(the SDK's `draft_head` mode), from an exact replay at R = 2 / 3 / 4:
+
+| head | alpha chat / code | tokens per pass, chat | code |
+|---|---|---|---|
+| 0.5B old (removed) | 0.477 / 0.464 | 1.52 / 1.78 / 1.91 | 1.49 / 1.75 / 1.85 |
+| 0.5B new, shipped | 0.472 / 0.559 | 1.51 / 1.77 / 1.89 | 1.56 / 1.87 / 2.03 |
+| 7B old (removed) | 0.474 / 0.506 | 1.46 / 1.66 / 1.74 | 1.51 / 1.73 / 1.82 |
+| 7B new, shipped | 0.467 / 0.635 | 1.45 / 1.64 / 1.72 | 1.61 / 1.94 / 2.12 |
+
+Accepted. Open chat is within 0.01 alpha of the old heads (criterion: 0.03). Code is +0.09 / +0.13 alpha, because
+code instructions are now in training. The old 0.5B head's chat numbers match those of the earlier run exactly (same
+held-out answers), so the comparison is like for like.
+
+**End to end, 0.5B** (`sdk_spec_bench.py`, CPU provider on this 4-vCPU box, pinned head, 6 chat + 4 MBPP + 2 fixed
+prompts, 96 tokens). Every answer's tokens and logprobs are identical to `off` in all configurations.
+* Tokens per round: chat 1.52 / 1.82 / 1.95, code 1.62 / 1.92 / 2.15 at R = 2 / 3 / 4.
+* Decode speed: chat 3.04 tok/s off -> 3.97 / 4.46 / 4.20; code 3.00 -> 4.26 / 4.76 / 4.48.
+* `lookup:3`: -9% (chat), -4% (code).
+* The code-edit prompt at R = 3: 2.16 tokens per round, +81%.
+
+The 7B end-to-end T4 row in the docs is still the earlier head's measurement (same size; it was a tokens-per-round
+and exactness check, not a speed figure). `round_trip_model.py` uses the new 7B replay tau. Modelled 7B (H100, RTT
+0.2 ms): 16.6 -> 19.5 / 18.5 / 16.8 tok/s at R = 2 / 3 / 4.
+
+**Pins** (`PINNED_DRAFT_HEADS`; new file names, so that a mirror or cache holding an old file cannot collide):
+* `qwen2.5-0.5b-instruct-d256-v16384-r2.pgwhead`: sha256 `fbb4ed1c0bece068c61cd69a56afe4d0956877ec4de45c925eab11c6096247c2`, 5,289,977 bytes;
+* `qwen2.5-7b-instruct-d384-v16384-r2.pgwhead`: sha256 `c3ed147cc58483f8d65ce6e8eaa229f9cd0c9e71119c9a4310c801b0f9b27b56`, 11,191,929 bytes.
+
+The README is added to the package data.
+
+**Tests:** `tests/sdk/test_draft_heads.py` (pins, shipped files load and match the model), `tests/sdk/test_speculation.py`
+(strict exactness vs off), `tests/engine/test_tree_spec.py` and `tests/benchmarks`: 196 passed, the same
+count as before the change. `tests/docs`: 112 passed; the 18 `test_numbers` failures need research logs that are not in
+this worktree (`results/kaggle/...`), and the change does not touch them.
+
+**Kaggle cleanup:**
+* deleted: `pgw-spec-7b-t4-src` and the temporary `pgw-head-cmp-tmp`;
+* left alone: `pgw-sdk-e2e-7b-src` (another workstream's);
+* the private kernels `pgw-head-05b` and `pgw-head-7b` keep their version-1 outputs (the old heads) in their
+  private version history.

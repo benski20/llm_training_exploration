@@ -1,0 +1,6 @@
+== d384_v16384
+chat {"2": {"head": 1.438, "lookup": 1.071, "hybrid": 1.45}, "3": {"head": 1.607, "lookup": 1.095, "hybrid": 1.643}, "4": {"head": 1.668, "lookup": 1.104, "hybrid": 1.723}}
+code {"2": {"head": 1.592, "lookup": 1.131, "hybrid": 1.605}, "3": {"head": 1.876, "lookup": 1.176, "hybrid": 1.943}, "4": {"head": 2.004, "lookup": 1.198, "hybrid": 2.124}}
+== cmp0
+chat {"2": {"head": 1.447, "lookup": 1.071, "hybrid": 1.459}, "3": {"head": 1.62, "lookup": 1.095, "hybrid": 1.658}, "4": {"head": 1.685, "lookup": 1.104, "hybrid": 1.74}}
+code {"2": {"head": 1.467, "lookup": 1.131, "hybrid": 1.505}, "3": {"head": 1.629, "lookup": 1.176, "hybrid": 1.728}, "4": {"head": 1.683, "lookup": 1.198, "hybrid": 1.824}}

@@ -75,16 +75,17 @@ SDK_NOISE_RATE = 0.05
 #: tokens per verify pass (strict, chain) and whether the pass runs the draft head: prompt lookup measured here on
 #: Qwen2.5-0.5B (sdk_trip_profile.py, 64 tokens): open chat 1.14 (R=2) / 1.15 (R=3), a code edit 1.66 (R=2) /
 #: 2.10-2.14 (R=3) / 2.52 (R=4). Draft head (speculation="draft_head": the shipped head + prompt lookup), measured
-#: 2026-11-26: 7B held-out open chat 1.46 / 1.66 / 1.74 at R = 2 / 3 / 4 (code 1.69 at R = 3), exact replay of the
-#: 7B's own greedy answers through the strict acceptance rule (benchmarks/results/feature_head/kaggle_7b; alpha
-#: 0.47 chat / 0.51 code at depth 1); 0.5B end to end through the library 1.51 / 1.77 / 1.95 (sdk_spec_bench.py).
+#: 2026-11-26 (heads retrained without non-commercial data): 7B held-out open chat 1.45 / 1.64 / 1.72 at R = 2 / 3 / 4
+#: (MBPP code 1.94 at R = 3), exact replay of the 7B's own greedy answers through the strict acceptance rule
+#: (benchmarks/results/feature_head/kaggle_7b_r2; alpha 0.47 chat / 0.64 code at depth 1); 0.5B end to end through
+#: the library 1.52 / 1.82 / 1.95 (sdk_spec_bench.py, kaggle_05b_r2).
 #: 32B / 72B have no trained head: the 7B values are an assumption there. EAGLE-class (alpha 0.8, attention over
 #: past features; not trained) for comparison: (1 - a^3) / (1 - a).
 SDK_TAU = {"off (R=1)": (1, 1.0, False), "lookup, open chat (R=2)": (2, 1.14, False),
            "lookup, open chat (R=3)": (3, 1.15, False), "lookup, copy-heavy (R=2)": (2, 1.66, False),
            "lookup, copy-heavy (R=3)": (3, 2.1, False),
-           "draft head, open chat (R=2)": (2, 1.46, True), "draft head, open chat (R=3)": (3, 1.66, True),
-           "draft head, open chat (R=4)": (4, 1.74, True), "draft head, code (R=3)": (3, 1.69, True),
+           "draft head, open chat (R=2)": (2, 1.45, True), "draft head, open chat (R=3)": (3, 1.64, True),
+           "draft head, open chat (R=4)": (4, 1.72, True), "draft head, code (R=3)": (3, 1.94, True),
            "EAGLE-class a=0.8 (R=3, not trained)": (3, (1 - 0.8 ** 3) / (1 - 0.8), True)}
 #: draft head CPU time per head step (R - 1 steps per pass), ms: 7B d = 384, V = 16,384 measured here (float32
 #: kernel, 4 threads, feature_head_cpu_bench.py; 0.88 ms; the native int8 kernel 1.3 ms); 32B / 72B scaled by the
