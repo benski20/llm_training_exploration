@@ -284,12 +284,20 @@ class Engine:
             models=[], models_file=None, maskstore_root=self.layout.masks_dir(self.key.key_id_hex),
             allow_dev_modes=False, allow_anonymous=False, audit_log_file=None,
             noise_monitor=True, noise_monitor_fail_closed=True, egress_allowlist=egress, require_service_tls=True,
-            prime_check=None, pack_verify="full", mask_reservation="incremental", mask_chunk_slots=8,
+            prime_check=self._prime_check(), pack_verify="full", mask_reservation="incremental", mask_chunk_slots=8,
             default_max_tokens=512, max_tokens_limit=32768, maskstore_gc_interval_s=0,
             dashboard_enabled=False, console_enabled=False, setup_mode=False,
             config_dir=self.layout.session_dir(self.key.key_id_hex),
             data_dir=self.layout.session_dir(self.key.key_id_hex),
         )
+
+    def _prime_check(self) -> bool | None:
+        """``None``: auto (p31 with the TripEngine). Strict speculation with masked filler rows makes no padded call,
+        so the p31 check stays valid there, but the gateway's auto rule refuses p31 for any fixed-row mode: it is
+        asked for explicitly, with the native trip stack only (which runs the prime check)."""
+        if self.options.speculation != "off" and self.options.native:
+            return True
+        return None
 
     def _open_store(self) -> Any:
         from pgw.maskstore.admin import open_store
@@ -528,7 +536,25 @@ class Engine:
             "head_mode": "provider_int8" if h.masked_head else "gateway",
             "prefix_cache": "conversation" if self._prefix_on(h) else "off",
         }
+        kw.update(self._spec_config())
         return GatewayModelConfig(**kw)
+
+    def _spec_config(self) -> dict[str, Any]:
+        """Strict speculation (``speculation``, opt-in): fixed ``spec_rows`` rows per verify pass, strict pass
+        count (dummy passes after the answer), masked filler rows. The prompt-lookup draft proposes whenever a
+        context match of at least 2 tokens exists: the rows are fixed, so a rejected proposal costs nothing more
+        than the filler row it replaces."""
+        o = self.options
+        if o.speculation == "off":
+            return {}
+        r = int(o.spec_rows)
+        kw: dict[str, Any] = {"spec_rows": r, "spec_strict_passes": True, "spec_tokens": r - 1,
+                              "spec_min_tokens": r - 1}
+        if o.speculation == "lookup":
+            kw.update(spec_lookup=4, spec_lookup_min_n=2)
+        else:
+            kw.update(draft_backend="feature_head", draft_head_path=o.draft_head_path)
+        return kw
 
     def _prefix_on(self, h: ModelHandle) -> bool:
         """Conversation prefix reuse: explicit ``True``, or ``"auto"`` without the masked LM head (the engine
@@ -594,7 +620,7 @@ class Engine:
             h.runtime.reset_safety(breaker=True, noise=True)
 
     async def _open(self, h: ModelHandle, rt: Any, ids: list[int], params: Any, rid: str, prefix_key: str | None,
-                    deadline: float, setup_deadline: float | None = None) -> Any:
+                    deadline: float, setup_deadline: float | None = None, conversation: str | None = None) -> Any:
         """Admit and reserve masks; waits (back-pressure) while the mask stock is empty or the service reconnects.
 
         ``mask_wait_s`` bounds the wait for masks, except during the model's first fill on this host (no mask seen
@@ -604,7 +630,8 @@ class Engine:
         delay = 0.1
         while True:
             try:
-                sess = (await rt.open_sessions([ids], params, request_id=rid, prefix_key=prefix_key))[0]
+                sess = (await rt.open_sessions([ids], params, request_id=rid, prefix_key=prefix_key,
+                                               conversation=conversation))[0]
                 h.masks_seen = True
                 return sess
             except MaskExhaustedError as exc:
@@ -704,6 +731,10 @@ class Engine:
         prefix_key = None
         if rt.prefix_cache is not None:
             prefix_key = f"sdk\x00user:{req.user or ''}\x00conv:{conversation or ''}"
+        # Strict speculation orders a request behind the dummy passes of the previous request of the same OpenAI
+        # ``user`` (as the gateway does per key and user): a follow-up issued after an answer must not start before
+        # the provider has seen one pass per token of that answer. A client-local key, never sent to the provider.
+        strict = f"sdk\x00user:{req.user or ''}" if self.options.speculation != "off" else None
         attempt = 0
         while True:
             produced = 0
@@ -711,7 +742,8 @@ class Engine:
             try:
                 sess = await self._open(h, rt, ids, params, rid if attempt == 0 else f"{rid}-r{attempt}",
                                         prefix_key, deadline,
-                                        None if timeout_s is not None else deadline + self.options.ready_timeout_s)
+                                        None if timeout_s is not None else deadline + self.options.ready_timeout_s,
+                                        conversation=strict)
                 h.requests += 1
                 meta["prompt_tokens"] = len(sess.prompt_ids)
                 meta["cached_tokens"] = int(sess.prefix_reused)
@@ -885,6 +917,13 @@ class Engine:
                     h.factory.stop()
         if loop is not None and thread is not None and thread.is_alive():
             async def _stop() -> None:
+                for h in list(self.models.values()):
+                    gen = getattr(h.runtime, "generator", None) if h.runtime is not None else None
+                    if gen is not None and self.options.speculation != "off":
+                        # strict speculation: let the dummy passes still due run first, so the provider sees one
+                        # pass per generated token even when the application closes right after an answer
+                        with contextlib.suppress(Exception):
+                            await asyncio.wait_for(gen.wait_drained(), timeout=max(1.0, 0.8 * timeout_s))
                 for h in list(self.models.values()):
                     if h.runtime is not None:
                         with contextlib.suppress(Exception):

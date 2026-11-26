@@ -4,8 +4,9 @@ Every option has a default that needs no configuration. The defaults for a remot
 measured, exact stack of the 7B 28 tok/s run (STATUS.md, deploy/modal/README.md): every linear on the provider
 (``local_linears = "off"``), native float ops, the native per-trip and decode drivers, the masked LM head
 (when the provider serves it), the prime-field (p31) check, incremental mask reservations, exact conversation
-prefix reuse, and the pks-v3 encrypted mask factory in low-priority background processes. Speculation and other
-modes that are not proven exact and safe stay off.
+prefix reuse, and the pks-v3 encrypted mask factory in low-priority background processes. Speculation (strict,
+exact and draft-independent on the wire, but it multiplies the mask demand) is opt-in (``speculation``); modes that
+are not proven exact and safe stay off.
 """
 
 from __future__ import annotations
@@ -105,6 +106,20 @@ class SDKOptions:
             latency, status, whether every integrity check passed) for the developer console's request log. The
             provider already sees the same counts and timing in the masked traffic; never any content.
         max_concurrent: Requests generating at once per model.
+        speculation: Strict speculative decoding [``PGW_SPECULATION``] (opt-in; ``"off"`` by default). Every decode
+            pass verifies a fixed ``spec_rows`` rows (the pending token, the drafts, masked filler rows), so one pass
+            of ``4 x layers + 1`` round trips yields 1 to ``spec_rows`` tokens and the answer streams that many
+            times faster on the round-trip-bound path. Bit-identical to plain decoding (the verifier keeps only
+            tokens the target model itself samples). The provider's view stays independent of the drafts: fixed
+            rows per pass, and after the answer the client runs dummy passes until the provider has seen exactly
+            one pass per generated token (as without speculation); the next request of the same ``user`` waits
+            for them. Costs: ``spec_rows`` mask slots per pass (the factory must make ``spec_rows`` times the
+            masks) and ``spec_rows`` rows of provider work per trip. Drafts: ``"lookup"`` (prompt lookup: no
+            weights, no model; strong when the answer copies the prompt or the conversation: code edits, RAG,
+            summaries, rewrites; about 1.0-1.1 tokens per pass on open chat) or ``"draft_head"`` (a trained
+            target-feature draft head file, ``draft_head_path``: a few MB, one small CPU step per draft row).
+        spec_rows: Rows per verify pass with ``speculation`` (2-8; default 3: up to 2 drafts per pass).
+        draft_head_path: The draft head file for ``speculation="draft_head"`` (a public artefact for this model).
         log_level: Enable the library's structured (JSON) logs on stderr at this level [``PGW_SDK_LOG``]; ``None``
             = silent (records still reach handlers the application configures).
     """
@@ -132,6 +147,9 @@ class SDKOptions:
     model_fingerprints: dict[str, str] = field(default_factory=dict)
     usage_reports: bool = True
     max_concurrent: int = 8
+    speculation: Literal["off", "lookup", "draft_head"] = "off"
+    spec_rows: int = 3
+    draft_head_path: Path | None = None
     log_level: str | None = None
     extra: dict[str, Any] = field(default_factory=dict)
 
@@ -153,6 +171,9 @@ class SDKOptions:
         hint = os.environ.get("PGW_HINT", "").strip()
         if hint:
             base["hint"] = hint
+        spec = os.environ.get("PGW_SPECULATION", "").strip()
+        if spec:
+            base["speculation"] = spec
         lvl = os.environ.get("PGW_SDK_LOG", "").strip()
         if lvl:
             base["log_level"] = lvl
@@ -183,6 +204,14 @@ class SDKOptions:
             raise ValueError("mask_workers must be between 1 and 64")
         if not 0 <= self.mask_nice <= 19:
             raise ValueError("mask_nice must be between 0 and 19")
+        if self.speculation not in ("off", "lookup", "draft_head"):
+            raise ValueError("speculation must be 'off', 'lookup' or 'draft_head'")
+        if not 2 <= int(self.spec_rows) <= 8:
+            raise ValueError("spec_rows must be between 2 and 8")
+        if self.speculation == "draft_head" and self.draft_head_path is None:
+            raise ValueError("speculation='draft_head' needs draft_head_path (the trained head file)")
+        if self.draft_head_path is not None and self.speculation != "draft_head":
+            raise ValueError("draft_head_path is used only with speculation='draft_head'")
         if self.timeout_s <= 0 or self.mask_wait_s < 0 or self.max_retries < 0 or self.max_concurrent < 1:
             raise ValueError("timeouts must be positive and max_concurrent >= 1")
 

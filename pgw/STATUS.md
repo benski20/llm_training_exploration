@@ -1799,3 +1799,49 @@ final padding fix (bug 3) was not done. No real model shape is affected by that 
 ### Phase A wiring check (2026-11-20)
 - Commit 450b788 (marked WIP by a forced hook commit) is complete: full suite 3615 passed / 122 skipped, tests/e2e 32 passed.
 - Modal e2e (CPU provider, tunnel, 0.5B): exact (first_mismatch null); local_linears auto chose qkv+o on the gateway, 49.5 round trips per token (was ~100). That placement had a 26 ms median trip, so the warm 32-token chat took 47 s; trip latency, not compute, dominates on Modal.
+
+## 2026-11-26 — Round trips per token in the client library: measured, strict speculation opt-in, 7B/32B/72B model
+
+Scope: the shipped path (`from pgw import OpenAI`, `src/pgw/sdk`), CPU here only (no Modal, RunPod or Kaggle).
+Measurement: `benchmarks/sdk_trip_profile.py` (real `pgw service` on loopback with the TCP+TLS lane, Qwen2.5-0.5B-Instruct,
+the library's default stack, warm streamed greedy chats; trips counted exactly from the runtime's counters, the
+provider's compute from the lane replies' `compute_us`).
+
+- **Trips per decoded token: 97 = 4L + 1** (0.5B; 113 at 7B, 257 at 32B, 321 at 72B), all on the lane, 1 row each.
+  This is the floor for the library: the gateway holds no weights (no local qkv/o), the exact int8 reference puts a
+  nonlinear step between every pair of linears, and the masked head is one trip (a local head would stream the
+  bf16 head per token). The 2-per-layer floor needs local linears or fused2; **fused2 cannot be on by default: it is a
+  different fixed-point reference** (not bit-identical to the int8 one).
+- **Per trip at 0.5B on this box: 3.0-3.1 ms**, of which the CPU provider's kernel path 2.8-2.9 ms (`compute_us`;
+  a GPU provider replies in ~0.05-0.2 ms), TLS transport + provider lane I/O ~0.25 ms (stub floor 55 us p50,
+  `lane_tls_bench.py`), gateway native work 70-113 us (prepare, finish, p31, float ops). Per token outside the
+  trips: sampling over 152k logits + hand-off to the caller 1.2-1.4 ms (the gateway's HTTP path measured 9.2 ms in
+  the 7B run); noise-sampled trips (5%) leave the native driver for the inline statistics (~0.2 ms extra each at
+  0.5B). Nothing found on the critical path from serialization, per-trip Python hops, TLS records, the batching
+  window (lane calls run inline on an idle device) or mask fetch (decrypt-ahead). The adaptive reply spin (400 us
+  cap) never hits against a slow CPU provider (CPU waste here; it hits with a GPU provider).
+- **Strict speculation in the library, opt-in** (`speculation="lookup" | "draft_head"`, `spec_rows` 2-8, default 3,
+  `draft_head_path`; `PGW_SPECULATION`): strict passes (dummy passes after the answer: the provider sees one pass per
+  generated token), fixed rows per pass with masked filler rows, the p31 check kept (asked for explicitly: no padded
+  call is made), requests of one OpenAI `user` ordered behind the previous one's dummy passes, `close()` runs the
+  dummy passes still due. Measured (0.5B, 64 tokens, CPU provider): code-edit prompt **tokens per pass 1.66 / 2.10 /
+  2.52 at R = 2 / 3 / 4, trips on the critical path 97 -> 59 / 47 / 39 per token, 3.2 -> 4.7 / 5.75 / 5.9 tok/s**;
+  open chat 1.14-1.15 tokens per pass (no gain: 3.08 -> 3.0-3.09 tok/s). Outputs bit-identical in every run.
+  Not default: R masks per token, R rows of provider work and wire per trip, and a loss on open chat.
+- **Local linears from the factory pack: not proposed.** One remote trip at RTT 0.2 ms is ~0.43 ms; an exact local
+  1-row GEMV (stacked digits, 1 thread) is 2.2 / 1.7 / 27 / 12.5 ms per layer for qkv / o / gate_up / down at 7B and
+  3.5-97 ms at 32B-72B. Only 0.5B qkv and o (0.13 / 0.12 ms) beat a trip.
+- **Model** (`python benchmarks/round_trip_model.py --sdk`; components from the co-located model that reproduces the
+  7B run; NIC 25 Gbit/s; H100, 72B on 2): ms per token (tok/s) at RTT 0.1 / 0.2 / 0.5 ms, today (R = 1): **7B 47.6
+  (21.0) / 58.9 (17.0) / 92.8 (10.8); 32B 123.5 (8.1) / 149.2 (6.7) / 226.3 (4.4); 72B 163.0 (6.1) / 195.1 (5.1) /
+  291.4 (3.4)**. Lookup on copy-heavy text (R = 3): 7B 34.4 / 39.8 / 55.9, 32B 89.5 / 101.8 / 138.5, 72B 123.8 /
+  139.0 / 184.9. EAGLE-class draft head (alpha 0.8, R = 3; not trained): 7B 29.6-48.1, 72B 106.5-159.1. **The
+  per-trip overhead beyond RTT (lane ~0.13 ms + gateway 0.1-0.13 ms) is larger than a same-data-center RTT**: at 72B
+  and RTT 0.2 ms the pass is network 64 + lane 42 + gateway 41 + device 32 + wire 15 ms; lane 0.05 ms and half the
+  gateway work would give 149 ms, plus a 0.8 draft head 87 ms (11.5 tok/s).
+- Needs a GPU (RunPod later): the lane's fixed cost per trip over TCP+TLS on a real NIC, lookup tokens per pass on
+  real 7B+ answers, a trained draft head's alpha at 7B/32B/72B, gateway work per trip at 72B widths with the trip
+  split on a many-core gateway, speculation's wire cost at 25 Gbit/s.
+- Tests: `tests/sdk/test_speculation.py` (bit-identical greedy / seeded / streamed with lookup and with a draft head;
+  provider-metered trips, rows and bytes identical with every draft right vs none; `close()` runs the due dummy
+  passes; options), `tests/benchmarks/test_round_trip_model.py`; tests/sdk 99 passed + 1 opt-in skip.

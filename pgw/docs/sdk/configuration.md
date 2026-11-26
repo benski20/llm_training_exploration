@@ -23,6 +23,9 @@ behaviour of the OpenAI client it replaces.
 | `lane` | `"auto"` | our fast connection for the per-token round trips when the service offers it (`"stream"`, `"off"`) |
 | `model_fingerprints` | `{}` | extra or replacement fingerprint pins `{model: fingerprint}`. The library pins every supported model itself and refuses a service that serves anything else; set this only for a custom model build you checked yourself |
 | `usage_reports` | `True` | after each request, send the service a record without content (model, token counts, latency, status, whether every check passed) for your organisation's console. The service sees the same counts and timing in the masked traffic anyway |
+| `speculation` | `PGW_SPECULATION`, else `"off"` | strict speculative decoding (opt-in): each round of round trips verifies `spec_rows` rows, so one round can yield up to `spec_rows` tokens. Answers are bit-identical; the service sees the same number of rounds and rows whatever the drafts (after the answer, your process runs the remaining rounds on random data, and the next request of the same `user` waits for them). `"lookup"` drafts from the prompt and the conversation (no model; helps when the answer copies text: code edits, rewrites, summaries, retrieval; about 2x tokens per round on a code edit, little on open chat), `"draft_head"` uses a trained draft-head file (`draft_head_path`). Costs `spec_rows` masks per token and `spec_rows` times the per-round traffic |
+| `spec_rows` | 3 | rows per round with `speculation` (2 to 8) |
+| `draft_head_path` | none | the draft-head file for `speculation="draft_head"` |
 | `log_level` | `PGW_SDK_LOG`, else silent | structured (JSON) logs on stderr at this level |
 
 There is no `base_url`: the provider address comes from the key. Use one client per process and share it
@@ -44,7 +47,7 @@ between threads or tasks; it is safe for concurrent use and batches concurrent r
 | `stream_options` | `{"include_usage": true}` | a final chunk with token counts |
 | `logprobs`, `top_logprobs` | `true`/`false`, 0 to 20 | |
 | `n` | 1 | values above 1 are rejected |
-| `user` | string | accepted and ignored |
+| `user` | string | accepted and ignored (with `speculation`, requests of one `user` are ordered behind the previous one's remaining rounds) |
 
 Not supported in this release: tool or function calling, structured output (`response_format` with a JSON
 schema), `n` above 1, and image or audio inputs. Such requests fail with a clear error instead of being
@@ -60,6 +63,7 @@ silently ignored.
 | `PGW_HINT` | `local` | `hint` |
 | `PGW_MASK_SCHEME` | `pks-v3` | `mask_scheme` |
 | `PGW_MASK_WORKERS` | a quarter of the CPUs | `mask_workers` |
+| `PGW_SPECULATION` | `off` | `speculation` |
 | `PGW_MASK_STORE_GB` | `8` | `mask_store_gb` |
 | `PGW_SDK_LOG` | unset | `log_level` |
 | `PGW_NATIVE` | `1` | `0` disables all native extensions (pure-Python path: same results, much slower). For diagnosis only |
