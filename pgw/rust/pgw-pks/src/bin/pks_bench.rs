@@ -6,6 +6,9 @@
 //! `pks-bench keyswitch <m> <groups> <threads>`: the provider's CPU key switch; per-kernel micro timings:
 //! `pks-bench ntt <reps> 1 1 [isa]` (16-lane NTTs), `pks-bench cbd <count> 1 1 [isa]` (noise sampler),
 //! `pks-bench encout <reps>` (AVX-512 upload output on L2-resident data; timing only, dummy constants).
+//! Mask factory check kernels: `pks-bench vecmat <m> <n> <threads> [isa]` (`x @ W8` wrap32 and p31, `PKS_C`
+//! vectors; prints an output digest, identical across ISAs), `pks-bench checkrows <rows> <m> <threads> [isa]`
+//! (`PKS_N` inputs, `PKS_C` vectors).
 //! `isa`: auto, avx512ifma, avx512, avx2, scalar. Env: `PKS_REPS` (repetitions, best wall time reported),
 //! `PKS_PACKED=1` (36-bit replies read in place), `PKS_ROWS` (slots per group). Prints JSON lines with the
 //! best wall time and the process CPU averaged over the repetitions, in ns per output (input) and slot.

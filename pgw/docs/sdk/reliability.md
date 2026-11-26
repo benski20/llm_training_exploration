@@ -57,6 +57,7 @@ behind a fault-injection proxy) or `tests/sdk/test_reliability_unit.py`, unless 
 | the factory halts after provider integrity failures | `NotReadyError` naming the halt once the stock is used up | operator action (`pgw factory clear-halt` after investigating), never automatic |
 | a request needs more masks than are in stock | it waits up to `mask_wait_s` (default 120 s) while the factory refills now (the factory normally refills only below its low-water mark); longer, up to the request's `timeout`, while the factory is visibly making the segment it needs and expects it within that time; else `NotReadyError` (`mask_exhausted`) saying when the factory expects more masks | automatic |
 | the provider dies, or cannot be reached, while the factory makes masks (connection refused or reset, TLS failure, 5xx, timeouts) | requests waiting for masks fail once the factory has made no progress for `factory_stall_s` (default 120 s): `APIConnectionError` (`backend_unavailable`, retryable) naming the provider, its probe result and the factory's last error. Detection takes `factory_stall_s` plus up to 10 s. Before 2026-11-26 a first request waited out `ready_timeout_s` (hours in the Kaggle 7B run) | the factory keeps retrying with back-off; when the provider answers again a factory waiting out a long back-off is restarted at once, and masks resume within seconds (5-8 s in the test). No action needed |
+| the provider answers its health check but its mask generation stops making progress (a wedged GPU, a hung kernel) | requests waiting for masks fail with `ProviderStalledError` (an `APIConnectionError`, `backend_unavailable`, retryable; `details["reason"] = "provider_maskgen_stalled"`) once an item of your key has run on the provider for `maskgen_stall_s` (default 30 s; at least 4x the slowest recent item, 300 s for the first item of a shape after the provider starts) without finishing: detection takes the bound plus up to 5 s (4-5 s with a 4 s bound in the test). Before 2026-11-26: the factory's request waited out its 600 s budget | the factory waits; when the item finishes (the provider's operator restarts it) masks resume within seconds (1.8 s in the test) |
 | the factory's runs keep failing while the provider answers (for example the provider returns 503 for mask generation) | after `factory_stall_s` without a segment: `NotReadyError` naming the factory's last error | automatic once the cause is gone |
 | a request needs more masks than the stock ever holds (prompt plus `max_tokens` above `mask_target_slots`, set by `mask_store_gb`) | `BadRequestError` (`payload_too_large`, 400) at once, naming the setting | lower `max_tokens`, shorten the prompt or raise `mask_store_gb` |
 
@@ -82,6 +83,22 @@ or, when the provider is gone:
     provider not answering for 130 s: connection failed (ConnectError)
     STALLED (requests waiting for masks fail at once; the factory keeps retrying): the provider (https://provider.example.com:8443) has not answered for 130s ...
 ```
+
+**The maskgen watchdog.** A provider can answer `/readyz` while its GPU no longer finishes mask generation. While
+the factory makes a segment, the supervisor therefore reads your key's own maskgen progress from the provider
+(`GET /pgw/v1/maskgen/status`, every 5 s, with the session's pinned CA, client certificate and token): items of
+your key waiting and running there, the age of the oldest running one, the finished and failed ones and the
+slowest recent one. Only your own numbers are served; the provider's public `/readyz` carries a single coarse
+`"maskgen": "ok" | "stalled"` bit and nothing else (its operator sees totals on the metrics port). The bound is
+progress-based: an item running longer than `maskgen_stall_s` and 4x the slowest recent item; the first item of a
+(device, shape) after the provider starts gets 300 s (kernel compilation, device self-tests). Your own CPU work
+(the pks-v3 encryption, the one-time hint build, a slow first segment at 32B/72B) is never on the provider's
+clock, so it never counts. A provider without the endpoint (older than 2026-11-26) turns the watchdog off. The
+stall shows as `phase: "maskgen_stalled"` (and the bound and item age under `maskgen`) in `supervisor.json` and
+`pgw sdk status`. Tests: `tests/service/test_maskgen_progress.py` (the provider's accounting, the public bit, the
+per-tenant view), `tests/sdk/test_factory_watch.py` (a fake provider that stalls; slow items that finish, a cold
+first item, an idle factory and an older provider are never stalls) and `tests/sdk/test_factory_stall.py` (the
+real service with a wedged maskgen item).
 
 The same "first-time setup in progress" line is in the error a request gets if its `timeout` ends during the
 setup. To keep the first requests from waiting for the setup at all, run `pgw sdk prepare` before the first

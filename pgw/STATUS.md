@@ -29,7 +29,8 @@ in the application's process against our provider service. Defaults:
 * the native TCP+TLS trip lane, with lane format 2: several answers of one step in one call;
 * the p31 check on every trip;
 * cross-process mask admission (`SharedLedger`);
-* stall detection of the mask factory (`factory_stall_s`).
+* stall detection of the mask factory (`factory_stall_s`), and the maskgen watchdog for a provider whose GPU stops
+  finishing mask generation (`maskgen_stall_s`, 30 s; `ProviderStalledError`; see the last 2026-11-26 section).
 
 Opt-in:
 * strict speculation (`speculation="lookup" | "draft_head"`);
@@ -3426,3 +3427,83 @@ for the three larger models so that clients never re-derive them.
 - Tests (one dir at a time, absolute `PYTHONPATH`): tests/modelpack 128 passed / 1 skipped (CUDA); tests/provision
   55 / 1; tests/sdk/test_unit.py 47, test_e2e_product + test_prepare 8 / 1 opt-in skip; tests/docs: only the earlier
   failures (test_numbers logs, README index, `PGW_MASK_ADMISSION`).
+
+## 2026-11-26: maskgen watchdog (wedged provider GPU), AVX2 / SSE4.1 check-vector kernels, mypy back to baseline
+
+**Maskgen watchdog.** A provider that answers `/readyz` but finishes no maskgen item (a wedged GPU, a hung kernel)
+was noticed by the client only when the factory's maskgen request ran out of its 600 s budget
+(`he_timeout_s`); requests waiting for masks waited `mask_wait_s` or longer meanwhile.
+* Provider (`pgw.hemask.progress.MaskgenProgress`, counted in `ServiceHandler._maskgen_in_slot`, so the HTTP route
+  and the bulk channel alike): every item from admission (waiting for a device slot) through its worker thread
+  (running) to its end; a cancelled request's item stays counted until its thread ends, like its slot. Bound:
+  `max(PGW_SERVICE_MASKGEN_STALL_S = 30 s, 4x the slowest recent item)`, `PGW_SERVICE_MASKGEN_WARMUP_S = 300 s`
+  for the first item of a (device, out, in) shape since start (Triton compilation, device self-tests). Exposure:
+  public `/readyz` gets **one coarse bit** `"maskgen": "ok" | "stalled"` (no counts, ages or tenants; the S5 rule);
+  `GET /pgw/v1/maskgen/status` (authenticated like maskgen, `Cache-Control: no-store`) gives the caller **its own**
+  items only (waiting, running, oldest running age, done, failed, slowest recent, cold) plus the bit; the metrics
+  port's `/readyz` gives the operator the totals (`maskgen_progress`, no tenant names). `/readyz` status codes are
+  unchanged (a stall does not take the service out of a load balancer).
+* Client (`FactoryProcess`, option `maskgen_stall_s` / `PGW_SDK_MASKGEN_STALL_S`, default 30 s, `0` off): while a
+  segment is being made (`in_progress`), the supervisor reads the status every `min(5 s, bound / 6)` with the
+  session's pinned CA, client certificate and the factory's token; an item of this key running past the same
+  adaptive bound (or the provider's bit `stalled` with items of this key waiting) is `phase: "maskgen_stalled"`
+  with the reason, item age and bound in `health()` / `supervisor.json` / `pgw sdk status` (`STALLED`). Requests
+  waiting for masks then fail at once with the new **`ProviderStalledError`** (subclass of `APIConnectionError`,
+  `backend_unavailable`, retryable, `details.reason = "provider_maskgen_stalled"`), after one more status read. It
+  clears as soon as the item finishes. Progress, not wall time: the client's own work (encryption, hint build, a
+  slow first segment at 32B/72B) is not on the provider's clock; a provider whose items get slower raises the bound
+  as they finish. A provider without the endpoint (404/405) turns the watchdog off after one read. Defaults on: no
+  false positive in the tests below, and on the GPU an item is ~0.05-1 s against a 30 s / 300 s bound (estimated
+  from the T4 throughput at 72B, 30-40 slots/s: about 50 ms per item on average; not measured per item on an H100).
+* Tests: `tests/service/test_maskgen_progress.py` (11: fake clock; wedged item, slow-but-finishing items whose
+  bound grows, cold first item, queue that does not move, tenant isolation, abandoned/failed items, the handler's
+  accounting incl. a cancelled request, the authenticated per-tenant route, public `/readyz` carries only the bit);
+  `tests/sdk/test_factory_watch.py` (+7: a fake HTTP provider with a real `MaskgenProgress`: a wedged item is a stall
+  after 0.6 s not before, `supervisor.json` has it and no token, recheck clears it; 0.5 s items against a 0.6 s
+  bound plus a 1.5 s cold first item: never a stall over 5 s; the provider's bit with waiting items; idle factory
+  and a 404 provider: no stall, no more reads; `0` off; the option; `ProviderStalledError` from `Engine._open`);
+  `tests/sdk/test_factory_stall.py::test_a_wedged_provider_maskgen_fails_waiting_requests_fast` (the real service,
+  pks-v3, every maskgen item blocked through a test-only hook in `tests/sdk/provider_main.py`,
+  `PGW_TEST_MASKGEN_HANG_FILE`): 10 answers from the stock, then the refill hangs, the stall is seen at 5 s
+  (bound 4 s) and the waiting request fails after 4.2 s with `ProviderStalledError`; items unblocked: served again
+  after 1.8 s, bit-identical. Whole file 5 passed (the slow-but-healthy first fill still waits). tests/service
+  maskgen/app/handler subset 192 passed.
+
+**Check-vector kernels on CPUs without AVX-512** (`rust/pgw-pks/src/vecmat.rs`: `vecmat_wrap32`, `vecmat_p31`,
+`check_rows32`). Before: a hand-written AVX-512F path; AVX2 CPUs ran the generic body compiled with AVX2
+(auto-vectorised), all others the SSE2 baseline (no 32-bit lane multiply). Now, picked at run time by `Isa::parse`
+(`PGW_PKS_ISA` caps it, as for the other pks kernels): hand-written AVX2 8-column tiles (`x256`), and the generic
+body compiled with SSE4.1 where the CPU has it (also for `check_rows32`); aarch64 keeps the generic body with NEON
+(`cargo check --target aarch64-unknown-linux-gnu`; not run on an ARM CPU). Integer sums only, so every ISA gives the
+same bits: Rust tests over every ISA of the CPU (worst-case lanes `u = p-1`, `w = -128`, 1000 rows, ragged
+columns; random shapes), `tests/factory/test_vecmat_native.py` 66 passed and `test_self_check.py` 10 passed with
+`PGW_PKS_ISA=scalar`, `avx2` and `auto`; output digests equal in every benchmark. `pks-bench vecmat` (this 4-vCPU
+AVX-512 box, one thread, ms for `x @ W8`, best of 3, shared box: +-20 %):
+
+| W8 (m x n), vectors | baseline SSE2 | AVX2 before (auto-vectorised) | AVX2 now | SSE4.1 now | AVX-512 |
+|---|---|---|---|---|---|
+| 18944 x 3584, c=1: wrap32 / p31 | 44 / 47 | 16.0 / 24.0 | 11.7 / 22.4 | 19.6 / 31.5 | 7.0 / 9.4 |
+| 18944 x 3584, c=2 | 45 / 70 | 23.1 / 34.2 | 17.0 / 27.9 | 45 / 78 | 10.8 / 18.6 |
+| 18944 x 3584, c=8 | 253 / 442 | 52.9 / 107 | 46.8 / 87.9 | 93 / 149 | 40.0 / 69.2 |
+| 3584 x 18944, c=2 | 45 / 78 | 21.1 / 29.2 | 13.3 / 22.8 | - | 8.4 / 14.3 |
+| 3584 x 4608, c=4 | 17 / 62 | 10.4 / 16.4 | 7.7 / 13.8 | 9.3 / 17.2 | 3.2 / 6.4 |
+
+AVX2: 1.1-1.6x over the auto-vectorised body (wrap32 1.2-1.6x, p31 1.05-1.45x); SSE4.1: 1.5-3x over the baseline
+(e.g. c=8 2.7x / 3.0x); `check_rows32` (1024 rows, 18944 + 3584): baseline 149 ms, SSE4.1 57 ms, AVX2 (unchanged,
+auto-vectorised) 44 ms, AVX-512 29 ms. The other native kernels already had AVX2 paths (pgw-pks `simd2`/`vntt`,
+pgw-fast, pgw-ntt: checked).
+
+**mypy** (`src/pgw/sdk` + `src/pgw/service` and what they import, strict): 184 at the start of this section (the
+23 of the integration sweep plus 14 from the shard-wise packer merge), **147 now = the `7b5b3c5` baseline** (the
+only difference is one line-number shift). `mypy src`: 150, the same set as at `7b5b3c5`. Typing-only changes:
+`**dict` arguments typed `dict[str, Any]` (`memplan.max_fitting`, `service_lane` ticket), misplaced
+`type: ignore`s moved to the line mypy reports (`wire/lane.py`, `pks_gpu.py`), `_tw_t` annotated with the tensor
+it always gets, `np.max` for `ndarray.max()`, loop variables renamed where they shadowed differently typed names
+(`modelpack/shardwise.py`, two now-unneeded ignores dropped, a `list[dict[str, Any]]` annotation), a local for a
+`getattr` narrowing (`sdk/engine.py`). Tests: tests/modelpack/test_shardwise.py 18, tests/service/test_memplan.py 8,
+tests/wire 334 passed.
+
+**Open.** The watchdog's bound on a real H100 at 32B/72B (per-item times are estimated, not measured; the RunPod
+sessions can log `maskgen_progress` from the metrics port). A wedge of one CUDA stream while others progress is
+caught per item; a provider that answers neither the status endpoint nor `/readyz` is the existing
+`factory_stall_s` path. The SSE4.1 and NEON paths are not benchmarked on a CPU that lacks AVX2 (only forced here).

@@ -24,6 +24,7 @@ behaviour of the OpenAI client it replaces.
 | `mask_admission` | `PGW_MASK_ADMISSION`, else `"entitled"` | `"overcommit"` (opt-in): a request starts when the stock covers its prompt and one chunk per running answer; answers that find the stock short wait for the factory (up to 30 s) instead of new requests queueing ([Scaling](scaling.md#when-the-stock-runs-short-bursts)) |
 | `mask_wait_s` | 120 s | how long a request waits for masks when the stock is short. Longer during a model's first fill on a machine while the setup makes progress (up to `ready_timeout_s`), and while the factory is visibly making the segment the request needs and expects it within the request's `timeout` |
 | `factory_stall_s` | `PGW_FACTORY_STALL_S`, else 120 s | how long the background mask factory may make no progress because our service cannot be reached (or its runs keep failing) before requests waiting for masks fail with `APIConnectionError` naming the reason ([Reliability](reliability.md#the-background-mask-factory)); the factory keeps retrying and resumes by itself |
+| `maskgen_stall_s` | `PGW_SDK_MASKGEN_STALL_S`, else 30 s; `0` turns it off | the maskgen watchdog: while the factory makes masks, how long one of its items may run on our service without finishing (at least 4x the slowest recent item; 300 s for the first item of a shape after the service starts) before the service's mask generation counts as stalled and requests waiting for masks fail with `ProviderStalledError` ([Reliability](reliability.md#the-background-mask-factory)). Your own CPU work (encryption, the one-time setup) never counts |
 | `masked_head` | `"auto"` | the model's output layer as one more masked step on our GPU when we serve it (`"on"`, `"off"`) |
 | `prefix_cache` | `"auto"` | exact reuse of the previous turn of a conversation (`extra_body={"conversation_id": ...}`) when the output layer runs in your process |
 | `lane` | `"auto"` | our fast connection for the per-token round trips when the service offers it (`"stream"`, `"off"`) |
@@ -77,6 +78,7 @@ silently ignored.
 | `PGW_SPECULATION` | `off` | `speculation` |
 | `PGW_MASK_ADMISSION` | `entitled` | `mask_admission` |
 | `PGW_FACTORY_STALL_S` | `120` | `factory_stall_s` |
+| `PGW_SDK_MASKGEN_STALL_S` | `30` | `maskgen_stall_s` (`0`: the maskgen watchdog is off) |
 | `PGW_MASK_STORE_GB` | `8` | `mask_store_gb` |
 | `PGW_SDK_LOG` | unset | `log_level` |
 | `PGW_FACTORY_MIN_FREE_BYTES` | `2147483648` (2 GiB) | free space the mask factory leaves on the cache volume; it stops producing below it ([Reliability](reliability.md#disk)) |
@@ -85,6 +87,7 @@ silently ignored.
 | `PGW_NATIVE` | `1` | `0` disables all native extensions (pure-Python path: same results, much slower). For diagnosis only |
 | `PGW_NTT` | `1` | `0` disables only the native NTT products of mask generation |
 | `PGW_PKS_NATIVE` | `1` | `0` disables only the native `pks-v3` kernels |
+| `PGW_PKS_ISA` | `auto` | caps the instruction set of the native `pks-v3` and check-vector kernels (`avx512ifma`, `avx512`, `avx2`, `scalar`); the best one the CPU has is picked by default. Every setting gives the same bits. For diagnosis and benchmarks only |
 | `PGW_REQUIRE_NATIVE` | `0` | build time only: `1` makes a source build fail when the native extensions cannot be compiled |
 
 ## Cache directory

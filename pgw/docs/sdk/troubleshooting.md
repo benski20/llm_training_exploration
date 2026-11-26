@@ -111,6 +111,18 @@ names the provider's health-check result and the factory's last error. The facto
 itself when the service is back; retry the request later. `pgw sdk status` shows `STALLED` with the reason until
 then.
 
+### `ProviderStalledError` while waiting for masks: "its mask generation is stalled"
+
+Our service answers its health check, but a mask generation item of your key has been running there for longer
+than `maskgen_stall_s` (30 s, and at least 4x the slowest recent item) without finishing: the service's GPU is
+wedged or its mask generation hangs. `ProviderStalledError` is an `APIConnectionError` (code
+`backend_unavailable`, retryable; `details["reason"]` is `provider_maskgen_stalled`, with the item's age and the
+bound). Nothing on your side needs to change: report it to us (the service has to be restarted), and retry later;
+the factory resumes by itself once the service makes progress again. `pgw sdk status` shows `STALLED` with the
+reason, and `supervisor.json` in the factory's directory has `"phase": "maskgen_stalled"`. Before 2026-11-26 this
+was noticed only after the 600 s budget of the factory's request. A service so slow that one item legitimately
+takes longer (not a GPU service) needs a larger `maskgen_stall_s`; `0` turns the watchdog off.
+
 ## Errors during requests
 
 What the library does by itself on each failure (reconnects, re-enrollment, factory restarts, cache repair) is in
