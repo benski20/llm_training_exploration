@@ -67,7 +67,14 @@ save()
 
 SRC = "/tmp/pgwsrc"
 os.makedirs(SRC, exist_ok=True)
-tarfile.open(fileobj=io.BytesIO(base64.b64decode(TGZ)), mode="r:*").extractall(SRC, filter="data")
+if TGZ.strip():
+    tarfile.open(fileobj=io.BytesIO(base64.b64decode(TGZ)), mode="r:*").extractall(SRC, filter="data")
+else:  # a bundle over Kaggle's script size limit ships as a private dataset (build.py: "source": "dataset")
+    import glob
+
+    found = sorted(glob.glob("/kaggle/input/**/pgw.tar.xz", recursive=True))
+    log("source tarball from the dataset", found)
+    tarfile.open(found[0], mode="r:*").extractall(SRC, filter="data")
 ROOT = f"{SRC}/pgw"
 rc, _ = sh("pip_install", [sys.executable, "-m", "pip", "install", "-q", "-e", f"{ROOT}[dev]"], timeout=1800)
 if rc != 0:
