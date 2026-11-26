@@ -91,6 +91,14 @@ class NativeDecode:
         self._held: tuple[int, Any] | None = None
         #: [driver calls, trips run natively, native local ns (prepare + finish + float ops), lane ns, run CPU s]
         self.totals = [0, 0, 0, 0, 0.0]
+        #: Several answers per pass (``PGW_DECODE_NATIVE_MULTI``, :meth:`run_multi`): on when set and built.
+        self.multi = os.environ.get("PGW_DECODE_NATIVE_MULTI", "0").strip().lower() in (
+            "1", "true", "yes", "on") and hasattr(self.drv, "run_multi")
+        #: [several-answer driver calls, several-answer trips run natively]
+        self.multi_totals = [0, 0]
+        self._ts: list[int] = []
+        self._left_multi: dict[int, bytes] = {}
+        self._held_multi: tuple[int, list[Any]] | None = None
 
     def configure(self, t: int) -> None:
         """Per-trip constants for ``t``-row trips (thread counts and split depend on the rows)."""
@@ -332,8 +340,15 @@ class NativeDecode:
             self._left_flags.update({idx: flags[idx - first] for idx in range(j + 1, end)})
             return self._handback(info, res, sess, t, end, first)
         lid = self.lids[int(drv.pos)] if int(drv.pos) < len(self.lids) else self.lids[-1]
+        self._raise_code(code, info, lid, int(dup_rows), t)
+        raise ProtocolError(f"compute response item is malformed: {info}")  # pragma: no cover - raised above
+
+    def _raise_code(self, code: int, info: Any, lid: Any, dup_rows: int, t: int) -> None:
+        """Raise the error of a failed driver call (:meth:`run` / :meth:`run_multi` codes 2-7)."""
+        be = self.backend
+        noise = be.noise_monitor
         if code == 2:
-            status, bad = info
+            status, bad = info[0], info[1]
             bound = int(be._consts(lid, be._meta.get(lid))[2])
             try:
                 be._raise_status(int(status), int(bad), lid, t, bound)
@@ -352,7 +367,7 @@ class NativeDecode:
                 noise.record_native_dups(int(dup_rows), int(dups_n), int(at_rows))
             raise IntegrityError("duplicate outbound rows (possible mask reuse)", details={"duplicates": int(dups_n)})
         if code == 5:
-            status, bad = info
+            status, bad = info[0], info[1]
             err: Exception
             if int(status) == 3:
                 raise MaskReuseError("mask reservation closed during a compute call")
@@ -367,6 +382,321 @@ class NativeDecode:
         if code == 6:
             raise MaskReuseError("mask lease could not serve a call it reported ready for")
         raise ProtocolError(f"compute response item is malformed: {info}")
+
+    # ---- several answers per pass (PGW_DECODE_NATIVE_MULTI) ------------------------------------------
+    def eligible_multi(self, st: Any) -> bool:
+        """A decode pass of several answers the driver runs (:meth:`run_multi`): each sequence a decode-sized pass
+        on its own reservation, the leased several-answer trips on (``PGW_TRIP_NATIVE_MULTI``), and one lane multi
+        call able to carry every answer's rows."""
+        be = self.backend
+        k = len(st.seqs)
+        if not self.multi or k < 2 or st.extra or any(tr is not None for tr in st.trees):
+            return False
+        if not getattr(be, "trip_native_multi", False):
+            return False
+        noise = be.noise_monitor
+        if noise is not None and (self.dup_hist is None or getattr(noise, "plan_call", None) is None):
+            return False
+        cap_rows = min(int(be.max_rows_per_item), MAX_ROWS)
+        total = 0
+        kvb = bool(self.model.float_ops.kv_bf16)
+        for h, cache in zip(st.hs, st.caches, strict=True):
+            t = int(h.shape[0])
+            if not 0 < t <= cap_rows or h.dtype != torch.float32 or h.device.type != "cpu":
+                return False
+            if (cache.dtype == torch.bfloat16) != kvb:
+                return False
+            total += t
+        multi_rows = getattr(be.client, "multi_rows", None)
+        if multi_rows is None:
+            return False
+        cap = int(multi_rows())
+        if total > cap or k > cap:
+            return False
+        if noise is not None:  # sampled values are inspected whole (no random block draw)
+            mx = int(getattr(noise, "_max_values", 0) or 0)
+            tmax = max(int(h.shape[0]) for h in st.hs)
+            if any(tmax * int(m.in_features) > mx for m in self.metas):
+                return False
+        is_local = getattr(be, "local_linear", None)
+        if is_local is not None and any(is_local(lid) for lid in self.lids):
+            return False
+        seen: set[int] = set()
+        for sess in st.sessions:
+            res = sess if sess is not None else be.mask_source
+            if res is None or getattr(res, "trip_leases", None) is None or id(res) in seen:
+                return False
+            seen.add(id(res))
+        return be._use_trip([_Call(self.lids[0], st.hs[0], st.sessions[0])]) and all(
+            be._trip_self_check(m) for m in self.metas)
+
+    def run_multi(self, st: Any) -> None:
+        """Every decoder layer of a several-answer pass; writes ``st.hs`` (and leaves ``st.normed`` empty).
+
+        The trips of the per-trip path of several answers (:meth:`MaskedBackend._prepare_trip_leases`): per trip
+        one item per answer in answer order and one request id; every answer's lease resolved before any draw,
+        then each answer's Freivalds and noise-sampling draws in answer order. A trip with a sampled answer ends
+        the driver call and is held after its prepare: the statistics run before its payloads leave and before
+        the next trip's draws (an alarm stops it, fail closed). A trip the lane does not serve goes back to
+        Python with the same request (:meth:`_handback_multi`); a trip with no lease for some answer runs on the
+        ordinary path (:meth:`_ordinary_multi`)."""
+        be = self.backend
+        model = self.model
+        drv = self.drv
+        if self.rows == 0:
+            self.configure(1)  # the linears' constants (the several-answer items run one thread each)
+        sessions = list(st.sessions)
+        self._ts = [int(h.shape[0]) for h in st.hs]
+        resv = [be._reservation(_Call(self.lids[0], h, s)) for h, s in zip(st.hs, sessions, strict=True)]
+        rope_np = st.rope_np
+        if rope_np is None:
+            from pgw.engine.model import _np32
+
+            rope_np = st.rope_np = [(_np32(c), _np32(s)) for c, s in st.rope]
+        kvs = [c.numpy_views() for c in st.caches]
+        pre = st.normed
+        st.normed = None
+        normed = None
+        if pre is not None and pre[0] == 0:
+            normed = [x.numpy() for x in pre[1]]
+        hs = [h.detach().numpy() if h.is_contiguous() else np.ascontiguousarray(h.detach().numpy()) for h in st.hs]
+        self._left_multi = {}
+        self._held_multi = None
+        drv.begin_multi(hs, [int(s) for s in st.starts], normed)
+        ok = False
+        try:
+            inject = None
+            L4 = 4 * self.layers
+            while drv.mpos < L4:
+                pos = int(drv.mpos)
+                inject = self._call_multi(resv, sessions, min(L4, (pos // 4 + self.per_call) * 4), kvs, rope_np,
+                                          inject)
+            outs = [torch.empty((t, int(model.arch.hidden_size)), dtype=torch.float32) for t in self._ts]
+            drv.end_multi([o.numpy() for o in outs])
+            ok = True
+        finally:
+            self._left_multi = {}
+            self._held_multi = None
+            if not ok:
+                drv.abort()  # zeroes a held trip too (its payloads never leave)
+        st.hs = outs
+
+    def _call_multi(self, resv: list[Any], sessions: list[Any], end: int, kvs: list[Any], ropes: list[Any],
+                    inject: Any) -> Any:
+        """One driver call of a several-answer pass from its position to trip ``end``; returns the outputs to
+        inject (a trip finished here after a hand-back, or run on the ordinary path) or ``None``."""
+        be = self.backend
+        drv = self.drv
+        from pgw.core.factory_yield import note_activity as _note_activity
+
+        _note_activity()
+        k = len(resv)
+        ts = self._ts
+        # as MaskedBackend._prepare: the sessions' deferred checks and sampled statistics first
+        if be._noise_pending is not None:
+            be._join_noise()
+        if be._pending or be._failed:
+            be._join_pending([_Call(self.lids[0], None, s) for s in sessions])
+        pos = int(drv.mpos)
+        first = pos + (1 if inject is not None else 0)
+        noise = be.noise_monitor
+        plan_call = getattr(noise, "plan_call", None) if noise is not None else None
+        leases: list[Any] = []
+        flags = bytearray()
+        left = self._left_multi
+        self._left_multi = {}
+        held = self._held_multi
+        self._held_multi = None
+        no_lease = None
+        for idx in range(first, end):
+            lid, meta = self.lids[idx], self.metas[idx]
+            if held is not None and held[0] == idx:
+                # the trip the driver holds (prepared before its statistics ran): its leases and draws as made
+                # then; the driver sends the held payloads (no second prepare, no second draw)
+                leases.extend(held[1])
+                flags.extend(left.pop(idx))
+                continue
+            got = []
+            for res, t in zip(resv, ts, strict=True):
+                lease = be._trip_lease_for(res, res.trip_leases, lid, meta, t, ahead=True)
+                if lease is None:
+                    break
+                got.append(lease)
+            if len(got) < k:  # this trip takes the ordinary path (after the driver ran the ones before it)
+                no_lease = idx
+                end = idx
+                break
+            f = left.pop(idx, None)
+            if f is None:  # the per-trip draws, in trip order and answer order, each made once
+                fb = bytearray()
+                for lease in got:
+                    check = be._should_check()
+                    sampled = bool(plan_call()) if plan_call is not None else False
+                    b = (1 if check else 0) | (2 if sampled else 0)
+                    if check and not lease.field and be._defer_ok(lid):
+                        b |= 4
+                    fb.append(b)
+                f = bytes(fb)
+            leases.extend(got)
+            if any(b & 2 for b in f):
+                # a sampled answer ends the call: the driver holds the trip after its prepare (bit 3); its
+                # statistics run before its payloads leave and before the next trip's draws
+                flags.extend(b | 8 for b in f)
+                end = idx + 1
+                break
+            flags.extend(f)
+        if no_lease is not None and end == first and inject is None:
+            return self._ordinary_multi(sessions, no_lease)
+        rids = os.urandom(16 * (end - first))
+        client = be.client
+        lane_got = None
+        lane_arg = None
+        drv_ch = getattr(client, "driver_channel", None)
+        only_hold = end - first == 1 and bool(flags) and flags[0] & 8
+        if drv_ch is not None and end > first and not only_hold and getattr(client, "lane_eligible_for_driver", True):
+            lane_got = drv_ch(be.fingerprint, be.ring.name, 1, be.deadline_ms)
+            if lane_got is not None:
+                ix = self._lane_index(lane_got[0])
+                if ix is None or str(getattr(lane_got[1], "transport", "")) == "shm":
+                    client.driver_release(lane_got[0], lane_got[1], lane_got[2])
+                    lane_got = None
+                else:
+                    lane_arg = (lane_got[1], lane_got[3], ix,
+                                int(be.deadline_ms if be.deadline_ms is not None else 0), lane_got[4])
+        c0 = time.thread_time()
+        try:
+            code, info, stats, sampled_vals = drv.run_multi(end, leases, bytes(flags), rids, kvs, ropes, lane_arg,
+                                                            self.dup_hist, inject, int(be.trip_many_parallel_elems))
+        except BaseException:
+            if lane_got is not None:
+                client.driver_release(lane_got[0], lane_got[1], lane_got[2])
+            raise
+        (trips, rows, up, down, checked, skipped, deferred, deferred_ok, remote_ns, local_ns, lane_trips, lane_sent,
+         lane_recv, rtt_ns, dup_rows, dups, items) = stats
+        if lane_got is not None:
+            st_ = 0
+            err = None
+            if code == 1 and info[3] >= 0:
+                st_, err = (0, info[4]) if info[4] is not None else (int(info[3]), None)
+            if st_:
+                lane_trips += 1
+                lane_sent += 48 + 8 * k + sum(len(p) for p in info[0])
+            client.driver_release(lane_got[0], lane_got[1], lane_got[2], trips=lane_trips, sent=lane_sent,
+                                  received=lane_recv, last_rtt_s=rtt_ns / 1e9, status=st_, error=err,
+                                  multi_items=int(items))
+        tot = self.totals
+        tot[4] += time.thread_time() - c0
+        tot[0] += 1
+        tot[1] += int(trips)
+        tot[2] += int(local_ns)
+        tot[3] += int(remote_ns)
+        self.multi_totals[0] += 1
+        self.multi_totals[1] += int(trips)
+        if trips:
+            # as _finish_leases books each trip: the items as calls, one round trip each
+            be.stats.add_many(int(items), int(rows), int(trips), int(up), int(down), int(checked) + int(deferred_ok),
+                              int(skipped), remote_ns / 1e9, local_ns / 1e9,
+                              0 < sum(ts) <= be.decode_max_rows)
+        if deferred:
+            be.stats.add(deferred_checks=int(deferred))
+        if noise is not None and dup_rows and not dups:
+            noise.record_native_dups(int(dup_rows), 0)
+        if code == 8:
+            # held after its prepare: the statistics of its sampled answers in answer order, before any of its
+            # payloads leaves; an alarm stops it here (run_multi aborts the pass, zeroing the held payloads)
+            self._sampled_multi(sampled_vals)
+            if noise is not None and getattr(noise, "fail_closed", False) and getattr(noise, "alarmed", False):
+                raise IntegrityError("outbound-noise monitor alarm: masked traffic blocked until an admin reset",
+                                     details={"reasons": list(noise.report().reasons[-4:])})
+            j = int(drv.mpos)
+            base = (j - first) * k
+            self._left_multi[j] = bytes(b & ~8 for b in flags[base:base + k])
+            self._held_multi = (j, leases[base:base + k])
+            return None
+        self._sampled_multi(sampled_vals)
+        if code == 0:
+            return self._ordinary_multi(sessions, no_lease) if no_lease is not None else None
+        if code == 1:
+            # trips after the handed-back one keep their draws for the next call (drawn once, in trip order)
+            j = int(drv.mpos)
+            self._left_multi.update({idx: bytes(flags[(idx - first) * k:(idx - first + 1) * k])
+                                     for idx in range(j + 1, end)})
+            fl = bytes(flags[(j - first) * k:(j - first + 1) * k])
+            return self._handback_multi(info, resv, sessions, fl)
+        mpos = int(drv.mpos)
+        lid = self.lids[mpos] if mpos < len(self.lids) else self.lids[-1]
+        self._raise_code(code, info, lid, int(dup_rows), max(ts))
+        raise ProtocolError(f"compute response item is malformed: {info}")  # pragma: no cover - raised above
+
+    def _sampled_multi(self, vals: list[Any]) -> None:
+        """The noise monitor's statistics of a held trip's sampled answers, in answer order (inline)."""
+        if not vals:
+            return
+        noise = self.backend.noise_monitor
+        for _pos, _a, xh, xq in vals:
+            try:
+                if noise is not None:
+                    noise.inspect_planned(torch.from_numpy(xh), torch.from_numpy(xq))
+            finally:
+                xh.fill(0)
+                xq.fill(0)
+
+    def _ordinary_multi(self, sessions: list[Any], idx: int) -> Any:
+        """Trip ``idx`` of a several-answer pass on the backend's ordinary path (no native lease for some
+        answer); the outputs to inject."""
+        if int(self.drv.mpos) != idx:  # pragma: no cover - the driver stopped right before it
+            raise ShapeError("native decode driver out of step")
+        xs = self.drv.current_inputs()
+        lid = self.lids[idx]
+        outs = self.backend.forward_many([_Call(lid, torch.from_numpy(x), s) for x, s in zip(xs, sessions,
+                                                                                            strict=True)])
+        return [np.ascontiguousarray(o.to(torch.float32).numpy(), dtype=np.float32) for o in outs]
+
+    def _handback_multi(self, info: Any, resv: list[Any], sessions: list[Any], flags: bytes) -> Any:
+        """Send a several-answer trip the driver handed back on the ordinary fallback (the same request: items in
+        answer order, payloads and id) and finish it (:meth:`MaskedBackend._finish_leases`)."""
+        from pgw.engine.backends import _Prepared
+        from pgw.wire.messages import ComputeItem, ComputeRequest
+
+        be = self.backend
+        payloads, tickets, rid, lane_status, _lane_err = info
+        idx = int(self.drv.mpos)
+        lid, meta = self.lids[idx], self.metas[idx]
+        calls = [_Call(lid, _CPU_ROW, s) for s in sessions]
+        request = ComputeRequest(request_id=bytes(rid).hex(), fingerprint=be.fingerprint, ring=be.ring.name,
+                                 items=tuple(ComputeItem(lid.key, int(tk.rows), pl)
+                                             for tk, pl in zip(tickets, payloads, strict=True)),
+                                 deadline_ms=be.deadline_ms)
+        prep = _Prepared(tuple(calls), [], [], [meta] * len(calls), request, 0.0)
+        prep.trip = True
+        prep.tickets = list(tickets)
+        prep.defers = [bool(f & 4) for f in flags]
+        prep.reservations = tuple(resv)
+        client = be.client
+        noise = be.noise_monitor
+        if noise is not None and getattr(noise, "fail_closed", False) and getattr(noise, "alarmed", False):
+            prep.wipe()
+            raise IntegrityError("outbound-noise monitor alarm: masked traffic blocked until an admin reset",
+                                 details={"reasons": list(noise.report().reasons[-4:])})
+        t0 = time.perf_counter()
+        try:
+            if lane_status >= 0 and hasattr(client, "fallback_sync"):
+                response = client.fallback_sync(request)  # the lane saw it and did not serve it
+            elif hasattr(client, "compute_sync"):
+                response = client.compute_sync(request)
+            else:
+                from pgw.engine.backends import _run_coro_blocking
+
+                response = _run_coro_blocking(client.compute(request))
+        except BaseException as exc:
+            prep.wipe()
+            if isinstance(exc, Exception):
+                raise be._wrap_transport(exc) from exc
+            raise
+        outs = be._finish_leases(prep, response, time.perf_counter() - t0)
+        if be._pending or be._failed:  # deferred checks of this trip: joined before the next payload
+            be._join_pending(calls)
+        return [np.ascontiguousarray(o.numpy(), dtype=np.float32) for o in outs]
 
     def _report(self, exc: IntegrityError) -> None:
         be = self.backend

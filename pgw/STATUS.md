@@ -29,7 +29,9 @@ in the application's process against our provider service. Defaults:
 * the native TCP+TLS trip lane, with lane format 2: several answers of one step in one call;
 * for several answers per step: one synchronous pass, one native lease per answer with batched native prepare /
   finish, sampling on a thread pool, and an exact native `torch.multinomial` (section "client CPU at many concurrent
-  streams" at the end);
+  streams" at the end); since the second round, the decoder layers of such a step in the native decode driver (one
+  native call per stretch of trips, one lane multi call per trip) and trip leases prepared on a background thread
+  (the last section);
 * the p31 check on every trip;
 * cross-process mask admission (`SharedLedger`);
 * stall detection of the mask factory (`factory_stall_s`), and the maskgen watchdog for a provider whose GPU stops
@@ -3945,3 +3947,110 @@ this worktree (`results/kaggle/...`), and the change does not touch them.
 * left alone: `pgw-sdk-e2e-7b-src` (another workstream's);
 * the private kernels `pgw-head-05b` and `pgw-head-7b` keep their version-1 outputs (the old heads) in their
   private version history.
+
+a GPU-provider run, where the client's per-trip work is the larger share of a trip. *(Since then: the first two
+done, next section.)*
+
+## 2026-11-26: client CPU at many concurrent streams, round 2 (several answers in the native decode driver, leases prepared ahead; exact)
+
+Scope: the two open points of the previous section. Profiled first (`benchmarks/sdk_concurrency_bench.py`, which now
+also reports generator steps, native driver calls and trip-lease counts; py-spy of the plaintext thread during a
+level; `benchmarks/sdk_trip_profile.py`), tiny and 0.5B at N = 1/4/16, 4-vCPU box shared with other jobs, CPU
+provider on the same box.
+
+**Profile (before).** Plaintext-thread CPU samples outside the lane wait, per several-answer trip: tiny N=16 lease
+creation 28 % (`trip_lease`: `W r` chunks, `ensure`, the ahead reservation's thread start, `TripLease`), noise monitor
+26 % (statistics of the sampled answers: with 16 answers about half the trips carry one; their duplicate check in
+Python), the Python loop per trip 25 % (generator step and float-op calls of `_layer_native`, `_prepare_trip_leases`,
+the lane client's multi plumbing, `_finish_leases`), the batched native prepare 15 %. 0.5B N=16 (3.5 ms plaintext CPU
+per trip of 16 answers): leases 25 %, noise 25 %, native prepare 21 %, Python loop 16 %. At N=1 the native driver
+already ran every decode pass. The provider limits tokens/s here (0.5B: its kernels hold the GIL, about one core;
+tiny: its per-trip latency), so the measure is client CPU per token; tokens/s moves where the client's per-trip time
+is on the critical path (tiny, and every model against a GPU provider).
+
+**Changes** (both exact, on in the SDK's `NATIVE_ENV`, off in the gateway unless set):
+- **Several answers per pass in the native decode driver** (`PGW_DECODE_NATIVE_MULTI`; `DecodeDriver.begin_multi /
+  run_multi / end_multi / current_inputs`, `NativeDecode.eligible_multi / run_multi`): a decode step of several
+  answers (each <= 8 rows on its own reservation, the leased several-answer trips on, one lane multi call able to
+  carry every row) runs its decoder layers in one native call per stretch of trips, GIL released. Per trip: the
+  previous trip's deferred checks joined; every answer's prepare on its own lease (native pool above 32k elements,
+  as `trip_prepare_many`; a non-finite value in any answer takes no row of any answer); the duplicate-row checks in
+  answer order before anything leaves; one lane format-2 multi call with the answers' items in answer order
+  (`TripChannel.trip_multi_raw`); every answer's finish (range check, ring Freivalds synchronous or deferred on the
+  native helper, p31 synchronous; unmask, rescale); the float ops of each answer on its own KV cache. Python runs once
+  per stretch: every answer's lease resolved before any draw (window `ensure`, exhaustion and soundness checks), the
+  Freivalds / noise-sampling draws in trip order and answer order (each once), request ids. A trip with a sampled
+  answer ends the call and is held after its prepare: the statistics of its sampled answers run in answer order before
+  its payloads leave and before the next trip's draws (an alarm stops it; the pass is aborted and the held payloads
+  zeroed). A trip the lane does not serve is sent with the same request (items, payloads, id) on the ordinary
+  fallback and finished by `_finish_leases`; a trip with no lease for some answer runs on the ordinary path. Same
+  requests, items, rows, payload bytes, checks, statistics and outputs as the per-trip several-answer path. One
+  difference, on a failure path only: when the statistics of a sampled answer alarm, the duplicate-row history
+  already holds the fingerprints of the later answers of that trip (the per-trip path stops before recording them);
+  the trip fails closed either way and nothing of it leaves.
+- **Trip leases prepared ahead** (`PGW_TRIP_LEASE_AHEAD`; `MaskReservation.lease_ahead`,
+  `WindowedReservation.lease_ahead`, `MaskedBackend._lease_ahead_submit`): for several-answer trips, a new lease starts
+  building the next one on a `pgw-lease-ahead` thread (the `W r` chunks decrypted ahead, waited for without the store
+  lock; the extent's soundness check, without recording; the native `TripLease`); with the SDK's 8-slot incremental
+  parts, the first lease of a part the background extension adds is prepared as the part arrives. Single use and
+  accounting: a prepared lease covers rows the session already holds (nothing reserved, taken or counted: admission
+  and the ledger unchanged, no `ensure`, no extension), hands out no row until `trip_lease` attaches it at exactly
+  the cursor's row under the same soundness policy, and is closed (key zeroized, chunks zeroed) when another path
+  takes the rows, on another row or policy, and at close (request end, cancel); the next lease's chunks are decrypted
+  ahead only once it is attached (at most as much `W r` plaintext per linear as before). Single-answer trips prepare
+  nothing ahead (measured: at N=1 it only added CPU on the other thread).
+
+Privacy and integrity: per trip the provider sees exactly what it saw (the same request: items in answer order, rows,
+payload bytes, uuid4-format id, the same lane multi frame); how the generator batches answers into steps is timing,
+as before. Masking, Freivalds (ring and p31), range, duplicate-row and noise checks run per answer before anything of
+a trip leaves. Secrets: the driver's pass buffers and held payloads are zeroed at the pass end, on abort and on every
+error; tickets wiped; prepared leases zeroed when unused.
+
+Measured (`sdk_concurrency_bench.py`, streamed sampled chats, every answer bit-identical to the same request alone;
+before = branch head `ee9f0a0` built here, after = this branch; two interleaved pairs, ranges; tiny 256 tokens per
+answer, 0.5B 32):
+
+| model | N | tokens/s before / after | client CPU ms/token before / after | plaintext thread ms/token before / after |
+|---|---|---|---|---|
+| tiny | 1 | 45-47 / 44-47 | 3.4-3.7 / 3.4-3.9 | 2.6-2.7 / 2.5-2.8 |
+| tiny | 4 | 123-126 / 140-147 | 2.9 / 1.9-2.1 | 2.3-2.4 / 1.3-1.4 |
+| tiny | 16 | 279-290 / 337-360 | 2.0-2.1 / 1.36-1.47 | 1.55-1.64 / 0.86-0.95 |
+| 0.5B | 1 | 2.7-2.9 / 2.9-3.0 | 64-67 / 59-66 | 44-45 / 40-46 |
+| 0.5B | 4 | 6.4-6.6 / 6.9-7.7 | 62-65 / 49-54 | 41-43 / 28-31 |
+| 0.5B | 16 | 10.4-11.0 / 11.9-12.4 | 50-52 / 44-46 | 29-31 / 22-24 |
+
+Each part alone (A/B by switch, same build): at tiny N=16 the driver takes the plaintext thread from 1.36 to 0.81 ms
+per token; lease ahead moves 1.5-2 ms of CPU per token at 0.5B N=16 off the plaintext thread onto its own (total
+about equal: 3,900 of 9,200 prepared leases were never attached, mostly the next part's leases at request end with
+32-token answers), and 83 % of the leases of several-answer trips at tiny N=16 come from ahead. A first version that
+also prepared leases for single-answer trips cost 2-5 ms of CPU per token at 0.5B N=1 for nothing: dropped.
+`sdk_trip_profile.py` (0.5B, N=1, greedy): the same logprobs hash before / after (`e2231950bdf2ed58`).
+
+Profile (after, tiny N=16): the plaintext thread spends 75 % of its samples (lane wait included) inside the driver's
+native call; the Python left: the noise statistics of sampled answers (9 %), lease resolution and window bookkeeping
+(11 %: `ensure`, the ahead reservation's thread start), and the masked LM head's trip, still on the per-trip path
+(16 %).
+
+Tests: tests/engine/test_decode_native_multi.py 12 (driver == plain bit for bit and == the per-trip several-answer
+path: payloads in order, requests (id format, items), noise statistics, every check counter; ring and p31, one and
+all layers per call; a wrong result in any answer's item fails, synchronous and deferred; a sampled answer's alarm
+stops its trip exactly where the per-trip path stops; a non-finite answer takes no row and sends nothing; native
+argument checks and wipes), tests/engine/test_lease_ahead.py 11 (exact and used, ring / p31 / incremental parts, also
+racing the plaintext thread; nothing handed out before attach; closed when another path takes the rows, on another
+row or policy, at close; a soundness failure ahead is raised by the lease path; reserved slots, extensions and taken
+rows unchanged; single-answer trips prepare nothing), tests/sdk/test_concurrency_cpu.py 2 (real provider: answers
+alone and concurrent identical with all switches on / off, provider-metered trips and rows of a request alone and
+rows of the concurrent runs unchanged, strict speculation unchanged, the driver's several-answer passes ran over lane
+multi calls, leases came from ahead); `cargo test -p pgw-fast --lib` 87. Directories, one at a time with the rebuilt
+`pgw_fast` in `src/`: tests/engine 1212 + 15 skips; tests/sdk 206 + 1 opt-in skip (serial, 12 min; an earlier full
+run had one failure, `test_factory_stall.py::test_provider_dies_in_steady_state`, a timing bound under load: the
+file passed twice alone, and the final run passed); tests/maskstore 247; tests/wire 334; tests/native 357; tests/service 600 + 80 CUDA skips;
+tests/gateway 282 + 1 crashed xdist worker (`test_source_dtype_gateway`, 2 passed alone, as before); tests/docs: the
+18 `test_numbers` failures of before (research logs missing from the checkout), the two new variables added to the
+documented-switch list.
+
+Open: the masked LM head's trip of a several-answer step (the per-trip Python path, 16 % of the plaintext thread at
+tiny N=16) could join the driver; the noise statistics of sampled answers stay in Python (about one trip in two at
+16 answers, each ending a driver call); leases prepared for the next part at request end are wasted work on the
+lease-ahead thread (about 40 % of those prepared with 32-token answers); a GPU-provider run, where the client's
+per-trip time is the larger share of a trip and these changes show as tokens/s.

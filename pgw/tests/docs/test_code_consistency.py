@@ -145,6 +145,8 @@ _NON_FIELD_ENV = {
     "PGW_SYNC_MULTI",  # several-answer decode passes on the plaintext thread (MaskedBackend; NATIVE_ENV sets it)
     "PGW_TRIP_NATIVE_MULTI",  # one native lease per answer in a shared trip (MaskedBackend; NATIVE_ENV sets it)
     "PGW_SAMPLE_THREADS",  # sampling threads per step (pgw.engine.generate.Generator; NATIVE_ENV sets it)
+    "PGW_DECODE_NATIVE_MULTI",  # several answers per pass in the native decode driver (NATIVE_ENV sets it)
+    "PGW_TRIP_LEASE_AHEAD",  # trip leases prepared on a background thread (pgw.maskstore.store; NATIVE_ENV sets it)
     "PGW_NATIVE_MULTINOMIAL",  # exact native torch.multinomial (pgw.engine.sampling; default on)
     "PGW_NATIVE",  # native-extension switch read by pgw.core.native, pgw.hemask.ntt, pgw.hemask.pks_native
     "PGW_NTT",  # native NTT switch read by pgw.hemask.ntt

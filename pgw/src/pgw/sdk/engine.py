@@ -87,6 +87,9 @@ NATIVE_ENV: dict[str, str] = {
     "PGW_TRIP_DRIVER": "1",
     "PGW_DECODE_NATIVE": "1",
     "PGW_TRIP_DECRYPT_AHEAD": "1",
+    # the next trip lease of each linear prepared on the lease-ahead thread (rows the session already holds; attached
+    # only at its first row, else zeroed): tests/engine/test_lease_ahead.py, tests/sdk/test_concurrency_cpu.py
+    "PGW_TRIP_LEASE_AHEAD": "1",
     "PGW_LANE_SPIN_AUTO_US": "400",
     "PGW_LANE_WAIT_PREFETCH": "1",
     # several answers in one batched trip: one lane-format-2 multi call when the service offers it (same items,
@@ -98,6 +101,10 @@ NATIVE_ENV: dict[str, str] = {
     # own generator: the same tokens, logprobs and generator states). tests/sdk/test_concurrency_cpu.py
     "PGW_SYNC_MULTI": "1",
     "PGW_TRIP_NATIVE_MULTI": "1",
+    # a decode step of several answers runs its decoder layers in the native decode driver (one native call per
+    # stretch of trips, one lane multi call per trip; same requests, rows, bytes, checks and outputs):
+    # tests/engine/test_decode_native_multi.py, tests/sdk/test_concurrency_cpu.py
+    "PGW_DECODE_NATIVE_MULTI": "1",
     "PGW_SAMPLE_THREADS": "auto",
 }
 
@@ -129,13 +136,14 @@ def apply_native_env(on: bool = True) -> None:
         os.environ.setdefault(k, v if on else "0")
     if not on:
         return
-    if os.environ.get("PGW_TRIP_DECRYPT_AHEAD", "") in ("1", "true", "yes", "on"):
-        try:  # read by the mask store at import: also correct an import that happened before this call
-            from pgw.maskstore import store as _store
+    for name in ("PGW_TRIP_DECRYPT_AHEAD", "PGW_TRIP_LEASE_AHEAD"):
+        if os.environ.get(name, "") in ("1", "true", "yes", "on"):
+            try:  # read by the mask store at import: also correct an import that happened before this call
+                from pgw.maskstore import store as _store
 
-            _store.TRIP_DECRYPT_AHEAD = True
-        except Exception:  # pragma: no cover - defensive
-            log.debug("mask store decrypt-ahead flag not set", exc_info=True)
+                setattr(_store, name[4:], True)
+            except Exception:  # pragma: no cover - defensive
+                log.debug("mask store flag %s not set", name, exc_info=True)
 
 
 @dataclass

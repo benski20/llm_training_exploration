@@ -65,6 +65,7 @@ from pgw.core.packing import pack_ring, unpack_ring_u64
 from pgw.core.ring import RingParams, balanced_digits, center, dequantize_outputs, quantize_activations
 from pgw.core.ringmm import INT_MM_MAX_INNER, cpu_int8_fast, int8_digit_gemm
 from pgw.core.types import LinearId
+from pgw.maskstore import store as _store_flags  # TRIP_LEASE_AHEAD (set by the SDK at start-up)
 
 __all__ = [
     "DUMMY",
@@ -1233,6 +1234,11 @@ class MaskedBackend(LinearBackend):
         self._lease_sound: dict[int, tuple[float, int]] = {}
         self._noise_pool: Any = None
         self._noise_pending: Any = None
+        #: The lease-ahead thread (``PGW_TRIP_LEASE_AHEAD``, :meth:`_lease_ahead_submit`) and its queued jobs.
+        self._ahead_pool: Any = None
+        self._ahead_lock = threading.Lock()
+        self._ahead_jobs: set[tuple[int, str]] = set()
+        self._closing = False
         #: :meth:`_local_lean_one` constants per linear key (:attr:`trip_fast`).
         self._local_lean: dict[str, tuple[Any, ...]] = {}
         #: :meth:`_local_fast` on ``pgw_fast.local_linear_into`` (one fused native call; ``PGW_LOCAL_NATIVE=0``
@@ -1398,7 +1404,7 @@ class MaskedBackend(LinearBackend):
             return fn(lid)  # type: ignore[no-any-return]
         return (None, *self._checks_u64(res, lid))
 
-    def _check_soundness(self, lid: Any, n: int, u: Any, token: Any = None) -> None:
+    def _check_soundness(self, lid: Any, n: int, u: Any, token: Any = None, record: bool = True) -> None:
         """Raise if the current extent's check vectors give less than ``min_soundness_bits``."""
         if u is not None and int(getattr(u, "size", 0) or 0) > 0 and _vacuous(u, 0):
             # Wiped vectors (a reservation closed under us): Freivalds with u = 0 accepts anything.
@@ -1421,7 +1427,7 @@ class MaskedBackend(LinearBackend):
                 "(regenerate masks with more checks)",
                 details={"linear": str(lid), "checks": checks, "min_soundness_bits": self.min_soundness_bits},
             )
-        if token is not None:
+        if token is not None and record:
             if len(self._sound_ok) > 65536:  # bounded: tokens are (segment, linear) pairs
                 self._sound_ok.clear()
             self._sound_ok.add(token)
@@ -1764,11 +1770,12 @@ class MaskedBackend(LinearBackend):
             pool = self._noise_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="pgw-noise")
         self._noise_pending = pool.submit(run)
 
-    def _sound_verifier(self, lid: Any, n: int) -> Any:
-        """``verify(checks)`` for ``take_checked``: :meth:`_check_soundness` of the extent's vectors."""
+    def _sound_verifier(self, lid: Any, n: int, record: bool = True) -> Any:
+        """``verify(checks)`` for ``take_checked``: :meth:`_check_soundness` of the extent's vectors (``record``:
+        remember a passing extent; off for the lease-ahead thread, which leaves the plaintext thread's state as is)."""
         def verify(chk: Any) -> None:
             token, u, _uw = chk
-            self._check_soundness(lid, n, u, token)
+            self._check_soundness(lid, n, u, token, record=record)
         return verify
 
     def _prepare_trip_one(self, call: LinearCall) -> _Prepared:
@@ -1930,10 +1937,13 @@ class MaskedBackend(LinearBackend):
         return prep
 
     # ---- native per-trip path (PGW_TRIP_NATIVE) ------------------------------------------------------
-    def _trip_lease_for(self, res: Any, leases: dict[str, Any], lid: LinearId, meta: _MaskedMeta, t: int) -> Any:
+    def _trip_lease_for(self, res: Any, leases: dict[str, Any], lid: LinearId, meta: _MaskedMeta, t: int,
+                        ahead: bool = False) -> Any:
         """The lease serving the next ``t`` rows of ``lid`` (the attached one, or a new one: the window's
         ``ensure`` / exhaustion pre-check and the extent's soundness check run before any row is taken), or
-        ``None`` (the ordinary path)."""
+        ``None`` (the ordinary path). ``ahead`` (several-answer trips, where the plaintext thread is the limit):
+        with ``PGW_TRIP_LEASE_AHEAD``, a new lease also starts preparing the next one on the lease-ahead thread;
+        a lease prepared ahead is attached on any path."""
         key = lid.key
         lease = leases.get(key)
         sound = (float(self.min_soundness_bits), len(self._sound_ok))
@@ -1941,21 +1951,61 @@ class MaskedBackend(LinearBackend):
             # soundness policy changed since this lease's extent was verified: verify again before any row
             lease.detach()
         if lease is None or key == res.trip_step_key or not lease.ready(t):
+            prev = lease
             n = meta.in_features
             vkey = (key, n)
             verify = self._verifiers.get(vkey) if self.min_soundness_bits > 0 else None
             if verify is None and self.min_soundness_bits > 0:
                 verify = self._verifiers[vkey] = self._sound_verifier(lid, n)
+            can_ahead = _store_flags.TRIP_LEASE_AHEAD and getattr(res, "lease_ahead", None) is not None
+            kw: dict[str, Any] = {}
             if self.prime_check:  # prime-field extents are leased only to a gateway that runs their check
-                lease = res.trip_lease(lid, t, verify, float(meta.wnorm or 0.0), prime_ok=True)
-            else:
-                lease = res.trip_lease(lid, t, verify, float(meta.wnorm or 0.0))
+                kw["prime_ok"] = True
+            if can_ahead:  # the policy a lease prepared ahead was verified under (attached only under the same)
+                kw["tag"] = (float(self.min_soundness_bits), bool(self.prime_check))
+            lease = res.trip_lease(lid, t, verify, float(meta.wnorm or 0.0), **kw)
             if lease is None:
                 return None
             if len(self._lease_sound) > 65536:
                 self._lease_sound.clear()
             self._lease_sound[id(lease)] = (float(self.min_soundness_bits), len(self._sound_ok))
+            if ahead and can_ahead and lease is not prev:
+                self._lease_ahead_submit(res, lid, meta, t, kw["tag"])
         return lease
+
+    def _lease_ahead_submit(self, res: Any, lid: LinearId, meta: _MaskedMeta, t: int, tag: Any) -> None:
+        """Prepare ``lid``'s next trip lease of ``res`` on the lease-ahead thread (``PGW_TRIP_LEASE_AHEAD``;
+        ``MaskReservation.lease_ahead``): rows the session already holds, attached only at its first row under
+        the same ``tag`` (the soundness policy, checked there without recording), else zeroed. Timing only."""
+        rk = (id(res), lid.key)
+        with self._ahead_lock:
+            if rk in self._ahead_jobs or self._closing:
+                return
+            self._ahead_jobs.add(rk)
+            pool = self._ahead_pool
+            if pool is None:
+                from concurrent.futures import ThreadPoolExecutor
+
+                pool = self._ahead_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="pgw-lease-ahead")
+        n = meta.in_features
+        verify = self._sound_verifier(lid, n, record=False) if self.min_soundness_bits > 0 else None
+        wnorm = float(meta.wnorm or 0.0)
+        prime_ok = bool(self.prime_check)
+
+        def run() -> None:
+            try:
+                res.lease_ahead(lid, t, verify, wnorm, prime_ok=prime_ok, tag=tag)
+            except Exception as exc:  # the lease path meets any error again and raises it there
+                log.debug("trip lease ahead failed: %s", type(exc).__name__)
+            finally:
+                with self._ahead_lock:
+                    self._ahead_jobs.discard(rk)
+
+        try:
+            pool.submit(run)
+        except RuntimeError:  # shut down (closing)
+            with self._ahead_lock:
+                self._ahead_jobs.discard(rk)
 
     def _prepare_trip_lease(self, call: LinearCall) -> _Prepared | None:
         """:meth:`_prepare_trip_one` as one native call (:attr:`trip_native`), or ``None`` (no row taken,
@@ -2113,7 +2163,7 @@ class MaskedBackend(LinearBackend):
                 raise RingOverflowError("non-finite activation values cannot be quantized")
         leases: list[Any] = []
         for c, res, meta, xn in zip(calls, reservations, metas, xs, strict=True):
-            lease = self._trip_lease_for(res, res.trip_leases, c.id, meta, int(xn.shape[0]))
+            lease = self._trip_lease_for(res, res.trip_leases, c.id, meta, int(xn.shape[0]), ahead=True)
             if lease is None:  # no row taken yet (leases only reserve): the batch path serves the whole trip
                 return None
             leases.append(lease)
@@ -3431,6 +3481,11 @@ class MaskedBackend(LinearBackend):
             pool, self._prefetch_pool = self._prefetch_pool, None
         if pool is not None:
             pool.shutdown(wait=False, cancel_futures=True)
+        with self._ahead_lock:
+            self._closing = True
+            apool, self._ahead_pool = self._ahead_pool, None
+        if apool is not None:  # leases prepared ahead belong to their reservations, which zero them at close
+            apool.shutdown(wait=True, cancel_futures=True)
         npool, self._noise_pool = self._noise_pool, None
         if npool is not None:  # the pending inspection wipes its copies when it ends
             npool.shutdown(wait=True)
