@@ -134,25 +134,38 @@ def test_seeded_sampling_and_streaming_are_bit_identical(state: dict[str, Any], 
     assert [ch.choices[0].finish_reason for ch in chunks if ch.choices][-1] == "length"
 
 
-def test_conversation_prefix_reuse_is_exact(state: dict[str, Any], provider: Provider) -> None:
-    """prefix_cache=True (the gateway's own LM head): turn 2 reuses turn 1's KV cache and gives the bits of a
-    recompute and of the existing gateway path."""
-    c = _client(provider, state["key"], state["root"] / "prefix", prefix_cache=True)
+@pytest.mark.parametrize("head", ["masked", "gateway"])
+def test_conversation_prefix_reuse_is_exact(state: dict[str, Any], provider: Provider, head: str) -> None:
+    """prefix_cache=True, with the masked LM head (now allowed) and with the gateway's own head: turn 2 reuses turn
+    1's KV cache and gives the bits of a recompute and of the existing gateway path; a second conversation of the
+    same ``user`` reuses the shared system prompt; another ``user`` reuses nothing."""
+    c = _client(provider, state["key"], state["root"] / f"prefix-{head}", prefix_cache=True,
+                masked_head="auto" if head == "masked" else "off")
     try:
-        kw = {**GREEDY, "extra_body": {"ignore_eos": True, "conversation_id": "conv-1"}}
+        kw = {**GREEDY, "user": "u1", "extra_body": {"ignore_eos": True, "conversation_id": "conv-1"}}
         r1 = c.chat.completions.create(model=MODEL, messages=PROMPT, **kw)
         st = c.status()["models"][MODEL]
-        assert st["masked_head"] is False and st["native"]["decode_native"] is True
-        ref = _reference(provider.pack_dir, GREEDY, head_mode="gateway")
+        assert st["masked_head"] is (head == "masked") and st["native"]["decode_native"] is True
+        ref = _reference(provider.pack_dir, GREEDY, head_mode="provider_int8" if head == "masked" else "gateway")
         assert r1.to_dict()["choices"][0]["logprobs"]["content"] == ref["choices"][0]["logprobs"]["content"]
         turn2 = [*PROMPT, {"role": "assistant", "content": r1.choices[0].message.content},
                  {"role": "user", "content": "And then?"}]
         r2 = c.chat.completions.create(model=MODEL, messages=turn2, **kw)
-        assert r2.usage.prompt_tokens_details is not None and r2.usage.prompt_tokens_details.cached_tokens > 0
-        fresh = c.chat.completions.create(model=MODEL, messages=turn2, **{**GREEDY, "extra_body": {
+        assert r2.usage.prompt_tokens_details is not None
+        assert r2.usage.prompt_tokens_details.cached_tokens > r1.usage.prompt_tokens
+        fresh = c.chat.completions.create(model=MODEL, messages=turn2, **{**GREEDY, "user": "u2", "extra_body": {
             "ignore_eos": True, "conversation_id": "conv-other"}})
-        assert fresh.usage.prompt_tokens_details.cached_tokens == 0
+        assert fresh.usage.prompt_tokens_details.cached_tokens == 0  # another user: no reuse
         assert r2.to_dict()["choices"][0] == fresh.to_dict()["choices"][0]  # reuse gives the bits of a recompute
+        other = [PROMPT[0], {"role": "user", "content": "Name a colour."}]
+        r3 = c.chat.completions.create(model=MODEL, messages=other, **{**kw, "extra_body": {
+            "ignore_eos": True, "conversation_id": "conv-2"}})
+        assert 0 < r3.usage.prompt_tokens_details.cached_tokens < r3.usage.prompt_tokens  # the system prompt
+        ref3 = _reference(provider.pack_dir, GREEDY, head_mode="provider_int8" if head == "masked" else "gateway",
+                          messages=other)
+        assert r3.to_dict()["choices"][0]["logprobs"]["content"] == ref3["choices"][0]["logprobs"]["content"]
+        pc = c.status()["models"][MODEL]["prefix_cache"]
+        assert pc["hits"] == 2 and pc["moved"] == 1 and pc["copied"] == 1 and pc["entries"] >= 1
     finally:
         c.close()
 

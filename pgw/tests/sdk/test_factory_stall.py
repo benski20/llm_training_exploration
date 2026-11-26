@@ -74,9 +74,12 @@ def _client(rig: Rig, key: str, root: Path, **kw: Any) -> Any:
     from pgw.sdk import LocalPackProvisioner
 
     # masked_head off: the tiny model's 260-token head is not a pks-v3 shape (real Qwen2.5 vocabularies are)
+    # prefix_cache off: these tests size requests against the stock by their whole prompt (with the multi-entry
+    # cache a repeated prompt needs one prompt row and would be admitted)
     opts: dict[str, Any] = {"cache_dir": root / "cache", "state_dir": root / "state", "mask_scheme": "pks-v3",
-                            "masked_head": "off", "mask_workers": 1, "mask_target_slots": 300,
-                            "mask_low_water_slots": 150, "mask_segment_slots": 64, "mask_wait_s": 600,
+                            "masked_head": "off", "prefix_cache": False, "mask_workers": 1,
+                            "mask_target_slots": 300, "mask_low_water_slots": 150, "mask_segment_slots": 64,
+                            "mask_wait_s": 600,
                             "factory_stall_s": STALL_S, "ready_timeout_s": 600}
     opts.update(kw)
     return OpenAI(api_key=key, provisioner=LocalPackProvisioner({MODEL: rig.prov.pack_dir}), **opts)

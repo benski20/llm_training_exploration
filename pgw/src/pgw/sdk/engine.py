@@ -187,6 +187,9 @@ class ModelHandle:
         if rt is not None:
             out["lane"] = getattr(rt, "lane_state", None)
             out["fingerprint"] = getattr(rt, "fingerprint", None)
+            pc = getattr(rt, "prefix_cache", None)
+            if pc is not None:  # counts and sizes only (no keys, no tokens)
+                out["prefix_cache"] = pc.status()
             with contextlib.suppress(Exception):
                 out["masks_available"] = rt._available_slots() if rt.started else None
             be = getattr(rt, "backend", None)
@@ -568,6 +571,7 @@ class Engine:
         repaired = False
         for attempt in (0, 1, 2):
             rt = ModelRuntime(cfg, self._settings, mask_store=self.store, metrics=GatewayMetrics(enabled=False))
+            rt.prefix_cache_factory = self._prefix_cache_factory
             self._bind_halt(h, rt)
             try:
                 await rt.start()
@@ -677,7 +681,7 @@ class Engine:
 
     async def _decide_masked_head(self, session: Session, fp: str) -> bool:
         mode = self.options.masked_head
-        if mode == "off" or self.options.prefix_cache is True:
+        if mode == "off":
             return False
         from pgw.modelpack.masked_head import head_fingerprint
 
@@ -748,10 +752,19 @@ class Engine:
         return kw
 
     def _prefix_on(self, h: ModelHandle) -> bool:
-        """Conversation prefix reuse: explicit ``True``, or ``"auto"`` without the masked LM head (the engine
-        proves reuse exact only with the gateway's own head)."""
+        """KV prefix reuse (:mod:`pgw.sdk.prefix_cache`): explicit ``True`` (with or without the masked LM head), or
+        ``"auto"`` without the masked head (the earlier default; with the masked head it stays opt-in: see
+        ``research/reviews/prefix-cache.md``)."""
         p = self.options.prefix_cache
         return p is True or (p == "auto" and not h.masked_head)
+
+    def _prefix_cache_factory(self, cfg: Any) -> Any:
+        """The runtime's prefix cache: the multi-entry, longest-prefix client cache (RAM only)."""
+        from pgw.sdk.prefix_cache import ClientPrefixCache
+
+        o = self.options
+        return ClientPrefixCache(max_bytes=int(float(o.prefix_cache_mb) * (1 << 20)),
+                                 ttl_s=float(o.prefix_cache_ttl_s), max_entries=int(cfg.prefix_cache_max_entries))
 
     def _factory_plan(self, h: ModelHandle) -> FactoryPlan:
         o = self.options
@@ -1265,7 +1278,10 @@ class Engine:
         meta["params"] = params
         prefix_key = None
         if rt.prefix_cache is not None:
-            prefix_key = f"sdk\x00user:{req.user or ''}\x00conv:{conversation or ''}"
+            from pgw.sdk.prefix_cache import scope_key
+
+            scope = "sdk\x00client" if self.options.prefix_cache_scope == "client" else f"sdk\x00user:{req.user or ''}"
+            prefix_key = scope_key(scope, conversation)
         # Strict speculation orders a request behind the dummy passes of the previous request of the same OpenAI
         # ``user`` (as the gateway does per key and user): a follow-up issued after an answer must not start before
         # the provider has seen one pass per token of that answer. A client-local key, never sent to the provider.

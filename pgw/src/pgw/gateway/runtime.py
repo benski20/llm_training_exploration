@@ -548,6 +548,9 @@ class ModelRuntime:
         self._prepared: tuple[Any, ChatTokenizer] | None = None
         #: Conversation KV-prefix reuse (``prefix_cache = "conversation"``; gateway RAM only, SPEC 9.4b).
         self.prefix_cache: ConversationPrefixCache | None = None
+        #: Optional builder of the prefix cache (the client library's multi-entry cache,
+        #: :class:`pgw.sdk.prefix_cache.ClientPrefixCache`); ``None``: :class:`ConversationPrefixCache`.
+        self.prefix_cache_factory: Callable[[GatewayModelConfig], Any] | None = None
         #: ``schedule = "fused2"`` (opt-in): the full public fused2 weights until the engine is built (then the
         #: weight-free tables only), the fused2 lane provider, and public bookkeeping for the admin status.
         self.fused2 = config.schedule == "fused2"
@@ -1235,9 +1238,12 @@ class ModelRuntime:
                 raise ConfigError(f"model {self.name!r}: prefix_cache = 'conversation' is not exact here: {why}")
             if self.prefix_cache is not None:
                 self.prefix_cache.close()
-            self.prefix_cache = ConversationPrefixCache(
-                max_bytes=int(c.prefix_cache_max_mb * (1 << 20)), ttl_s=c.prefix_cache_ttl_s,
-                max_entries=c.prefix_cache_max_entries)
+            if self.prefix_cache_factory is not None:
+                self.prefix_cache = self.prefix_cache_factory(c)
+            else:
+                self.prefix_cache = ConversationPrefixCache(
+                    max_bytes=int(c.prefix_cache_max_mb * (1 << 20)), ttl_s=c.prefix_cache_ttl_s,
+                    max_entries=c.prefix_cache_max_entries)
         self.tokenizer = tokenizer
         self.pack = pack
 

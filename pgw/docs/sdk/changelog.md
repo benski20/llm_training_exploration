@@ -3,6 +3,16 @@
 All notable changes to the PGW client library (`pgw-sdk`). Versions follow semantic versioning; while the
 major version is 0, minor versions may change interfaces, and such changes are listed here.
 
+## Unreleased: prefix cache
+
+* `prefix_cache=True` now works with the masked output layer (it used to turn the masked layer off) and keeps
+  several cached prompts per `user`: the longest exact token prefix wins, so a system prompt shared by several
+  conversations, a regenerated answer or an edited message reuse what they share. Answers and logprobs stay
+  bit-identical. Opt-in with the masked output layer (`"auto"` is unchanged); see
+  [Configuration](configuration.md#prefix-cache) for what the service can then infer.
+* New options `prefix_cache_mb` (1024), `prefix_cache_ttl_s` (600) and `prefix_cache_scope` (`"user"`, or
+  `"client"` to share across users). `client.status()` shows the cache's counters.
+
 ## Unreleased
 
 * Worker processes with the same key and cache directory now share one admission ledger for the mask stock, so a

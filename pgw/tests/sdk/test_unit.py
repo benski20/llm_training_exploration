@@ -60,8 +60,10 @@ def test_options_defaults_env_and_validation(monkeypatch: pytest.MonkeyPatch) ->
     assert o.workers == 3 and o.mask_scheme == "mlwe" and o.mask_store_gb == 2.0
     with pytest.raises(TypeError, match="unknown"):
         SDKOptions.from_env(no_such_option=1)
+    o = SDKOptions.from_env(prefix_cache=True, masked_head="on")  # the masked head no longer excludes reuse
+    assert o.prefix_cache is True and o.prefix_cache_scope == "user" and o.prefix_cache_mb == 1024.0
     for bad in ({"mask_scheme": "rot13"}, {"lane": "udp"}, {"mask_workers": 0}, {"mask_nice": 30},
-                {"prefix_cache": True, "masked_head": "on"}):
+                {"prefix_cache_scope": "everyone"}, {"prefix_cache_mb": 0}, {"prefix_cache_ttl_s": 0}):
         with pytest.raises(ValueError):
             SDKOptions.from_env(**bad)
 

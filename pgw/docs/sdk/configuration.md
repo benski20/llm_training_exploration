@@ -26,7 +26,10 @@ behaviour of the OpenAI client it replaces.
 | `factory_stall_s` | `PGW_FACTORY_STALL_S`, else 120 s | how long the background mask factory may make no progress because our service cannot be reached (or its runs keep failing) before requests waiting for masks fail with `APIConnectionError` naming the reason ([Reliability](reliability.md#the-background-mask-factory)); the factory keeps retrying and resumes by itself |
 | `maskgen_stall_s` | `PGW_SDK_MASKGEN_STALL_S`, else 30 s; `0` turns it off | the maskgen watchdog: while the factory makes masks, how long one of its items may run on our service without finishing (at least 4x the slowest recent item; 300 s for the first item of a shape after the service starts) before the service's mask generation counts as stalled and requests waiting for masks fail with `ProviderStalledError` ([Reliability](reliability.md#the-background-mask-factory)). Your own CPU work (encryption, the one-time setup) never counts |
 | `masked_head` | `"auto"` | the model's output layer as one more masked step on our GPU when we serve it (`"on"`, `"off"`) |
-| `prefix_cache` | `"auto"` | exact reuse of the previous turn of a conversation (`extra_body={"conversation_id": ...}`) when the output layer runs in your process |
+| `prefix_cache` | `"auto"` | exact reuse of prompt prefixes your process has already computed: the earlier turns of a conversation, a system prompt shared by several conversations, a regenerated answer. Cached tokens take no round-trip rows and no masks; answers and logprobs are bit-identical. `True`: on (with or without the masked output layer; opt-in, see [below](#prefix-cache)); `"auto"`: on only when the output layer runs in your process (`masked_head="off"` or not served); `False`: off |
+| `prefix_cache_mb` | 1024 | memory budget of the cached KV states per model and process (MiB, RAM only; least recently used are wiped first) |
+| `prefix_cache_ttl_s` | 600 | a cached KV state unused this long is wiped |
+| `prefix_cache_scope` | `"user"` | which requests may reuse each other's prefixes: the same OpenAI `user` (`"user"`), or every request of this client (`"client"`, opt-in: a system prompt shared by all users is computed once) |
 | `lane` | `"auto"` | our fast connection for the per-token round trips when the service offers it (`"stream"`, `"off"`) |
 | `model_fingerprints` | `{}` | extra or replacement fingerprint pins `{model: fingerprint}`. The library pins every supported model itself and refuses a service that serves anything else; set this only for a custom model build you checked yourself |
 | `usage_reports` | `True` | after each request, send the service a record without content (model, token counts, latency, status, whether every check passed) for your organisation's console. The service sees the same counts and timing in the masked traffic anyway. Requests that fail before reaching the service (for example no masks yet, or a prompt beyond the context) are not reported; they are counted in `client.status()["local_errors"]` only |
@@ -35,6 +38,30 @@ behaviour of the OpenAI client it replaces.
 | `draft_head_path` | none | the draft-head file for `speculation="draft_head"` |
 | `spec_pass_gap_ms` | 8 | with `speculation`: the least time between the end of one round and the start of the next (0 = off). It hides from the service the small timing differences between the answer's rounds and the random rounds after it; it costs a few ms per round |
 | `log_level` | `PGW_SDK_LOG`, else silent | structured (JSON) logs on stderr at this level |
+
+## Prefix cache
+
+With `prefix_cache=True` the client keeps the plaintext KV state of finished requests in its own RAM (never on
+disk, never sent anywhere) and a later request whose prompt starts with the same tokens runs only the rest of its
+prompt. In a multi-turn chat every turn after the first then costs masks and round-trip rows only for the new
+message and the answer, instead of the whole conversation; a shared system prompt is computed once per `user`
+(or once per client with `prefix_cache_scope="client"`). `usage.prompt_tokens_details.cached_tokens` shows how
+many prompt tokens came from the cache, and `client.status()["models"][model]["prefix_cache"]` the counters.
+
+* **Exact.** Answers and logprobs are bit-identical to recomputing the prompt (greedy, seeded sampling,
+  speculation), with the masked output layer and without.
+* **What it costs in privacy.** Our service then sees a short first round of trips for a request that continued
+  an earlier one (only the new tokens' rows), so it can tell *that* a request reused a cached prefix and roughly
+  how long its context is, and link a conversation's turns more surely than from token counts alone. It never
+  sees more content: every row it gets is still masked with a fresh single-use mask. This is why the cache is
+  opt-in with the masked output layer (the default where served). The analysis:
+  `research/reviews/prefix-cache.md`. With `prefix_cache_scope="client"` an application user can also tell from
+  the response time whether another user's prompt started with the same tokens: keep `"user"` if your users are
+  untrusted.
+* **Memory.** About 25 KB per cached token at 0.5B and 115 KB at 7B (1 GiB holds about 43,000 / 9,300 tokens).
+* **Several worker processes** each keep their own cache: route a conversation (or a `user`) to the same worker
+  for hits.
+* Everything cached is wiped on an integrity failure, a model reload and when the client closes.
 
 There is no `base_url`: the provider address comes from the key. Use one client per process and share it
 between threads or tasks; it is safe for concurrent use and batches concurrent requests. For many concurrent

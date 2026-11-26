@@ -68,6 +68,10 @@ class MaskedHead:
     name = "masked"
     #: The head call takes the pass's padding like the layers' calls (``TransformerModel._padded``).
     supports_pad_rows = True
+    #: Each logit row depends only on its own hidden row (normed alone, activations quantized per row, an exact
+    #: integer product), never on the other rows of the pass: conversation KV-prefix reuse stays bit-identical
+    #: (:meth:`pgw.engine.generate.Generator.prefix_reuse_supported`).
+    rows_exact = True
 
     def __init__(self, num_layers: int):
         self.lid = head_linear_id(num_layers)

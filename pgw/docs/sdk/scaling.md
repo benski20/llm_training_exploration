@@ -264,16 +264,17 @@ client = OpenAI(
   (`timeout` bounds the wait). Keep it at 4-8 for 7B and larger (gateway CPU, lane rows).
 * `mask_workers` and `mask_store_gb`: from the table. `pgw sdk status` shows the stock, the factory's
   throughput and how many requests wait for masks (`requests_waiting_for_masks`).
-* `prefix_cache` (default `"auto"`): continuing a conversation reuses the previous turn's KV state, and its
-  tokens take no masks. It is on when the output layer runs in your process (`masked_head="off"`, or when the
-  service does not serve the masked head). With the masked head (the default where served) every turn
-  recomputes the whole conversation and pays masks for it. `prefix_cache=True` turns the masked head off: the
-  output layer then runs on the client CPU (about 47 ms per generated token at 7B, float32), while every reused
-  token saves a mask slot (about 32 ms at 7B without the head's masks) and its prompt pass. A turn that reuses
-  2,000 tokens and generates 256 saves about 64 CPU-seconds of masks for about 12 of head work: for long multi-turn chats, prefer
-  `prefix_cache=True`; for single-turn traffic keep the default. Reuse is per conversation key (API key, OpenAI
-  `user`, `extra_body={"conversation_id": ...}`): never across users or conversations.
-* KV memory: the prefix cache keeps at most 1 GiB of conversations (least recently used are wiped first).
+* `prefix_cache` (default `"auto"`): a request whose prompt starts with tokens this process has already
+  computed (the earlier turns of its conversation, a shared system prompt) runs only the rest: the cached tokens
+  take no masks and no round-trip rows. `"auto"` turns it on only when the output layer runs in your process
+  (`masked_head="off"`, or when the service does not serve the masked head). `prefix_cache=True` turns it on
+  with the masked head as well (since 2026-11-26; before, it turned the masked head off): opt-in, because the
+  service can then tell that a request continued an earlier one ([configuration](configuration.md#prefix-cache)).
+  For long multi-turn chats it is the main lever on mask production (a turn that reuses 2,000 tokens saves about
+  2,000 mask slots, 64 CPU-seconds at 7B). Reuse is within one OpenAI `user` (`prefix_cache_scope="client"`:
+  across the whole client).
+* KV memory: the prefix cache keeps at most `prefix_cache_mb` (1 GiB) of KV states per model and process (least
+  recently used are wiped first); each worker process has its own, so route a conversation to one worker.
 
 ## When the stock runs short (bursts)
 
@@ -329,7 +330,7 @@ def get_client():
 
 * Admission is FIFO across all users of a client (`max_concurrent` running, the rest queued in arrival order);
   within a step every running answer gets one token, so a long answer does not slow a short one's tokens.
-* The OpenAI `user` field keys the conversation prefix cache (no reuse across users) and, with `speculation`,
+* The OpenAI `user` field scopes the prefix cache (no reuse across users unless `prefix_cache_scope="client"`) and, with `speculation`,
   orders a user's requests behind the previous one's remaining dummy rounds; it never delays another user.
 * There is no per-user quota inside the client: one user with many concurrent requests can occupy all
   `max_concurrent` slots. Apply per-user limits in your application if users are untrusted.

@@ -39,6 +39,9 @@ The model weights are public. Their secrecy is not a goal.
 
 * **Metadata.** We see which model you use, token counts, request timing and traffic volume, and we keep
   usage records for billing and capacity. Padding and dummy traffic are planned, not in this release.
+* **Prefix cache hits** (opt-in, `prefix_cache=True`): a request that reuses a cached prompt prefix sends only
+  its new tokens' rows, so we can tell that it continued an earlier request and roughly how long its context is.
+  No content is revealed ([configuration](configuration.md#prefix-cache)).
 * **A compromised client machine.** Anyone controlling the machine that runs your process can read
   everything your process can.
 * **Availability.** We can refuse or delay service. We cannot make you accept a wrong answer.

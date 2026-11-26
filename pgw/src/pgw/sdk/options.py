@@ -116,9 +116,19 @@ class SDKOptions:
             Process-wide (environment switches read when a model starts): the first client's choice applies.
         masked_head: ``"auto"`` (the int8 LM head as a masked linear when the provider serves it), ``"on"``
             (required), ``"off"``.
-        prefix_cache: Exact conversation prefix reuse (the KV cache of the previous turn, in RAM). ``"auto"``
-            (default): on when the masked LM head is not used (the engine proves prefix reuse exact only with the
-            gateway's own head); ``True``: on, and the masked head off; ``False``: off.
+        prefix_cache: Exact KV prefix reuse (``research/reviews/prefix-cache.md``): the plaintext KV cache of
+            finished requests stays in this process's RAM, and a later request whose prompt starts with the same
+            tokens (a conversation's earlier turns, a shared system prompt) runs only the rest of its prompt: no
+            round-trip rows and no masks for the cached tokens; answers and logprobs bit-identical. ``"auto"``
+            (default): on only when the masked LM head is not used (as before); ``True``: on, with or without the
+            masked head (opt-in: the provider then sees a shorter prompt pass for a request that hits the cache,
+            i.e. *that* it continued an earlier prompt); ``False``: off.
+        prefix_cache_mb: Memory budget of the stored KV caches per model and process (MiB, default 1024; least
+            recently used entries are wiped first). Live requests' caches are not counted.
+        prefix_cache_ttl_s: A stored KV cache unused this long is wiped (default 600 s).
+        prefix_cache_scope: Which requests may reuse each other's prefixes: ``"user"`` (default: the same OpenAI
+            ``user``, so one application user's timing cannot reveal another's prompts) or ``"client"`` (every
+            request of this client: a system prompt shared by all users is computed once).
         hint: How the pks-v3 hint is obtained on first use of a model [``PGW_HINT``]: ``"local"`` (default; the
             background factory builds it from the fingerprint-checked public weights: one-time, about 20-30 min of
             CPU at 7B on 4 cores, then cached) or ``"provider"`` (opt-in; the provider computes the expensive part
@@ -189,6 +199,9 @@ class SDKOptions:
     native: bool = True
     masked_head: Literal["auto", "on", "off"] = "auto"
     prefix_cache: bool | Literal["auto"] = "auto"
+    prefix_cache_mb: float = 1024.0
+    prefix_cache_ttl_s: float = 600.0
+    prefix_cache_scope: Literal["user", "client"] = "user"
     hint: Literal["local", "provider"] = "local"
     factory_weights: Literal["pack", "stream"] = "pack"
     factory_weights_source: Literal["provider", "hf"] = "provider"
@@ -260,9 +273,12 @@ class SDKOptions:
             raise ValueError("lane must be 'auto', 'stream' or 'off'")
         if self.prefix_cache not in (True, False, "auto"):
             raise ValueError("prefix_cache must be True, False or 'auto'")
-        if self.prefix_cache is True and self.masked_head == "on":
-            raise ValueError("prefix_cache=True and masked_head='on' do not combine (prefix reuse is proven exact "
-                             "with the gateway's own LM head only)")
+        if not 1.0 <= float(self.prefix_cache_mb) <= float(1 << 20):
+            raise ValueError("prefix_cache_mb must be between 1 and 1048576")
+        if not 1.0 <= float(self.prefix_cache_ttl_s) <= 7 * 86400.0:
+            raise ValueError("prefix_cache_ttl_s must be between 1 and 604800 seconds")
+        if self.prefix_cache_scope not in ("user", "client"):
+            raise ValueError("prefix_cache_scope must be 'user' or 'client'")
         if self.hint not in ("local", "provider"):
             raise ValueError("hint must be 'local' or 'provider'")
         if self.factory_weights not in ("pack", "stream"):

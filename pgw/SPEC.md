@@ -721,7 +721,9 @@ prompt pass (`pgw.engine.prefix_cache`, `Generator.generate/astream(..., prefix=
   holds because each K/V row and each logit row depends only on its own token and the cache prefix it attends
   to, never on which rows share a pass: the native float path (`float_ops = "native"`: fixed-order per-row
   RMSNorm, RoPE, attention and SiLU, no FMA or libm) and `rows_exact` backends (per-row activation scales, exact
-  integer products: `PlainBackend`, `MaskedBackend` incl. local linears). The earlier turn computed its generated
+  integer products: `PlainBackend`, `MaskedBackend` incl. local linears). Since 2026-11-26 also with the masked LM head
+  (`MaskedHead.rows_exact`: each logit row is its own row normed alone, quantized per row, an exact integer product;
+  `tests/engine/test_prefix_cache_masked_head.py`). The earlier turn computed its generated
   tokens one row per pass; the recompute would put them inside one prompt block. torch's float kernels (SDPA,
   RMSNorm reductions) choose blockings by shape and thread count, so the configuration refuses `prefix_cache`
   without `float_ops = "native"` (and on a GPU target or with `mode = "float"`), and the engine refuses a prefix

@@ -1706,16 +1706,18 @@ class Generator:
         never on how many rows share a pass (the earlier turn computed its generated tokens one row per pass,
         the recompute would run them inside one prompt block). True for the native float path (fixed-order
         per-row kernels) with a ``rows_exact`` backend (per-row activation scales, exact integer products) and
-        the default head and schedule. torch's float kernels (SDPA, RMSNorm reductions) choose blockings by
-        shape and thread count, so they are refused."""
+        the default head or a ``rows_exact`` head mode (the masked LM head: each logit row is its own row normed
+        alone, quantized per row, an exact integer product) and the default schedule. torch's float kernels
+        (SDPA, RMSNorm reductions) choose blockings by shape and thread count, so they are refused."""
         m = self.model
         if not isinstance(getattr(m, "float_ops", None), NativeFloatOps):
             return False, "needs float_ops='native' (torch float kernels are not row-invariant)"
         be = getattr(m, "backend", None)
         if not bool(getattr(be, "rows_exact", False)):
             return False, f"backend {type(be).__name__} is not row-exact"
-        if getattr(m, "head_mode", None) is not None or getattr(m, "schedule", None) is not None:
-            return False, "needs the default head and schedule"
+        hm = getattr(m, "head_mode", None)
+        if (hm is not None and not bool(getattr(hm, "rows_exact", False))) or getattr(m, "schedule", None) is not None:
+            return False, "needs the default head (or a row-exact head mode such as the masked head) and schedule"
         if getattr(m, "lm_head_fn", None) is not None:
             return False, "needs the exact gateway LM head"
         return True, "ok"
