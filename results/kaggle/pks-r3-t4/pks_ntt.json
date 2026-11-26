@@ -1,0 +1,280 @@
+{
+ "device": "Tesla T4",
+ "torch": "2.11.0+cu130",
+ "triton": "3.6.0",
+ "exact": {
+  "fwd_equals_pks_ntt": [
+   true,
+   true,
+   true,
+   true
+  ],
+  "mac_inv_equals_pks_ntt": [
+   true,
+   true,
+   true,
+   true
+  ],
+  "keyswitch_g1_fused_equals_torch": true,
+  "keyswitch_g1_fused_equals_cpu": true,
+  "keyswitch_g1_fwd4_fused_equals_torch": true,
+  "keyswitch_g1_fwd4_fused_equals_cpu": true,
+  "keyswitch_g1_1ct_g1": true,
+  "keyswitch_g2_fused_equals_torch": true,
+  "keyswitch_g2_fused_equals_cpu": true,
+  "keyswitch_g2_fwd4_fused_equals_torch": true,
+  "keyswitch_g2_fwd4_fused_equals_cpu": true,
+  "keyswitch_g2_1ct_g1": true,
+  "fused_self_test": true,
+  "keyswitch_2048rows_g4_fused_equals_torch": true,
+  "keyswitch_2048rows_g4_fwd4_equals_torch": true,
+  "all": true
+ },
+ "exact_new": {
+  "combine_64x300_equals_torch": true,
+  "combine_64x300_equals_numpy": true,
+  "switch_64x300_equals_torch": true,
+  "switch_64x300_equals_host_switch_hint": true,
+  "combine_2048x512_equals_torch": true,
+  "combine_2048x512_equals_numpy": true,
+  "switch_2048x512_equals_torch": true,
+  "switch_2048x512_equals_host_switch_hint": true,
+  "combine_1x256_equals_torch": true,
+  "combine_1x256_equals_numpy": true,
+  "switch_1x256_equals_torch": true,
+  "switch_1x256_equals_host_switch_hint": true,
+  "switch_rounding_boundaries_equal_host": true,
+  "ring_rows_device_and_threaded_host_equal_public_ring_rows": [
+   true,
+   true,
+   true,
+   true,
+   true,
+   true,
+   true,
+   true
+  ],
+  "fwd4_equals_forward": [
+   true,
+   true,
+   true,
+   true
+  ],
+  "fwd4_equals_pks_ntt": [
+   true,
+   true,
+   true,
+   true
+  ],
+  "fwd4_self_test": true,
+  "switch_self_test": true,
+  "ring_self_test": true,
+  "item_self_test": true,
+  "fused_status": {
+   "ntt": "fused",
+   "fwd4": "torch",
+   "switch": "fused",
+   "ring": "fused",
+   "wire": "fused",
+   "keys": "fused"
+  },
+  "all": false
+ },
+ "warps_used": null,
+ "round3": {
+  "host_threads": 4,
+  "cpus": 4,
+  "keys_device_equal_host": true,
+  "keys_out_of_range_flagged": true,
+  "keys_s": {
+   "host_unpack": 0.010128500000007534,
+   "host_unpack_and_upload_u32": 0.01190134199998738,
+   "device_unpack": 0.0018099859999551882,
+   "device_upload_and_unpack": 0.003166488000033496
+  },
+  "staged_upload": {
+   "72b_gate_up_b": {
+    "one_thread_gbps": 3.65,
+    "pool_gbps": 6.7,
+    "raw_pinned_h2d_gbps": 12.23,
+    "host_copy_one_thread_gbps": 5.43,
+    "host_copy_pool_gbps": 8.54
+   },
+   "72b_down_b": {
+    "one_thread_gbps": 3.67,
+    "pool_gbps": 9.15,
+    "raw_pinned_h2d_gbps": 12.31,
+    "host_copy_one_thread_gbps": 5.36,
+    "host_copy_pool_gbps": 9.82
+   }
+  },
+  "staged_upload_identical": true,
+  "keys_choice": "fused",
+  "all": true
+ },
+ "items": {
+  "cols": 1024,
+  "qwen2.5-7b:0.gate_up": {
+   "m": 37888,
+   "n": 3584,
+   "torch_s": 4.8901,
+   "torch_device_items": 2,
+   "r2_s": 0.7528,
+   "r2_device_items": 4,
+   "fused_s": 0.7397,
+   "fused_device_items": 4,
+   "fused_status": {
+    "ntt": "fused",
+    "fwd4": "torch",
+    "switch": "fused",
+    "ring": "fused",
+    "wire": "fused",
+    "keys": "fused"
+   },
+   "identical": true,
+   "speedup_vs_torch": 6.611,
+   "speedup_vs_r2": 1.018,
+   "model_t4_r2_s": 0.416,
+   "model_t4_all_s": 0.408
+  },
+  "qwen2.5-7b:0.down": {
+   "m": 3584,
+   "n": 18944,
+   "torch_s": 0.884,
+   "torch_device_items": 1,
+   "r2_s": 0.2811,
+   "r2_device_items": 3,
+   "fused_s": 0.2755,
+   "fused_device_items": 3,
+   "fused_status": {
+    "ntt": "fused",
+    "fwd4": "torch",
+    "switch": "fused",
+    "ring": "fused",
+    "wire": "fused",
+    "keys": "fused"
+   },
+   "identical": true,
+   "speedup_vs_torch": 3.209,
+   "speedup_vs_r2": 1.02,
+   "model_t4_r2_s": 0.177,
+   "model_t4_all_s": 0.169
+  },
+  "qwen2.5-7b:28.head": {
+   "m": 152064,
+   "n": 3584,
+   "torch_s": 19.5696,
+   "torch_device_items": 1,
+   "r2_s": 3.1636,
+   "r2_device_items": 3,
+   "fused_s": 3.1788,
+   "fused_device_items": 3,
+   "fused_status": {
+    "ntt": "fused",
+    "fwd4": "torch",
+    "switch": "fused",
+    "ring": "fused",
+    "wire": "fused",
+    "keys": "fused"
+   },
+   "identical": true,
+   "speedup_vs_torch": 6.156,
+   "speedup_vs_r2": 0.995,
+   "model_t4_r2_s": 1.626,
+   "model_t4_all_s": 1.617
+  },
+  "qwen2.5-32b:0.gate_up": {
+   "m": 55296,
+   "n": 5120,
+   "torch_s": 7.4099,
+   "torch_device_items": 1,
+   "r2_s": 1.4562,
+   "r2_device_items": 3,
+   "fused_s": 1.4596,
+   "fused_device_items": 3,
+   "fused_status": {
+    "ntt": "fused",
+    "fwd4": "torch",
+    "switch": "fused",
+    "ring": "fused",
+    "wire": "fused",
+    "keys": "fused"
+   },
+   "identical": true,
+   "speedup_vs_torch": 5.077,
+   "speedup_vs_r2": 0.998,
+   "model_t4_r2_s": 0.772,
+   "model_t4_all_s": 0.764
+  },
+  "qwen2.5-32b:0.down": {
+   "m": 5120,
+   "n": 27648,
+   "torch_s": 1.4875,
+   "torch_device_items": 1,
+   "r2_s": 0.6489,
+   "r2_device_items": 3,
+   "fused_s": 0.6367,
+   "fused_device_items": 3,
+   "fused_status": {
+    "ntt": "fused",
+    "fwd4": "torch",
+    "switch": "fused",
+    "ring": "fused",
+    "wire": "fused",
+    "keys": "fused"
+   },
+   "identical": true,
+   "speedup_vs_torch": 2.336,
+   "speedup_vs_r2": 1.019,
+   "model_t4_r2_s": 0.338,
+   "model_t4_all_s": 0.33
+  },
+  "qwen2.5-72b:0.gate_up": {
+   "m": 59136,
+   "n": 8192,
+   "torch_s": 8.1199,
+   "torch_device_items": 1,
+   "r2_s": 1.9906,
+   "r2_device_items": 3,
+   "fused_s": 2.0167,
+   "fused_device_items": 3,
+   "fused_status": {
+    "ntt": "fused",
+    "fwd4": "torch",
+    "switch": "fused",
+    "ring": "fused",
+    "wire": "fused",
+    "keys": "fused"
+   },
+   "identical": true,
+   "speedup_vs_torch": 4.026,
+   "speedup_vs_r2": 0.987,
+   "model_t4_r2_s": 1.192,
+   "model_t4_all_s": 1.184
+  },
+  "qwen2.5-72b:0.down": {
+   "m": 8192,
+   "n": 29568,
+   "torch_s": 2.1529,
+   "torch_device_items": 1,
+   "r2_s": 1.0125,
+   "r2_device_items": 3,
+   "fused_s": 1.014,
+   "fused_device_items": 3,
+   "fused_status": {
+    "ntt": "fused",
+    "fwd4": "torch",
+    "switch": "fused",
+    "ring": "fused",
+    "wire": "fused",
+    "keys": "fused"
+   },
+   "identical": true,
+   "speedup_vs_torch": 2.123,
+   "speedup_vs_r2": 0.999,
+   "model_t4_r2_s": 0.553,
+   "model_t4_all_s": 0.545
+  }
+ },
+ "total_s": 174.4
+}

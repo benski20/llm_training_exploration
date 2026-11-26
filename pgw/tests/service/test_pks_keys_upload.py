@@ -344,7 +344,7 @@ def test_cuda_staged_upload_and_keys() -> None:  # pragma: no cover - GPU only
     got = pks_gpu._upload_bytes(data, dev)
     torch.cuda.synchronize(dev)
     assert bytes(got.cpu().numpy()) == data
-    arr = np.frombuffer(os.urandom(8 * 999), dtype=np.uint64).reshape(999, 8)
+    arr = np.frombuffer(os.urandom(8 * 999 * 8), dtype=np.uint64).reshape(999, 8)
     assert np.array_equal(pks_gpu._upload(arr, dev).cpu().numpy().view(np.uint64), arr)
     pks_gpu._keys_self_test(dev)
     beta = _edge_keys(3, 5)

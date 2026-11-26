@@ -242,7 +242,9 @@ def exact_new(dev: torch.device, small: bool) -> dict[str, Any]:
             out[name] = repr(e)
     _set_env({})
     out["fused_status"] = pks_gpu.fused_status(dev)
-    out["all"] = _all_true(out) and (dev.type != "cuda" or set(out["fused_status"].values()) == {"fused"})
+    # every kernel ``auto`` chose on CUDA (the 4-prime forward NTT is off unless set: slower on the T4)
+    chosen = {k: v for k, v in out["fused_status"].items() if k != "fwd4" or pks_gpu.FWD4.mode() != "torch"}
+    out["all"] = _all_true(out) and (dev.type != "cuda" or set(chosen.values()) == {"fused"})
     return out
 
 

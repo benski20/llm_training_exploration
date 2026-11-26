@@ -440,9 +440,10 @@ class PksRates:
     host_amlwe_feature_s: float = 0.46 / 8192  #: ``pks.a_mlwe_rows`` numpy per input feature (measured)
     host_stream_bytes_s: float = 1.0e9  #: ``public_ring_rows`` ChaCha20, GIL held (measured)
     host_copy_bytes_s: float = 10e9  #: numpy -> pinned staging buffer (one thread)
-    #: the same on the host thread pool (:func:`pgw.service.pks_gpu.staged_copy`, 4 threads): 2.3x one thread, the
-    #: ratio measured on the development box (17.3 against 7.6 GB/s for 60-212 MB copies)
-    host_copy_mt_bytes_s: float = 23e9
+    #: the same on the host thread pool (:func:`pgw.service.pks_gpu.staged_copy`, 4 threads): 1.7x one thread, the
+    #: lower of the ratios measured on the Kaggle T4 VM (9.2 against 5.4 GB/s at 59-212 MB, 4 vCPUs) and on the
+    #: development box (17.3 against 7.6 GB/s)
+    host_copy_mt_bytes_s: float = 17e9
     #: the wire forms on the host, one thread (measured on the development box): ``unpack_bits(b, 56)`` per value,
     #: ``pack_bits(reply, 36)`` per value, ``unpack_ksk`` per key residue
     host_unpack_value_s: float = 8.4e-9
@@ -457,10 +458,11 @@ H100_RATES = PksRates()
 #: The Kaggle T4 of ``results/kaggle/pks-ntt-t4-r2`` (``stages``): int8 GEMM 35.7 TOPS (the hint GEMM at 72B's
 #: gate_up shape), pageable upload 2.85 GB/s, pinned upload incl. the host staging copy 3.6 GB/s, reply copy 3.25
 #: GB/s, host ChaCha20 1.42 GB/s; HBM 70 % of 320 GB/s. With these rates the model reproduces the run's whole items
-#: (``items``: 7 linears of 7B / 32B / 72B, before and after) within about 25 % (``test_pks_fused.py``).
+#: (``items``: 7 linears of 7B / 32B / 72B, before and after) within about 25 % (``test_pks_fused.py``). The host
+#: copy pool (``results/kaggle/pks-r3-t4``, ``round3``): 9.2 GB/s on the T4 VM's 4 vCPUs.
 T4_RATES = PksRates(name="Kaggle T4 (measured)", int8_ops_s=35.7e12, hbm_bytes_s=0.7 * 320e9,
                     int32_ops_s=T4_INT32_OPS_S, h2d_pageable_s=2.85e9, h2d_pinned_s=7.2e9, host_copy_bytes_s=7.2e9,
-                    host_copy_mt_bytes_s=2.3 * 7.2e9, d2h_s=3.25e9, host_stream_bytes_s=1.42e9)
+                    host_copy_mt_bytes_s=9.2e9, d2h_s=3.25e9, host_stream_bytes_s=1.42e9)
 PKS_RATES = {"h100": H100_RATES, "t4": T4_RATES}
 
 
