@@ -186,6 +186,12 @@ before the dummy passes), and `error_code` is one of the library's public codes 
 limits reports per SDK key (`PGW_SERVICE_ACCOUNTS_REPORT_RECORDS_PER_S`, default 20 records/s, burst 4096); over it
 the reply is 429 and the library keeps the batch for its next send.
 
+Only requests that reached the provider are reported: a request that failed before its mask session opened (no
+masks in stock, prompt and `max_tokens` beyond the context, the model blocked after an integrity failure, the
+model not ready) produces no record. The provider never saw it, and a record would tell it that a request was
+made. Such failures are counted by error code in the client's own status only (`client.status()["local_errors"]`,
+per model in `pgw sdk status --json`) and logged at INFO level, without content (security review 2026-11, S12).
+
 ### A4. Admin API (provider agent; off unless `PGW_SERVICE_ACCOUNTS_ADMIN_API=true`; for the console agent)
 
 `Authorization: Bearer <admin token>` (`pgwa-...`, created with `pgw service admin-token create [--org ORG]` and

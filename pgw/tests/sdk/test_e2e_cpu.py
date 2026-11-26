@@ -213,25 +213,54 @@ def test_restart_reuses_the_cache(state: dict[str, Any], provider: Provider) -> 
           f"after restart {restart_s:.1f}s")
 
 
-def test_integrity_failure_raises_and_blocks(state: dict[str, Any], provider: Provider) -> None:
+def test_integrity_failure_raises_and_blocks(provider: Provider, tmp_path: Path) -> None:
+    """Self-contained (its own key, cache and client): a tampering provider gives IntegrityError, the model stays
+    blocked after the provider recovers and after a restart (persisted halt, review S11), until cleared."""
+    from click.testing import CliRunner
+
+    from pgw.cli.main import cli
     from pgw.sdk import IntegrityError
 
-    c = state["client"]
-    provider.tamper_file.touch()
+    key = provider.new_key()
+    c = _client(provider, key, tmp_path)
     try:
-        with pytest.raises(IntegrityError):
+        good = c.chat.completions.create(model=MODEL, messages=PROMPT, **GREEDY).to_dict()["choices"][0]
+        provider.tamper_file.touch()
+        try:
+            with pytest.raises(IntegrityError):
+                c.chat.completions.create(model=MODEL, messages=PROMPT, **GREEDY)
+            with pytest.raises(IntegrityError):  # blocked: never silently retried into a success
+                list(c.chat.completions.create(model=MODEL, messages=PROMPT, stream=True, **GREEDY))
+        finally:
+            provider.tamper_file.unlink()
+        with pytest.raises(IntegrityError):  # still blocked after the provider "recovered"
             c.chat.completions.create(model=MODEL, messages=PROMPT, **GREEDY)
-        with pytest.raises(IntegrityError):  # blocked: never silently retried into a success
-            list(c.chat.completions.create(model=MODEL, messages=PROMPT, stream=True, **GREEDY))
+        st = c.status()["models"][MODEL]
+        assert st["integrity_failures"] >= 1 and st["last_integrity_failure_at"] is not None
+        assert st["integrity_halt"]["halted"]
     finally:
-        provider.tamper_file.unlink()
-    with pytest.raises(IntegrityError):  # still blocked after the provider "recovered"
-        c.chat.completions.create(model=MODEL, messages=PROMPT, **GREEDY)
-    st = c.status()["models"][MODEL]
-    assert st["integrity_failures"] >= 1 and st["last_integrity_failure_at"] is not None
-    c.reset_integrity_breaker(MODEL)
-    r = c.chat.completions.create(model=MODEL, messages=PROMPT, **GREEDY)
-    assert r.to_dict()["choices"][0] == state["greedy"].to_dict()["choices"][0]
+        c.close()
+    c = _client(provider, key, tmp_path)  # a restart does not re-open the model
+    try:
+        with pytest.raises(IntegrityError, match="clear-halt"):
+            c.chat.completions.create(model=MODEL, messages=PROMPT, **GREEDY)
+    finally:
+        c.close()
+    r = CliRunner().invoke(cli, ["sdk", "clear-halt", "--model", MODEL, "--yes", "--state-dir", str(tmp_path / "state")])
+    assert r.exit_code == 0 and "cleared" in r.output, r.output
+    c = _client(provider, key, tmp_path)
+    try:
+        assert c.chat.completions.create(model=MODEL, messages=PROMPT, **GREEDY).to_dict()["choices"][0] == good
+        provider.tamper_file.touch()
+        try:
+            with pytest.raises(IntegrityError):
+                c.chat.completions.create(model=MODEL, messages=PROMPT, **GREEDY)
+        finally:
+            provider.tamper_file.unlink()
+        c.reset_integrity_breaker(MODEL)  # the in-process reset clears the persisted halt too
+        assert c.chat.completions.create(model=MODEL, messages=PROMPT, **GREEDY).to_dict()["choices"][0] == good
+    finally:
+        c.close()
 
 
 def test_revoked_and_unknown_keys_are_refused(provider: Provider, tmp_path: Path) -> None:

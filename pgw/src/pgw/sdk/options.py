@@ -122,6 +122,11 @@ class SDKOptions:
             target-feature draft head file, ``draft_head_path``: a few MB, one small CPU step per draft row).
         spec_rows: Rows per verify pass with ``speculation`` (2-8; default 3: up to 2 drafts per pass).
         draft_head_path: The draft head file for ``speculation="draft_head"`` (a public artefact for this model).
+        spec_pass_gap_ms: With ``speculation``: the least time from the end of one pass to the start of the next
+            (default 8 ms; 0 = off). The client work between passes (sampling, drafting, handing tokens to the
+            application, and the application waking up when the answer is complete) differs a little between the
+            answer's passes and the dummy passes after it; this floor hides it from the provider's view of pass
+            timing (security review 2026-11, S20). It adds the floor minus the usual gap (a few ms) per pass.
         log_level: Enable the library's structured (JSON) logs on stderr at this level [``PGW_SDK_LOG``]; ``None``
             = silent (records still reach handlers the application configures).
     """
@@ -152,6 +157,7 @@ class SDKOptions:
     speculation: Literal["off", "lookup", "draft_head"] = "off"
     spec_rows: int = 3
     draft_head_path: Path | None = None
+    spec_pass_gap_ms: float = 8.0
     log_level: str | None = None
     extra: dict[str, Any] = field(default_factory=dict)
 
@@ -214,6 +220,8 @@ class SDKOptions:
             raise ValueError("speculation='draft_head' needs draft_head_path (the trained head file)")
         if self.draft_head_path is not None and self.speculation != "draft_head":
             raise ValueError("draft_head_path is used only with speculation='draft_head'")
+        if not 0.0 <= float(self.spec_pass_gap_ms) <= 1000.0:
+            raise ValueError("spec_pass_gap_ms must be between 0 and 1000")
         if self.timeout_s <= 0 or self.mask_wait_s < 0 or self.max_retries < 0 or self.max_concurrent < 1:
             raise ValueError("timeouts must be positive and max_concurrent >= 1")
 

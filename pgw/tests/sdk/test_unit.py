@@ -586,6 +586,7 @@ def test_create_timeout_bounds_the_request_and_reports_without_content(tmp_path:
 
     async def slow(req: Any, *, conversation: Any = None, meta: Any = None, timeout_s: Any = None) -> Any:
         meta["model"] = "qwen2.5-0.5b-instruct"
+        meta["opened"] = True  # in flight at the provider (requests that never reach it are not reported, S12)
         meta["prompt_tokens"] = 5
         await aio.sleep(30)
         yield None, None
