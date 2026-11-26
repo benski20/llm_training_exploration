@@ -12,7 +12,7 @@ The default provisioner is :class:`ProviderProvisioner`, a thin layer over :func
   (``public-check.json``) and the derived pack is reused. ``SDKOptions.model_fingerprints`` adds or replaces pins
   (custom packs); a replaced pin is the caller's explicit decision.
 * **Hint.** ``hint="local"`` (default): the background mask factory builds the pks-v3 hint itself from the
-  fingerprint-checked int8 weights (one-time: about 11 CPU-minutes at 7B with AVX-512 VNNI / AMX, then cached),
+  fingerprint-checked int8 weights (one-time: about 10-16 CPU-minutes at 7B with AMX / AVX-512 VNNI, then cached),
   unless :meth:`ProviderProvisioner.prepare` (``pgw sdk prepare``) built it ahead of time in the same pass as the
   factory pack; a prepared store is used when its ``meta.json`` verifies under the cache's hint key.
   ``hint="provider"`` (opt-in): the provider computes the expensive part for client-chosen seeds and the client

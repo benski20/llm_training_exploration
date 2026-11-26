@@ -42,8 +42,8 @@ below are planning estimates for a pilot, not measurements; the pilot will confi
 
 The disk figures include the mask stock budget (`mask_store_gb`, 8 GB per model by default), the public int8
 weights kept for background mask generation, and the one-time mask setup (about 2.4 GB at 7B). The mask setup is
-built on your machine on first use (`hint="local"`): at 7B about 3-4 minutes on 4 cores with AVX-512 VNNI or AMX
-(about half an hour on AVX2-only CPUs), once; `pgw sdk prepare` builds it ahead of time
+built on your machine on first use (`hint="local"`): at 7B about 10-16 CPU-minutes with AMX or AVX-512 VNNI
+(1.5-2 CPU-hours on AVX2-only CPUs), once; `pgw sdk prepare` builds it ahead of time
 ([Configuration](configuration.md#preparing-a-model-ahead-of-time)).
 
 Fingerprints: the library pins every model above. 0.5B and 1.5B are pinned by their pack fingerprint; 3B and 7B

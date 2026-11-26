@@ -15,7 +15,7 @@ behaviour of the OpenAI client it replaces.
 | `cache_dir` | `PGW_CACHE_DIR`, else `~/.cache/pgw` | where enrollment credentials, model data and the mask stock are kept ([below](#cache-directory)) |
 | `state_dir` | `PGW_STATE_DIR`, else `~/.local/state/pgw` | the mask store's key and rollback counter (keep it next to the cache, on a persistent volume) |
 | `mask_scheme` | `"pks-v3"` | how one-time masks are generated: `"pks-v3"`, `"mlwe"` or `"plain"` ([Concepts](concepts.md#mask-schemes)) |
-| `hint` | `"local"` | how the one-time `pks-v3` setup is built: `"local"` builds it on your machine from the public weights (at 7B about 3-4 min on 4 cores with AVX-512 VNNI or AMX, about half an hour with AVX2 only; once, then cached; `pgw sdk prepare` does it ahead of time, [below](#preparing-a-model-ahead-of-time)); `"provider"` lets our GPU compute the expensive part for seeds your process chose, and your process accepts it only after a check (faster on few cores, but it downloads about 44 GB at 7B) |
+| `hint` | `"local"` | how the one-time `pks-v3` setup is built: `"local"` builds it on your machine from the public weights (at 7B about 10-16 CPU-minutes with AMX or AVX-512 VNNI, 1.5-2 CPU-hours with AVX2 only; once, then cached; `pgw sdk prepare` does it ahead of time, [below](#preparing-a-model-ahead-of-time)); `"provider"` lets our GPU compute the expensive part for seeds your process chose, and your process accepts it only after a check (faster on few cores, but it downloads about 44 GB at 7B) |
 | `mask_workers` | a quarter of the CPUs (1 to 8) | background mask-generation processes per model (low priority) |
 | `mask_store_gb` | 8 | disk budget of the mask stock per model |
 | `masked_head` | `"auto"` | the model's output layer as one more masked step on our GPU when we serve it (`"on"`, `"off"`) |
@@ -84,9 +84,9 @@ The cache directory holds:
 * **Mask stock**: masks prepared ahead of use, up to `mask_store_gb` (8 GB) per model.
 
 First use of a model, once per machine: enrollment (seconds), the model data and the weights (about 11 GB at
-7B, mostly the 6.5 GB of int8 weights), then the mask setup (with the default `hint="local"`, about 11 CPU-minutes
-at 7B on a CPU with AVX-512 VNNI or AMX, i.e. 3-4 min on 4 cores; on CPUs with AVX2 only, about 2 CPU-hours). Later
-starts reuse everything and take seconds.
+7B, mostly the 6.5 GB of int8 weights), then the mask setup (with the default `hint="local"`, at 7B about 10 CPU-minutes
+on a CPU with AMX and 16 with AVX-512 VNNI, about 5 minutes on a 4-vCPU AMX machine; on CPUs with AVX2 only about
+1.5-2 CPU-hours). Later starts reuse everything and take seconds.
 
 ### Preparing a model ahead of time
 
