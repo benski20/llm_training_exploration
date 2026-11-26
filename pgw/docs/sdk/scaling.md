@@ -164,6 +164,35 @@ Not changed, with the reason:
   `r` keystream (normative SPEC 7.3 derivation, 8 keystream bytes per element) are unchanged; they are now 70-80 %
   of the total.
 
+## Keeping no weights on the client
+
+`factory_weights="stream"` (opt-in, [Configuration](configuration.md#keeping-no-weights-factory_weightsstream))
+replaces the int8 weights on disk by a stock of pre-drawn check values, refilled by a weight pass whenever it falls
+to a quarter. Measured on Qwen2.5-0.5B-Instruct (CPU, the real provisioning endpoint on loopback, the SDK's
+settings: masked head, p31 checks, 40-bit private sets; `benchmarks/stock_pass_bench.py`): one pass received
+357.9 MB (the 357.8 MB of layer weights plus 0.03 % of protocol; the output layer's int8 weights are derived from the
+model data the client keeps anyway) and wrote a stock of 128.6 MB (64 segment sets of 0.73 MB, 8 private sets of
+10.2 MB) in place of the 359 MB of int8 weights, in 14-22 s on this shared 4-vCPU box. Extrapolated with the same
+formulas to the real shapes:
+
+| model | int8 weights it replaces | stock on disk (64 segments + 8 private sets) | weights per pass | pks-v3 traffic per 1024-slot segment | extra network, default (48 segments per pass) | extra network, 64 per pass |
+|---|---|---|---|---|---|---|
+| 0.5B (measured) | 0.36 GB | 0.13 GB | 0.36 GB | 4.1 GB | +0.18 % | +0.14 % |
+| 7B | 6.5 GB | 0.59 GB | 6.5 GB | 13.9 GB | +0.98 % | +0.73 % |
+| 32B | 31.2 GB | 1.94 GB | 31.2 GB | 43.7 GB | +1.49 % | +1.12 % |
+| 72B | 70.2 GB | 3.06 GB | 70.2 GB | 65.7 GB | +2.23 % | +1.67 % |
+
+* **Disk** drops by the weights minus the stock: 5.9 / 29.3 / 67.2 GB at 7B / 32B / 72B. More workers need more
+  private sets (`max(8, 2 x workers + 2)`, 47 / 155 / 243 MB each at 7B / 32B / 72B).
+* **Network** is a full weight download per pass, every `check_stock_segments - low water` segments. A bigger
+  `check_stock_segments` lowers it (disk: 3.3 / 11 / 17 MB per extra segment). Every worker start and every aborted
+  segment uses a private set, so frequent restarts or a flaky link bring passes sooner.
+* **Availability**: the factory depends on reaching a weight source; with the stock empty and no source, masks stop
+  (requests wait, then fail closed). A pass at 72B moves 70 GB: at 1 Gbit/s about 10 minutes, during which the
+  quarter of the stock left (16 segments, about 16 K token rows) must cover the traffic.
+* **CPU**: a pass hashes the weights (SHA-256) and computes 64 + 112 check vectors over them, once per 48
+  segments: small against pks-v3's own per-segment client work.
+
 ## Settings for many streams
 
 ```python

@@ -16,6 +16,9 @@ behaviour of the OpenAI client it replaces.
 | `state_dir` | `PGW_STATE_DIR`, else `~/.local/state/pgw` | the mask store's key and rollback counter (keep it next to the cache, on a persistent volume) |
 | `mask_scheme` | `"pks-v3"` | how one-time masks are generated: `"pks-v3"`, `"mlwe"` or `"plain"` ([Concepts](concepts.md#mask-schemes)) |
 | `hint` | `"local"` | how the one-time `pks-v3` setup is built: `"local"` builds it on your machine from the public weights (at 7B about 10-16 CPU-minutes with AMX or AVX-512 VNNI, 1.5-2 CPU-hours with AVX2 only; once, then cached; `pgw sdk prepare` does it ahead of time, [below](#preparing-a-model-ahead-of-time)); `"provider"` lets our GPU compute the expensive part for seeds your process chose, and your process accepts it only after a check (faster on few cores, but it downloads about 44 GB at 7B) |
+| `factory_weights` | `PGW_FACTORY_WEIGHTS`, else `"pack"` | where the background mask processes get their check values from. `"pack"` keeps the public int8 weights in the cache (6.5 / 31 / 70 GB at 7B / 32B / 72B). `"stream"` (opt-in, `mask_scheme="pks-v3"`) keeps no int8 weights: whenever a small encrypted stock of check values runs low, the weights are streamed once more, checked against the pinned fingerprint and dropped. Trade: about 1-2 % more network and a stock of 0.6 / 1.9 / 3.1 GB instead of the weights ([below](#keeping-no-weights-factory_weightsstream)) |
+| `factory_weights_source` | `PGW_FACTORY_WEIGHTS_SOURCE`, else `"provider"` | with `factory_weights="stream"`: stream the weights from our provisioning endpoint (`"provider"`) or pack the pinned public checkpoint from Hugging Face on each pass (`"hf"`; needs the checkpoint's size in temporary disk). Neither is trusted: every tensor is checked |
+| `check_stock_segments` | `PGW_CHECK_STOCK_SEGMENTS`, else 64 | with `factory_weights="stream"`: segments of check values one weight pass prepares (one segment is 1024 mask slots); the next pass starts at a quarter |
 | `mask_workers` | a quarter of the CPUs (1 to 8) | background mask-generation processes per model (low priority) |
 | `mask_store_gb` | 8 | disk budget of the mask stock per model. A request starts only when the stock covers the prompt + `max_tokens` of every running request: at 7B the default holds about one such request at a time; size it for your concurrency ([Scaling](scaling.md)) |
 | `mask_admission` | `PGW_MASK_ADMISSION`, else `"entitled"` | `"overcommit"` (opt-in): a request starts when the stock covers its prompt and one chunk per running answer; answers that find the stock short wait for the factory (up to 30 s) instead of new requests queueing ([Scaling](scaling.md#when-the-stock-runs-short-bursts)) |
@@ -65,6 +68,9 @@ silently ignored.
 | `PGW_STATE_DIR` | `~/.local/state/pgw` | state directory (`state_dir`) |
 | `PGW_HINT` | `local` | `hint` |
 | `PGW_MASK_SCHEME` | `pks-v3` | `mask_scheme` |
+| `PGW_FACTORY_WEIGHTS` | `pack` | `factory_weights` |
+| `PGW_FACTORY_WEIGHTS_SOURCE` | `provider` | `factory_weights_source` |
+| `PGW_CHECK_STOCK_SEGMENTS` | `64` | `check_stock_segments` |
 | `PGW_MASK_WORKERS` | a quarter of the CPUs | `mask_workers` |
 | `PGW_SPECULATION` | `off` | `speculation` |
 | `PGW_MASK_STORE_GB` | `8` | `mask_store_gb` |
@@ -86,7 +92,8 @@ The cache directory holds:
   public and is checked against the model fingerprint the library pins (about 0.6 GB at 0.5B, 4.4 GB at 7B).
 * **The public int8 weights, for mask generation only**: the background mask processes need them for their
   private check values and to build the one-time setup; they are downloaded once from us and checked against
-  the same fingerprint (about 6.5 GB at 7B). The process that handles your requests never loads them.
+  the same fingerprint (about 6.5 GB at 7B). The process that handles your requests never loads them. With
+  `factory_weights="stream"` they are not kept ([below](#keeping-no-weights-factory_weightsstream)).
 * **Mask setup**: the one-time material for mask generation (about 2.4 GB at 7B with `pks-v3`).
 * **Mask stock**: masks prepared ahead of use, up to `mask_store_gb` (8 GB) per model.
 
@@ -119,6 +126,32 @@ machine). The key authenticates the setup's metadata (HMAC-SHA256 over its seeds
 SHA-256 of every file); the target uses the copied setup only if the metadata verifies under that key, and
 re-hashes every file before use. Copy the key over a channel you trust and keep it readable by the client's
 user only. Without the key the copied setup is ignored and rebuilt.
+
+### Keeping no weights (`factory_weights="stream"`)
+
+Opt-in, for hosts whose disk cannot hold the int8 weights. The mask processes need the weights only for check
+values: per segment of masks, the segment's secret check vector times the weights, and per worker start (and after
+every aborted segment) a set of private check values. With `"stream"` they prepare these ahead of time in passes:
+
+1. The weights are streamed from `factory_weights_source` (our provisioning endpoint, or the public checkpoint).
+   The source is not trusted: every tensor is checked against the SHA-256 in the manifest that the library's
+   pinned fingerprint covers, and nothing from a pass is kept unless every tensor passed.
+2. During the pass the processes draw fresh secret seeds from the operating system's random generator, exactly as
+   they would on demand, and compute the check values of the next `check_stock_segments` segments and a few
+   private sets with the same code. Masks, check vectors and answers are bit-identical to `"pack"`.
+3. The check values go into an encrypted stock under the mask store's key (`<state>/.../factory/.../check-stock`,
+   owner-only files, authenticated index). Each item is used once; its use is recorded on disk before it is read,
+   so a crash or restart never hands one out twice. Tampered items are refused. The weights are dropped.
+4. When the stock falls to a quarter, the next pass starts in the background.
+
+The first setup streams the weights twice (once for the mask setup, once for the first stock). Requests always
+run with checked material: if the stock is empty and no pass can reach a source, masks stop being made, and
+requests wait for masks and then fail with a clear error naming the failing pass. `pgw sdk status` shows the
+stock, its passes and the last error; `pgw sdk prepare --factory-weights stream` sets a model up this way and
+removes a factory pack left by an earlier `"pack"` setup. Disk and network per model:
+[Scaling](scaling.md#keeping-no-weights-on-the-client). Security note:
+`research/reviews/weight-free-stock-security.md` (nothing weakens; the private check values now sit on disk inside
+the mask store's encryption).
 
 Plan the disk per model with [Supported models](models.md#resources-per-model). Deleting the directory is
 safe: the next start enrolls again and prepares the model again. In containers, mount the cache directory

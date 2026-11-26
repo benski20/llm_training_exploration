@@ -681,7 +681,7 @@ class CheckStock:
                 w8 = src.get(lin.key)  # checked against the pinned manifest before it is returned
                 if tuple(w8.shape) != (lin.out_features, lin.in_features):
                     raise IntegrityError(f"{lin.key}: streamed weight shape {tuple(w8.shape)} does not match the pack")
-                wt = torch.from_numpy(np.ascontiguousarray(w8))
+                wt = torch.from_numpy(np.require(w8, requirements=["C", "W"]))  # a read-only buffer is copied
                 if segs:
                     self._segment_records(lin, wt, seeds, segs)
                 if privs:

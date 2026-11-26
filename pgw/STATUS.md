@@ -2488,3 +2488,79 @@ method and the levers not taken: `docs/sdk/scaling.md` ("Mask cost per slot, by 
   the factory tests compare canonical values), Rust `cargo test -p pgw-pks vecmat`. tests/factory 463 passed /
   9 skipped; tests/hemask 439 passed / 20 skipped; tests/sdk 115 passed / 1 opt-in skip (the factory subset rerun after the last
   kernel-selection change: 96 passed).
+
+
+## 2026-11-26: weight-free client factory (`factory_weights="stream"`, opt-in; option C, scheme unchanged)
+
+Goal: the SDK client's encrypted factory keeps no int8 weights `W8` at rest. Each refill pass streams `W8` from an
+untrusted source, checks it against the pinned fingerprint, pre-draws the check material of the next segments and
+drops the weights. Option C of `research/reviews/weight-free-client-checks.md`. Default (`"pack"`) unchanged.
+
+- **Security note first** (`research/reviews/weight-free-stock-security.md`): verdict **no weakening** beyond the
+  earlier analysis. Each pre-drawn item comes from the same CSPRNG and the same SPEC 7.3 derivation, with the same
+  kernels, as an on-demand draw, and is used under the same single-use rules (one segment set per segment, one
+  private set from a worker start until its first failed or aborted segment). Two stated changes: more secret
+  material at rest (up to `K` future segments, readable only with the KEK, which already decrypts every stored mask)
+  and private `v W8` on disk for the first time (an integrity exposure under a condition that already breaks privacy).
+- **`pgw.factory.checkstock.CheckStock`**: one item file per segment set (seed + `uW` per linear) or private set (`v`
+  seed + `v W8`), AES-256-GCM under a fresh DEK wrapped by the mask store's KEK provider, the header as AAD. The
+  index lists each item's header digest and is HMAC'd under the KEK-derived key (domain `pgw/v1/check-stock-index`).
+  A generation witness outside the directory catches a rolled-back index. A take records consumption durably
+  (index fsync) before the item is read, then deletes it; orphans of a crash or of a dead pass are deleted at open.
+  Low-water refill runs in a background thread, one pass at a time across processes (flock), with back-off after a
+  failed pass. An empty stock waits up to `check_stock_wait_s`, then fails closed with `CheckStockEmpty`.
+- **Factory**: `MaskGenerator(weights="stream")` streams shape-only placeholders. Each segment's seed and `uW` come
+  from the stock (the private set is taken first, so a missing one never burns a segment set). `_private_check` /
+  `_wipe_private` take and burn private sets exactly where on-demand draws happen. Settings (`PGW_FACTORY_*`):
+  `factory_weights`, `weights_source` (`provider` | `hf` | `dir`), `pack_fingerprint`, `check_stock_*`. In stream mode
+  the pack is the weight-free `GatewayPack` (verified in full), the pks-v3 hint must exist (built at provisioning),
+  and fleet workers share one stock. `pgw factory check-stock [--discard]`.
+- **Sources** (`pgw.provision.client.weight_source`): the provider's provisioning endpoint (per-chunk and whole-object
+  SHA-256 against the pinned manifest), a full pack directory (each linear `check_hash=True`), or the public
+  checkpoint (packed per pass, must reproduce the pin, deleted after). The masked head's `W8` is derived from the
+  gateway pack's hash-checked plain head, as before. A pass commits nothing unless every tensor passed.
+- **SDK**: `factory_weights` / `factory_weights_source` / `check_stock_segments` (`PGW_FACTORY_WEIGHTS`,
+  `PGW_FACTORY_WEIGHTS_SOURCE`, `PGW_CHECK_STOCK_SEGMENTS`). Provisioning keeps no factory pack and builds the hint from
+  the streamed weights (it deletes a factory pack left by `"pack"`). The plan sets `max(8, 2 x workers + 2)` private
+  sets. `pgw sdk status` shows the stock, its passes and the last pass error. `pgw sdk prepare --factory-weights
+  stream`. A request whose model has an empty stock and 3 failed passes fails at once with that reason.
+  Docs: `docs/sdk/configuration.md` (option, env, "Keeping no weights"), `docs/sdk/scaling.md` (disk/network table).
+- **Measured, Qwen2.5-0.5B-Instruct** (`benchmarks/stock_pass_bench.py`: pinned pack `d773a502fb97`, the real
+  provisioning endpoint on loopback, SDK settings: masked head, p31, one check vector, 14 private vectors): one pass
+  of 64 segment sets + 8 private sets received **357.9 MB** (357.8 MB of layer `W8`, protocol +0.03 %; the 136 MB head
+  `W8` is derived locally). It wrote a **128.6 MB** stock (0.73 MB per segment set, 10.2 MB per private set) in place of
+  the 359 MB of `W8`, in 14-22 s wall on this loaded 4-vCPU box. Extrapolated with the same formulas (pks-v3 traffic:
+  `hemask_pks_model.py` formulas with the masked head; default 48 segments per pass = 64 minus the low water of 16):
+
+  | | 0.5B (measured) | 7B | 32B | 72B |
+  |---|---|---|---|---|
+  | int8 `W8` no longer on disk | 0.36 GB | 6.53 GB | 31.2 GB | 70.2 GB |
+  | stock on disk (64 segment + 8 private sets) | 0.13 GB | 0.59 GB | 1.94 GB | 3.06 GB |
+  | `W8` streamed per pass | 0.36 GB | 6.53 GB | 31.2 GB | 70.2 GB |
+  | network vs pks-v3 per 1024-slot segment, default | +0.18 % | +0.98 % | +1.49 % | +2.23 % |
+  | same at 64 segments per pass (the review's R = 64) | +0.14 % | +0.73 % | +1.12 % | +1.67 % |
+
+  The first setup streams `W8` twice: once for the hint, once for the first stock.
+- **Tests**:
+  - `tests/factory/test_check_stock.py` (21). Segments are bit-identical to pack mode and to local generation, ring
+    and p31, several seeds stacked. Private sets equal `_private_check`'s draw. A wrong provider product (shift 2^31
+    / 2^35) is caught with no `W8` on the client, and both sets are burned. A crash after a take (child process
+    killed) and a pass killed midway lead to no reuse and no partial items. Tampered, swapped or header-edited items
+    are rejected and burned. A tampered index is discarded; a rolled-back index or a missing witness are refused; a
+    foreign KEK cannot use the stock. A bad stream commits nothing. Files are 0600 with no plaintext seed. Further
+    tests: low-water background refill, fail-closed exhaustion with the pass error, waiting for a running pass,
+    stop, concurrent takers, and the CLI.
+  - `tests/provision/test_weight_source.py` (6): the provider, directory and public-checkpoint sources, a tampered
+    weight chunk, the derived head, and a real pass over the endpoint whose `uW` equals an on-demand computation.
+  - `tests/sdk/test_stream_weights.py` (4): end to end on a real provider (tiny model, pks-v3). Answers are
+    bit-identical to the reference. No factory pack, and no file in the cache or state holds a `W8` byte run. The
+    stock shows in status. A tampered provider product is caught online, so the p31 vectors come from the stock.
+    Also covered: prepare in stream mode deleting an old factory pack, option validation, and the factory env.
+  - Runs, one directory at a time, absolute `PYTHONPATH`: tests/factory 484 passed / 9 skipped (CUDA); tests/provision
+    52 / 1; tests/sdk file by file 124 passed / 1 opt-in skip; tests/cli 209 / 3 (helm); tests/docs: only the earlier failures (test_numbers logs, README not
+    linking sdk/scaling.md, `PGW_MASK_ADMISSION` in the changelog); `PGW_FACTORY_WEIGHTS*` and
+    `PGW_CHECK_STOCK_SEGMENTS` added to the documented SDK env list.
+- Not done: the first stock is not drawn during provisioning's own `W8` stream, because the check format depends on
+  the runtime chosen after provisioning, so setup streams `W8` twice. mlwe in stream mode is not supported (its hint
+  is built by the factory). No monotonic counter for the stock beyond the store's own level (security note
+  section 2).

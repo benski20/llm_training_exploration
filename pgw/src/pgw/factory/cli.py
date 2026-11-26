@@ -340,6 +340,48 @@ def outbox_serve_cmd(export_dir: Path, token_file: Path, host: str, port: int, t
         srv.stop()
 
 
+@factory_group.command("check-stock")
+@click.option("--state-dir", type=click.Path(path_type=Path), default=None,
+              help="Factory state directory (default: PGW_FACTORY_STATE_DIR); the stock is <state>/check-stock")
+@click.option("--discard", is_flag=True, help="Delete every pre-drawn item (after a suspected compromise, with a "
+              "KEK rotation); the next weight pass refills the stock")
+@click.option("--json", "as_json", is_flag=True, help="Machine-readable status")
+@_handle_errors
+def check_stock_cmd(state_dir: Path | None, discard: bool, as_json: bool) -> None:
+    """Status of a weight-free factory's check stock (factory_weights=stream): items, passes, last pass, last error
+    (public counters only). --discard deletes the stock and its witness (no key needed; only availability is lost)."""
+    import os
+    import shutil
+
+    from pgw.factory.checkstock import stock_status
+
+    if state_dir is None:
+        env = os.environ.get("PGW_FACTORY_CHECK_STOCK_DIR")
+        base = Path(env) if env else (Path(os.environ["PGW_FACTORY_STATE_DIR"]) / "check-stock"
+                                      if os.environ.get("PGW_FACTORY_STATE_DIR") else None)
+        if base is None:
+            raise click.UsageError("pass --state-dir (or set PGW_FACTORY_STATE_DIR / PGW_FACTORY_CHECK_STOCK_DIR)")
+    else:
+        base = Path(state_dir) / "check-stock"
+    stocks = sorted(d for d in base.iterdir() if d.is_dir()) if base.is_dir() else []
+    out = {d.name: stock_status(d) for d in stocks}
+    if discard:
+        for d in stocks:
+            shutil.rmtree(d, ignore_errors=True)
+            d.with_name(d.name + ".witness").unlink(missing_ok=True)
+        click.echo(f"discarded {len(stocks)} check stock(s) under {base}", err=True)
+    if as_json:
+        click.echo(json.dumps(out, indent=1))
+        return
+    if not stocks:
+        click.echo(f"no check stock under {base}")
+    for name, st in out.items():
+        click.echo(f"{name}: {st.get('segments', 0)}/{st.get('target_segments', '?')} segment sets, "
+                   f"{st.get('private_sets', 0)}/{st.get('target_private_sets', '?')} private sets, "
+                   f"{st.get('passes', 0)} pass(es)" + (f", last pass error: {st['last_pass_error']}"
+                                                         if st.get("last_pass_error") else ""))
+
+
 @factory_group.command("clear-halt")
 @click.option("--state-dir", type=click.Path(path_type=Path), default=None,
               help="Factory state directory (default: PGW_FACTORY_STATE_DIR, else the mask store root)")

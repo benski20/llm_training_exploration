@@ -489,3 +489,26 @@ def test_two_processes_never_share_an_item(env: dict[str, Any]) -> None:
     for t in ts:
         t.join()
     assert len(got) == 40 and len(set(got)) == 40
+
+
+def test_cli_status_and_discard(env: dict[str, Any]) -> None:
+    from click.testing import CliRunner
+
+    from pgw.factory.cli import factory_group
+
+    gen = _gen(env)
+    state = env["tmp"] / "state"
+    stock = CheckStock(state / "check-stock" / "fp-ring", env["kp"], fingerprint=gen.fingerprint, ring=RING,
+                       check_field="p31", checks=1, linears=gen.stock_linears(), source=lambda: _Source(env["pack"]),
+                       target_segments=4, low_water_segments=1, target_private=3, low_water_private=1,
+                       background=False)
+    stock.refill()
+    r = CliRunner().invoke(factory_group, ["check-stock", "--state-dir", str(state), "--json"])
+    assert r.exit_code == 0, r.output
+    assert json.loads(r.output)["fp-ring"]["segments"] == 4
+    r = CliRunner().invoke(factory_group, ["check-stock", "--state-dir", str(state), "--discard"])
+    assert r.exit_code == 0, r.output
+    assert not stock.root.exists() and not stock.witness.exists()
+    again = CheckStock(stock.root, env["kp"], fingerprint=gen.fingerprint, ring=RING, check_field="p31", checks=1,
+                       linears=gen.stock_linears(), background=False)
+    assert again.counts() == {"segment": 0, "private": 0}
