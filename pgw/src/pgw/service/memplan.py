@@ -174,8 +174,9 @@ class MemConfig:
     #: the device item's other fused kernels (``PGW_SERVICE_PKS_GPU_FWD4`` / ``_SWITCH`` / ``_RING`` /
     #: ``PGW_SERVICE_PKS_PINNED``): ``all`` (what ``auto`` picks on CUDA after their self-tests: the 4-prime forward
     #: NTT, the fused recombination + hint switch, the device ChaCha20 ring rows, pinned overlapped copies) or
-    #: ``ntt`` (the fused NTTs only: the state before 2026-11-26's second round)
-    pks_kernels: Literal["all", "ntt"] = "all"
+    #: ``ntt`` (the fused NTTs only: the state before 2026-11-26's second round); ``r2``: the second round without the
+    #: third (the reply keys unpacked on the host, uploads staged by one host thread before their transfer)
+    pks_kernels: Literal["all", "r2", "ntt"] = "all"
     context_bytes: int = 512 * MIB  #: CUDA context, cuBLAS/cuBLASLt handles, Triton modules
     cublas_workspace_bytes: int = 32 * MIB  #: per stream that runs GEMMs
     fragmentation: float = 0.03  #: caching-allocator slack on non-weight memory
@@ -414,6 +415,11 @@ RING_FEATURE_OPS = T4_R2_S["ring_feature_device"] * T4_INT32_OPS_S
 #: value, the reply's pack reads 8 and writes 4.5
 WIRE_UNPACK_VALUE_BYTES = 15
 WIRE_PACK_VALUE_BYTES = 12.5
+#: the reply keys unpacked and range-checked on the device (``PGW_SERVICE_PKS_GPU_KEYS``,
+#: :func:`pgw.service.pks_gpu._unpack_ksk_dev`): torch operators and bytes read + written per residue, counted
+#: operator by operator on CPU (``tests/service/test_pks_keys_upload.py``); 47 launches per item
+KEYS_RESIDUE_BYTES = 140
+KEYS_LAUNCHES = 47
 
 
 @dataclass(frozen=True)
@@ -434,6 +440,9 @@ class PksRates:
     host_amlwe_feature_s: float = 0.46 / 8192  #: ``pks.a_mlwe_rows`` numpy per input feature (measured)
     host_stream_bytes_s: float = 1.0e9  #: ``public_ring_rows`` ChaCha20, GIL held (measured)
     host_copy_bytes_s: float = 10e9  #: numpy -> pinned staging buffer (one thread)
+    #: the same on the host thread pool (:func:`pgw.service.pks_gpu.staged_copy`, 4 threads): 2.3x one thread, the
+    #: ratio measured on the development box (17.3 against 7.6 GB/s for 60-212 MB copies)
+    host_copy_mt_bytes_s: float = 23e9
     #: the wire forms on the host, one thread (measured on the development box): ``unpack_bits(b, 56)`` per value,
     #: ``pack_bits(reply, 36)`` per value, ``unpack_ksk`` per key residue
     host_unpack_value_s: float = 8.4e-9
@@ -451,7 +460,7 @@ H100_RATES = PksRates()
 #: (``items``: 7 linears of 7B / 32B / 72B, before and after) within about 25 % (``test_pks_fused.py``).
 T4_RATES = PksRates(name="Kaggle T4 (measured)", int8_ops_s=35.7e12, hbm_bytes_s=0.7 * 320e9,
                     int32_ops_s=T4_INT32_OPS_S, h2d_pageable_s=2.85e9, h2d_pinned_s=7.2e9, host_copy_bytes_s=7.2e9,
-                    d2h_s=3.25e9, host_stream_bytes_s=1.42e9)
+                    host_copy_mt_bytes_s=2.3 * 7.2e9, d2h_s=3.25e9, host_stream_bytes_s=1.42e9)
 PKS_RATES = {"h100": H100_RATES, "t4": T4_RATES}
 
 
@@ -487,12 +496,17 @@ def pks_item_seconds(m: int, n: int, cols: int, path: str, rates: PksRates = H10
     ``kernels="all"`` (the device path with ``ntt="fused"``): the second round's kernels too: the fused
     recombination + switch, the ring rows generated on the device, the wire forms on the device (``wire_host``
     disappears), and pinned copies overlapped with device work (the upload exposed only beyond the ring rows, the
-    planes and the first row block's hint, the packed reply only for the last row block). ``fwd4``: the key switch
+    planes and the first row block's hint, the packed reply only for the last row block); and the third round's
+    (2026-11-26): the reply keys unpacked and range-checked on the device (``keys_device`` instead of
+    ``keys_host``), the uploads staged in pieces by the host thread pool with each piece's transfer queued as soon as
+    it is in pinned memory (the host copy and PCIe overlap: ``max`` instead of their sum). ``kernels="r2"``: the second
+    round without the third. ``fwd4``: the key switch
     with the 4-prime forward NTT (:func:`fused4_keyswitch_row_seconds`; off by default, slower on the T4)."""
-    if kernels not in ("ntt", "all"):
+    if kernels not in ("ntt", "r2", "all"):
         raise ValueError(f"unknown kernels {kernels!r}")
     from pgw.hemask.pks import NR, NU, PACK
-    from pgw.service.pks_gpu import _block_bytes, item_rows
+    from pgw.hemask.wire import V3_KSK_BYTES
+    from pgw.service.pks_gpu import UPLOAD_CHUNK, _block_bytes, item_rows
 
     r = rates
     groups = cols // 256
@@ -518,7 +532,7 @@ def pks_item_seconds(m: int, n: int, cols: int, path: str, rates: PksRates = H10
     t["y_gemm"] = gemm(cols) + m * cols * COMBINE_VALUE_BYTES / r.hbm_bytes_s
     t["key_switch"] = key_switch(ks_blocks)
     t["reply_d2h"] = groups * m * D_REPLY * 8 / r.d2h_s
-    if path == "device" and kernels == "all" and ntt == "fused":
+    if path == "device" and kernels in ("all", "r2") and ntt == "fused":
         rows = item_rows(m, np_, cols, groups, work_bytes)
         blocks = -(-m // rows)
         reply_vals = groups * m * D_REPLY
@@ -526,7 +540,10 @@ def pks_item_seconds(m: int, n: int, cols: int, path: str, rates: PksRates = H10
         def fused(nbytes: float, ops: float, launches: float) -> float:
             return max(nbytes / r.hbm_bytes_s, ops / r.int32_ops_s, launches * r.launch_s)
 
-        t["keys_host"] = keys // 8 * r.host_ksk_value_s
+        if kernels == "all":  # the keys' wire bytes go up and the device unpacks and range-checks them
+            t["keys_device"] = fused(keys // 8 * KEYS_RESIDUE_BYTES, 0, KEYS_LAUNCHES)
+        else:
+            t["keys_host"] = keys // 8 * r.host_ksk_value_s
         t["ring_rows_device"] = fused(n * RING_FEATURE_BYTES, n * RING_FEATURE_OPS, 1)
         t["planes"] = (n * A_PLANES_FEATURE_BYTES + n * cols * (B_PLANES_VALUE_BYTES + WIRE_UNPACK_VALUE_BYTES)) \
             / r.hbm_bytes_s
@@ -540,7 +557,12 @@ def pks_item_seconds(m: int, n: int, cols: int, path: str, rates: PksRates = H10
         t["reply_pack_device"] = reply_vals * WIRE_PACK_VALUE_BYTES / r.hbm_bytes_s
         # the upload's wire bytes (7 per value) and the keys (uint32) through pinned memory on a side stream: exposed
         # only beyond the ring rows, the planes and the first row block's hint
-        upload = (n * cols * 7 + keys // 2) * (1 / r.h2d_pinned_s + 1 / r.host_copy_bytes_s)
+        if kernels == "all":  # staged in pieces by the host thread pool, each piece's transfer queued when it is there
+            up = n * cols * 7 + groups * V3_KSK_BYTES
+            upload = max(up / r.h2d_pinned_s, up / r.host_copy_mt_bytes_s) + min(up, UPLOAD_CHUNK) / \
+                r.host_copy_mt_bytes_s
+        else:
+            upload = (n * cols * 7 + keys // 2) * (1 / r.h2d_pinned_s + 1 / r.host_copy_bytes_s)
         t["upload_h2d"] = max(0.0, upload - (t["ring_rows_device"] + t["planes"] + hint * min(1.0, rows / m)))
         # the packed reply (4.5 bytes per value) back and into the wire buffer: every row block's copy but the last
         # overlaps the next block
@@ -805,8 +827,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     ap.add_argument("--pks-work-mb", type=int, default=512)
     ap.add_argument("--pks-ntt", default="fused", choices=["torch", "fused"],
                     help="pks-v3 key-switch NTTs: fused Triton kernels (auto on CUDA after the self-test) or torch")
-    ap.add_argument("--pks-kernels", default="all", choices=["all", "ntt"],
-                    help="pks-v3 device item: every fused kernel (auto on CUDA after the self-tests) or the NTTs only")
+    ap.add_argument("--pks-kernels", default="all", choices=["all", "r2", "ntt"],
+                    help="pks-v3 device item: every device step (auto on CUDA after the self-tests), the second "
+                         "round's (host reply keys, unstaged uploads) or the fused NTTs only")
     ap.add_argument("--pks-gpu", default="h100", choices=sorted(PKS_RATES),
                     help="--pks-throughput rates: h100 (datasheet estimates) or t4 (the Kaggle T4 measurements)")
     ap.add_argument("--pks-throughput", action="store_true",

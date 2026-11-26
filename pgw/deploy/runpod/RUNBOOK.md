@@ -132,7 +132,8 @@ python deploy/runpod/jobs.py launch perf --dc <DC> --max-usd 9
   `device_time.json`, `gemv_table.json`, `lane_local_{7b,72b}.json`, `maskgen.json` (wire v2 fused, 1/4/16
   groups, 1/2/4 concurrent), and `maskgen_pks_v3.json`. The last one covers the pks-v3 cache miss, hit and
   device path at 512/1024/2048 MB work budgets, and the fused kernels as `auto` picks them, against `fwd4`
-  (4-prime forward), `prev` (fused NTT only) and plain `torch`, with byte-identity and `memplan`'s estimates.
+  (4-prime forward), `r2` (reply keys unpacked on the host, one-thread upload staging), `prev` (fused NTT only)
+  and plain `torch`, with byte-identity and `memplan`'s estimates.
   `cpu/results/lane_nic_{7b,72b}_client.json` gives trip p50/p90/p99, `compute_us`, RTT, `transport_us`,
   `lane_fixed_us` and throughput at 1-64 connections.
 * Decisions it feeds:
