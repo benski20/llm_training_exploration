@@ -53,6 +53,10 @@ def test_ring_vecmat_native_threads_identical() -> None:
     x = rng.integers(0, 1 << 32, (14, 700), dtype=np.uint32)
     outs = [pgw_pks.vecmat_wrap32(x, w.numpy(), t) for t in (1, 2, 3, 8)]
     assert all(np.array_equal(outs[0], o) for o in outs[1:])
+    # many vectors (ring_vecmat may hand c > 4 to the int8 GEMMs on AMX): the kernel itself, incl. c > 16
+    x17 = rng.integers(0, 1 << 32, (17, 700), dtype=np.uint32)
+    exact = (x17.astype(object) @ w.numpy().astype(object)) % (1 << 32)
+    assert np.array_equal(pgw_pks.vecmat_wrap32(x17, w.numpy(), 2).astype(np.int64), exact.astype(np.int64))
 
 
 @pytest.mark.parametrize(("m", "n"), [*SHAPES, (4096, 40)])

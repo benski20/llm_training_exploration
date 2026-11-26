@@ -364,8 +364,9 @@ def ring_vecmat(
         int64 ``(c, n)`` in ``[0, 2^K)`` on the CPU.
 
     On a CPU with ``K <= 32`` and ``pgw_pks`` built, ``auto`` runs the native kernel (``vecmat_wrap32``: wrapping
-    32-bit sums, the weight read once per 16-row block; 20-500x the int8 digit GEMMs at ``c = 2-14``, whose
-    ``(c, m)`` operand is too thin for them). Else,
+    32-bit sums, the weight read once per 16-row block) for ``c <= 4`` vectors, or for any ``c`` where the int8
+    GEMMs are not fast: at one thread on AMX it is 1.5-4.5x the int8 digit GEMMs at ``c = 1-2`` and about even at
+    ``c = 8-14``; on hosts without fast int8 GEMMs it replaces the float64 path. Else,
     on CPUs with an exact ``torch._int_mm`` this uses int8 digit GEMMs. Otherwise it splits ``u``
     into wide balanced digits and multiplying row chunks of ``W8`` in
     float64 so every partial sum is an integer below ``2^53`` (exact on any BLAS); only one chunk
@@ -398,7 +399,10 @@ def ring_vecmat(
             del wt
     if method == "kernel":
         raise ConfigError(f"kernel vecmat needs K a multiple of 8 in [8, 56], got {k}")
-    if method == "auto" and dev.type == "cpu" and k <= 32 and w8.dtype == torch.int8:
+    # the native kernel for few vectors (the segment's check vectors), or wherever the int8 GEMMs are not fast;
+    # many vectors (the 14 private self-check vectors) on AMX: torch's int8 GEMM is as fast at one thread
+    native_ok = c <= 4 or not cpu_int8_fast()
+    if method == "auto" and dev.type == "cpu" and k <= 32 and w8.dtype == torch.int8 and native_ok:
         nat = _native_vecmat()
         if nat is not None:
             # u W8 mod 2^32 in wrapping 32-bit lanes (pgw_pks.vecmat_wrap32), then mod 2^K (2^K divides 2^32):
