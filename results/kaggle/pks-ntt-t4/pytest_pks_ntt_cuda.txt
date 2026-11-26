@@ -1,0 +1,115 @@
+............F....F.                                                      [100%]
+=================================== FAILURES ===================================
+_________________ test_fused_keyswitch_equals_torch_and_cpu[1] _________________
+
+groups = 1
+
+    @pytest.mark.parametrize("groups", [1, 2])
+    def test_fused_keyswitch_equals_torch_and_cpu(groups: int) -> None:
+        rng = np.random.default_rng(20 + groups)
+        m = 3 * PACK
+        hs = _edge_rows(7 + groups, 3)
+        y = rng.integers(0, 1 << 56, (m, D * groups), dtype=np.uint64)
+        y[0, :4] = [0, 1, (1 << 56) - 1, 1 << 55]
+        y[PACK] = (1 << 56) - 1
+        ops = np.stack([np.stack([rng.integers(0, p, (RANK, NR), dtype=np.int64) for p in pks.QP])
+                        for _ in range(groups)])
+        for k, p in enumerate(pks.QP):
+            ops[0, k, 0] = p - 1
+        keys = pks_gpu._Keys(torch.from_numpy(ops).to(DEV))
+        hs_t = torch.from_numpy(hs.view(np.int64)).to(DEV)
+        y_t = torch.from_numpy(y.view(np.int64)).to(DEV)
+>       got = pks_ntt.keyswitch(hs_t, keys.u32(), y_t).cpu()
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/service/test_pks_ntt.py:118: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+src/pgw/service/pks_ntt.py:325: in keyswitch
+    _tail_kernel[(NR // _TAIL_BLOCK, nb, groups)](
+/usr/local/lib/python3.13/dist-packages/triton/runtime/jit.py:370: in <lambda>
+    return lambda *args, **kwargs: self.run(grid=grid, warmup=False, *args, **kwargs)
+                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/usr/local/lib/python3.13/dist-packages/triton/runtime/jit.py:720: in run
+    kernel = self._do_compile(key, signature, device, constexprs, options, attrs, warmup)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/usr/local/lib/python3.13/dist-packages/triton/runtime/jit.py:849: in _do_compile
+    kernel = self.compile(src, target=target, options=options.__dict__)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/usr/local/lib/python3.13/dist-packages/triton/compiler/compiler.py:304: in compile
+    module = src.make_ir(target, options, codegen_fns, module_map, context)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <triton.compiler.compiler.ASTSource object at 0x7cfda54d4e50>
+target = GPUTarget(backend='cuda', arch=75, warp_size=32)
+options = CUDAOptions(num_warps=4, num_ctas=1, num_stages=3, warp_size=32, maxnreg=None, ptx_version=None, ptx_options=None, ir_...ib/libdevice.10.bc'),), debug=False, backend_name='cuda', sanitize_overflow=True, arch='sm75', instrumentation_mode='')
+codegen_fns = {'convert_custom_types': <function convert_custom_float8_sm70 at 0x7cfda59836a0>, 'min_dot_size': <function min_dot_size.<locals>.check_dot_compatibility at 0x7cfda27d96c0>}
+module_map = {'triton.language.extra.libdevice': <module 'triton.language.extra.cuda.libdevice' from '/usr/local/lib/python3.13/dist-packages/triton/language/extra/cuda/libdevice.py'>}
+context = <triton._C.libtriton.ir.context object at 0x7cfda27885f0>
+
+    def make_ir(self, target: GPUTarget, options, codegen_fns, module_map, context):
+        from .code_generator import ast_to_ttir
+>       return ast_to_ttir(self.fn, self, context=context, options=options, codegen_fns=codegen_fns,
+                           module_map=module_map)
+E       triton.compiler.errors.CompilationError: at 14:11:
+E                        PMINV1: tl.constexpr, INV01: tl.constexpr, N: tl.constexpr, PK: tl.constexpr, DD: tl.constexpr,
+E                        BLOCK: tl.constexpr):
+E           """Program ``(i block, b, g)``: ``OUT[g, b, i]`` from ``RES[k, g, b, i]`` (the inverse transforms, uint32 per
+E           prime of ``QP``) and ``body[g, b, 32 u + j] = round_q1(Y[32 b + j, 256 g + u])``."""
+E           pid = tl.program_id(0)
+E           b = tl.program_id(1)
+E           g = tl.program_id(2)
+E           i = pid * BLOCK + tl.arange(0, BLOCK)
+E           yoff = (b * PK + i % PK).to(tl.int64) * (G * DD) + g * DD + i // PK
+E           body = _round_q1(tl.load(Y + yoff), Q1)
+E           plane = (g.to(tl.int64) * NBLK + b) * N + i
+E           step = G.to(tl.int64) * NBLK * N
+E                  ^
+E       AttributeError("'int' object has no attribute 'to'")
+
+/usr/local/lib/python3.13/dist-packages/triton/compiler/compiler.py:80: CompilationError
+__________________ test_auto_selection_and_permanent_fallback __________________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7cfda276ef90>
+
+    def test_auto_selection_and_permanent_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(pks_gpu, "_ntt_choice", {})
+        monkeypatch.delenv("PGW_SERVICE_PKS_GPU_NTT", raising=False)
+        assert pks_gpu.ntt_impl("cpu") == "torch"  # auto: CUDA devices only
+        if not torch.cuda.is_available():
+            # the self-test cannot place tensors on a missing CUDA device: an error keeps torch for good
+            assert pks_gpu.ntt_impl("cuda:0") == "torch"
+            assert pks_gpu._ntt_choice["cuda:0"] == "torch"
+        monkeypatch.setenv("PGW_SERVICE_PKS_GPU_NTT", "fused")
+        assert pks_gpu.ntt_impl("cpu") == "fused"
+        monkeypatch.setenv("PGW_SERVICE_PKS_GPU_NTT", "torch")
+        assert pks_gpu.ntt_impl("cuda:0") == "torch"
+        # auto with the fused kernels chosen: an error falls back to torch (same bits) and stays there
+        monkeypatch.delenv("PGW_SERVICE_PKS_GPU_NTT")
+        key = str(DEV)
+        pks_gpu._ntt_choice[key] = "fused"
+        rng = np.random.default_rng(4)
+        hs = torch.from_numpy(rng.integers(0, PAR.q1, (PACK, NU), dtype=np.int64)).to(DEV)
+        y = torch.from_numpy(rng.integers(0, 1 << 56, (PACK, D), dtype=np.int64)).to(DEV)
+        ops = torch.from_numpy(np.stack([rng.integers(0, p, (RANK, NR), dtype=np.int64) for p in pks.QP])[None]).to(DEV)
+        want = pks_gpu._keyswitch_torch(hs, ops, y)
+        calls = []
+    
+        def boom(*a: object) -> torch.Tensor:
+            calls.append(1)
+            raise RuntimeError("kernel launch failed")
+    
+        monkeypatch.setattr(pks_ntt, "keyswitch", boom)
+        assert torch.equal(pks_gpu._keyswitch_t(hs, ops, y), want)
+>       assert pks_gpu._ntt_choice[key] == "torch" and calls == [1]
+E       AssertionError: assert ('fused' == 'torch'
+E         
+E         - torch
+E         + fused)
+
+tests/service/test_pks_ntt.py:180: AssertionError
+------------------------------ Captured log call -------------------------------
+WARNING  pgw.service.pks_gpu:pks_gpu.py:242 pks-v3 fused NTT unavailable on cuda:0, using torch: RuntimeError('kernel launch failed')
+2 failed, 17 passed in 28.17s
+
+---stderr---

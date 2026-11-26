@@ -1,0 +1,54 @@
+{
+ "device": "Tesla T4",
+ "torch": "2.11.0+cu130",
+ "triton": "3.6.0",
+ "exact": {
+  "fwd_equals_pks_ntt": [
+   true,
+   true,
+   true,
+   true
+  ],
+  "mac_inv_equals_pks_ntt": [
+   true,
+   true,
+   true,
+   true
+  ],
+  "keyswitch_fused_equals_torch": true,
+  "keyswitch_fused_equals_cpu": true,
+  "fused_self_test": true,
+  "keyswitch_2048rows_g4_fused_equals_torch": true,
+  "all": true
+ },
+ "ntt_us": {
+  "polys": 2048,
+  "warps_4": {
+   "first_call_s": 7.34,
+   "fwd_us": 1.294,
+   "mac_inv_us": 2.738,
+   "keyswitch_g4_us_per_row": 4.109
+  },
+  "warps_8": {
+   "first_call_s": 0.0,
+   "fwd_us": 1.066,
+   "mac_inv_us": 2.53,
+   "keyswitch_g4_us_per_row": 3.59
+  },
+  "warps_16": {
+   "first_call_s": 3.49,
+   "fwd_us": 1.196,
+   "mac_inv_us": 2.426,
+   "keyswitch_g4_us_per_row": 3.728
+  },
+  "torch": {
+   "fwd_us": 29.771,
+   "inv_us": 31.19
+  }
+ },
+ "warps_used": "8",
+ "keyswitch": {
+  "error": "CompilationError: at 14:11:\n                 PMINV1: tl.constexpr, INV01: tl.constexpr, N: tl.constexpr, PK: tl.constexpr, DD: tl.constexpr,\n                 BLOCK: tl.constexpr):\n    \"\"\"Program ``(i block, b, g)``: ``OUT[g, b, i]`` from ``RES[k, g, b, i]`` (the inverse transforms, uint32 per\n    prime of ``QP``) and ``body[g, b, 32 u + j] = round_q1(Y[32 b + j, 256 g + u])``.\"\"\"\n    pid = tl.program_id(0)\n    b = tl.program_id(1)\n    g = tl.program_id(2)\n    i = pid * BLOCK + tl.arange(0, BLOCK)\n    yoff = (b * PK + i % PK).to(tl.int64) * (G * DD) + g * DD + i // PK\n    body = _round_q1(tl.load(Y + yoff), Q1)\n    plane = (g.to(tl.int64) * NBLK + b) * N + i\n    step = G.to(tl.int64) * NBLK * N\n           ^\nAttributeError(\"'int' object has no attribute 'to'\")",
+  "trace": "  File \"/tmp/pgwsrc/pgw/benchmarks/pks_ntt_bench.py\", line 164, in keyswitch_rows\n    tf = _time(lambda o=ops_u, y=y: pks_ntt.keyswitch(hs, o, y), dev, reps)\n  File \"/tmp/pgwsrc/pgw/benchmarks/pks_ntt_bench.py\", line 55, in _time\n    fn()\n    ~~^^\n  File \"/tmp/pgwsrc/pgw/benchmarks/pks_ntt_bench.py\", line 164, in <lambda>\n    tf = _time(lambda o=ops_u, y=y: pks_ntt.keyswitch(hs, o, y), dev, reps)\n                                    ~~~~~~~~~~~~~~~~~^^^^^^^^^^\n  File \"/tmp/pgwsrc/pgw/src/pgw/service/pks_ntt.py\", line 325, in keyswitch\n    _tail_kernel[(NR // _TAIL_BLOCK, nb, groups)](\n    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^\n        res, y_t.contiguous(), out, nb, groups, P0=p0, P1=p1, P2=p2, P3=p3, PM=pm, Q1=par.q1, YB=par.yb,\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n        INV23=pow(p2, -1, p3), PMINV0=pow(pm, -1, p0), PMINV1=pow(pm, -1, p1), INV01=pow(p0, -1, p1), N=NR, PK=PACK,\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n        DD=D, BLOCK=_TAIL_BLOCK, num_warps=4)\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.13/dist-packages/triton/runtime/jit.py\", line 370, in <lambda>\n    return lambda *args, **kwargs: self.run(grid=grid, warmup=False, *args, **kwargs)\n                                   ~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.13/dist-packages/triton/runtime/jit.py\", line 720, in run\n    kernel = self._do_compile(key, signature, device, constexprs, options, attrs, warmup)\n  File \"/usr/local/lib/python3.13/dist-packages/triton/runtime/jit.py\", line 849, in _do_compile\n    kernel = self.compile(src, target=target, options=options.__dict__)\n  File \"/usr/local/lib/python3.13/dist-packages/triton/compiler/compiler.py\", line 304, in compile\n    module = src.make_ir(target, options, codegen_fns, module_map, context)\n  File \"/usr/local/lib/python3.13/dist-packages/triton/compiler/compiler.py\", line 80, in make_ir\n    return ast_to_ttir(self.fn, self, context=context, options=options, codegen_fns=codegen_fns,\n                       module_map=module_map)\ntriton.compiler.errors.CompilationError: at 14:11:\n                 PMINV1: tl.constexpr, INV01: tl.constexpr, N: tl.constexpr, PK: tl.constexpr, DD: tl.constexpr,\n                 BLOCK: tl.constexpr):\n    \"\"\"Program ``(i block, b, g)``: ``OUT[g, b, i]`` from ``RES[k, g, b, i]`` (the inverse transforms, uint32 per\n    prime of ``QP``) and ``body[g, b, 32 u + j] = round_q1(Y[32 b + j, 256 g + u])``.\"\"\"\n    pid = tl.program_id(0)\n    b = tl.program_id(1)\n    g = tl.program_id(2)\n    i = pid * BLOCK + tl.arange(0, BLOCK)\n    yoff = (b * PK + i % PK).to(tl.int64) * (G * DD) + g * DD + i // PK\n    body = _round_q1(tl.load(Y + yoff), Q1)\n    plane = (g.to(tl.int64) * NBLK + b) * N + i\n    step = G.to(tl.int64) * NBLK * N\n           ^\nAttributeError(\"'int' object has no attribute 'to'\")\n"
+ }
+}

@@ -928,6 +928,31 @@ JOBS["pgw-sdk-e2e-3b"] = _sdk_e2e_job("qwen2.5-3b-instruct", 2 * 3600)
 JOBS["pgw-sdk-e2e-15b"] = _sdk_e2e_job("qwen2.5-1.5b-instruct", 2 * 3600)
 
 
+# pks-v3 provider key switch with the fused Triton NTTs (pgw.service.pks_ntt) on a T4: the kernels against
+# pks.Ntt, the torch key switch and the CPU key switch (tests/service/test_pks_ntt.py on CUDA, then the bench's
+# exactness section), microseconds per NTT at 4 / 8 / 16 warps, the key switch per output row, and whole items of
+# the largest 7B / 32B / 72B linears with PGW_SERVICE_PKS_GPU_NTT=torch vs fused (byte-identical replies). No native
+# build (the CPU references are the numpy ones). Under 1 h: the bench stops starting items after --budget-s.
+_PKS_NTT_KEEP_TESTS = {"service", "__init__.py", "conftest.py"}
+_PKS_NTT_KEEP_SRC = {"core", "hemask", "observability", "service", "wire"}  # the import closure of the bench + test
+JOBS["pgw-pks-ntt-t4"] = {"machine_shape": "NvidiaTeslaT4", "exclude": [
+    "scripts", "examples", "rust", "SPEC.md", "INTERFACE_NOTES.md", "STATUS.md",
+    *sorted(f"src/pgw/{p.name}" for p in (PGW / "src" / "pgw").iterdir()
+            if p.is_dir() and p.name not in _PKS_NTT_KEEP_SRC),
+    *sorted(f"tests/{p.name}" for p in (PGW / "tests").iterdir() if p.name not in _PKS_NTT_KEEP_TESTS),
+    *sorted(f"tests/service/{p.name}" for p in (PGW / "tests" / "service").iterdir()
+            if p.name not in ("__init__.py", "test_pks_ntt.py")),
+    *sorted(f"benchmarks/{p.name}" for p in HERE.parent.iterdir() if p.name != "pks_ntt_bench.py")], "steps": [
+    {"kind": "shell", "name": "gpu_info", "cmd": "nproc; free -g; nvidia-smi; python -c 'import triton; "
+     "print(triton.__version__)'", "timeout": 120},
+    {"kind": "pytest", "name": "pytest_pks_ntt_cuda", "args": ["tests/service/test_pks_ntt.py", "-q", "-rs",
+                                                               "--timeout", "900"], "timeout": 1000},
+    {"kind": "shell", "name": "pks_ntt_bench",
+     "cmd": "python benchmarks/pks_ntt_bench.py --json /kaggle/working/pks_ntt.json --budget-s 1300",
+     "timeout": 2100},
+]}
+
+
 def source_tarball(exclude: tuple[str, ...] = (), include_top: tuple[str, ...] = ()) -> bytes:
     """xz tarball of pgw/ without the excluded folders (plus ``exclude``: job-specific paths under pgw/;
     ``include_top``: top-level folders of :data:`EXCLUDE_TOP` this job needs after all)."""
