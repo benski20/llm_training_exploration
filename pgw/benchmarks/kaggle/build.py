@@ -898,7 +898,7 @@ JOBS["pgw-sdk-pins"] = {"gpu": False, "exclude": ["tests", "benchmarks", "rust",
 # OpenAI`` with the defaults (pks-v3, hint built locally) on loopback, empty cache; provisioning, first answer, TTFT,
 # steady tokens/s, streaming, multi-turn, revocation, every answer checked bit for bit against the gateway path.
 # Native extensions built first (pgw_pks makes the local 7B hint build feasible on 4 cores).
-_SDK_E2E_KEEP_TESTS = {"sdk", "__init__.py"}
+_SDK_E2E_KEEP_TESTS = {"sdk", "service", "core", "__init__.py", "conftest.py", "enroll_helpers.py"}
 _SDK_E2E_EXCLUDE = ["scripts", "examples", "SPEC.md", "INTERFACE_NOTES.md", "STATUS.md", "rust/pgw-core-rs/tests",
                     *sorted(f"tests/{p.name}" for p in (PGW / "tests").iterdir() if p.name not in _SDK_E2E_KEEP_TESTS),
                     *sorted(f"benchmarks/{p.name}" for p in HERE.parent.iterdir() if p.name != "sdk_e2e_gpu.py")]
@@ -910,6 +910,9 @@ BUILD_NATIVE_ALL = {**BUILD_NATIVE, "cmd": BUILD_NATIVE["cmd"] + " && python rus
 def _sdk_e2e_job(model: str, timeout_s: int) -> dict:
     return {"machine_shape": "NvidiaTeslaT4", "source": "dataset", "exclude": _SDK_E2E_EXCLUDE, "steps": [
         BUILD_NATIVE_ALL,
+        {"kind": "pytest", "name": "pytest_kernels_gpu", "timeout": 1200,
+         "args": ["tests/service/test_kernels.py", "tests/core/test_ringmm.py", "-q", "-rs", "-m", "gpu",
+                  "--timeout", "900"]},
         {"kind": "shell", "name": "cpu_info", "cmd": "lscpu | head -20; nproc; free -g; nvidia-smi; df -h / /tmp",
          "timeout": 60},
         {"kind": "shell", "name": f"sdk_e2e_{model}",

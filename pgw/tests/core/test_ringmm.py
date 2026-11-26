@@ -160,3 +160,16 @@ def test_offset_byte_mm_exact(k: int, b: int, m: int, n: int, mode: str) -> None
     except RuntimeError as exc:  # some CPU builds lack the int8 GEMM kernel
         pytest.skip(f"torch._int_mm unavailable on CPU: {exc}")
     assert np.array_equal(got.numpy(), ringmm_reference(x, w8, k))
+
+
+def test_weight_rowsum_is_exact_in_chunks() -> None:
+    """Row sums without an int64 copy of the whole weight (chunked), equal to the naive sum incl. -128."""
+    from pgw.core.ringmm import weight_rowsum
+
+    w = torch.randint(-128, 128, (1000, 37), dtype=torch.int8)
+    w[0] = -128
+    w[999] = 127
+    want = w.to(torch.int64).sum(1)
+    for chunk in (1, 7, 128, 4096):
+        assert torch.equal(weight_rowsum(w, chunk_rows=chunk), want)
+    assert weight_rowsum(w[:0]).shape == (0,)
