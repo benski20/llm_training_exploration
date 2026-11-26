@@ -93,7 +93,11 @@ The first call on a machine does three things before it answers:
    your machine from those weights: about 20-30 minutes of CPU at 7B on 4 cores (a few minutes at 0.5B).
 
 All three are cached: expect one-time ~6.5 GB of public weight download plus ~20-30 min of CPU for the 7B
-model on a 4-core machine, then a few seconds to start. Mask generation keeps running in background
+model on a 4-core machine, then a few seconds to start. **Before real traffic, run `pgw sdk prepare --model
+qwen2.5-7b-instruct`** once on the machine (or on a bigger one and copy the result:
+[Configuration](configuration.md#preparing-a-model-ahead-of-time)): it does all three ahead of time, so your first
+requests do not wait for them. While a setup runs, `pgw sdk status` shows `first-time setup in progress` with the
+share done and an estimate of the time left. Mask generation keeps running in background
 processes while your process is up. The [Configuration reference](configuration.md#cache-directory) has the
 disk figures and the `hint="provider"` alternative.
 

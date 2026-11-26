@@ -5,7 +5,8 @@ still verifies the provider's pinned CA through it) and can, on command:
 
 * ``drop()``: reset every open connection (a network blip, a provider restart seen from the client);
 * ``mode = "blackhole"``: keep connections open but stop forwarding in both directions (a hung network path);
-* ``mode = "refuse"``: close new connections at once (the provider is down).
+* ``mode = "refuse"``: close new connections at once (the provider is down);
+* ``delay_s``: hold every forwarded read this long (a slow but working path: requests take long, then complete).
 
 It runs its own event loop in a daemon thread, so it works next to a synchronous client in the test process.
 """
@@ -28,6 +29,7 @@ class ChaosProxy:
         self.target = target
         self.port = port or _free_port()
         self.mode: Mode = "pass"
+        self.delay_s = 0.0
         self.connections = 0
         self._writers: set[asyncio.StreamWriter] = set()
         self._loop = asyncio.new_event_loop()
@@ -65,6 +67,8 @@ class ChaosProxy:
                         break
                     while self.mode == "blackhole":
                         await asyncio.sleep(0.05)
+                    if self.delay_s > 0:
+                        await asyncio.sleep(self.delay_s)
                     dst.write(data)
                     await dst.drain()
             except (OSError, asyncio.CancelledError):

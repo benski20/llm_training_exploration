@@ -22,6 +22,8 @@ behaviour of the OpenAI client it replaces.
 | `mask_workers` | a quarter of the CPUs (1 to 8) | background mask-generation processes per model (low priority) |
 | `mask_store_gb` | 8 | disk budget of the mask stock per model. A request starts only when the stock covers the prompt + `max_tokens` of every running request: at 7B the default holds about one such request at a time; size it for your concurrency ([Scaling](scaling.md)) |
 | `mask_admission` | `PGW_MASK_ADMISSION`, else `"entitled"` | `"overcommit"` (opt-in): a request starts when the stock covers its prompt and one chunk per running answer; answers that find the stock short wait for the factory (up to 30 s) instead of new requests queueing ([Scaling](scaling.md#when-the-stock-runs-short-bursts)) |
+| `mask_wait_s` | 120 s | how long a request waits for masks when the stock is short. Longer during a model's first fill on a machine while the setup makes progress (up to `ready_timeout_s`), and while the factory is visibly making the segment the request needs and expects it within the request's `timeout` |
+| `factory_stall_s` | `PGW_FACTORY_STALL_S`, else 120 s | how long the background mask factory may make no progress because our service cannot be reached (or its runs keep failing) before requests waiting for masks fail with `APIConnectionError` naming the reason ([Reliability](reliability.md#the-background-mask-factory)); the factory keeps retrying and resumes by itself |
 | `masked_head` | `"auto"` | the model's output layer as one more masked step on our GPU when we serve it (`"on"`, `"off"`) |
 | `prefix_cache` | `"auto"` | exact reuse of the previous turn of a conversation (`extra_body={"conversation_id": ...}`) when the output layer runs in your process |
 | `lane` | `"auto"` | our fast connection for the per-token round trips when the service offers it (`"stream"`, `"off"`) |
@@ -107,7 +109,9 @@ on a CPU with AMX and 16 with AVX-512 VNNI, about 5 minutes on a 4-vCPU AMX mach
 
 ### Preparing a model ahead of time
 
-To keep the first request from waiting for this, prepare the model beforehand, for example while the
+**Recommended before the first traffic.** Without it, the first request of a fresh machine waits for the whole
+setup (21 minutes at 7B on a 4-vCPU VM in our Kaggle run), and requests arriving during the first minutes of mask
+production may be refused with `mask_exhausted`. Prepare the model beforehand, for example while the
 application is being deployed:
 
 ```bash

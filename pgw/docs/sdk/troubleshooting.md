@@ -51,9 +51,15 @@ An unrelated package called `pgw` exists on PyPI and uses the same import name. 
 
 Expected once per machine and model: enrollment, model preparation and mask setup run before the first
 answer ([Quickstart](quickstart.md#4-first-call)): at 7B on 4 cores, a one-time download of about 6.5 GB of public
-weights and about 20-30 minutes of CPU for the mask setup. `pgw sdk status` shows where it is. Later starts reuse
-the cache. If every start is slow, the cache directory is not persistent (for example a container without a
-volume); see [Configuration](configuration.md#cache-directory).
+weights and about 20-30 minutes of CPU for the mask setup (on a 4-vCPU Kaggle VM shared with a T4 provider: a 17-minute
+hint build, then about 3 minutes for the first 64 mask slots, 21 minutes in all). `pgw sdk status` shows where it is,
+for example `first-time setup in progress: building the one-time pks-v3 hint, 45% done (about 9 min left)`. Later
+starts reuse the cache. If every start is slow, the cache directory is not persistent (for example a container
+without a volume); see [Configuration](configuration.md#cache-directory).
+
+**Run `pgw sdk prepare --model <model>` before the first traffic** (at deploy time, or in the image build with the
+cache directory on a volume): it does the downloads and the one-time setup on every core, ahead of time, so the
+first request only waits for the first mask segment, if at all.
 
 A request with a short `timeout` during that first preparation fails with a timeout but does not stop the
 preparation; the next request continues where it is.
@@ -94,7 +100,16 @@ Per-token time is dominated by round trips to our GPU ([Concepts](concepts.md#wh
 
 The background mask generator fell behind and the library waits for masks (`mask_exhausted`, or a pause
 before generation continues). It catches up at a rate set by the vCPUs available; give the process more
-vCPUs, or lower `max_tokens` for bulk jobs.
+vCPUs, or lower `max_tokens` for bulk jobs. While the factory is visibly making the masks a request needs, the
+request waits for them up to its `timeout` (not only `mask_wait_s`); a `mask_exhausted` error says when the
+factory expects more masks.
+
+### `APIConnectionError` while waiting for masks: "the mask factory has made no progress"
+
+The mask factory could not reach our service (or its runs kept failing) for `factory_stall_s` (120 s). The message
+names the provider's health-check result and the factory's last error. The factory keeps retrying and resumes by
+itself when the service is back; retry the request later. `pgw sdk status` shows `STALLED` with the reason until
+then.
 
 ## Errors during requests
 
@@ -106,7 +121,7 @@ What the library does by itself on each failure (reconnects, re-enrollment, fact
 | `rate_limited` (429) | your key's rate or quota limit | wait for the `Retry-After` time |
 | `unavailable`, `backend_unavailable` (503) | service busy or restarting, or the connection was lost mid-answer | retry with exponential back-off; the same client reconnects |
 | `deadline_exceeded` (504) | a request timed out | retry with back-off |
-| `mask_exhausted` (503) | masks not ready for `prompt + max_tokens`; the message says why (setup still running, factory failing, disk almost full) | retry shortly, or lower `max_tokens`; act on the reason given |
+| `mask_exhausted` (503) | masks not ready for `prompt + max_tokens`; the message says why (first-time setup still running, with its progress; factory failing; disk almost full; when the next masks are due) | retry shortly, or lower `max_tokens`; act on the reason given. For first use: `pgw sdk prepare` ahead of time |
 | `payload_too_large` (400) | `prompt + max_tokens` needs more masks than the stock ever holds | lower `max_tokens` or shorten the prompt, or raise `mask_store_gb` |
 | `bad_shape` (400) | prompt too long for the model context | shorten the prompt |
 | `integrity_check_failed` (502) | a result from our GPU failed verification | **do not retry automatically**; report it. The model stays blocked, across restarts, until you clear it (below) |

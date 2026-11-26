@@ -57,7 +57,14 @@ from pgw.sdk.errors import (
     PGWAPIError,
     from_pgw_error,
 )
-from pgw.sdk.factory import FactoryPlan, FactoryProcess, read_factory_state, write_demand
+from pgw.sdk.factory import (
+    FactoryPlan,
+    FactoryProcess,
+    describe_setup,
+    provider_error,
+    read_factory_state,
+    write_demand,
+)
 from pgw.sdk.halt import HaltRecord, HaltStore
 from pgw.sdk.keys import SdkKey
 from pgw.sdk.options import SDKOptions, canonical_model
@@ -623,7 +630,7 @@ class Engine:
             self._cert_task = asyncio.get_running_loop().create_task(self._cert_loop(), name="pgw-sdk-cert")
         if self.options.factory and h.factory is None:
             try:
-                h.factory = FactoryProcess(self._factory_plan(h)).start()
+                h.factory = FactoryProcess(self._factory_plan(h), stall_s=self.options.factory_stall_s).start()
             except Exception as exc:  # the stock still serves; status shows it
                 log.error("mask factory for %s not started: %s", h.name, getattr(exc, "message", type(exc).__name__))
         self._write_status()
@@ -785,8 +792,19 @@ class Engine:
             hint_key_file=hint_key, factory_weights="stream" if stream else "pack",
             weights_source=o.factory_weights_source, pack_fingerprint=prov.fingerprint, hf_repo=prov.hf_repo,
             hf_revision=prov.hf_revision, check_stock_segments=int(o.check_stock_segments),
+            hint_work=self._hint_work(rt) if scheme == "pks-v3" else (),
+            store_fingerprint=getattr(rt, "fingerprint", None) or None,
             # one private set per worker start and per failed or aborted segment
             check_stock_private=max(8, 2 * int(o.workers) + 2))
+
+    @staticmethod
+    def _hint_work(rt: Any) -> tuple[tuple[str, int], ...]:
+        """``(linear key, rows x columns)`` of the runtime pack's linears: the weights of the hint build's progress
+        (public shapes)."""
+        try:
+            return tuple((str(s.id.key), int(s.out_features) * int(s.in_features)) for s in rt.pack.linear_specs())
+        except Exception:  # pragma: no cover - progress without a percentage
+            return ()
 
     @staticmethod
     def _slot_bytes(rt: Any) -> int:
@@ -936,10 +954,16 @@ class Engine:
                     deadline: float, setup_deadline: float | None = None, conversation: str | None = None) -> Any:
         """Admit and reserve masks; waits (back-pressure) while the mask stock is empty or the service reconnects.
 
-        ``mask_wait_s`` bounds the wait for masks, except during the model's first fill on this host (no mask seen
-        yet, the factory running and healthy: it may still be building the one-time pks-v3 hint, tens of minutes at
-        7B), when the request waits up to ``setup_deadline`` (the start-up budget ``ready_timeout_s``)."""
-        mask_deadline = min(deadline, time.monotonic() + self.options.mask_wait_s)
+        ``mask_wait_s`` bounds the wait for masks, except
+        * during the model's first fill on this host (no mask seen yet, the factory running and making progress: it
+          may still be building the one-time pks-v3 hint, tens of minutes at 7B), when the request waits up to
+          ``setup_deadline`` (the start-up budget ``ready_timeout_s``);
+        * while the factory is visibly making the segment that will cover this request and expects it within the
+          request's ``timeout_s`` (:meth:`_extended_limit`).
+        A stalled factory (no progress for ``factory_stall_s`` because the provider cannot be reached, or its runs
+        keep failing: :meth:`pgw.sdk.factory.FactoryProcess.health`) fails the request at once, naming why."""
+        t_open = time.monotonic()
+        mask_deadline = min(deadline, t_open + self.options.mask_wait_s)
         delay = 0.1
         # Requests waiting for masks are served in arrival order (FIFO): once one waits, later requests queue behind
         # it instead of trying first, so a large request is never starved by a stream of smaller ones that each fit
@@ -952,12 +976,17 @@ class Engine:
                     ticket = asyncio.Event()
                     waiters.append(ticket)
                 if ticket is not None and waiters and waiters[0] is not ticket:
-                    left = self._mask_limit(h, mask_deadline, setup_deadline) - time.monotonic()
+                    left = min(self._mask_limit(h, mask_deadline, setup_deadline, t_open, deadline) - time.monotonic(),
+                               self.options.factory_stall_s / 4)  # re-check the factory's health now and then
                     try:
                         await asyncio.wait_for(ticket.wait(), timeout=max(0.0, left))
                     except TimeoutError as exc:
+                        await self._raise_if_stalled(h, rid, exc)
+                        if time.monotonic() < self._mask_limit(h, mask_deadline, setup_deadline, t_open, deadline):
+                            continue
+                        why = self._waiting_why(h)
                         raise NotReadyError(f"no masks in stock for model {h.name!r} after waiting (queued behind "
-                                            f"{waiters.index(ticket)} earlier request(s) waiting for masks)",
+                                            f"{waiters.index(ticket)} earlier request(s) waiting for masks){why}",
                                             code=str(ErrorCode.MASK_EXHAUSTED), request_id=rid) from exc
                     ticket.clear()
                     continue
@@ -978,12 +1007,19 @@ class Engine:
                         want = int(exc.details.get("entitled") or exc.details.get("needed") or 0)
                         write_demand(fac.plan.demand_file, want + int(exc.details.get("promised") or 0))
                     broken = fac is not None and fac.owner and fac.failures >= 3 and fac.last_error
+                    if not broken:
+                        await self._raise_if_stalled(h, rid, exc)
                     fst = fac.state() if fac is not None else {}
                     disk = fst.get("disk_limited") if isinstance(fst.get("disk_limited"), dict) else None
-                    fac_error = fst.get("last_error") if isinstance(fst.get("last_error"), str) else None
+                    hl: dict[str, Any] = _as_dict(fst.get("health"))
+                    # a run error of this factory child (the factory retries with back-off; a persistent one stalls)
+                    fac_error = hl.get("last_error") if isinstance(hl.get("last_error"), str) else None
                     stock_why = _check_stock_trouble(fac)
-                    first_fill = self._first_fill(h, setup_deadline) and disk is None and fac_error is None
-                    limit = self._mask_limit(h, mask_deadline, setup_deadline) if first_fill else mask_deadline
+                    first_fill = self._first_fill(h, setup_deadline) and disk is None
+                    deficit = (int(exc.details.get("entitled") or exc.details.get("needed") or 0)
+                               + int(exc.details.get("promised") or 0) - int(exc.details.get("available") or 0))
+                    limit = self._mask_limit(h, mask_deadline, setup_deadline, t_open, deadline, deficit) if (
+                        disk is None) else mask_deadline
                     if broken or stock_why or time.monotonic() + delay > limit:
                         why = f"; the mask factory is failing: {fac.last_error}" if broken and fac is not None else (
                             "" if self.options.factory else "; the background mask factory is off (factory=False)")
@@ -996,10 +1032,13 @@ class Engine:
                         elif fst.get("halted"):
                             why += "; the mask factory halted after provider integrity failures (see pgw sdk status)"
                         elif fac_error is not None and not broken:
-                            why += f"; the mask factory's last run failed: {fac_error[:300]}"
+                            why += f"; the mask factory's last run failed: {fac_error[:300]} (it retries)"
                         if first_fill:
-                            why += "; the one-time mask setup of this model is still running (see pgw sdk status)"
-                        raise NotReadyError(f"no masks in stock for model {h.name!r} after waiting{why}",
+                            why += self._setup_why(hl)
+                        elif not broken and not stock_why and disk is None:
+                            why += self._eta_why(hl)
+                        raise NotReadyError(f"no masks in stock for model {h.name!r} after waiting "
+                                            f"{time.monotonic() - t_open:.0f}s{why}",
                                             code=str(exc.code), request_id=rid) from exc
                 except BreakerOpenError as exc:  # blocked after an integrity failure: hard error, never waited out
                     why = (h.halt.reason if h.halt is not None else None) or exc.message
@@ -1021,16 +1060,105 @@ class Engine:
                     waiters[0].set()  # the next request in line tries now
 
     def _first_fill(self, h: ModelHandle, setup_deadline: float | None) -> bool:
-        """The model's first fill on this host (no mask seen yet, the factory running and healthy)."""
+        """The model's first fill on this host (no mask seen yet, the factory running and not stalled)."""
         fac = h.factory
         broken = fac is not None and fac.owner and fac.failures >= 3 and fac.last_error
-        return bool(fac is not None and not broken and not h.masks_seen and setup_deadline is not None
-                    and not fac.state().get("halted"))
+        if fac is None or broken or h.masks_seen or setup_deadline is None:
+            return False
+        st = fac.state()
+        return not st.get("halted") and not (st.get("health") or {}).get("stalled")
 
-    def _mask_limit(self, h: ModelHandle, mask_deadline: float, setup_deadline: float | None) -> float:
+    def _mask_limit(self, h: ModelHandle, mask_deadline: float, setup_deadline: float | None,
+                    t_open: float | None = None, deadline: float | None = None, deficit: int = 0) -> float:
         if setup_deadline is not None and self._first_fill(h, setup_deadline):
             return max(mask_deadline, setup_deadline)
+        if t_open is not None and deadline is not None:
+            return max(mask_deadline, self._extended_limit(h, t_open, deadline, deficit))
         return mask_deadline
+
+    def _extended_limit(self, h: ModelHandle, t_open: float, deadline: float, deficit: int = 0) -> float:
+        """How long a request may wait beyond ``mask_wait_s`` because the factory is visibly making its masks: while
+        a segment is being made (or one completed within ``factory_stall_s``), the factory is not stalled, and the
+        segments this request still lacks are due (at the last measured rate) within ``max(mask_wait_s,
+        timeout_s)`` of the request's start and before its deadline; never beyond either. ``0.0``: no extension."""
+        fac = h.factory
+        if fac is None or self.options.mask_wait_s <= 0 or not self.options.factory:
+            return 0.0
+        hl = _health_of(fac)
+        if hl.get("stalled") or hl.get("phase") not in ("producing", "first_segment", "idle", "retrying"):
+            return 0.0
+        seg = hl.get("segment") if isinstance(hl.get("segment"), dict) else None
+        full = hl.get("segment_s")
+        if not isinstance(full, int | float) or full <= 0:
+            return 0.0
+        progress_at = float(hl.get("progress_at") or 0.0)
+        if seg is None and time.time() - progress_at > self.options.factory_stall_s:
+            return 0.0  # nothing being made and nothing made lately
+        first = float(seg["eta_s"]) if seg is not None and isinstance(seg.get("eta_s"), int | float) else float(full)
+        per = max(1, int(fac.plan.segment_slots))
+        more = max(0, -(-max(0, deficit) // per) - 1)  # whole segments after the next one
+        eta = first + more * float(full)
+        cap = min(deadline, t_open + max(self.options.mask_wait_s, self.options.timeout_s))
+        now = time.monotonic()
+        if now + eta > cap:
+            return 0.0
+        return min(cap, now + eta + min(60.0, self.options.mask_wait_s))
+
+    async def _raise_if_stalled(self, h: ModelHandle, rid: str, cause: BaseException | None = None) -> None:
+        """Fail a request waiting for masks at once while the factory is stalled (see
+        :meth:`pgw.sdk.factory.FactoryProcess.health`; confirmed by one more probe of the provider first):
+        ``APIConnectionError`` when the provider cannot be reached, else ``NotReadyError``; both retryable, both name
+        the factory's last error and any first-time setup."""
+        fac = h.factory
+        if fac is None or not self.options.factory:
+            return
+        hl = _health_of(fac)
+        if not hl.get("stalled"):
+            return
+        again = getattr(fac, "recheck", None)
+        if callable(again):
+            with contextlib.suppress(Exception):
+                hl = await asyncio.to_thread(again) or {}
+        stalled = hl.get("stalled")
+        if not stalled:
+            return
+        msg = (f"no masks for model {h.name!r}: the mask factory has made no progress for at least "
+               f"{self.options.factory_stall_s:.0f}s: {str(stalled)[:600]}. It keeps retrying with back-off and "
+               "resumes by itself when the provider is back; retry later (pgw sdk status shows the factory)")
+        setup = describe_setup(hl)
+        if setup:
+            msg += f"; {setup} (it continues in the background)"
+        prov = _as_dict(hl.get("provider"))
+        details = {"phase": hl.get("phase"), "stall_s": self.options.factory_stall_s,
+                   "provider_error": prov.get("error"), "factory_error": hl.get("last_error")}
+        if prov.get("reachable") is False or provider_error(hl.get("last_error")):
+            raise APIConnectionError(msg, code=str(ErrorCode.BACKEND_UNAVAILABLE), request_id=rid,
+                                     details=details) from cause
+        raise NotReadyError(msg, code=str(ErrorCode.MASK_EXHAUSTED), request_id=rid, details=details) from cause
+
+    @staticmethod
+    def _setup_why(hl: dict[str, Any]) -> str:
+        setup = describe_setup(hl)
+        return (f"; {setup or 'the one-time mask setup of this model is still running'} (see pgw sdk status; run "
+                "'pgw sdk prepare' before the first traffic to do it ahead of time)")
+
+    @staticmethod
+    def _eta_why(hl: dict[str, Any]) -> str:
+        seg = hl.get("segment") if isinstance(hl.get("segment"), dict) else None
+        if seg is not None and isinstance(seg.get("eta_s"), int | float):
+            return (f"; the mask factory is making {seg.get('slots')} more mask slots, due in about "
+                    f"{float(seg['eta_s']):.0f}s (retry then, raise mask_wait_s, or lower max_tokens)")
+        if isinstance(hl.get("segment_s"), int | float):
+            return (f"; the mask factory makes a segment of masks in about {float(hl['segment_s']):.0f}s here "
+                    "(retry then, raise mask_wait_s, or lower max_tokens)")
+        return ""
+
+    def _waiting_why(self, h: ModelHandle) -> str:
+        fac = h.factory
+        if fac is None:
+            return ""
+        hl = _health_of(fac)
+        return self._setup_why(hl) if hl.get("setup") else self._eta_why(hl)
 
     def _never_fits(self, h: ModelHandle, exc: MaskExhaustedError, rid: str) -> None:
         """Fail at once (no wait) when the request is entitled to more mask slots than this client's stock can ever
@@ -1448,6 +1576,20 @@ def read_status(layout: CacheLayout) -> dict[str, Any]:
             entry["factories"] = {f.name: read_factory_state(f) for f in sorted(fdir.iterdir()) if f.is_dir()}
         out["sessions"].append(entry)
     return out
+
+
+def _as_dict(v: Any) -> dict[str, Any]:
+    return v if isinstance(v, dict) else {}
+
+
+def _health_of(fac: Any) -> dict[str, Any]:
+    """:meth:`pgw.sdk.factory.FactoryProcess.health` (``{}`` when unknown)."""
+    fn = getattr(fac, "health", None)
+    try:
+        out = fn() if callable(fn) else None
+    except Exception:  # pragma: no cover - status only
+        return {}
+    return out if isinstance(out, dict) else {}
 
 
 def _check_stock_trouble(fac: Any) -> str | None:
