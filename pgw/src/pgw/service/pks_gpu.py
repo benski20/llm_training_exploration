@@ -286,14 +286,16 @@ class FusedChoice:
     (same bits); ``fused`` forces it (errors propagate), ``torch`` disables it. ``choice``: per device ``"fused"`` or
     ``"torch"`` once decided."""
 
-    def __init__(self, name: str, env: str, test: Any):
-        self.name, self.env, self.test = name, env, test
+    def __init__(self, name: str, env: str, test: Any, default: str = "auto"):
+        self.name, self.env, self.test, self.default = name, env, test, default
         self.choice: dict[str, str] = {}
         self._lock = threading.Lock()
 
     def mode(self) -> str:
         raw = os.environ.get(self.env, "").strip().lower()
-        if raw in ("", "auto"):
+        if raw == "":
+            return self.default
+        if raw == "auto":
             return "auto"
         if raw in ("torch", "host", "0", "off", "false", "no"):
             return "torch"
@@ -400,8 +402,11 @@ def _ring_self_test(dev: Any) -> None:
 
 
 #: ``PGW_SERVICE_PKS_GPU_FWD4``: the key switch's forward NTTs of all four primes in one launch, coalesced gather
-#: (:func:`pgw.service.pks_ntt.forward4`); used only while the fused NTTs are (:func:`ntt_impl`).
-FWD4 = FusedChoice("4-prime forward NTT", "PGW_SERVICE_PKS_GPU_FWD4", _fwd4_self_test)
+#: (:func:`pgw.service.pks_ntt.forward4`); used only while the fused NTTs are (:func:`ntt_impl`). Off unless set
+#: (``auto`` or ``fused``): exact on the Kaggle T4 but slower there (3.14 against 2.50 us per output row for 4 groups;
+#: the transforms are bound by the SMs, and the per-prime kernel's strided gather costs less than four on-chip
+#: transposes of the tile); the RunPod session measures both on an H100.
+FWD4 = FusedChoice("4-prime forward NTT", "PGW_SERVICE_PKS_GPU_FWD4", _fwd4_self_test, default="torch")
 #: ``PGW_SERVICE_PKS_GPU_SWITCH``: the device item's plane recombination and hint switch in one pass
 #: (:func:`pgw.service.pks_fused.combine`).
 SWITCH = FusedChoice("hint switch + recombination", "PGW_SERVICE_PKS_GPU_SWITCH", _switch_self_test)
@@ -415,7 +420,7 @@ def fused_status(dev: Any) -> dict[str, str]:
     ring rows, each ``"fused"`` or ``"torch"``."""
     ntt = ntt_impl(dev)
     return {"ntt": ntt, "fwd4": FWD4.impl(dev) if ntt == "fused" else "torch", "switch": SWITCH.impl(dev),
-            "ring": RING.impl(dev)}
+            "ring": RING.impl(dev), "wire": WIRE.impl(dev)}
 
 
 class _Keys:
@@ -452,7 +457,7 @@ def _keyswitch_t(hs_t: torch.Tensor, ops_t: _Keys | torch.Tensor, y_t: torch.Ten
 
             u32 = keys.u32()
             return FWD4.run(dev, lambda: pks_ntt.keyswitch(hs_t, u32, y_t, fwd4=True),
-                            lambda: pks_ntt.keyswitch(hs_t, u32, y_t))
+                            lambda: pks_ntt.keyswitch(hs_t, u32, y_t))  # type: ignore[no-any-return]
         except Exception as e:
             if ntt_mode() == "fused":
                 raise
@@ -604,12 +609,13 @@ def host_ring_rows(a_seed: bytes, n: int, linear: str) -> np.ndarray:
 
 
 def _upload(a: np.ndarray, dev: torch.device) -> torch.Tensor:
-    """``a`` (int64 or uint64 view) on ``dev``: through a pinned staging buffer and a non-blocking copy on the current
+    """``a`` on ``dev`` (uint64 as int64 bits): through a pinned staging buffer and a non-blocking copy on the current
     stream on CUDA (PyTorch's caching host allocator keeps the buffer until the copy finished), plain elsewhere."""
-    src = torch.from_numpy(np.ascontiguousarray(a).view(np.int64))
+    a = np.ascontiguousarray(a)
+    src = torch.from_numpy(a.view(np.int64) if a.dtype == np.uint64 else a)
     if dev.type != "cuda" or not _pinned_ok():
         return src.to(dev)
-    pin = torch.empty(src.shape, dtype=torch.int64, pin_memory=True)
+    pin = torch.empty(src.shape, dtype=src.dtype, pin_memory=True)
     pin.copy_(src)
     return pin.to(dev, non_blocking=True)
 
@@ -708,11 +714,14 @@ def item_bytes(m: int, n: int, n_pad: int, cols: int, groups: int, work_bytes: i
     rows = item_rows(m, n_pad, cols, groups, work_bytes)
     held = PLANES * (NU + cols) * n_pad + 8 * (n // RANK) * NU
     build = 2 * 8 * (n // RANK) * 2 * NU + 2 * 8 * n * COL_BLOCK  # cat(a, X a) + roll, one column block (+ copy)
-    return held + max(build, rows * _row_bytes(n_pad, cols, groups))
+    # on CUDA the upload's planes are built on a side stream at the same time: its wire bytes and one column block
+    upload = 7 * n * cols + 8 * n * COL_BLOCK
+    return held + max(build + upload, rows * _row_bytes(n_pad, cols, groups))
 
 
-def item(w: torch.Tensor, const: torch.Tensor, m: int, n: int, ring_t: Any, b: np.ndarray, ops: np.ndarray,
-         *, work_bytes: int | None = None) -> np.ndarray:
+def item(w: torch.Tensor, const: torch.Tensor, m: int, n: int, ring_t: Any, b: np.ndarray | PackedUpload,
+         ops: np.ndarray, *, work_bytes: int | None = None, out: np.ndarray | PackedReply | None = None,
+         out_b0: int = 0) -> np.ndarray | PackedReply:
     """The reply ``(G, m/32, 8192)`` uint64 of one pks-v3 item, computed on ``w``'s device.
 
     ``w``: the kernel's int8 weight (``(>= m, n_pad)``, rows and inputs beyond ``(m, n)`` zero), ``const``: its
@@ -722,12 +731,18 @@ def item(w: torch.Tensor, const: torch.Tensor, m: int, n: int, ring_t: Any, b: n
     keys. Equal bit for bit to ``keyswitch(switch_hint(W8 A mod 2^56), ops, W8 b mod 2^56)`` (the host path of
     :class:`pgw.service.pks_provider.PKSProvider`): the same GEMM arithmetic (:func:`gemm_mod56`), the same
     exact 14-bit-digit switch (:func:`_round_mul_shift`) and the same key switch (:func:`_keyswitch_t`, whose
-    reply ciphertexts depend only on their own 32 rows)."""
+    reply ciphertexts depend only on their own 32 rows).
+
+    ``b`` may be the upload's wire bytes (:class:`PackedUpload`, unpacked on the device when :data:`WIRE` says so,
+    else on the host); ``out`` an array or :class:`PackedReply` to write the reply rows into at reply ciphertext
+    ``out_b0`` (tensor-parallel shards), returned."""
     dev = w.device
     np_ = int(w.shape[1])
     groups, cols = int(ops.shape[0]), int(b.shape[1])
     if m % PACK or n % RANK or b.shape[0] != n or cols != D * groups or w.shape[0] < m or np_ < n:
         raise ValueError("pks-v3 device item: bad shapes")
+    if isinstance(b, PackedUpload) and WIRE.impl(dev) != "fused":
+        b = b.host()
     side = _side_stream(dev) if dev.type == "cuda" and _pinned_ok() else None
     aplanes = _a_planes(ring_t, np_) if isinstance(ring_t, torch.Tensor) else None  # queued first
     if aplanes is not None:
@@ -736,19 +751,26 @@ def item(w: torch.Tensor, const: torch.Tensor, m: int, n: int, ring_t: Any, b: n
     # transfers overlap the ring rows, the hint operand's planes and the first row block's hint GEMMs (or, with the
     # host ring-row stream still running, that stream)
     with torch.cuda.stream(side) if side is not None else contextlib.nullcontext():
-        ops_t = _Keys(_upload(np.ascontiguousarray(ops).astype(np.int64), dev))
+        # the keys go up as uint32 (half the bytes) and widen on the device (residues below 2^30: exact)
+        ops_t = _Keys(_upload(np.ascontiguousarray(ops, dtype=np.uint32).view(np.int32), dev).to(torch.int64))
         bplanes = []
+        raw = _upload_bytes(b.data, dev) if isinstance(b, PackedUpload) else None
         for c0 in range(0, cols, COL_BLOCK):
-            bt = _upload(b[:, c0:c0 + COL_BLOCK], dev)
+            if raw is not None:
+                bt = _unpack56_cols(raw, n, cols, c0, min(cols, c0 + COL_BLOCK))
+            else:
+                bt = _upload(b[:, c0:c0 + COL_BLOCK], dev)  # type: ignore[index]
             bplanes.append(planes_of(bt, np_))
             del bt
+        del raw
     if aplanes is None:
         aplanes = _a_planes(ring_t.result(), np_)
         del ring_t
     waited = side is None
     rows = item_rows(m, np_, cols, groups, work_bytes)
-    out = np.empty((groups, m // PACK, NR), dtype=np.uint64)
-    copies = _ReplyCopies(out, dev)
+    if out is None:
+        out = np.empty((groups, m // PACK, NR), dtype=np.uint64)
+    copies = _ReplyCopies(out, dev, out_b0)
     for r0 in range(0, m, rows):
         r1 = min(m, r0 + rows)
         wr, cr = w[r0:r1], const[r0:r1]
@@ -796,35 +818,178 @@ def _side_stream(dev: torch.device) -> Any:
 
 
 class _ReplyCopies:
-    """The reply rows of :func:`item`'s row blocks back to the host. On CUDA (``PGW_SERVICE_PKS_PINNED``, default on)
-    each block goes into a pinned buffer by a non-blocking copy on the current stream, and the host copies the
-    previous block out of its pinned buffer while the device computes the next one; elsewhere a plain copy."""
+    """The reply rows of :func:`item`'s row blocks back to the host, into an array or a :class:`PackedReply` (the wire
+    bytes; packed on the device when :data:`WIRE` says so: 4.5 instead of 8 bytes per value cross PCIe and the host
+    only copies, else packed on the host block by block). On CUDA (``PGW_SERVICE_PKS_PINNED``, default on) each
+    block goes into pinned buffers by non-blocking copies on the current stream, and the host copies the previous
+    block out while the device computes the next one; elsewhere plain copies."""
 
-    def __init__(self, out: np.ndarray, dev: torch.device):
-        self.out = out
+    def __init__(self, out: np.ndarray | PackedReply, dev: torch.device, b_off: int = 0):
+        self.out, self.b_off = out, b_off
         self.overlap = dev.type == "cuda" and _pinned_ok()
-        self.pending: tuple[Any, torch.Tensor, int, int] | None = None
+        self.dev_pack = isinstance(out, PackedReply) and WIRE.impl(dev) == "fused"
+        self.pending: tuple[Any, tuple[torch.Tensor, ...], int, int] | None = None
 
     def put(self, res: torch.Tensor, b0: int, b1: int) -> None:
+        b0, b1 = b0 + self.b_off, b1 + self.b_off
+        parts = _pack36_dev(res) if self.dev_pack else (res,)
         if not self.overlap:
-            self.out[:, b0:b1] = res.cpu().numpy().view(np.uint64)
+            self._store(tuple(p.cpu() for p in parts), b0, b1)
             return
-        host = torch.empty(res.shape, dtype=torch.int64, pin_memory=True)
-        host.copy_(res, non_blocking=True)
+        host = []
+        for p in parts:
+            h = torch.empty(p.shape, dtype=p.dtype, pin_memory=True)
+            h.copy_(p, non_blocking=True)
+            host.append(h)
         ev = torch.cuda.Event()  # type: ignore[no-untyped-call]
         ev.record()
         self._drain()
-        self.pending = (ev, host, b0, b1)
+        self.pending = (ev, tuple(host), b0, b1)
+
+    def _store(self, parts: tuple[torch.Tensor, ...], b0: int, b1: int) -> None:
+        if isinstance(self.out, PackedReply):
+            if len(parts) == 2:
+                self.out.low[:, b0:b1] = parts[0].numpy().view(np.uint32)
+                self.out.tail[:, b0:b1] = parts[1].numpy()
+            else:
+                self.out.put_host(parts[0].numpy().view(np.uint64), b0, b1)
+        else:
+            self.out[:, b0:b1] = parts[0].numpy().view(np.uint64)
 
     def _drain(self) -> None:
         if self.pending is not None:
             ev, host, b0, b1 = self.pending
             ev.synchronize()
-            self.out[:, b0:b1] = host.numpy().view(np.uint64)
+            self._store(host, b0, b1)
             self.pending = None
 
     def finish(self) -> None:
         self._drain()
+
+
+# ---- the wire forms on the device (PGW_SERVICE_PKS_GPU_WIRE) ------------------------------------------------
+#
+# ``run_item`` used to unpack the upload ``b`` (56-bit wire fields) and pack the reply (36-bit fields) with numpy on
+# one host thread: ~8 and ~20 ns per value on the development box, i.e. ~37 + ~147 s per 1024-slot cycle at 72B
+# (4.4e9 upload and 7.2e9 reply values), far above the device work. Both formats are plain bit fields
+# (:func:`pgw.hemask.wire.pack_bits`): the upload as 32 + 16 + 8-bit little-endian arrays, the reply as one 32-bit
+# array and a 4-bit tail stream (two values per byte, the first in the low nibble). So the raw upload bytes go up
+# (7 instead of 8 bytes per value) and are unpacked by the device, and the reply is packed by the device row block
+# by row block (4.5 instead of 8 bytes per value come back) straight into the reply's wire buffer. Integer bit
+# operations only: the same bytes (self-tested against ``pack_bits`` / ``unpack_bits`` before first use).
+
+_M32 = (1 << 32) - 1
+
+
+def wire_layout_ok() -> bool:
+    """True when the v3 wire fields are the ones the device pack / unpack assume (56-bit upload: 32 + 16 + 8 bits;
+    36-bit reply: 32 bits + a 4-bit tail)."""
+    from pgw.hemask.wire import V3_Y_BITS, bit_fields
+
+    return V3_Y_BITS == 36 and bit_fields(36) == ([(0, 32)], 4) and \
+        bit_fields(56) == ([(0, 32), (32, 16), (48, 8)], 0)
+
+
+class PackedUpload:
+    """An item's upload ``b`` (``(n, cols)`` values below ``2^56``) in its wire form (``pack_bits(b, 56)``)."""
+
+    def __init__(self, data: bytes | bytearray | memoryview, n: int, cols: int):
+        if len(data) != n * cols * 7:
+            raise ValueError("pks-v3 upload: wrong size")
+        self.data, self.n, self.cols = data, int(n), int(cols)
+        self.shape = (self.n, self.cols)
+        self._host: np.ndarray | None = None
+
+    def host(self) -> np.ndarray:
+        """``unpack_bits`` on the host (cached): the fallback and the cache path."""
+        if self._host is None:
+            from pgw.hemask.wire import unpack_bits
+
+            self._host = unpack_bits(self.data, self.n * self.cols, 56).reshape(self.n, self.cols)
+        return self._host
+
+
+class PackedReply:
+    """The reply's wire bytes ``pack_bits(reply.reshape(-1), 36)`` (``reply``: ``(G, nb, 8192)``), filled row block
+    by row block: ``low`` ``(G, nb, 8192)`` uint32 and ``tail`` ``(G, nb, 4096)`` uint8 views of ``buf``."""
+
+    def __init__(self, groups: int, nb: int):
+        count = groups * nb * NR
+        self.buf = bytearray(count * 36 // 8)
+        self.low = np.frombuffer(self.buf, dtype=np.uint32, count=count).reshape(groups, nb, NR)
+        self.tail = np.frombuffer(self.buf, dtype=np.uint8, count=count // 2, offset=4 * count).reshape(groups, nb,
+                                                                                                         NR // 2)
+
+    def put_host(self, vals: np.ndarray, b0: int, b1: int) -> None:
+        """Pack ``(G, b1 - b0, 8192)`` uint64 reply values below ``2^36`` on the host."""
+        np.copyto(self.low[:, b0:b1], vals & np.uint64(_M32), casting="unsafe")
+        t = ((vals >> np.uint64(32)) & np.uint64(15)).astype(np.uint8)
+        self.tail[:, b0:b1] = t[..., 0::2] | (t[..., 1::2] << np.uint8(4))
+
+
+def _pack36_dev(res: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    """``(low, tail)`` of reply values ``res`` (int64 below ``2^36``) on their device: the low 32 bits as int32 (the
+    same bits as uint32) and the 4-bit tails two per byte (uint8, the first value in the low nibble)."""
+    low = res & _M32
+    low = torch.where(low > (1 << 31) - 1, low - (1 << 32), low).to(torch.int32)
+    t = (res >> 32) & 15
+    tail = (t[..., 0::2] | (t[..., 1::2] << 4)).to(torch.uint8)
+    return low, tail
+
+
+def _upload_bytes(data: bytes | bytearray | memoryview, dev: torch.device) -> torch.Tensor:
+    """Raw bytes as a uint8 tensor on ``dev`` (pinned and non-blocking on CUDA, as :func:`_upload`)."""
+    arr = np.frombuffer(data, dtype=np.uint8)
+    if dev.type != "cuda" or not _pinned_ok():
+        return torch.from_numpy(arr.copy()).to(dev)
+    pin = torch.empty(arr.shape, dtype=torch.uint8, pin_memory=True)
+    pin.numpy()[:] = arr
+    return pin.to(dev, non_blocking=True)
+
+
+def _unpack56_cols(raw: torch.Tensor, n: int, cols: int, c0: int, c1: int) -> torch.Tensor:
+    """Columns ``c0 .. c1 - 1`` of the ``(n, cols)`` upload from its wire bytes ``raw`` (uint8 on the device):
+    ``low32 | mid16 << 32 | hi8 << 48`` (int64, below ``2^56``)."""
+    cnt = n * cols
+    low = raw[:4 * cnt].view(torch.int32).view(n, cols)[:, c0:c1].to(torch.int64) & _M32
+    mid = raw[4 * cnt:6 * cnt].view(torch.int16).view(n, cols)[:, c0:c1].to(torch.int64) & 0xFFFF
+    hi = raw[6 * cnt:7 * cnt].view(n, cols)[:, c0:c1].to(torch.int64)
+    return low | (mid << 32) | (hi << 48)
+
+
+def _wire_self_test(dev: Any, seed: int = 19) -> None:
+    """Raise unless the device pack of a reply equals ``pack_bits(., 36)`` and the device unpack of an upload equals
+    ``unpack_bits(., 56)``, on edge values (``0``, ``2^31 - 1``, ``2^31``, ``2^32 - 1``, ``2^32``, ``2^36 - 1``;
+    ``2^56 - 1`` and the field boundaries of the upload)."""
+    from pgw.hemask.wire import pack_bits
+
+    if not wire_layout_ok():
+        raise RuntimeError("pks-v3 wire fields changed: device pack / unpack disabled")
+    dev = torch.device(dev)
+    rng = np.random.default_rng(seed)
+    groups, nb = 2, 3
+    vals = rng.integers(0, 1 << 36, (groups, nb, NR), dtype=np.uint64)
+    vals[0, 0, :8] = [0, (1 << 31) - 1, 1 << 31, (1 << 32) - 1, 1 << 32, (1 << 36) - 1, 1, (1 << 35)]
+    vals[1, 2] = (1 << 36) - 1
+    pr = PackedReply(groups, nb)
+    low, tail = _pack36_dev(torch.from_numpy(vals.view(np.int64)).to(dev)[:, 1:])
+    pr.low[:, 1:] = low.cpu().numpy().view(np.uint32)
+    pr.tail[:, 1:] = tail.cpu().numpy()
+    pr.put_host(vals[:, :1], 0, 1)
+    if bytes(pr.buf) != bytes(pack_bits(vals.reshape(-1), 36)):
+        raise RuntimeError("pks-v3 device reply pack does not match pack_bits")
+    n, cols = 48, 1024 + 256
+    b = rng.integers(0, 1 << 56, (n, cols), dtype=np.uint64)
+    b[0, :10] = [0, (1 << 56) - 1, (1 << 32) - 1, 1 << 32, (1 << 48) - 1, 1 << 48, (1 << 31), (1 << 47), 1 << 55, 1]
+    raw = _upload_bytes(pack_bits(b.reshape(-1), 56), dev)
+    got = torch.cat([_unpack56_cols(raw, n, cols, c0, min(cols, c0 + COL_BLOCK)) for c0 in range(0, cols, COL_BLOCK)],
+                    dim=1)
+    if not np.array_equal(got.cpu().numpy().view(np.uint64), b):
+        raise RuntimeError("pks-v3 device upload unpack does not match unpack_bits")
+
+
+#: ``PGW_SERVICE_PKS_GPU_WIRE``: the upload unpacked and the reply packed on the device (the wire's bit fields).
+WIRE = FusedChoice("wire pack / unpack", "PGW_SERVICE_PKS_GPU_WIRE", _wire_self_test)
 
 
 def item_self_test(dev: Any, seed: int = 5) -> None:
@@ -853,6 +1018,14 @@ def item_self_test(dev: Any, seed: int = 5) -> None:
     want = cpu(hs, ops, matmul_mod64(w8, b) & np.uint64(_M56))
     if not np.array_equal(got, want):
         raise RuntimeError("pks-v3 device item does not match the host path")
+    if wire_layout_ok():  # the wire forms: the upload's bytes in, the reply's bytes out (as PKSProvider)
+        from pgw.hemask.wire import V3_Y_BITS, pack_bits
+
+        pr = item(wpad.to(dev), const.to(dev), m, n, ring_rows(a_seed, n, "self-test", dev),
+                  PackedUpload(pack_bits(b.reshape(-1), 56), n, b.shape[1]), ops,
+                  out=PackedReply(ops.shape[0], m // PACK))
+        if not isinstance(pr, PackedReply) or bytes(pr.buf) != bytes(pack_bits(want.reshape(-1), V3_Y_BITS)):
+            raise RuntimeError("pks-v3 device item (wire forms) does not match the host path")
 
 
 def self_test(dev: Any, seed: int = 7) -> None:

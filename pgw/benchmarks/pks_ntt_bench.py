@@ -17,9 +17,9 @@ Sections (one JSON object, ``--json``):
 * ``keyswitch``: microseconds per output row of the whole key switch (torch, fused, fused with the 4-prime forward)
   for 1 and 4 groups;
 * ``stages``: per-stage seconds of the device item at 72B's gate_up shape (8192 inputs, 1024 columns) on a block
-  of output rows, before (torch / host / pageable) and after (fused / device / pinned): ring rows, the upload, the
-  hint operand's planes, the GEMMs, the recombination + switch, the key switch, the reply copy; scaled to a
-  1024-slot cycle of every linear of 7B / 32B / 72B;
+  of output rows, before (torch / host / pageable) and after (fused / device / pinned): ring rows, the upload and
+  its wire unpack, the hint operand's planes, the GEMMs, the recombination + switch, the key switch, the reply copy
+  and its wire pack; scaled to a 1024-slot cycle of every linear of 7B / 32B / 72B;
 * ``items``: one pks-v3 item (1024 columns) of the largest linears of 7B / 32B / 72B through ``ComputeKernel`` +
   ``PKSProvider`` (device hint path) in three configurations: ``torch`` (every kernel plain), ``prev`` (the fused
   NTTs only: the state before this round) and ``fused`` (every kernel under ``auto``); seconds and byte-identical
@@ -57,15 +57,15 @@ LINEARS = {
     "qwen2.5-72b": [("0.gate_up", 59136, 8192), ("0.down", 8192, 29568)],
 }
 CHOICES = ("PGW_SERVICE_PKS_GPU_NTT", "PGW_SERVICE_PKS_GPU_FWD4", "PGW_SERVICE_PKS_GPU_SWITCH",
-           "PGW_SERVICE_PKS_GPU_RING", "PGW_SERVICE_PKS_PINNED", "PGW_SERVICE_PKS_HOST_THREADS")
+           "PGW_SERVICE_PKS_GPU_RING", "PGW_SERVICE_PKS_PINNED", "PGW_SERVICE_PKS_HOST_THREADS",
+           "PGW_SERVICE_PKS_GPU_WIRE")
 #: item configurations: every kernel plain; the fused NTTs only (before this round); every kernel under auto
+_PKS_PLAIN = {"PGW_SERVICE_PKS_GPU_FWD4": "torch", "PGW_SERVICE_PKS_GPU_SWITCH": "torch",
+              "PGW_SERVICE_PKS_GPU_RING": "torch", "PGW_SERVICE_PKS_GPU_WIRE": "torch",
+              "PGW_SERVICE_PKS_PINNED": "0", "PGW_SERVICE_PKS_HOST_THREADS": "1"}
 CONFIGS = {
-    "torch": {"PGW_SERVICE_PKS_GPU_NTT": "torch", "PGW_SERVICE_PKS_GPU_FWD4": "torch",
-              "PGW_SERVICE_PKS_GPU_SWITCH": "torch", "PGW_SERVICE_PKS_GPU_RING": "torch", "PGW_SERVICE_PKS_PINNED": "0",
-              "PGW_SERVICE_PKS_HOST_THREADS": "1"},
-    "prev": {"PGW_SERVICE_PKS_GPU_NTT": "auto", "PGW_SERVICE_PKS_GPU_FWD4": "torch",
-             "PGW_SERVICE_PKS_GPU_SWITCH": "torch", "PGW_SERVICE_PKS_GPU_RING": "torch", "PGW_SERVICE_PKS_PINNED": "0",
-              "PGW_SERVICE_PKS_HOST_THREADS": "1"},
+    "torch": {**_PKS_PLAIN, "PGW_SERVICE_PKS_GPU_NTT": "torch"},
+    "prev": _PKS_PLAIN,
     "fused": {},
 }
 
@@ -325,8 +325,21 @@ def stages(dev: torch.device, rows: int, reps: int, small: bool) -> dict[str, An
         for c0 in range(0, cols, pks_gpu.COL_BLOCK):
             pks_gpu._upload(b[:, c0:c0 + pks_gpu.COL_BLOCK], dev)
 
-    t["upload_b"] = {"before_pageable": _time(lambda: up(False), dev, reps), "after_pinned": _time(lambda: up(True),
-                                                                                                  dev, reps)}
+    from pgw.hemask.wire import pack_bits, unpack_bits
+
+    packed_b = pack_bits(b.reshape(-1), 56)
+
+    def up_raw() -> torch.Tensor:  # the upload's wire bytes (7 per value), pinned
+        os.environ["PGW_SERVICE_PKS_PINNED"] = "1"
+        return pks_gpu._upload_bytes(packed_b, dev)
+
+    t["upload_b"] = {"before_pageable": _time(lambda: up(False), dev, reps),
+                     "pinned_int64": _time(lambda: up(True), dev, reps),
+                     "after_pinned_wire_bytes": _time(up_raw, dev, reps)}
+    raw = up_raw()
+    t["wire_unpack_b"] = {"before_host": _time(lambda: unpack_bits(packed_b, n * cols, 56), dev, reps),
+                          "after_device": _time(lambda: [pks_gpu._unpack56_cols(raw, n, cols, c0, c0 + 512)
+                                                         for c0 in range(0, cols, 512)], dev, reps)}
     os.environ.pop("PGW_SERVICE_PKS_PINNED", None)
     ring_t = pks_fused.ring_rows(seed, n, "x", dev) if dev.type == "cuda" else pks_gpu.ring_rows(seed, n, "x", dev)
     step = pks_gpu.COL_BLOCK // D
@@ -369,10 +382,10 @@ def stages(dev: torch.device, rows: int, reps: int, small: bool) -> dict[str, An
     keys = pks_gpu._Keys(torch.from_numpy(_keys(rng, groups)).to(dev))
     u32 = keys.u32()
     if small:
-        t["key_switch"] = {"before_fused": 0.0, "after_fused_fwd4": 0.0}
+        t["key_switch"] = {"before_fused": 0.0, "fwd4_fused": 0.0}
     else:
         t["key_switch"] = {"before_fused": _time(lambda: pks_ntt.keyswitch(hs, u32, y), dev, reps),
-                           "after_fused_fwd4": _time(lambda: pks_ntt.keyswitch(hs, u32, y, fwd4=True), dev, reps)}
+                           "fwd4_fused": _time(lambda: pks_ntt.keyswitch(hs, u32, y, fwd4=True), dev, reps)}
     res = torch.randint(0, 1 << 36, (groups, rows // PACK, NR), dtype=torch.int64, device=dev)
     dst = np.empty((groups, rows // PACK, NR), dtype=np.uint64)
 
@@ -382,14 +395,30 @@ def stages(dev: torch.device, rows: int, reps: int, small: bool) -> dict[str, An
         cp.put(res, 0, rows // PACK)
         cp.finish()
 
+    def back_packed() -> None:  # packed by the device into the reply's wire buffer (4.5 bytes per value back)
+        os.environ["PGW_SERVICE_PKS_PINNED"] = "1"
+        os.environ["PGW_SERVICE_PKS_GPU_WIRE"] = "fused"
+        cp = pks_gpu._ReplyCopies(pks_gpu.PackedReply(groups, rows // PACK), dev)
+        cp.put(res, 0, rows // PACK)
+        cp.finish()
+
     t["reply_d2h"] = {"before_pageable": _time(lambda: back(False), dev, reps),
-                      "after_pinned": _time(lambda: back(True), dev, reps)}
+                      "pinned_int64": _time(lambda: back(True), dev, reps),
+                      "after_device_packed": _time(back_packed, dev, reps)}
+    t["wire_pack_reply"] = {"before_host": _time(lambda: pack_bits(dst.reshape(-1), 36), dev, reps),
+                            "after_device": 0.0}  # inside reply_d2h's after_device_packed
+    pr = pks_gpu.PackedReply(groups, rows // PACK)
+    cp = pks_gpu._ReplyCopies(pr, dev)
+    cp.put(res, 0, rows // PACK)
+    cp.finish()
+    out["reply_pack_identical"] = bytes(pr.buf) == bytes(pack_bits(res.cpu().numpy().view(np.uint64).reshape(-1), 36))
     os.environ.pop("PGW_SERVICE_PKS_PINNED", None)
+    os.environ.pop("PGW_SERVICE_PKS_GPU_WIRE", None)
     out["seconds"] = {k: {kk: round(vv, 6) for kk, vv in v.items()} for k, v in t.items()}
     out["recombination_identical"] = same
     # unit costs: per input feature (ring rows, a planes), per input x upload column (upload b), per output row
     per_feature = {"ring_rows", "a_planes"}
-    per_upload = {"upload_b"}
+    per_upload = {"upload_b", "wire_unpack_b"}
     unit: dict[str, dict[str, float]] = {}
     for k, v in t.items():
         div = n if k in per_feature else n * cols if k in per_upload else rows
@@ -560,6 +589,7 @@ def main() -> int:
     ok = all(isinstance(res.get(s), dict) and res[s].get("all") is True for s in ("exact", "exact_new"))
     ok = ok and all(v.get("identical", False) for k, v in res.get("items", {}).items() if isinstance(v, dict))
     ok = ok and bool(res.get("stages", {}).get("recombination_identical"))
+    ok = ok and bool(res.get("stages", {}).get("reply_pack_identical"))
     print("OK" if ok else "FAILED", flush=True)
     return 0 if ok else 1
 

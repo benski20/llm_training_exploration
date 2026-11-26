@@ -32,7 +32,7 @@ INTERP = DEV.type == "cpu"
 if INTERP and os.environ.get("TRITON_INTERPRET", "0") in ("", "0"):
     pytest.skip("needs CUDA or TRITON_INTERPRET=1", allow_module_level=True)
 CHOICES = ("PGW_SERVICE_PKS_GPU_NTT", "PGW_SERVICE_PKS_GPU_FWD4", "PGW_SERVICE_PKS_GPU_SWITCH",
-           "PGW_SERVICE_PKS_GPU_RING")
+           "PGW_SERVICE_PKS_GPU_RING", "PGW_SERVICE_PKS_GPU_WIRE")
 
 
 def _partials(rng: np.random.Generator, r: int, c: int) -> tuple[np.ndarray, np.ndarray]:
@@ -224,7 +224,7 @@ def test_self_tests_detect_one_bit(monkeypatch: pytest.MonkeyPatch) -> None:
 
     def bad_fwd4(hs: torch.Tensor) -> torch.Tensor:
         t = good(hs).clone()
-        t[2, 0, 0, 0] ^= 1
+        t.view(torch.int32)[2, 0, 0, 0] ^= 1  # (no uint32 xor on CUDA)
         return t
 
     monkeypatch.setattr(pks_ntt, "forward4", bad_fwd4)
@@ -271,7 +271,105 @@ def test_choice_env_auto_and_permanent_fallback(monkeypatch: pytest.MonkeyPatch)
 def test_fused_status_on_cpu(monkeypatch: pytest.MonkeyPatch) -> None:
     for e in CHOICES:
         monkeypatch.delenv(e, raising=False)
-    assert pks_gpu.fused_status("cpu") == {"ntt": "torch", "fwd4": "torch", "switch": "torch", "ring": "torch"}
+    assert pks_gpu.fused_status("cpu") == {"ntt": "torch", "fwd4": "torch", "switch": "torch", "ring": "torch",
+                                           "wire": "torch"}
+    # the 4-prime forward NTT is off unless set (slower on the T4); auto or fused enable it
+    assert pks_gpu.FWD4.mode() == "torch"
+    monkeypatch.setenv("PGW_SERVICE_PKS_GPU_FWD4", "auto")
+    assert pks_gpu.FWD4.mode() == "auto"
+
+
+# ---- the wire forms on the device ------------------------------------------------------------------------------
+
+
+def test_reply_pack_device_and_host_equal_pack_bits() -> None:
+    from pgw.hemask.wire import pack_bits
+
+    rng = np.random.default_rng(40)
+    groups, nb = 3, 4
+    vals = rng.integers(0, 1 << 36, (groups, nb, NR), dtype=np.uint64)
+    vals[0, 0, :6] = [0, (1 << 31) - 1, 1 << 31, (1 << 32) - 1, 1 << 32, (1 << 36) - 1]
+    vals[2, 3] = (1 << 36) - 1
+    want = bytes(pack_bits(vals.reshape(-1), 36))
+    host = pks_gpu.PackedReply(groups, nb)
+    for b0 in range(nb):  # row block by row block, as the item
+        host.put_host(vals[:, b0:b0 + 1], b0, b0 + 1)
+    assert bytes(host.buf) == want
+    dev = pks_gpu.PackedReply(groups, nb)
+    low, tail = pks_gpu._pack36_dev(torch.from_numpy(vals.view(np.int64)).to(DEV))
+    dev.low[:] = low.cpu().numpy().view(np.uint32)
+    dev.tail[:] = tail.cpu().numpy()
+    assert bytes(dev.buf) == want
+
+
+def test_upload_unpack_device_equals_unpack_bits() -> None:
+    from pgw.hemask.wire import pack_bits
+
+    rng = np.random.default_rng(41)
+    n, cols = 32, 768
+    b = rng.integers(0, 1 << 56, (n, cols), dtype=np.uint64)
+    b[0, :6] = [0, (1 << 56) - 1, (1 << 32) - 1, 1 << 32, (1 << 48) - 1, 1 << 48]
+    up = pks_gpu.PackedUpload(pack_bits(b.reshape(-1), 56), n, cols)
+    assert np.array_equal(up.host(), b)
+    raw = pks_gpu._upload_bytes(up.data, DEV)
+    for c0, c1 in ((0, 512), (512, 768), (100, 101)):
+        got = pks_gpu._unpack56_cols(raw, n, cols, c0, c1)
+        assert np.array_equal(got.cpu().numpy().view(np.uint64), b[:, c0:c1])
+    with pytest.raises(ValueError):
+        pks_gpu.PackedUpload(b"\0" * 10, n, cols)
+
+
+def test_wire_self_test_passes_and_detects_one_bit(monkeypatch: pytest.MonkeyPatch) -> None:
+    pks_gpu._wire_self_test(DEV)
+    real = pks_gpu._pack36_dev
+
+    def bad(res: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        low, tail = real(res)
+        tail[0, 0, 0] ^= 1
+        return low, tail
+
+    monkeypatch.setattr(pks_gpu, "_pack36_dev", bad)
+    with pytest.raises(RuntimeError, match="does not match"):
+        pks_gpu._wire_self_test(DEV)
+    monkeypatch.setattr(pks_gpu, "_pack36_dev", real)
+    real_u = pks_gpu._unpack56_cols
+    monkeypatch.setattr(pks_gpu, "_unpack56_cols", lambda *a: real_u(*a) ^ (1 << 50))
+    with pytest.raises(RuntimeError, match="does not match"):
+        pks_gpu._wire_self_test(DEV)
+
+
+@pytest.mark.parametrize("wire", ["torch", "fused"])
+def test_item_wire_forms_equal_host_pack(monkeypatch: pytest.MonkeyPatch, wire: str) -> None:
+    """``pks_gpu.item`` with the upload's wire bytes in and the reply's wire bytes out (packed by the device or on
+    the host, row block by row block, also at a shard offset) equals ``pack_bits`` of the host path's reply."""
+    from pgw.core.ringmm import cpu_int8_available
+    from pgw.hemask import pks_native as pn
+    from pgw.hemask.wire import pack_bits
+
+    if INTERP and not cpu_int8_available():
+        pytest.skip("needs exact CPU int8 GEMMs (torch._int_mm)")
+    for e in CHOICES:
+        monkeypatch.setenv(e, "torch")
+    monkeypatch.setenv("PGW_SERVICE_PKS_GPU_WIRE", wire)
+    m, n, groups = 2 * PACK, 2 * RANK, 2
+    w8, wpad, const = _w_const(m, n, n, 21)
+    rng = np.random.default_rng(22)
+    b = rng.integers(0, 1 << 56, (n, D * groups), dtype=np.uint64)
+    ops = np.stack([np.stack([rng.integers(0, p, (RANK, NR), dtype=np.uint64) for p in pks.QP])
+                    for _ in range(groups)]).astype(np.uint32)
+    seed = os.urandom(32)
+    up = pks_gpu.PackedUpload(pack_bits(b.reshape(-1), 56), n, D * groups)
+    pr = pks_gpu.PackedReply(groups, 2 * m // PACK)  # two shards' worth: this item fills the second half
+    work = pks_gpu._row_bytes(n, D * groups, groups) * PACK  # one reply ciphertext per row block
+    got = pks_gpu.item(wpad.to(DEV), const.to(DEV), m, n, pks_gpu.ring_rows(seed, n, "w", DEV), up, ops,
+                       work_bytes=work, out=pr, out_b0=m // PACK)
+    assert got is pr
+    a = pks.a_mlwe_rows(pks.public_ring_rows(seed, n, "w"))
+    m56 = np.uint64(M56)
+    want = pn.keyswitch(pks.switch_hint(matmul_mod64(w8, a) & m56, PAR), ops, matmul_mod64(w8, b) & m56)
+    full = np.zeros((groups, 2 * m // PACK, NR), dtype=np.uint64)
+    full[:, m // PACK:] = want
+    assert bytes(pr.buf) == bytes(pack_bits(full.reshape(-1), 36))  # the first shard's rows untouched (zero)
 
 
 def test_switch_fallback_keeps_the_bits(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -279,10 +377,11 @@ def test_switch_fallback_keeps_the_bits(monkeypatch: pytest.MonkeyPatch) -> None
     from pgw.service.pks_gpu import SWITCH
 
     monkeypatch.delenv("PGW_SERVICE_PKS_GPU_SWITCH", raising=False)
-    monkeypatch.setattr(SWITCH, "choice", {str(DEV): "fused"})
     rng = np.random.default_rng(5)
     n, rows = 64, 32
     w = torch.from_numpy(rng.integers(-128, 128, (rows, n), dtype=np.int64).astype(np.int8)).to(DEV)
+    key = str(w.device)  # "cuda:0", not "cuda"
+    monkeypatch.setattr(SWITCH, "choice", {key: "fused"})
     pl = pks_gpu.planes_of(torch.from_numpy(rng.integers(0, 1 << 56, (n, 256), dtype=np.int64)).to(DEV), n)
     const = torch.from_numpy(rng.integers(-(1 << 62), 1 << 62, (rows, 1), dtype=np.int64)).to(DEV)
     want = pks_gpu._round_mul_shift(pks_gpu.gemm_mod56(w, pl, const), PAR.q1, 56) % PAR.q1
@@ -296,7 +395,7 @@ def test_switch_fallback_keeps_the_bits(monkeypatch: pytest.MonkeyPatch) -> None
     monkeypatch.setattr(pks_fused, "combine", boom)
     out.zero_()
     pks_gpu.gemm_into(w, pl, const, out, True)
-    assert torch.equal(out, want) and SWITCH.choice[str(DEV)] == "torch"
+    assert torch.equal(out, want) and SWITCH.choice[key] == "torch"
 
 
 # ---- whole items -----------------------------------------------------------------------------------------------
@@ -378,3 +477,48 @@ def test_item_cpu_ring_future_overlaps(monkeypatch: pytest.MonkeyPatch) -> None:
     got = pks_gpu.item(wpad.to(DEV), const.to(DEV), m, n, fut, b, ops)
     assert np.array_equal(got, pks_gpu.item(wpad.to(DEV), const.to(DEV), m, n,
                                             pks_gpu.ring_rows(seed, n, "x", DEV), b, ops))
+
+
+# ---- memplan: the throughput model of the device item, calibrated on the Kaggle T4 ---------------------------
+
+#: whole items measured on the Kaggle T4 (``results/kaggle/pks-ntt-t4-r2``, ``items``): (m, n, before s, after s),
+#: before = the fused NTTs only, after = every kernel of this round but the device wire forms (packed on the host)
+T4_ITEMS = {"7b gate_up": (37888, 3584, 1.698, 1.199), "7b down": (3584, 18944, 0.581, 0.578),
+            "7b head": (152064, 3584, 6.616, 4.689), "32b gate_up": (55296, 5120, 2.572, 1.908),
+            "32b down": (5120, 27648, 0.975, 0.877), "72b gate_up": (59136, 8192, 3.122, 2.541),
+            "72b down": (8192, 29568, 1.402, 1.273)}
+
+
+def test_memplan_reproduces_the_t4_items() -> None:
+    from pgw.service import memplan as mp
+
+    for name, (m, n, before, after) in T4_ITEMS.items():
+        prev = mp.pks_item_seconds(m, n, 1024, "device", mp.T4_RATES, ntt="fused", kernels="ntt")
+        assert abs(sum(prev.values()) / before - 1) < 0.25, (name, sum(prev.values()), before)
+        new = mp.pks_item_seconds(m, n, 1024, "device", mp.T4_RATES, ntt="fused", kernels="all")
+        new.pop("reply_pack_device")  # the run packed on the host
+        new["wire_host"], new["reply_d2h"] = prev["wire_host"], prev["reply_d2h"]
+        assert abs(sum(new.values()) / after - 1) < 0.3, (name, sum(new.values()), after)
+
+
+def test_memplan_all_kernels(capsys: pytest.CaptureFixture[str]) -> None:
+    from pgw.service import memplan as mp
+
+    prev = mp.pks_item_seconds(59136, 8192, 1024, "device", ntt="fused", kernels="ntt")
+    new = mp.pks_item_seconds(59136, 8192, 1024, "device", ntt="fused", kernels="all")
+    assert "wire_host" in prev and "wire_host" not in new and "ring_rows_host" not in new
+    assert new["hint_gemm_switch"] < prev["hint_gemm_switch"] / 3
+    assert new["key_switch"] == prev["key_switch"]  # the per-prime forward NTT stays the default
+    f4 = mp.pks_item_seconds(59136, 8192, 1024, "device", mp.T4_RATES, ntt="fused", kernels="all", fwd4=True)
+    t4 = mp.pks_item_seconds(59136, 8192, 1024, "device", mp.T4_RATES, ntt="fused", kernels="all")
+    assert f4["key_switch"] > t4["key_switch"]  # the 4-prime forward is slower on the T4
+    with pytest.raises(ValueError, match="unknown kernels"):
+        mp.pks_item_seconds(64, 64, 256, "device", kernels="most")
+    for model in ("qwen2.5-7b", "qwen2.5-72b"):
+        a = mp.pks_throughput(model, "device")
+        b = mp.pks_throughput(model, "device", mp.MemConfig(pks_kernels="ntt"))
+        assert a["kernels"] == "all" and b["kernels"] == "ntt"
+        assert a["slots_per_s"] > 5 * b["slots_per_s"]  # type: ignore[operator]
+    assert mp.main(["--pks-throughput", "--model", "qwen2.5-72b", "--pks-gpu", "t4", "--pks-kernels", "ntt"]) == 0
+    out = capsys.readouterr().out
+    assert "Kaggle T4" in out and "device-item kernels: ntt" in out
