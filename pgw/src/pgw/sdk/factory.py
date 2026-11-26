@@ -65,6 +65,20 @@ class FactoryPlan:
     hint_key_file: Path | None = None
 
 
+#: pks-v3 encrypts in groups of 256 slots and amortises the upload's public NTTs over the groups of one request:
+#: a segment is rounded down to whole groups (a partly filled group costs as much as a full one).
+PKS_GROUP_SLOTS = 256
+
+
+def segment_slots(scheme: str, slots: int) -> int:
+    """The factory's steady-state segment size: ``slots``, for pks-v3 rounded down to whole 256-slot groups (at
+    least one). Per mask slot the client's encryption costs about 1.8x as much with one group per request as with
+    four (``benchmarks/pks_client_slot_bench.py``); masks and outputs do not depend on the segmentation."""
+    if scheme != "pks-v3" or slots < PKS_GROUP_SLOTS:
+        return int(slots)
+    return int(slots) // PKS_GROUP_SLOTS * PKS_GROUP_SLOTS
+
+
 def factory_env(plan: FactoryPlan) -> dict[str, str]:
     """``PGW_FACTORY_*`` / ``PGW_MASKSTORE_*`` for the child (paths only; secrets stay in their 0600 files)."""
     env: dict[str, str] = {
@@ -73,7 +87,7 @@ def factory_env(plan: FactoryPlan) -> dict[str, str]:
         "PGW_FACTORY_RING": plan.ring,
         "PGW_FACTORY_DEVICE": "cpu",
         "PGW_FACTORY_STATE_DIR": str(plan.state_dir),
-        "PGW_FACTORY_SEGMENT_SLOTS": str(plan.segment_slots),
+        "PGW_FACTORY_SEGMENT_SLOTS": str(segment_slots(plan.scheme, plan.segment_slots)),
         "PGW_FACTORY_FIRST_SEGMENT_SLOTS": str(plan.first_segment_slots),
         "PGW_FACTORY_LOW_WATER_SLOTS": str(plan.low_water_slots),
         "PGW_FACTORY_TARGET_SLOTS": str(plan.target_slots),

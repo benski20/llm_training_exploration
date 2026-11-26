@@ -284,6 +284,26 @@ fn a_planes<'py>(py: Python<'py>, ring: PyReadonlyArray2<'py, u64>, cb: usize, t
     Ok(Array2::from_shape_vec((7 * NU, n), out).map_err(|e| verr(e.to_string()))?.into_pyarray(py))
 }
 
+/// :func:`pgw.service.pks_provider.pack_ksk`: the reply keys' wire form, ``beta`` ``(G, 4, 16, 8192)`` uint32 packed per
+/// (group, prime) with ``bits[i]`` bits (:func:`pgw.hemask.wire.pack_bits` layout).
+#[pyfunction]
+fn pack_ksk<'py>(py: Python<'py>, beta: PyReadonlyArray4<'py, u32>, bits: Vec<u32>) -> PyResult<Bound<'py, PyBytes>> {
+    let sh = beta.shape();
+    if sh[1] != bits.len() || sh[2] != RANK || sh[3] != NR {
+        return Err(verr("beta must be (G, len(bits), 16, 8192)"));
+    }
+    let bsl = beta.as_slice().map_err(|_| verr("beta must be C-contiguous"))?;
+    let per = RANK * NR;
+    let out = py.allow_threads(|| -> Result<Vec<u8>, String> {
+        let mut out = Vec::with_capacity(bsl.len() * 4);
+        for (j, chunk) in bsl.chunks_exact(per).enumerate() {
+            crate::arith::pack_bits_into(chunk, bits[j % bits.len()], &mut out)?;
+        }
+        Ok(out)
+    }).map_err(verr)?;
+    Ok(PyBytes::new(py, &out))
+}
+
 /// :func:`pgw.hemask.wire.unpack_bits` (uint64 values).
 #[pyfunction]
 fn unpack_bits<'py>(py: Python<'py>, data: &Bound<'py, PyBytes>, count: usize, bits: u32) -> PyResult<Bound<'py, PyArray1<u64>>> {
@@ -304,6 +324,7 @@ fn pgw_pks(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(hint_keyswitch, m)?)?;
     m.add_function(wrap_pyfunction!(combine_planes, m)?)?;
     m.add_function(wrap_pyfunction!(a_planes, m)?)?;
+    m.add_function(wrap_pyfunction!(pack_ksk, m)?)?;
     m.add_function(wrap_pyfunction!(unpack_bits, m)?)?;
     m.add_class::<KHat>()?;
     Ok(())

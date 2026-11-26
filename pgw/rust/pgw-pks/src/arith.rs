@@ -601,9 +601,58 @@ pub fn unpack_bits(data: &[u8], count: usize, bits: u32) -> Result<Vec<u64>, Str
     Ok(out)
 }
 
+/// `pgw.hemask.wire.pack_bits` of `vals` (the low `bits` bits of each value), appended to `out`: the inverse of
+/// [`unpack_bits`] (fields of 64/32/16/8 bits as little-endian arrays, then the `bits mod 8` tail stream).
+pub fn pack_bits_into(vals: &[u32], bits: u32, out: &mut Vec<u8>) -> Result<(), String> {
+    let count = vals.len();
+    if !(1..=32).contains(&bits) || !count.is_multiple_of(8) {
+        return Err(format!("pack_bits: {count} values of {bits} bits (needs a multiple of 8, bits <= 32)"));
+    }
+    let start = out.len();
+    out.resize(start + count * bits as usize / 8, 0);
+    let dst = &mut out[start..];
+    let (mut off, mut pos) = (0u32, 0usize);
+    while bits - off >= 8 {
+        let w = [32u32, 16, 8].into_iter().find(|&c| c <= bits - off).unwrap();
+        let d = &mut dst[pos..pos + count * (w / 8) as usize];
+        match w {
+            32 => d.chunks_exact_mut(4).zip(vals).for_each(|(o, &v)| o.copy_from_slice(&v.to_le_bytes())),
+            16 => d.chunks_exact_mut(2).zip(vals).for_each(|(o, &v)| o.copy_from_slice(&((v >> off) as u16).to_le_bytes())),
+            _ => d.iter_mut().zip(vals).for_each(|(o, &v)| *o = (v >> off) as u8),
+        }
+        pos += d.len();
+        off += w;
+    }
+    let t = bits - off;
+    if t > 0 {
+        let tb = t as usize;
+        let mask = (1u64 << t) - 1;
+        for (o, g) in dst[pos..].chunks_exact_mut(tb).zip(vals.chunks_exact(8)) {
+            let mut word = 0u64;
+            for (k, &v) in g.iter().enumerate() {
+                word |= (((v >> off) as u64) & mask) << (tb * k);
+            }
+            o.copy_from_slice(&word.to_le_bytes()[..tb]);
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pack_bits_round_trips() {
+        for bits in [8u32, 13, 16, 24, 30, 32] {
+            let vals: Vec<u32> = (0..64u64).map(|i| ((i * 2654435761) & ((1u64 << bits) - 1)) as u32).collect();
+            let mut packed = Vec::new();
+            pack_bits_into(&vals, bits, &mut packed).unwrap();
+            assert_eq!(packed.len(), vals.len() * bits as usize / 8);
+            let back = unpack_bits(&packed, vals.len(), bits).unwrap();
+            assert!(back.iter().zip(&vals).all(|(&a, &b)| a == b as u64), "bits {bits}");
+        }
+    }
 
     #[test]
     fn ntt_round_trip_and_lanes() {

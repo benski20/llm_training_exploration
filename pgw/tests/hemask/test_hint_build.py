@@ -140,3 +140,40 @@ def test_store_build_equals_reference_compact_hint(tmp_path: Path) -> None:
         want = pks.compact_hint(pks.switch_hint(matmul_mod64(w, a, fast=False) & M56, PAR), k_hat, PAR)
         assert np.array_equal(np.asarray(st.hint(k)), want)
     st.close()
+
+
+@NATIVE
+def test_native_pack_ksk_equals_python() -> None:
+    """The reply keys' wire form (customer, per linear and group): native bytes == the numpy pack_bits layout."""
+    from pgw.hemask.wire import V3_KSK_BITS, pack_bits
+    from pgw.service.pks_provider import pack_ksk, unpack_ksk
+
+    rng = np.random.default_rng(5)
+    beta = np.stack([np.stack([rng.integers(0, p, (pks.RANK, pks.NR), dtype=np.uint64) for p in pks.QP])
+                     for _ in range(3)]).astype(np.uint32)
+    beta[0, :, 0, :8] = np.arange(8, dtype=np.uint32)
+    for i, p in enumerate(pks.QP):
+        beta[1, i, 0, :2] = (p - 1, p - 2)
+    want = bytearray()
+    for g in range(beta.shape[0]):
+        for i, bits in enumerate(V3_KSK_BITS):
+            want += pack_bits(np.ascontiguousarray(beta[g, i], dtype=np.uint64).reshape(-1), bits)
+    got = pack_ksk(beta)
+    assert got == want
+    assert np.array_equal(unpack_ksk(got, beta.shape[0]), beta)
+
+
+def test_hint_build_partial_state_needs_the_key(tmp_path: Path) -> None:
+    """A resumable build without a hint key is not resumable (nothing unauthenticated is ever reused); with the key,
+    a state written under another key is discarded with its seeds."""
+    from pgw.hemask.pks_backend import HintBuild
+
+    hb = HintBuild(tmp_path, "cd" * 32, mac_key=None, resumable=True)
+    assert not hb.resumable and ".building-" in hb.dir.name
+    hb.abort()
+    a = HintBuild(tmp_path, "cd" * 32, mac_key=b"k1" * 16, resumable=True)
+    assert (a.dir / "partial.json").is_file()
+    b = HintBuild(tmp_path, "cd" * 32, mac_key=b"k1" * 16, resumable=True)
+    assert (b.a_seed, b.ks_seed) == (a.a_seed, a.ks_seed)
+    c = HintBuild(tmp_path, "cd" * 32, mac_key=b"k2" * 16, resumable=True)
+    assert (c.a_seed, c.ks_seed) != (a.a_seed, a.ks_seed)
