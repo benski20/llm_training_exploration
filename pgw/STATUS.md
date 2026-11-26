@@ -2128,3 +2128,49 @@ CPU by thread, lane counters), `benchmarks/sdk_scale_sizing.py` (cores / RAM / d
   passed; 2 failures not from this change (`test_ringbuf` / `test_ringshm` crash children: `tests/platform` shadows
   the stdlib `platform` module on their path). Open: multi-item (or parallel single-item) lane calls, a shared
   system-prompt prefix across conversations (needs a privacy review), per-user quotas.
+
+
+## 2026-11-26: mask cost per slot on the client (factory CPU, stock bytes; scheme unchanged)
+
+Goal: less client CPU and fewer stored bytes per mask slot (the scaling audit's #1 bottleneck), with single use,
+mask secrecy, check soundness, the scheme and its parameters unchanged and outputs bit-identical. Breakdown,
+method and the levers not taken: `docs/sdk/scaling.md` ("Mask cost per slot, by component"); tool:
+`benchmarks/pks_slot_breakdown.py` (every per-slot and per-segment part at the real shapes of each model).
+
+- **The earlier per-slot figure was incomplete.** 7.2 / 24.9 / 80 / 121 ms (0.5B / 7B / 32B / 72B) counted `r`, the
+  upload, the reply keys and the decryption, without the masked LM head. Counting everything the factory does per
+  slot (head, the segment's p31 check vectors `u W8`, the every-row 40-bit self-check, the int64 copy of `W r`,
+  the writer), the factory cost **14.2 / 66 / 231 / 433 ms** per slot (scaled to the earlier audit's box). The
+  largest term from 7B up was `u W8 mod p`: a float64 copy of every `W8` per segment, 5.5 ns per multiply-add
+  (38 / 172 / 383 ms per slot at 7B / 32B / 72B).
+- **Now 10.6 / 33.5 / 103 / 157 ms** per slot (-25 / -49 / -55 / -64 %); this box under load measured
+  17.3 -> 13.0 (0.5B, both measured), 90 -> 46, 347 -> 155, 652 -> 236 ms (after: measured at the real shapes;
+  before: the changed parts at measured rates). Factory cores at 16 streams: 15 / 27 / 33 / 38
+  (were 20 / 53 / 73 / 104 with everything counted; the old table said 10 / 20 / 25 / 29).
+  * `pgw_pks.vecmat_p31` / `vecmat_wrap32` (new `rust/pgw-pks/src/vecmat.rs`): `u W8 mod p` and `u W8 mod 2^32`
+    as exact 32-bit lane sums on AVX-512 (0.17 ns per multiply-add, 30x); `ring_vecmat` uses it for up to 4
+    vectors or where int8 GEMMs are not fast (the 14 private vectors stay on torch's int8 GEMM on AMX: as fast at
+    one thread).
+  * `pgw_pks.check_rows32`: the every-row self-check on 32-bit lanes, 16 rows per block, int64 or 32-bit `W r`
+    (2.5x; same flags as `verify_rows`).
+  * pks-v3 compact output (default; `PGW_PKS_COMPACT=0` off): the decryption's uint32 buffer goes to the
+    self-check and the writer as the int32 compact form every segment writer already accepts; no int64 copy
+    (2.9 / 9 / 13 ms per slot, 7B measured 23 under memory pressure), the writer packs from 4 bytes.
+  * The private self-check vectors are cached as uint32 at K <= 32: at 72B the uint64 set (1.27 GB) overflowed
+    the 1 GiB cache, so the last layers' `v W8` were redrawn for every segment (6.6 ms per slot); now 0.63 GB.
+- **Bytes per slot: unchanged, at the floor** (1.82 / 6.17 / 19.2 / 28.1 MB): uniform 32-bit masks of every output
+  feature; format overhead 0.05 % (`uW`) plus 16 bytes per ~1 MiB chunk. Storing seeds (needs a pass over all of
+  `W8` per token at use time) or the provider's reply (4.5 bytes per element, +12.5 %, decryption at use time)
+  loses on both counts. Written up, not implemented: a separate head stock for decode tokens only (the masked head
+  uses one row per prefill; 22 / 6.5 / 2 / 1.4 % of the stock and 11 / 3 / 1 / 0.7 % of the factory CPU at
+  500-token prompts; a store / gateway change), `ring`'s AES-GCM for the writer and the gateway's open (~4x on
+  9.7 ms per slot at 7B, but no key-schedule wipe), sharing `u` across segments (a SPEC 7.3 change; no longer
+  worth it). The sizing now also counts the gateway's mask open + retirement (1.25 / 3.7 / 11 / 16 ms per slot,
+  helper threads) and the stock's write bandwidth (5 GB/s at 7B, 16 streams; twice with `shred_zero_fill`, which
+  the guide now says to turn off on SSDs).
+- Tests: `tests/factory/test_vecmat_native.py` (new: kernels equal the reference paths over shapes, extremes,
+  threads, c up to 17, every `W r` form), `tests/hemask/test_pks.py` (new `test_compact_output_stores_the_same_masks`:
+  compact, int64 and local generation store the same masks and check vectors, ring and p31, one- and multi-pass;
+  the factory tests compare canonical values), Rust `cargo test -p pgw-pks vecmat`. tests/factory 463 passed /
+  9 skipped; tests/hemask 439 passed / 20 skipped; tests/sdk 115 passed / 1 opt-in skip (the factory subset rerun after the last
+  kernel-selection change: 96 passed).
