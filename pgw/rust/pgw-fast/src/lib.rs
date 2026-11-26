@@ -19,6 +19,7 @@
 //! | [`trip`] | stub (chat-speed WP-A4a): `prepare_into` / `finish_into` for the TripEngine; registers nothing yet |
 //! | [`tripnative`] | opt-in `PGW_TRIP_NATIVE`: `TripLease` / `TripTicket`, one native call per trip on each side of the lane call (take rows of a reservation lease, derive `r`, prepare; finish), `r` of the next row derived ahead on a helper thread |
 //! | [`layer`] | opt-in pinned float formulation (`float_ops = "native"`): RMSNorm, residual add + RMSNorm, SiLU gate (fixed order, no FMA, no libm) |
+//! | [`sampling`] | `torch.multinomial(probs, 1, generator)` of `Sampler.sample`: the same index and generator state, `log1p` only for elements that can win |
 //! | [`attn`] | opt-in row-deterministic attention over the KV cache, fused with RoPE and the cache write (`float_ops = "native"`) |
 //!
 //! Every function is bit-identical to the Python path (tests in `pgw/tests/native/`), takes numpy
@@ -43,6 +44,7 @@ pub mod noise;
 pub mod p61;
 pub mod prepare;
 pub mod prime;
+pub mod sampling;
 pub mod store;
 pub mod trip;
 pub mod tripnative;
@@ -75,6 +77,7 @@ fn pgw_fast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     noise::register(m)?;
     p61::register(m)?;
     prepare::register(m)?;
+    sampling::register(m)?;
     store::register(m)?;
     trip::register(m)?;
     tripnative::register(m)?;

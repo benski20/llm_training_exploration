@@ -648,6 +648,16 @@ class LaneComputeClient:
     def __getattr__(self, name: str) -> Any:
         return getattr(self._client, name)
 
+    def multi_rows(self) -> int:
+        """Rows (= items, at one row per item) one multi call of the current lane serves: ``min(max_items,
+        max_multi_rows)`` of its ticket with :attr:`LaneConfig.multi` on and lane format 2 offered, else 0
+        (also with no lane open). A public capacity; requests above it go on the stream channel."""
+        lane = self._lane
+        if lane is None or self._closed or not self.lane_config.multi:
+            return 0
+        t = lane.ticket
+        return max(0, min(int(getattr(t, "max_items", 0) or 0), int(getattr(t, "max_multi_rows", 0) or 0)))
+
     def channel_stats(self) -> dict[str, Any]:
         """Sums of the idle native channels' counters (``TripChannel.stats()``: trips, spin hits, blocking
         waits, wait / trip / service queue / service compute microseconds) and their transports."""

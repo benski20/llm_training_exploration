@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 import os
+import threading
 from collections import Counter
 from collections.abc import Sequence
 
@@ -45,6 +46,62 @@ def fast_topk(x: torch.Tensor, k: int) -> list[tuple[int, float]]:
             return [(int(i), float(v)) for i, v in zip(idx, vals, strict=True)]
     top = torch.topk(x, k)
     return [(int(i), float(v)) for v, i in zip(top.values, top.indices, strict=True)]
+
+
+_MN_LOCK = threading.Lock()
+_MN_OK: bool | None = None
+
+
+def _native_multinomial_ok() -> bool:
+    """Whether ``pgw_fast.torch_multinomial1`` reproduces this torch build's ``torch.multinomial(p, 1, g)``:
+    checked once per process on public test distributions (index and generator state afterwards, byte for
+    byte); ``PGW_NATIVE_MULTINOMIAL=0`` turns it off."""
+    global _MN_OK
+    ok = _MN_OK
+    if ok is not None:
+        return ok
+    with _MN_LOCK:
+        if _MN_OK is not None:
+            return _MN_OK
+        ok = False
+        if (os.environ.get("PGW_NATIVE_MULTINOMIAL", "1").strip().lower() not in ("0", "false", "no", "off")
+                and native.native_available("torch_multinomial1")):
+            try:
+                ok = True
+                for case, (n, temp) in enumerate(((7, 1.0), (1000, 0.5), (151936, 0.7), (151936, 1.6))):
+                    logits = torch.randn(n, generator=torch.Generator().manual_seed(1000 + case)) * 4
+                    logits[::5] = float("-inf")
+                    probs = torch.softmax(logits / temp, dim=-1)
+                    g = torch.Generator().manual_seed(77 + case)
+                    torch.rand(case + 1, generator=g)
+                    st = g.get_state()
+                    got = native.fast.torch_multinomial1(st.numpy(), probs.numpy())
+                    ref = int(torch.multinomial(probs, 1, generator=g))
+                    if got is None or int(got) != ref or not torch.equal(st, g.get_state()):
+                        ok = False
+                        break
+            except Exception:  # any surprise: torch's own draw
+                ok = False
+            if not ok:
+                import logging
+
+                logging.getLogger(__name__).warning("native multinomial disagrees with torch.multinomial: not used")
+        _MN_OK = ok
+        return ok
+
+
+def multinomial1(probs: torch.Tensor, gen: torch.Generator) -> int:
+    """``int(torch.multinomial(probs, 1, generator=gen))`` for a 1-D float32 CPU tensor: the same index and the
+    same generator state afterwards (``pgw_fast.torch_multinomial1``: torch's exponential race, ``log1p`` only
+    for the elements that can win; checked against torch once per process), else torch itself."""
+    if (probs.ndim == 1 and probs.dtype == torch.float32 and probs.device.type == "cpu" and probs.is_contiguous()
+            and gen.device.type == "cpu" and _native_multinomial_ok()):
+        st = gen.get_state()
+        got = native.fast.torch_multinomial1(st.numpy(), probs.detach().numpy())
+        if got is not None:
+            gen.set_state(st)
+            return int(got)
+    return int(torch.multinomial(probs, 1, generator=gen))
 
 
 def _top_p_reference(logits: torch.Tensor, top_p: float) -> torch.Tensor:
@@ -174,7 +231,7 @@ class Sampler:
         probs = torch.softmax(self._filter(work / p.temperature), dim=-1)
         if not torch.isfinite(probs).all() or float(probs.sum()) <= 0:
             return fast_argmax(work)
-        return int(torch.multinomial(probs, 1, generator=self._gen))
+        return multinomial1(probs, self._gen)
 
     def _penalize(self, logits: torch.Tensor, generated: Sequence[int]) -> torch.Tensor:
         p = self.params
@@ -229,7 +286,7 @@ class Sampler:
             if not torch.isfinite(probs).all() or float(probs.sum()) <= 0:
                 token = fast_argmax(work)
             else:
-                token = int(torch.multinomial(probs, 1, generator=self._gen))
+                token = multinomial1(probs, self._gen)
         logprob: float | None = None
         self.last_top_logprobs = None
         if p.logprobs is not None:
