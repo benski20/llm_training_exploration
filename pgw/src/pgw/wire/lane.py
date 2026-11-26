@@ -614,8 +614,10 @@ class LaneComputeClient:
     """A :class:`~pgw.wire.client.ComputeClient` that sends eligible calls on the trip lane.
 
     Eligible: one item, ``rows <= max_rows``, a known linear and ring of the ticket's model, a
-    ``uuid4().hex``-form request id and ``len(x_hat) == rows * n * K/8``. Everything else, and every lane
-    failure, goes to the wrapped client with the **same** request object (byte-identical body and id).
+    ``uuid4().hex``-form request id and ``len(x_hat) == rows * n * K/8``. With :attr:`LaneConfig.multi` and a
+    service ticket offering lane format 2 (``max_items``), also several items (the rows of several answers in
+    one batched trip) or one item of more rows than ``max_rows``, in one multi call (:meth:`_plan_multi`).
+    Everything else, and every lane failure, goes to the wrapped client with the **same** request object (byte-identical body and id).
     After a failure that breaks the lane (connection error, closing status, refused hello, failed
     ``lane_open``) the lane is off for :attr:`LaneConfig.retry_s`. A failure seen on a lane that has since
     been replaced never touches the newer one. A UDS ticket is accepted only from a service on this host

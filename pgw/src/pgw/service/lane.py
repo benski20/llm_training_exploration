@@ -5,6 +5,13 @@ The lane is a second front end next to the WebSocket stream channel for decode-s
 ``x_hat`` / ``y_hat`` bytes. It never carries anything the stream channel does not, so the provider
 learns nothing new (plan section 3); it only removes framing, msgpack and Python from the trip.
 
+Lane format 2 (``multi`` frames, ``rust/pgw-lane/src/proto.rs``; offered in every ticket unless
+``PGW_SERVICE_LANE_MULTI=0``): one frame carries the items of one batched trip, the same items in the same
+order as the stream channel's compute request, all under the connection's tenant; same-linear rows run as
+one executor call (of at most ``lane_max_rows`` rows where CUDA graphs serve, any count on the kernel path,
+as the stream channel's batcher), and the reply is the items' ``y_hat`` in order. Clients send multi
+frames only to a service that offered them.
+
 Flow:
 
 1. The gateway calls ``POST /pgw/v1/lane/open`` (same authentication as compute) with a model

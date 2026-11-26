@@ -126,6 +126,8 @@ _NON_FIELD_ENV = {
     "PGW_TRIP_DECRYPT_AHEAD",
     "PGW_LANE_SPIN_AUTO_US",
     "PGW_LANE_WAIT_PREFETCH",
+    "PGW_LANE_MULTI",  # lane format 2 multi calls (pgw.wire.service_lane.build_lane_client; NATIVE_ENV sets it)
+    "PGW_SERVICE_LANE_MULTI",  # lane format 2 offer of the service lane (pgw.service.lane._multi_items)
     "PGW_NATIVE",  # native-extension switch read by pgw.core.native, pgw.hemask.ntt, pgw.hemask.pks_native
     "PGW_NTT",  # native NTT switch read by pgw.hemask.ntt
     "PGW_PKS_NATIVE",  # native pks-v3 switch read by pgw.hemask.pks_native

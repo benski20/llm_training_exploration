@@ -211,6 +211,8 @@ def main() -> None:
     ap.add_argument("--live-factory", action="store_true")
     ap.add_argument("--admission", default="entitled", choices=["entitled", "overcommit"])
     ap.add_argument("--fill-timeout", type=float, default=900.0)
+    ap.add_argument("--client-env", action="append", default=[], help="client process env KEY=VALUE (repeatable)")
+    ap.add_argument("--provider-env", action="append", default=[], help="provider env KEY=VALUE (repeatable)")
     ap.add_argument("--worker", type=int, default=None, help=argparse.SUPPRESS)
     ap.add_argument("--root", default=None, help=argparse.SUPPRESS)
     ap.add_argument("--pack", default=None, help=argparse.SUPPRESS)
@@ -230,12 +232,14 @@ def main() -> None:
         for sub in ("pki", "provider", "sync"):
             (root / sub).mkdir()
         pack = _pack(args.model, root / "pack" / "pack")
-        prov = start_provider(root / "provider", pack, make_pki(root / "pki"))
+        prov = start_provider(root / "provider", pack, make_pki(root / "pki"),
+                              extra_env=dict(kv.split("=", 1) for kv in args.provider_env))
         out: dict[str, Any] = {"model": args.model, "tokens": args.tokens, "cpus": os.cpu_count(), "procs": args.procs,
                                "scheme": args.scheme, "store_slots": args.store_slots, "levels": {}}
         try:
             env = {k: v for k, v in os.environ.items() if not k.startswith("PGW_")}
             env["PGW_API_KEY"] = prov.new_key()
+            env.update(dict(kv.split("=", 1) for kv in args.client_env))
             env["PYTHONPATH"] = os.pathsep.join([str(ROOT / "src"), str(ROOT)])
             cmd = [sys.executable, __file__, "--root", str(root), "--pack", str(pack), "--sync", str(root / "sync"),
                    "--streams", args.streams, "--tokens", str(args.tokens), "--procs", str(args.procs),
