@@ -33,7 +33,7 @@ behaviour of the OpenAI client it replaces.
 | `lane` | `"auto"` | our fast connection for the per-token round trips when the service offers it (`"stream"`, `"off"`) |
 | `model_fingerprints` | `{}` | extra or replacement fingerprint pins `{model: fingerprint}`. The library pins every supported model itself and refuses a service that serves anything else; set this only for a custom model build you checked yourself |
 | `usage_reports` | `True` | after each request, send the service a record without content (model, token counts, latency, status, whether every check passed) for your organisation's console. The service sees the same counts and timing in the masked traffic anyway. Requests that fail before reaching the service (for example no masks yet, or a prompt beyond the context) are not reported; they are counted in `client.status()["local_errors"]` only |
-| `speculation` | `PGW_SPECULATION`, else `"off"` | strict speculative decoding (opt-in): each round of round trips verifies `spec_rows` rows, so one round can yield up to `spec_rows` tokens. Answers are bit-identical; the service sees the same number of rounds and rows whatever the drafts (after the answer, your process runs the remaining rounds on random data, and the next request of the same `user` waits for them). `"draft_head"` drafts with a small trained head that ships with the library for `qwen2.5-0.5b-instruct` and `qwen2.5-7b-instruct` (checked against its pinned SHA-256; it runs on your CPU only and is never sent anywhere) plus prompt lookup: about 1.5-1.8 tokens per round on open chat and code. `"lookup"` drafts from the prompt and the conversation only (no model; about 2x tokens per round on a code edit, little on open chat). Costs `spec_rows` masks per token and `spec_rows` times the per-round traffic. When to enable it: [below](#speculative-decoding-when-to-enable-it) |
+| `speculation` | `PGW_SPECULATION`, else `"off"` | strict speculative decoding (opt-in): each round of round trips verifies `spec_rows` rows, so one round can yield up to `spec_rows` tokens. Answers are bit-identical; the service sees the same number of rounds and rows whatever the drafts (after the answer, your process runs the remaining rounds on random data, and the next request of the same `user` waits for them). `"draft_head"` drafts with a small trained head that ships with the library for `qwen2.5-0.5b-instruct` and `qwen2.5-7b-instruct` (checked against its pinned SHA-256; it runs on your CPU only and is never sent anywhere) plus prompt lookup: about 1.5-1.9 tokens per round on open chat and code. `"lookup"` drafts from the prompt and the conversation only (no model; about 2x tokens per round on a code edit, little on open chat). Costs `spec_rows` masks per token and `spec_rows` times the per-round traffic. When to enable it: [below](#speculative-decoding-when-to-enable-it) |
 | `spec_rows` | 3 | rows per round with `speculation` (2 to 8) |
 | `draft_head_path` | the shipped head | your own draft-head file for `speculation="draft_head"` (`benchmarks/feature_head_distill.py` trains one) |
 | `spec_pass_gap_ms` | 8 | with `speculation`: the least time between the end of one round and the start of the next (0 = off). It hides from the service the small timing differences between the answer's rounds and the random rounds after it; it costs a few ms per round |
@@ -122,16 +122,16 @@ silently ignored.
 ## Speculative decoding: when to enable it
 
 Speculation never changes an answer and never changes what the service sees (rounds, rows, bytes); it changes how
-fast the answer reaches you and what it costs you. Measured on 2026-11-26 (greedy decoding, held-out prompts the
-heads were not trained on):
+fast the answer reaches you and what it costs you. Measured on 2026-11-26 with the shipped heads (greedy decoding,
+held-out prompts the heads were not trained on: open chat from UltraChat, code from MBPP):
 
 | | open chat, tokens per round | code, tokens per round | decode speed vs off |
 |---|---|---|---|
-| `qwen2.5-0.5b-instruct`, `draft_head`, `spec_rows` 2 / 3 / 4 (end to end, CPU service) | 1.51 / 1.77 / 1.95 | 1.50 / 1.74 / 1.86 | chat +18 / +27 / +32 %, code +18 / +23 / +27 % |
-| `qwen2.5-0.5b-instruct`, `lookup`, `spec_rows` 3 (same run) | 1.18 | 1.22 | -5 % (chat), -3 % (code) |
-| `qwen2.5-7b-instruct`, `draft_head`, `spec_rows` 2 / 3 / 4 (replay of the model's own answers) | 1.46 / 1.66 / 1.74 | 1.48 / 1.69 / 1.77 | modelled at 0.2 ms round-trip time on a GPU service: +18 / +13 / +2 % |
-| `qwen2.5-7b-instruct`, `draft_head`, `spec_rows` 2 / 3 (end to end on one 4-vCPU T4 machine: service, your process and its mask factory together) | 1.53 / 1.69 | 1.59 / 1.81 | -27 / -62 %: on that machine every extra row costs the T4 (no int8 tensor-core GEMV) and the factory shares the 4 CPUs; it measures tokens per round, not a deployment |
-| a code edit (the answer copies the prompt), 0.5B, `spec_rows` 3: `draft_head` / `lookup` | 2.11 / 1.98 | | +53 % / +55 % |
+| `qwen2.5-0.5b-instruct`, `draft_head`, `spec_rows` 2 / 3 / 4 (end to end, CPU service) | 1.52 / 1.82 / 1.95 | 1.62 / 1.92 / 2.15 | chat +31 / +47 / +38 %, code +42 / +59 / +50 % |
+| `qwen2.5-0.5b-instruct`, `lookup`, `spec_rows` 3 (same run) | 1.18 | 1.20 | -9 % (chat), -4 % (code) |
+| `qwen2.5-7b-instruct`, `draft_head`, `spec_rows` 2 / 3 / 4 (replay of the model's own answers) | 1.45 / 1.64 / 1.72 | 1.61 / 1.94 / 2.12 | modelled at 0.2 ms round-trip time on a GPU service: +17 / +11 / +1 % (open chat) |
+| `qwen2.5-7b-instruct`, `draft_head`, `spec_rows` 2 / 3 (end to end on one 4-vCPU T4 machine: service, your process and its mask factory together; earlier head of the same size, 5 prompts) | 1.53 / 1.69 | 1.59 / 1.81 | -27 / -62 %: on that machine every extra row costs the T4 (no int8 tensor-core GEMV) and the factory shares the 4 CPUs; it measures tokens per round, not a deployment |
+| a code edit (the answer copies the prompt), 0.5B, `spec_rows` 3: `draft_head` / `lookup` | 2.16 / 1.98 | | +81 % / +58 % |
 
 Enable `speculation="draft_head"` when:
 

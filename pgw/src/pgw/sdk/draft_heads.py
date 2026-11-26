@@ -1,9 +1,9 @@
 """Trained draft heads for ``speculation="draft_head"``: shipped with the library, pinned by SHA-256.
 
 A draft head is a few-MB public artefact per model (``benchmarks/feature_head_distill.py``: distilled from the
-model's own answers to public chat prompts; int8 weights, ``FeatureHeadDrafter`` format v2). It runs on the
-client's CPU only, next to the gateway's plaintext state; it is never sent to the provider, and its proposals
-only decide which rows a verify pass carries (the answer is the target model's, bit for bit).
+model's own answers to permissively licensed public prompts; int8 weights, ``FeatureHeadDrafter`` format v2).
+It runs on the client's CPU only, next to the gateway's plaintext state; it is never sent to the provider, and
+its proposals only decide which rows a verify pass carries (the answer is the target model's, bit for bit).
 
 Resolution of ``speculation="draft_head"`` without ``draft_head_path`` (:func:`resolve_draft_head`):
 
@@ -59,18 +59,22 @@ class DraftHeadPin:
 
 
 #: The release's draft heads (format ``pgw-feature-head-v2``), from the Kaggle distillation runs of 2026-11-26
-#: (``benchmarks/results/feature_head/``; acceptance and tokens per pass in docs/sdk/configuration.md).
+#: (``benchmarks/results/feature_head/kaggle_*_r2/``; acceptance and tokens per pass in docs/sdk/configuration.md).
+#: Training prompts: UltraChat 200k (MIT), OASST2 (Apache-2.0), Self-OSS-Instruct (ODC-By 1.0); held-out code from
+#: MBPP (CC BY 4.0); revisions and attribution in ``draft_heads/README.md`` (shipped next to the files). No
+#: non-commercial or share-alike data.
 PINNED_DRAFT_HEADS: dict[str, DraftHeadPin] = {
-    # d = 256, V = 16,384, 5.3 MB; held-out greedy alpha 0.48 (chat) / 0.49 (code), tokens per pass at R = 3: 1.65 / 1.66
+    # d = 256, V = 16,384, 5.3 MB; held-out greedy alpha 0.47 (chat) / 0.56 (code), tokens per pass at R = 3 with
+    # prompt lookup: 1.77 / 1.87 (replay), 1.82 / 1.92 end to end through pgw.OpenAI on CPU
     "qwen2.5-0.5b-instruct": DraftHeadPin(
-        "qwen2.5-0.5b-instruct-d256-v16384.pgwhead",
-        "948b95e70608620b420707e5df5ed69ee8ecf9c07351ff4036c33a80f8242162", 5288953,
+        "qwen2.5-0.5b-instruct-d256-v16384-r2.pgwhead",
+        "fbb4ed1c0bece068c61cd69a56afe4d0956877ec4de45c925eab11c6096247c2", 5289977,
         "Qwen/Qwen2.5-0.5B-Instruct", "7ae557604adf67be50417f59c2c2f167def9a775"),
-    # d = 384, V = 16,384, 11.2 MB; held-out greedy alpha 0.47 (chat) / 0.51 (code), tokens per pass at R = 3 with
-    # prompt lookup: 1.66 / 1.69 (replay of the 7B's own answers)
+    # d = 384, V = 16,384, 11.2 MB; held-out greedy alpha 0.47 (chat) / 0.64 (code), tokens per pass at R = 3 with
+    # prompt lookup: 1.64 / 1.94 (replay of the 7B's own answers)
     "qwen2.5-7b-instruct": DraftHeadPin(
-        "qwen2.5-7b-instruct-d384-v16384.pgwhead",
-        "019397d17a8cc2313288d722c1a791c2e18e04d9a2a92eca2316b879538ad604", 11191161,
+        "qwen2.5-7b-instruct-d384-v16384-r2.pgwhead",
+        "c3ed147cc58483f8d65ce6e8eaa229f9cd0c9e71119c9a4310c801b0f9b27b56", 11191929,
         "Qwen/Qwen2.5-7B-Instruct", "a09a35458c702b33eeacc393d103063234e8bc28"),
 }
 

@@ -7,11 +7,14 @@ no teacher-forced pass (the features and the target's greedy labels are captured
 forward hooks on the final norm and the LM head), several times more data, fp16 on the T4, features kept in host
 RAM as int8 (per-dimension scale, then per-row scale) and the v2 export (``feature_head_train.export``).
 
-1. **Prompts.** Public datasets the repository already uses: first-turn user prompts of UltraChat 200k
-   (``HuggingFaceH4/ultrachat_200k``, MIT), Stanford Alpaca instructions (``tatsu-lab/alpaca``, CC BY-NC 4.0, used
-   for evaluation and research only) and Dolly 15k (``databricks/databricks-dolly-15k``, CC BY-SA 3.0). Held out
-   before anything else: ``--n-eval-chat`` UltraChat ``test_sft`` prompts (open chat) and ``--n-eval-code`` Alpaca
-   prompts that ask for code (none of them are trained on).
+1. **Prompts** (licences at the pinned revisions in ``DATA``; all allow commercial use, none share-alike):
+   first-turn user prompts of UltraChat 200k (``HuggingFaceH4/ultrachat_200k``, MIT), the root prompts of
+   OpenAssistant OASST2 (``OpenAssistant/oasst2``, Apache-2.0; human-written, all languages) and the instructions
+   of StarCoder2 Self-OSS-Instruct (``bigcode/self-oss-instruct-sc2-exec-filter-50k``, ODC-By 1.0; code). Held
+   out before anything else: ``--n-eval-chat`` UltraChat ``test_sft`` prompts (open chat) and ``--n-eval-code``
+   MBPP test-split problems (``google-research-datasets/mbpp``, CC BY 4.0; evaluation only, never trained on).
+   Until 2026-11-26 the heads were trained on Stanford Alpaca (CC BY-NC 4.0, non-commercial) and Dolly 15k
+   (CC BY-SA 3.0) as well; both are gone (``pgw/sdk/draft_heads/README.md``).
 2. **Answers** by the target itself (distillation): batched HF ``generate``, greedy for most training prompts and
    sampled (``--sample-frac``, T = 0.7, top-p 0.9) for the rest, no repetition penalty. Per generated position:
    the final-norm hidden state (what the gateway holds), the token and the target's greedy (raw arg-max) token.
@@ -33,7 +36,6 @@ import argparse
 import json
 import os
 import random
-import re
 import sys
 import threading
 import time
@@ -54,25 +56,30 @@ def log(msg: str) -> None:
     print(f"[{(time.time() - T0) / 60:6.1f}m] {msg}", flush=True)
 
 
-CODE_RE = re.compile(r"\b(code|function|python|java|javascript|sql|program|script|algorithm|c\+\+|html|css|regex|"
-                     r"class|implement|bash|query|json|api)\b", re.I)
-
-
 # ---- prompts ---------------------------------------------------------------------------------------------
-#: Dataset files at fixed revisions (Hugging Face Hub).
+#: Dataset repositories at fixed revisions (Hugging Face Hub): (repo, revision, licence).
 DATA = {
-    "ultrachat": ("HuggingFaceH4/ultrachat_200k", "8049631c405ae6576f93f445c6b8166f76f5505a"),
-    "alpaca": ("tatsu-lab/alpaca", "dce01c9b08f87459cf36a430d809084718273017"),
-    "dolly": ("databricks/databricks-dolly-15k", "bdd27f4d94b9c1f951818a7da7fd7aeea5dbff1a"),
+    "ultrachat": ("HuggingFaceH4/ultrachat_200k", "8049631c405ae6576f93f445c6b8166f76f5505a", "MIT"),
+    "oasst2": ("OpenAssistant/oasst2", "179dd21fc55192153d94adb0e0ce8f69e222bf75", "Apache-2.0"),
+    "selfoss": ("bigcode/self-oss-instruct-sc2-exec-filter-50k", "356bb069eee815daa6e23e9a282eeefe1490ad44",
+                "ODC-By-1.0"),
+    "mbpp": ("google-research-datasets/mbpp", "4bb6404fdc6cacfda99d4ac4205087b89d32030c", "CC-BY-4.0"),
 }
+#: What each dataset is used for (recorded in the head file and summary.json).
+DATA_USE = {"ultrachat": "train (train_sft) + held-out chat eval (test_sft)", "oasst2": "train",
+            "selfoss": "train (code)", "mbpp": "held-out code eval only (test split)"}
 ULTRACHAT_FILES = {"test_sft": "data/test_sft-00000-of-00001-f7dfac4afe5b93f4.parquet",
                    "train_sft": "data/train_sft-00000-of-00003-a3ecf92756993583.parquet"}
+
+
+def data_provenance() -> list[dict[str, str]]:
+    return [{"repo": r, "revision": v, "license": lic, "use": DATA_USE[k]} for k, (r, v, lic) in DATA.items()]
 
 
 def _file(name: str, path: str) -> str:
     from huggingface_hub import hf_hub_download
 
-    repo, rev = DATA[name]
+    repo, rev, _ = DATA[name]
     return hf_hub_download(repo, path, repo_type="dataset", revision=rev)
 
 
@@ -92,45 +99,53 @@ def _ultrachat(split: str, n: int, seed: int) -> list[str]:
     return out
 
 
-def _alpaca() -> list[str]:
+def _oasst2() -> list[str]:
+    """Root (first user turn) prompts of the OASST2 train split, all languages, not deleted, review passed."""
     import pyarrow.parquet as pq
 
-    t = pq.read_table(_file("alpaca", "data/train-00000-of-00001-a09b74b3ef9c3b56.parquet"),
-                      columns=["instruction", "input"]).to_pylist()
-    return [(r["instruction"] + ("\n\n" + r["input"] if r["input"].strip() else "")).strip() for r in t]
+    t = pq.read_table(_file("oasst2", "data/train-00000-of-00001-88ba0162028a73fc.parquet"),
+                      columns=["parent_id", "role", "text", "deleted", "review_result"]).to_pylist()
+    return [r["text"].strip() for r in t if r["parent_id"] is None and r["role"] == "prompter"
+            and not r["deleted"] and r["review_result"] and r["text"].strip()]
 
 
-def _dolly() -> list[str]:
-    rows = [json.loads(x) for x in open(_file("dolly", "databricks-dolly-15k.jsonl")) if x.strip()]
-    return [(r["instruction"] + ("\n\n" + r["context"] if r["context"].strip() else "")).strip() for r in rows]
+def _selfoss() -> list[str]:
+    import pyarrow.parquet as pq
+
+    t = pq.read_table(_file("selfoss", "data/train-00000-of-00001.parquet"), columns=["instruction"]).to_pylist()
+    return [r["instruction"].strip() for r in t if r["instruction"] and r["instruction"].strip()]
 
 
-def code_eval_split(alp: list[str], n_code: int) -> tuple[list[str], list[str]]:
-    """(held-out code prompts, the other Alpaca prompts): Alpaca prompts that ask for code, a fixed sample."""
-    code_idx = [i for i, p in enumerate(alp) if CODE_RE.search(p) and len(p) < 1200]
-    random.Random(5).shuffle(code_idx)
-    held = set(code_idx[:n_code])
-    return [alp[i] for i in sorted(held)], [p for i, p in enumerate(alp) if i not in held]
+def _mbpp_code_eval(n_code: int) -> list[str]:
+    """Held-out code prompts: a fixed sample of MBPP test-split problems, with the first test as the example."""
+    import pyarrow.parquet as pq
+
+    t = pq.read_table(_file("mbpp", "full/test-00000-of-00001.parquet"), columns=["text", "test_list"]).to_pylist()
+    rows = [f"{r['text'].strip()} Your code should pass this test:\n\n{r['test_list'][0]}" for r in t]
+    random.Random(5).shuffle(rows)
+    return rows[:n_code]
 
 
 def eval_prompts(n_chat: int, n_code: int) -> tuple[list[str], list[str]]:
     """The held-out evaluation prompts (open chat, code), as the distillation draws them."""
-    return _ultrachat("test_sft", n_chat, seed=2), code_eval_split(_alpaca(), n_code)[0]
+    return _ultrachat("test_sft", n_chat, seed=2), _mbpp_code_eval(n_code)
 
 
 def load_prompts(args) -> tuple[list[str], list[str], list[str]]:
-    """(train, eval chat, eval code). Eval sets are drawn first; the code set is removed from Alpaca."""
+    """(train, eval chat, eval code). The eval sets come from splits / datasets never trained on."""
     rnd = random.Random(5)
-    chat_eval = _ultrachat("test_sft", args.n_eval_chat, seed=2)
-    code_eval, alp_train = code_eval_split(_alpaca(), args.n_eval_code)
+    chat_eval, code_eval = eval_prompts(args.n_eval_chat, args.n_eval_code)
     n = args.n_train
-    n_u, n_a = int(n * args.mix[0]), int(n * args.mix[1])
-    n_d = n - n_u - n_a
+    n_u, n_o = int(n * args.mix[0]), int(n * args.mix[1])
+    n_c = n - n_u - n_o
     uc = _ultrachat("train_sft", n_u, seed=1)
-    rnd.shuffle(alp_train)
-    dl = _dolly()
-    rnd.shuffle(dl)
-    train = uc + alp_train[:n_a] + dl[:n_d]
+    oa = _oasst2()
+    rnd.shuffle(oa)
+    co = _selfoss()
+    rnd.shuffle(co)
+    if len(oa) < n_o or len(co) < n_c:
+        log(f"note: {len(oa)} OASST2 prompts for {n_o} asked, {len(co)} code prompts for {n_c} asked")
+    train = uc + oa[:n_o] + co[:n_c]
     rnd.shuffle(train)
     return train, chat_eval, code_eval
 
@@ -471,8 +486,8 @@ def main() -> None:
     ap.add_argument("--device", default="cuda")
     ap.add_argument("--dtype", default="float16")
     ap.add_argument("--n-train", type=int, default=40000)
-    ap.add_argument("--mix", type=lambda s: [float(x) for x in s.split(",")], default=[0.6, 0.25, 0.15],
-                    help="UltraChat, Alpaca, Dolly shares of the training prompts")
+    ap.add_argument("--mix", type=lambda s: [float(x) for x in s.split(",")], default=[0.75, 0.15, 0.10],
+                    help="UltraChat, OASST2, Self-OSS-Instruct (code) shares of the training prompts")
     ap.add_argument("--n-eval-chat", type=int, default=200)
     ap.add_argument("--n-eval-code", type=int, default=120)
     ap.add_argument("--sample-frac", type=float, default=0.25)
@@ -495,6 +510,8 @@ def main() -> None:
     ap.add_argument("--budget-min", type=float, default=160.0, help="wall budget of the whole job")
     ap.add_argument("--gen-share", type=float, default=0.6, help="share of the budget for training answers")
     ap.add_argument("--max-memory", default=None, help="per-GPU memory cap for the target, e.g. 12GiB")
+    ap.add_argument("--compare-heads", nargs="*", default=[],
+                    help="existing head files to evaluate on the same held-out answers (ranks_cmp<i>_<set>.json)")
     ap.add_argument("--out", required=True)
     args = ap.parse_args()
     out = Path(args.out)
@@ -568,7 +585,8 @@ def main() -> None:
         (wva if is_val[si] else wtr).append(w)
     win_tr, win_va = torch.cat(wtr), torch.cat(wva)
     cnt = torch.bincount(store.am[: store.n], minlength=emb.shape[0])
-    summary: dict = {"target": args.target, "revision": args.revision, "args": vars(args), "train_rows": store.n,
+    summary: dict = {"target": args.target, "revision": args.revision, "args": vars(args), "data": data_provenance(),
+                     "train_rows": store.n,
                      "train_answers": len(store.seqs), "windows_train": len(win_tr), "windows_val": len(win_va),
                      "eval": {k: {"answers": len(v), "tokens": sum(len(e["answer"]) for e in v)}
                               for k, v in evals.items()}, "configs": {}}
@@ -592,7 +610,8 @@ def main() -> None:
             share = (deadline - time.time()) / (len(same) - pos)
             head, info = train_head(store, win_tr, win_va, emb, hv, vid, d, args, time.time() + share, label, dev)
             blob = fht.export(head, hv, vocab, args.target,
-                              {"revision": args.revision, "training": info, "vocab_coverage": cover},
+                              {"revision": args.revision, "training": info, "vocab_coverage": cover,
+                               "training_data": data_provenance()},
                               keep_float=False)
             torch.save(blob, out / f"head_{label}.pt")
             w = fht.dequant_head(blob)
@@ -627,6 +646,31 @@ def main() -> None:
         threads[-1].start()
     for t in threads:
         t.join()
+    # earlier heads on the same held-out answers (the acceptance comparison)
+    for ci, path in enumerate(args.compare_heads):
+        label = f"cmp{ci}"
+        try:
+            blob = torch.load(path, map_location="cpu", weights_only=True)
+            vocab = blob["vocab"]
+            vid = torch.full((emb.shape[0],), -1, dtype=torch.long)
+            vid[torch.tensor(vocab)] = torch.arange(len(vocab))
+            w = fht.dequant_head(blob)
+            u = blob["int8"]["u"]["w8"].float() * blob["int8"]["u"]["scale"][:, None]
+            rec = {"file": os.path.basename(path), "d": int(blob["d"]), "vocab": len(vocab)}
+            for name, ev in evals.items():
+                rk, al = eval_ranks(w, emb, u, vid, ev, args.depth, devs[0])
+                plens = [len(e["prompt"]) for e in ev]
+                rec[name] = {**al, **taus(rk, plens)}
+                json.dump({"ranks2d": rk, "answers": [e["answer"] for e in ev], "prompt_lens": plens,
+                           "vocab": len(vocab), "d": int(blob["d"]), "file": rec["file"]},
+                          open(out / f"ranks_{label}_{name}.json", "w"))
+            summary.setdefault("compare", {})[label] = rec
+            log(f"{label} ({rec['file']}): {json.dumps({k: rec[k] for k in ('chat', 'code')})}")
+        except Exception as exc:  # noqa: BLE001
+            import traceback
+
+            traceback.print_exc()
+            summary.setdefault("compare", {})[label] = {"file": path, "error": repr(exc)}
     summary["minutes"] = round((time.time() - T0) / 60, 1)
     json.dump(summary, open(out / "summary.json", "w"), indent=1)
     log("done")

@@ -1,0 +1,272 @@
+{
+ "target": "Qwen/Qwen2.5-0.5B-Instruct",
+ "revision": "7ae557604adf67be50417f59c2c2f167def9a775",
+ "args": {
+  "target": "Qwen/Qwen2.5-0.5B-Instruct",
+  "revision": "7ae557604adf67be50417f59c2c2f167def9a775",
+  "device": "cuda",
+  "dtype": "float16",
+  "n_train": 60000,
+  "mix": [
+   0.75,
+   0.15,
+   0.1
+  ],
+  "n_eval_chat": 200,
+  "n_eval_code": 120,
+  "sample_frac": 0.25,
+  "max_new": 384,
+  "eval_max_new": 256,
+  "max_prompt": 512,
+  "gen_batch": 192,
+  "kv_tokens": 200000,
+  "prefill_tokens": 32768,
+  "max_rows": 8000000,
+  "configs": "256:16384",
+  "epochs": 10,
+  "batch": 1024,
+  "lr": 0.001,
+  "wd": 0.01,
+  "noise": 0.05,
+  "reg": 0.5,
+  "unroll": 3,
+  "depth": 7,
+  "budget_min": 105.0,
+  "gen_share": 0.42,
+  "max_memory": null,
+  "compare_heads": [
+   "/kaggle/input/pgw-head-cmp-tmp/qwen2.5-0.5b-instruct-d256-v16384.pgwhead"
+  ],
+  "out": "/kaggle/working/out"
+ },
+ "data": [
+  {
+   "repo": "HuggingFaceH4/ultrachat_200k",
+   "revision": "8049631c405ae6576f93f445c6b8166f76f5505a",
+   "license": "MIT",
+   "use": "train (train_sft) + held-out chat eval (test_sft)"
+  },
+  {
+   "repo": "OpenAssistant/oasst2",
+   "revision": "179dd21fc55192153d94adb0e0ce8f69e222bf75",
+   "license": "Apache-2.0",
+   "use": "train"
+  },
+  {
+   "repo": "bigcode/self-oss-instruct-sc2-exec-filter-50k",
+   "revision": "356bb069eee815daa6e23e9a282eeefe1490ad44",
+   "license": "ODC-By-1.0",
+   "use": "train (code)"
+  },
+  {
+   "repo": "google-research-datasets/mbpp",
+   "revision": "4bb6404fdc6cacfda99d4ac4205087b89d32030c",
+   "license": "CC-BY-4.0",
+   "use": "held-out code eval only (test split)"
+  }
+ ],
+ "train_rows": 2800386,
+ "train_answers": 9094,
+ "windows_train": 2670468,
+ "windows_val": 93542,
+ "eval": {
+  "chat": {
+   "answers": 179,
+   "tokens": 40880
+  },
+  "code": {
+   "answers": 120,
+   "tokens": 27692
+  }
+ },
+ "configs": {
+  "d256_v16384": {
+   "vocab_coverage_train_labels": 0.9554358124732971,
+   "training": {
+    "history": [
+     {
+      "epoch": 0,
+      "loss": 9.6834,
+      "val_top1_by_depth": [
+       0.3951,
+       0.3346,
+       0.3069
+      ],
+      "steps": 2608,
+      "s": 68.2
+     },
+     {
+      "epoch": 1,
+      "loss": 7.4328,
+      "val_top1_by_depth": [
+       0.4088,
+       0.345,
+       0.3161
+      ],
+      "steps": 2608,
+      "s": 136.2
+     },
+     {
+      "epoch": 2,
+      "loss": 7.1312,
+      "val_top1_by_depth": [
+       0.4168,
+       0.3532,
+       0.3226
+      ],
+      "steps": 2608,
+      "s": 204.0
+     },
+     {
+      "epoch": 3,
+      "loss": 6.9234,
+      "val_top1_by_depth": [
+       0.4268,
+       0.3616,
+       0.3324
+      ],
+      "steps": 2608,
+      "s": 271.7
+     },
+     {
+      "epoch": 4,
+      "loss": 6.7224,
+      "val_top1_by_depth": [
+       0.4338,
+       0.3684,
+       0.3372
+      ],
+      "steps": 2608,
+      "s": 339.7
+     },
+     {
+      "epoch": 5,
+      "loss": 6.5225,
+      "val_top1_by_depth": [
+       0.44,
+       0.3758,
+       0.3487
+      ],
+      "steps": 2608,
+      "s": 408.0
+     },
+     {
+      "epoch": 6,
+      "loss": 6.3307,
+      "val_top1_by_depth": [
+       0.4425,
+       0.3815,
+       0.3545
+      ],
+      "steps": 2608,
+      "s": 476.0
+     },
+     {
+      "epoch": 7,
+      "loss": 6.1637,
+      "val_top1_by_depth": [
+       0.4486,
+       0.3871,
+       0.3621
+      ],
+      "steps": 2608,
+      "s": 544.3
+     },
+     {
+      "epoch": 8,
+      "loss": 6.0349,
+      "val_top1_by_depth": [
+       0.4511,
+       0.391,
+       0.3654
+      ],
+      "steps": 2608,
+      "s": 612.7
+     },
+     {
+      "epoch": 9,
+      "loss": 5.9571,
+      "val_top1_by_depth": [
+       0.4511,
+       0.3916,
+       0.3661
+      ],
+      "steps": 2608,
+      "s": 681.4
+     }
+    ],
+    "best_val_top1_d1": 0.4511449337005615
+   },
+   "file_bytes": 5289977,
+   "weights_per_step": 5144576,
+   "chat": {
+    "alpha_d1": 0.47151175646790006,
+    "positions": 40701,
+    "alpha_by_depth": [
+     0.4715,
+     0.4575,
+     0.4799,
+     0.4965,
+     0.5204,
+     0.5454
+    ],
+    "tau_R2": 1.4527,
+    "tau_R3": 1.6363,
+    "tau_R4": 1.7074
+   },
+   "code": {
+    "alpha_d1": 0.5586827216016248,
+    "positions": 27572,
+    "alpha_by_depth": [
+     0.5587,
+     0.5141,
+     0.5197,
+     0.4811,
+     0.469,
+     0.4283
+    ],
+    "tau_R2": 1.525,
+    "tau_R3": 1.7617,
+    "tau_R4": 1.8684
+   }
+  }
+ },
+ "compare": {
+  "cmp0": {
+   "file": "qwen2.5-0.5b-instruct-d256-v16384.pgwhead",
+   "d": 256,
+   "vocab": 16384,
+   "chat": {
+    "alpha_d1": 0.47745755632539744,
+    "positions": 40701,
+    "alpha_by_depth": [
+     0.4775,
+     0.4623,
+     0.486,
+     0.5012,
+     0.5176,
+     0.5576
+    ],
+    "tau_R2": 1.4556,
+    "tau_R3": 1.6466,
+    "tau_R4": 1.7221
+   },
+   "code": {
+    "alpha_d1": 0.4643841578412883,
+    "positions": 27572,
+    "alpha_by_depth": [
+     0.4644,
+     0.4395,
+     0.4222,
+     0.4007,
+     0.3742,
+     0.4153
+    ],
+    "tau_R2": 1.4326,
+    "tau_R3": 1.6096,
+    "tau_R4": 1.6661
+   }
+  }
+ },
+ "minutes": 56.6
+}
