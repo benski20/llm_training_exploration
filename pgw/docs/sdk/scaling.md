@@ -51,7 +51,9 @@ request, `max_tokens = 512`, a stock that also absorbs 30 s of full-rate demand.
 data and mask setup (not per stream). Cores are physical cores with AVX-512 VNNI or AMX for the factory. Mask CPU
 per slot is the complete figure of the [breakdown](#mask-cost-per-slot-by-component) (factory 10.6 / 33.5 / 103 /
 157 ms; gateway cores include 1.25 / 3.7 / 11 / 16 ms per slot of mask opening and retirement on the gateway's
-helper threads). "Stock writes" is the disk write bandwidth of the factory at that rate.
+helper threads). These figures predate the switch of the store's AES-GCM to AWS-LC (same day), which cuts the
+writer by about 35-45 % and the open by about 45 % ([below](#the-stores-aes-256-gcm-writer-open-retirement)); the
+table is not recomputed: the factory total falls by about 5 %, the gateway's open + retirement by about a third. "Stock writes" is the disk write bandwidth of the factory at that rate.
 
 | model | N | tok/s each | mask slots/s | factory cores | gateway procs | gateway cores | cores total | RAM GB | mask stock GB (entitled / overcommit) | stock writes GB/s | cache GB |
 |---|---|---|---|---|---|---|---|---|---|---|---|
@@ -105,12 +107,13 @@ on a shared 4-vCPU AMX box under load (4-19):
 | every-row 40-bit self-check (14 private vectors) | 1.97 -> **0.85** | 8.0 -> **3.1** | 25.4 -> **10.0** | 38.1 -> **15.4** |
 | segment check vectors `u W8 mod p` (per segment / 1024) | 2.43 -> **0.15** | 37.9 -> **1.2** | 172 -> **4.8** | 383 -> **9.6** |
 | private `v W8` redrawn per segment (cache overflow) | 0 | 0 | 0 | 6.6 -> **0** |
-| writer: pack + AES-256-GCM + pwrite + fsync | 2.38 -> 1.89 | 6.1 | 19.1 | 27.6 |
+| writer: pack + AES-256-GCM + pwrite + fsync (AWS-LC AES-GCM, below: -> **after**) | 2.38 -> 1.89 -> **1.19** | 6.1 -> **4.0** | 19.1 -> **11.8** | 27.6 -> **16.7** |
 | **factory total, this box** | **17.3 -> 13.0** | **90 -> 46** | **347 -> 155** | **652 -> 236** |
 | factory total, scaled to the earlier audit's box | 14.2 -> 10.6 | 66 -> 33.5 | 231 -> 103 | 433 -> 157 |
 | (earlier documented figure: r, upload, keys, decryption, no head) | 7.2 | 24.9 | 80 | 121 |
-| gateway: AES-GCM open + unpack of the slot's rows | 1.04 -> 1.05 | 3.6 | 11.9 | 16.5 |
+| gateway: AES-GCM open + unpack of the slot's rows (AWS-LC: -> **after**) | 1.04 -> 1.05 -> **0.55** | 3.6 -> **1.9** | 11.9 -> **5.9** | 16.5 -> **8.9** |
 | gateway: retirement (crypto-erase, zero-fill, unlink) | 0.70 -> 0.48 | 1.5 | 4.9 | 6.9 |
+| (retirement with `shred_zero_fill=False`: crypto-erase + unlink) | 0.15 | 0.45 | 1.3 | 2.0 |
 | private `v W8` at factory worker start (s, once) | 0.3 | 4.2 | 18.9 | 42.3 |
 | bytes per slot (MB) | 1.82 | 6.17 | 19.2 | 28.1 |
 
@@ -156,13 +159,59 @@ Not changed, with the reason:
   would save, at 500-token prompts and 256 generated tokens, 22 / 6.5 / 2 / 1.4 % of the stock's bytes and
   11 / 3 / 1 / 0.7 % of the factory CPU (0.5B / 7B / 32B / 72B). Single use and secrecy are unaffected (separate segments, same derivation),
   but it changes the store's reservations and the gateway: a decision, not done here.
-* **AES-GCM speed:** the native writer and reader use RustCrypto AES-GCM (VAES AES, 128-bit PCLMUL GHASH):
-  about 1.2 GB/s here against 7.4 GB/s for OpenSSL on the same core. `ring`'s VAES/VPCLMUL path would cut the
-  writer and the gateway's open about 4x (7B: 9.7 -> ~2.5 ms per slot), but it does not wipe its key schedule
-  on drop, which the writer guarantees today: a decision.
 * The HE kernels themselves (upload, reply keys, decryption: hand-written AVX-512 IFMA, earlier audit) and the
   `r` keystream (normative SPEC 7.3 derivation, 8 keystream bytes per element) are unchanged; they are now 70-80 %
   of the total.
+
+### The store's AES-256-GCM (writer, open, retirement)
+
+Since 2026-11-26 the native segment writer (`pgw_fast.seal_chunks` / `seal_ring_chunks`) and the gateway's
+chunk open (`chunk_open_into`) use AWS-LC's AES-256-GCM (`aws-lc-rs`, statically linked) instead of RustCrypto
+`aes-gcm` 0.11. Same at-rest bytes, same nonces (`prefix || u64be(index)`) and AAD, same store contents.
+Measured with `benchmarks/maskstore_aead_bench.py` (the store rows of the breakdown, same calls and shapes;
+best of two interleaved runs on this shared 4-vCPU box, load 3-8):
+
+| ms per slot | 0.5B | 7B | 32B | 72B |
+|---|---|---|---|---|
+| writer (range check + pack + AES-GCM + pwrite + fsync), RustCrypto -> AWS-LC | 1.79 -> 1.19 | 6.14 -> 4.00 | 18.8 -> 11.8 | 29.4 -> 16.7 |
+| gateway open + unpack | 1.05 -> 0.55 | 3.52 -> 1.88 | 10.8 -> 5.92 | 16.4 -> 8.89 |
+| gateway open + unpack + retirement (default zero-fill) | 1.69 -> 1.04 | 5.24 -> 3.45 | 15.4 -> 10.8 | 24.4 -> 15.6 |
+| retirement, default / `shred_zero_fill=False` (no AES; best of all four runs) | 0.48 / 0.15 | 1.57 / 0.45 | 4.6 / 1.3 | 6.7 / 2.0 |
+
+* **Why RustCrypto was slow.** Not a configuration problem: `aes` 0.9 already picks its VAES AVX-512 backend
+  and `polyval` 0.7 its PCLMULQDQ backend at run time (`cpufeatures`; no `RUSTFLAGS` or `.cargo/config` in the
+  build, and `-C target-cpu=native` does not help: 2.0 GB/s). `aes-gcm` runs CTR and GHASH as two separate
+  passes over the chunk, CTR through the generic `ctr` crate (5.5 GB/s) and GHASH as POLYVAL with a byte
+  reversal per block, four 128-bit carry-less multiplies at a time (6 GB/s): 2.8 GB/s for the AEAD on an idle
+  core, the 1.2 GB/s quoted before under load. Chunks are already ~1 MiB, so per-call overhead is nil (64 KiB
+  chunks: the same rate). AWS-LC (like OpenSSL) runs one stitched pass with VAES and VPCLMULQDQ on 512-bit
+  registers.
+* **Options measured** (one core, 1 MiB chunks, seal / open): RustCrypto aes-gcm 0.11 2.8 / 2.5 GB/s;
+  **AWS-LC (aws-lc-rs 1.19) 13.8 / 12.9**; OpenSSL 3.0 via the `openssl` crate 12.3 (seal); graviola 0.4
+  (pure Rust + assembly, zeroizes) 9.8 / 8.4; `ring` excluded (no key-schedule wipe). AWS-LC is the fastest and
+  wipes its key schedule on drop: the round keys and GHASH table live in the `EVP_AEAD_CTX` that
+  `EVP_AEAD_CTX_free` releases with `OPENSSL_free`, which `OPENSSL_cleanse`s the whole allocation (references and
+  tests in `rust/pgw-fast/src/writer.rs`). OpenSSL would need a vendored libcrypto in the wheel (or an
+  auditwheel-bundled `.so`); graviola panics on CPUs without ADX / AVX2 and is 30 % slower.
+* **Where the writer's time goes now** (7B, one `gate_up` linear, 155 MB of `W r`, one thread): packing the
+  uint32 rows into the chunk buffer plus AES-GCM 29 ms (5.4 GB/s; the AEAD alone is about 12 ms of it), the
+  `pwrite` into the page cache 30-48 ms (3-5 GB/s: the kernel's copy, into freshly allocated pages for a new
+  file), the range check 0: it cannot fail for the uint32 / int32 form at K = 32 (the pks-v3 compact output) and
+  is now skipped there (`ALWAYS_IN_RANGE_FROM_K`; it was a separate 24 ms pass over the array; every other
+  type / K is still checked in full). So the writer is now bound by memory copies and the page cache, not the
+  cipher. The fsync (one per segment, at publish, plus the directory's) costs the factory almost no CPU (the
+  writeback runs in the kernel's flusher threads: `seal` and `seal_nofsync` agree within noise), but doubles the
+  segment's wall time (7B linear: 132 -> 268 ms); it is what makes a published segment durable before its cursor
+  is used, so it stays. `O_DIRECT` would skip the page-cache copy but needs 4 KiB-aligned chunk offsets and
+  lengths: a format change, not done. Several writer threads per call cost more CPU than one (111 vs 94 ms for
+  that linear) for less wall time (132 vs 126 ms on this 4-vCPU box shared with other jobs; more on an idle
+  one); the default (`PGW_WRITER_THREADS=0`: one per MiB, at most the CPU count and 8) is unchanged.
+* **Retirement** is the crypto-erase (64 KiB of random bytes over the header that holds the wrapped DEK, fsync),
+  then, with `shred_zero_fill` (default on), zeros over the whole body and a second fsync, then truncate and
+  unlink: the zero-fill is 70 % of the retirement CPU (6.7 vs 2.0 ms per slot at 72B) and doubles the disk writes.
+  The masks are deleted by the crypto-erase; the zero-fill only helps on disks that overwrite in place (not SSDs,
+  not copy-on-write filesystems), so the default stays on (the conservative choice for spinning disks) and the
+  guide's advice stays: turn it off on SSDs (`PGW_MASKSTORE_SHRED_ZERO_FILL=false`).
 
 ## Settings for many streams
 
