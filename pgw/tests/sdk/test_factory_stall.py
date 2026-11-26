@@ -273,7 +273,8 @@ def test_a_wedged_provider_maskgen_fails_waiting_requests_fast(rig: Rig, want: s
                 assert time.monotonic() - t1 < 60
                 time.sleep(0.5)
         print(f"wedged provider maskgen: served again {time.monotonic() - t1:.1f}s after the items finished")
-        assert not _factory(c)["health"].get("stalled")
+        # health is refreshed on the watch loop's next tick after the segment lands, not with the answer itself
+        assert _wait(lambda: not _factory(c)["health"].get("stalled"), 30)
     finally:
         hang.unlink(missing_ok=True)
         c.close()
