@@ -738,6 +738,26 @@ class GatewaySettings(PGWSettings):
         description="mask_reservation='incremental': slots per chunk (a public constant; mask_window_tokens is not "
         "used then). Keep it >= 2 x the rows of a decode pass (spec_rows)",
     )
+    mask_ledger_dir: Path | None = Field(
+        None,
+        description="mask_reservation='incremental' with several gateway processes over one mask store: a directory "
+        "(local disk, next to the store) where each process publishes its live requests' outstanding entitlement, "
+        "and admission counts every process's (cross-process lock). Unset: the ledger is per process (correct when "
+        "one process reserves from the store). Admission only: single use is enforced by the store either way",
+    )
+    mask_admission: Literal["entitled", "overcommit"] = Field(
+        "entitled",
+        description="mask_reservation='incremental': 'entitled' (default) admits a request only when the stock covers "
+        "every live request's whole remaining prompt + max_tokens (no extension ever waits; needs a stock of about "
+        "N x (prompt + max_tokens) slots for N concurrent requests). 'overcommit' admits when the stock covers the "
+        "request's first part and one chunk for every live request; an extension that finds the stock short waits "
+        "for the mask factory (up to mask_extension_wait_s, then fails closed as before), so under a burst every "
+        "answer slows to the factory's rate instead of new requests queueing. Single use is unchanged either way",
+    )
+    mask_extension_wait_s: float = Field(
+        30.0, ge=0, le=3600,
+        description="mask_admission='overcommit': how long an extension waits for the factory before failing closed",
+    )
     mask_burn_weight: float = Field(
         1.0,
         ge=0,

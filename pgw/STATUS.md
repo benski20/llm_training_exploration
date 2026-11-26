@@ -2078,3 +2078,53 @@ Question: can the client avoid keeping `W8` on disk (6.5 / 31 / 70 GB) without w
   source. This is the client-disk note's lever 1; it is a factory decision.
 - No candidate passed "no loss", so no prototype was written. The default is unchanged. If disk forces it, the
   recommendation is C; B only as an explicit, documented opt-in with rotation and external review.
+
+
+## 2026-11-26: client library at many concurrent streams and worker processes (scaling)
+
+Scope: `from pgw import OpenAI` with N = 1-64 concurrent streams per machine and several worker processes per
+machine; CPU here (shared 4-vCPU box, provider on the same CPU, load 4-28 from other jobs). Guide and sizing table:
+`docs/sdk/scaling.md`; tools: `benchmarks/sdk_concurrency_bench.py` (N streams, `--procs`, bit-identity check,
+CPU by thread, lane counters), `benchmarks/sdk_scale_sizing.py` (cores / RAM / disk per model and N).
+
+- **Measured** (every answer bit-identical to the same request alone, 0 errors): tiny 1/4/16/64 streams 45/98/173/211
+  tok/s total, client CPU 6.5 -> 2.4 ms/token (batching amortises the per-trip part), rows per trip 2.2 -> 75;
+  4 worker processes at 64 streams 296 tok/s. 0.5B 1/4/8 streams 2.1/4.4/4.9 tok/s: the CPU provider saturates
+  (268 -> 114 ms provider CPU per token), the client's plaintext thread is 20-27 % busy.
+- **Bottlenecks, ranked** (7B-72B extrapolated, H100 provider): (1) mask production: one slot per generated and
+  per uncached prompt token, 25 / 80 / 121 ms of client CPU per slot at 7B / 32B / 72B, no batching gain: 16 streams
+  at 7B need ~20 factory cores; (2) mask stock admission: a request starts only when the stock covers every running
+  request's prompt + max_tokens: the default `mask_store_gb = 8` admits about one 500 + 512-token request at a time
+  at 7B (6.2 MB per slot) and none at 32B/72B (19 / 28 MB per slot); (3) the trip lane serves one item per call:
+  with two answers in one step every decode trip falls back to the WebSocket stream channel (tiny: 280/312 lane
+  trips at N=1, 1/345 at N=4; per trip 0.22 vs 0.35 ms idle, 0.28 vs 2.2 ms with busy Python threads; not changed
+  here: hot-path / lane owners); (4) the gateway's plaintext thread (GIL, one core per process): ~4-5 streams per
+  process at 7B-72B decode speeds; (5) provider batching: not a client limit. KV: float32, 115 / 524 / 655 KB per
+  token at 7B / 32B / 72B; the prefix cache (1 GiB default) saves masks and the prompt pass on multi-turn chats but
+  needs the gateway's own head (`prefix_cache=True`).
+- **Multi-process (gunicorn)**: workers with one key and cache dir already shared one store (cursor moves in
+  `BEGIN IMMEDIATE` + fsync under an `flock`: single use holds across processes) and one factory (owner lock), but
+  each had its own in-memory entitlement ledger, so one worker could admit a request on stock promised to another
+  worker's running answer, whose extension then failed mid-answer (reproduced: 1 failed session in the stress
+  layout without the shared ledger). Fix: `SharedLedger` (`mask_ledger_dir`; per-process outstanding-entitlement
+  files, admission under a cross-process `flock`, dead processes pruned; published values are upper bounds, so it
+  is conservative), on in the SDK, off for `pgw gateway` unless set. Recommended pattern: one client per worker
+  created after the fork, one factory per machine (no separate mask daemon needed).
+- **Bursts**: requests waiting for masks are now served FIFO (only the head polls; a large request is no longer
+  starved by smaller later ones); a request that can never fit the stock fails at once (`BadRequestError` naming
+  `mask_store_gb`); `mask_admission="overcommit"` (opt-in, `PGW_MASK_ADMISSION`): admit on prompt + one chunk per
+  running answer, extensions wait for the factory (`mask_extension_wait_s`, 30 s) then fail closed. 64 tiny streams
+  on a 512-slot stock: all served bit-identical, TTFT p95 14.3 s (entitled) / 11.6 s (overcommit).
+- **Fairness**: admission FIFO across users, one token per running answer per step; `user` keys the prefix cache
+  and the strict-speculation ordering only; no per-user quota in the client (documented). Provider side:
+  per-tenant `tenant_max_inflight` / `tenant_rows_per_s`, global `max_inflight_requests`; refusals carry
+  Retry-After and the client retries.
+- Tests: `tests/maskstore/test_scale_stress.py` (4 processes x 4 threads of incremental sessions with ahead
+  extensions, background retirement, gc and a concurrent factory: no slot or mask row twice, consumed total exact,
+  no mid-answer failure; ledger unit test), `tests/sdk/test_e2e_scale.py` (bursts larger than the stock with both
+  admissions, 3 worker processes x 3 threads: bit-identical, no slot reserved twice in the store's records),
+  `tests/sdk/test_unit.py` (FIFO order, never-fits). tests/sdk 108 passed + 1 opt-in skip;
+  tests/gateway/test_incremental_masks.py + test_masked.py 35 passed; tests/maskstore: 245
+  passed; 2 failures not from this change (`test_ringbuf` / `test_ringshm` crash children: `tests/platform` shadows
+  the stdlib `platform` module on their path). Open: multi-item (or parallel single-item) lane calls, a shared
+  system-prompt prefix across conversations (needs a privacy review), per-user quotas.

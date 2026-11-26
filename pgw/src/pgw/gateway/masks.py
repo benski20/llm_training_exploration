@@ -26,9 +26,16 @@ on-demand extensions do not run short in normal operation (and fail closed if th
 
 from __future__ import annotations
 
+import contextlib
+import errno
+import fcntl
+import json
 import logging
+import os
 import threading
+import time
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 import torch
@@ -43,7 +50,7 @@ def _decrypt_ahead() -> bool:
 
     return bool(store.TRIP_DECRYPT_AHEAD)
 
-__all__ = ["EntitlementLedger", "WindowedReservation", "chunk_entitlement"]
+__all__ = ["EntitlementLedger", "SharedLedger", "WindowedReservation", "chunk_entitlement"]
 
 
 def chunk_entitlement(first: int, cap: int, chunk: int) -> int:
@@ -86,6 +93,112 @@ def _close_quietly(part: Any) -> None:
         log.exception("closing an exhausted mask reservation part failed")
 
 
+def _proc_start(pid: int) -> str:
+    """A process's start time (``/proc/<pid>/stat`` field 22; ``""`` where unavailable): tells a reused pid apart."""
+    try:
+        with open(f"/proc/{int(pid)}/stat", encoding="ascii") as fh:
+            return fh.read().rsplit(")", 1)[1].split()[19]
+    except (OSError, IndexError, ValueError):
+        return ""
+
+
+def _pid_alive(pid: int) -> bool:
+    try:
+        os.kill(int(pid), 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+class SharedLedger:
+    """The entitlement ledgers of several processes over one mask store (``mask_ledger_dir``).
+
+    Every process that reserves from the store for one ``(fingerprint, ring)`` publishes its live sessions'
+    outstanding entitlement in its own file (``<dir>/<pid>-<start time>.json``, atomic rename). An admission sums
+    the other live processes' files under an exclusive ``flock`` on ``<dir>/.lock`` that it holds across "check the
+    stock, reserve the first part, publish", so two processes never both count the same stock. A process's published
+    value rises only under that lock (at an admission) and falls at any time (sessions closing): a value read between
+    two publications is an upper bound, so admission is conservative, never optimistic. Files of dead processes are
+    ignored and removed. Single use of masks does not depend on this (the store's durable cursors enforce it); the
+    ledger only keeps a running answer's extensions from finding its stock promised to another process's requests.
+    """
+
+    def __init__(self, directory: str | Path, timeout_s: float = 60.0):
+        self.dir = Path(directory)
+        self.dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+        self.timeout_s = float(timeout_s)
+        pid = os.getpid()
+        self.own = self.dir / f"{pid}-{_proc_start(pid) or 'x'}.json"
+        self._fd: int | None = None
+        self._mu = threading.Lock()  # one publication at a time in this process
+
+    def acquire(self) -> None:
+        """Take the cross-process admission lock (blocking, bounded by ``timeout_s``)."""
+        fd = os.open(self.dir / ".lock", os.O_RDWR | os.O_CREAT | getattr(os, "O_CLOEXEC", 0), 0o600)
+        deadline = time.monotonic() + self.timeout_s
+        delay = 0.0005
+        while True:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                self._fd = fd
+                return
+            except OSError as exc:
+                if exc.errno not in (errno.EWOULDBLOCK, errno.EAGAIN, errno.EACCES):
+                    os.close(fd)
+                    raise
+            if time.monotonic() >= deadline:
+                os.close(fd)
+                raise MaskExhaustedError("timed out waiting for the shared mask admission lock")
+            time.sleep(delay)
+            delay = min(2 * delay, 0.02)
+
+    def release(self) -> None:
+        """Release :meth:`acquire` (from any thread of this process)."""
+        fd, self._fd = self._fd, None
+        if fd is not None:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_UN)
+            finally:
+                os.close(fd)
+
+    def others(self) -> int:
+        """Outstanding slots the other live processes published (files of dead processes are removed)."""
+        total = 0
+        for f in self.dir.glob("*.json"):
+            if f == self.own:
+                continue
+            try:
+                pid_s, start = f.stem.split("-", 1)
+                pid = int(pid_s)
+            except ValueError:
+                continue
+            if not _pid_alive(pid) or (start != "x" and _proc_start(pid) not in ("", start)):
+                with contextlib.suppress(OSError):
+                    f.unlink()
+                continue
+            with contextlib.suppress(OSError, ValueError, KeyError, TypeError):
+                total += max(0, int(json.loads(f.read_text(encoding="utf-8"))["outstanding"]))
+        return total
+
+    def publish(self, outstanding: int) -> None:
+        """Write this process's outstanding entitlement (atomic replace)."""
+        with self._mu:
+            tmp = self.own.with_suffix(".tmp")
+            fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_CLOEXEC", 0), 0o600)
+            try:
+                os.write(fd, json.dumps({"outstanding": int(outstanding)}).encode())
+            finally:
+                os.close(fd)
+            os.replace(tmp, self.own)
+
+    def close(self) -> None:
+        """Remove this process's file (its sessions are gone)."""
+        with contextlib.suppress(OSError):
+            self.own.unlink()
+
+
 class EntitlementLedger:
     """Admission for incremental reservations (one per model runtime, i.e. per fingerprint and ring).
 
@@ -98,14 +211,19 @@ class EntitlementLedger:
     extension fail: that fails closed (:class:`MaskExhaustedError`, nothing taken; the answer ends with an
     error and its reservation is burned).
 
-    The ledger lives in gateway memory only: a crash loses entitlements, never consumed slots.
+    The ledger lives in gateway memory only: a crash loses entitlements, never consumed slots. With ``shared``
+    (several processes reserving from one store, :class:`SharedLedger`), the other processes' published entitlements
+    count too.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, shared: SharedLedger | None = None) -> None:
         import weakref
 
         self._live: weakref.WeakSet[WindowedReservation] = weakref.WeakSet()
         self.refused = 0
+        self.shared = shared
+        #: ``mask_admission = "overcommit"``: a live session is promised at most this many slots (its next chunk)
+        self.per_session_cap: int | None = None
 
     def outstanding(self) -> int:
         """Slots live sessions may still reserve."""
@@ -114,18 +232,36 @@ class EntitlementLedger:
             if w.closed:
                 self._live.discard(w)
                 continue
-            total += w.outstanding
+            n = w.outstanding
+            total += n if self.per_session_cap is None else min(n, self.per_session_cap)
         return total
 
+    def outstanding_all(self) -> int:
+        """Slots live sessions of this process and (``shared``) of the other processes may still reserve."""
+        return self.outstanding() + (self.shared.others() if self.shared is not None else 0)
+
     def admit(self, available: int, entitled: int) -> bool:
-        """True when ``available`` slots cover the live sessions' outstanding entitlement plus ``entitled``."""
-        ok = int(available) - self.outstanding() >= int(entitled)
+        """True when ``available`` slots cover the live sessions' outstanding entitlement plus ``entitled``
+        (with ``shared``: call it while holding :meth:`SharedLedger.acquire`)."""
+        ok = int(available) - self.outstanding_all() >= int(entitled)
         if not ok:
             self.refused += 1
         return ok
 
     def add(self, w: WindowedReservation) -> None:
         self._live.add(w)
+        if self.shared is not None:
+            w._on_close = self.publish
+            self.publish()
+
+    def publish(self) -> None:
+        """Publish this process's outstanding entitlement (``shared`` only)."""
+        if self.shared is None:
+            return
+        try:
+            self.shared.publish(self.outstanding())
+        except OSError:  # pragma: no cover - a stale (higher) value only makes the others more conservative
+            log.warning("could not publish the mask entitlement ledger", exc_info=True)
 
     def __len__(self) -> int:
         return sum(1 for w in list(self._live) if not w.closed)
@@ -193,6 +329,8 @@ class WindowedReservation:
         self.chunked = bool(chunked)
         #: chunked mode: background closes of retired parts (joined by :meth:`close`)
         self._retiring: list[Any] = []
+        #: called after :meth:`close` (the shared entitlement ledger's publication)
+        self._on_close: Callable[[], None] | None = None
 
     def __repr__(self) -> str:
         return f"WindowedReservation(parts={len(self._parts)}, slots={self.slots}, cap={self.cap})"
@@ -543,6 +681,12 @@ class WindowedReservation:
                 p.close()
             except Exception as exc:  # close the others regardless
                 errors.append(exc)
+        cb = self._on_close
+        if cb is not None:  # the shared ledger's publication (this session's entitlement is now 0)
+            try:
+                cb()
+            except Exception:  # pragma: no cover - defensive
+                log.exception("mask ledger publication after close failed")
         if errors:
             raise errors[0]
 

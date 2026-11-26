@@ -47,6 +47,7 @@ from pgw.sdk import types as T
 from pgw.sdk.cache import CacheLayout, ensure_private_dir, file_lock
 from pgw.sdk.errors import (
     APITimeoutError,
+    BadRequestError,
     IntegrityError,
     NotFoundError,
     NotReadyError,
@@ -136,6 +137,8 @@ class ModelHandle:
     last_verified_at: float | None = None
     last_integrity_failure_at: float | None = None
     started_at: float | None = None
+    #: requests waiting for masks, in arrival order (the head polls the stock; see ``Engine._open``)
+    mask_waiters: list[asyncio.Event] = field(default_factory=list)
 
     def public(self) -> dict[str, Any]:
         """Status view (no secrets, no content)."""
@@ -143,6 +146,7 @@ class ModelHandle:
                                "masked_head": self.masked_head, "ring": self.ring, "requests": self.requests,
                                "verified_requests": self.verified_requests,
                                "integrity_failures": self.integrity_failures,
+                               "requests_waiting_for_masks": len(self.mask_waiters),
                                "last_integrity_check_ok_at": self.last_verified_at,
                                "last_integrity_failure_at": self.last_integrity_failure_at}
         p = self.provisioned
@@ -285,6 +289,10 @@ class Engine:
             allow_dev_modes=False, allow_anonymous=False, audit_log_file=None,
             noise_monitor=True, noise_monitor_fail_closed=True, egress_allowlist=egress, require_service_tls=True,
             prime_check=self._prime_check(), pack_verify="full", mask_reservation="incremental", mask_chunk_slots=8,
+            # processes with the same key and cache directory share the mask store: admission counts every
+            # process's promised masks, so a running answer's extensions never find its stock taken by another
+            mask_ledger_dir=self.layout.session_dir(self.key.key_id_hex) / "mask-ledger",
+            mask_admission=self.options.mask_admission,
             default_max_tokens=512, max_tokens_limit=32768, maskstore_gc_interval_s=0,
             dashboard_enabled=False, console_enabled=False, setup_mode=False,
             config_dir=self.layout.session_dir(self.key.key_id_hex),
@@ -628,35 +636,91 @@ class Engine:
         7B), when the request waits up to ``setup_deadline`` (the start-up budget ``ready_timeout_s``)."""
         mask_deadline = min(deadline, time.monotonic() + self.options.mask_wait_s)
         delay = 0.1
-        while True:
-            try:
-                sess = (await rt.open_sessions([ids], params, request_id=rid, prefix_key=prefix_key,
-                                               conversation=conversation))[0]
-                h.masks_seen = True
-                return sess
-            except MaskExhaustedError as exc:
-                fac = h.factory
-                broken = fac is not None and fac.owner and fac.failures >= 3 and fac.last_error
-                first_fill = (fac is not None and not broken and not h.masks_seen and setup_deadline is not None
-                              and not fac.state().get("halted"))
-                limit = max(mask_deadline, setup_deadline) if first_fill and setup_deadline else mask_deadline
-                if broken or time.monotonic() + delay > limit:
-                    why = f"; the mask factory is failing: {fac.last_error}" if broken and fac is not None else (
-                        "" if self.options.factory else "; the background mask factory is off (factory=False)")
-                    if first_fill:
-                        why += "; the one-time mask setup of this model is still running (see pgw sdk status)"
-                    raise NotReadyError(f"no masks in stock for model {h.name!r} after waiting{why}",
-                                        code=str(exc.code), request_id=rid) from exc
-            except BreakerOpenError as exc:  # blocked after an integrity failure: hard error, never waited out
-                raise IntegrityError(f"model {h.name!r} is blocked after an integrity failure of the provider "
-                                     f"({exc.message}); call reset_integrity_breaker() after investigating",
-                                     request_id=rid) from exc
-            except ServiceUnavailableError as exc:
-                retry = exc.details.get("retry_after_s") is not None or rt.state == "connecting"
-                if not retry or time.monotonic() + delay > deadline:
-                    raise
-            await asyncio.sleep(delay)
-            delay = min(1.0, delay * 1.5)
+        # Requests waiting for masks are served in arrival order (FIFO): once one waits, later requests queue behind
+        # it instead of trying first, so a large request is never starved by a stream of smaller ones that each fit
+        # the stock left. Only the head of the queue polls the stock.
+        ticket: asyncio.Event | None = None
+        waiters = h.mask_waiters
+        try:
+            while True:
+                if ticket is None and waiters:
+                    ticket = asyncio.Event()
+                    waiters.append(ticket)
+                if ticket is not None and waiters and waiters[0] is not ticket:
+                    left = self._mask_limit(h, mask_deadline, setup_deadline) - time.monotonic()
+                    try:
+                        await asyncio.wait_for(ticket.wait(), timeout=max(0.0, left))
+                    except TimeoutError as exc:
+                        raise NotReadyError(f"no masks in stock for model {h.name!r} after waiting (queued behind "
+                                            f"{waiters.index(ticket)} earlier request(s) waiting for masks)",
+                                            code=str(ErrorCode.MASK_EXHAUSTED), request_id=rid) from exc
+                    ticket.clear()
+                    continue
+                try:
+                    sess = (await rt.open_sessions([ids], params, request_id=rid, prefix_key=prefix_key,
+                                                   conversation=conversation))[0]
+                    h.masks_seen = True
+                    return sess
+                except MaskExhaustedError as exc:
+                    self._never_fits(h, exc, rid)
+                    if ticket is None:
+                        ticket = asyncio.Event()
+                        waiters.append(ticket)
+                    fac = h.factory
+                    broken = fac is not None and fac.owner and fac.failures >= 3 and fac.last_error
+                    first_fill = self._first_fill(h, setup_deadline)
+                    limit = self._mask_limit(h, mask_deadline, setup_deadline)
+                    if broken or time.monotonic() + delay > limit:
+                        why = f"; the mask factory is failing: {fac.last_error}" if broken and fac is not None else (
+                            "" if self.options.factory else "; the background mask factory is off (factory=False)")
+                        if first_fill:
+                            why += "; the one-time mask setup of this model is still running (see pgw sdk status)"
+                        raise NotReadyError(f"no masks in stock for model {h.name!r} after waiting{why}",
+                                            code=str(exc.code), request_id=rid) from exc
+                except BreakerOpenError as exc:  # blocked after an integrity failure: hard error, never waited out
+                    raise IntegrityError(f"model {h.name!r} is blocked after an integrity failure of the provider "
+                                         f"({exc.message}); call reset_integrity_breaker() after investigating",
+                                         request_id=rid) from exc
+                except ServiceUnavailableError as exc:
+                    retry = exc.details.get("retry_after_s") is not None or rt.state == "connecting"
+                    if not retry or time.monotonic() + delay > deadline:
+                        raise
+                await asyncio.sleep(delay)
+                delay = min(1.0, delay * 1.5)
+        finally:
+            if ticket is not None:
+                head = bool(waiters) and waiters[0] is ticket
+                with contextlib.suppress(ValueError):
+                    waiters.remove(ticket)
+                if head and waiters:
+                    waiters[0].set()  # the next request in line tries now
+
+    def _first_fill(self, h: ModelHandle, setup_deadline: float | None) -> bool:
+        """The model's first fill on this host (no mask seen yet, the factory running and healthy)."""
+        fac = h.factory
+        broken = fac is not None and fac.owner and fac.failures >= 3 and fac.last_error
+        return bool(fac is not None and not broken and not h.masks_seen and setup_deadline is not None
+                    and not fac.state().get("halted"))
+
+    def _mask_limit(self, h: ModelHandle, mask_deadline: float, setup_deadline: float | None) -> float:
+        if setup_deadline is not None and self._first_fill(h, setup_deadline):
+            return max(mask_deadline, setup_deadline)
+        return mask_deadline
+
+    def _never_fits(self, h: ModelHandle, exc: MaskExhaustedError, rid: str) -> None:
+        """Fail at once (no wait) when the request is entitled to more mask slots than this client's stock can ever
+        hold (the factory's target plus one segment): waiting could not help."""
+        fac = h.factory
+        entitled = exc.details.get("entitled") if isinstance(exc.details, dict) else None
+        if fac is None or not isinstance(entitled, int):
+            return
+        cap = int(fac.plan.target_slots) + int(fac.plan.segment_slots)
+        if entitled > cap:
+            raise BadRequestError(
+                f"this request may use up to {entitled} mask slots (prompt + max_tokens), more than the {cap} the "
+                f"mask stock of model {h.name!r} can hold; lower max_tokens or raise mask_store_gb "
+                "(docs/sdk/scaling.md)", code=str(exc.code), request_id=rid,
+                details={"entitled": entitled, "stock_capacity": cap}) from exc
 
     def _budget(self, timeout_s: float | None) -> float:
         """Whole-request budget: an explicit per-request ``timeout`` bounds everything (waiting for a model that is

@@ -3,6 +3,14 @@
 All notable changes to the PGW client library (`pgw-sdk`). Versions follow semantic versioning; while the
 major version is 0, minor versions may change interfaces, and such changes are listed here.
 
+## Unreleased
+
+* Worker processes with the same key and cache directory now share one admission ledger for the mask stock, so a
+  request admitted in one worker never takes the masks a running answer of another worker needs.
+* Requests waiting for masks are served in arrival order; a request that can never fit the stock fails at once.
+* `mask_admission="overcommit"` (opt-in, `PGW_MASK_ADMISSION`).
+* New page: [Scaling](scaling.md) (sizing per model and concurrency, worker processes, fairness).
+
 ## 0.1.0 (2026-11-25): pilot release
 
 First release of the client library for pilot customers.

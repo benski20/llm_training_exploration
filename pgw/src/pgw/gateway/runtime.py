@@ -1392,6 +1392,8 @@ class ModelRuntime:
             if not idle:
                 log.warning("model %s: %d sessions still active after drain timeout; cancelling",
                             self.name, self.admission.active)
+            if self.mask_ledger.shared is not None and idle:
+                self.mask_ledger.shared.close()  # nothing of this process is outstanding any more
             if self.generator is not None:
                 await self.generator.aclose()
             for s in list(self._sessions):
@@ -1654,29 +1656,64 @@ class ModelRuntime:
         # whether a background store transaction happens near the end does not depend on max_tokens either
         entitled = chunk_entitlement(first, cap, chunk) + chunk
         async with self._ledger_lock:
-            avail = await asyncio.to_thread(self._available_slots)
-            if not self.mask_ledger.admit(avail, entitled):
-                held = self.mask_ledger.outstanding()
-                raise MaskExhaustedError(
-                    f"not enough mask slots for this request: it can use up to {need} ({rows0} prompt rows + the "
-                    f"decode budget), {avail} are available and {held} are promised to running requests. Lower "
-                    "max_tokens, or retry when the mask factory has added more (the Masks page shows the stock)",
-                    details={"needed": need, "available": avail, "promised": held, "model": self.name},
-                )
-            res = await _reserve_shielded(self.mask_store, self.fingerprint, self.ring, first, rid,
-                                          **self._reserve_kw())
-            store, fp, ring = self.mask_store, self.fingerprint, self.ring
-            reserve_ext = None if self.fused2 else getattr(store, "reserve_extension", None)
-            kw = self._reserve_kw()
+            shared = self._shared_ledger()
+            if shared is not None:  # several processes over one store: hold the cross-process admission lock
+                await _acquire_shielded(shared)
+            try:
+                avail = await asyncio.to_thread(self._available_slots)
+                # overcommit: each live request is promised only its next chunk (extensions wait for the factory)
+                over = getattr(self.settings, "mask_admission", "entitled") == "overcommit"
+                self.mask_ledger.per_session_cap = chunk if over else None
+                if not self.mask_ledger.admit(avail, first + chunk if over else entitled):
+                    held = await asyncio.to_thread(self.mask_ledger.outstanding_all)
+                    raise MaskExhaustedError(
+                        f"not enough mask slots for this request: it can use up to {need} ({rows0} prompt rows + the "
+                        f"decode budget), {avail} are available and {held} are promised to running requests. Lower "
+                        "max_tokens, or retry when the mask factory has added more (the Masks page shows the stock)",
+                        details={"needed": need, "entitled": entitled, "available": avail, "promised": held,
+                                 "model": self.name},
+                    )
+                res = await _reserve_shielded(self.mask_store, self.fingerprint, self.ring, first, rid,
+                                              **self._reserve_kw())
+                store, fp, ring = self.mask_store, self.fingerprint, self.ring
+                reserve_ext = None if self.fused2 else getattr(store, "reserve_extension", None)
+                kw = self._reserve_kw()
 
-            def extend(slots: int) -> Any:  # a background (ahead) thread, or the backend's worker thread
-                if reserve_ext is not None:
-                    return reserve_ext(fp, ring, slots, session_id=rid)
-                return store.reserve(fp, ring, slots, session_id=rid, **kw)
+                wait_s = float(getattr(self.settings, "mask_extension_wait_s", 0.0)) if over else 0.0
 
-            w = WindowedReservation(res, extend, cap=entitled, window=chunk, ahead=True, public=public, chunked=True)
-            self.mask_ledger.add(w)
+                def extend(slots: int) -> Any:  # a background (ahead) thread, or the backend's worker thread
+                    give_up = time.monotonic() + wait_s
+                    delay = 0.01
+                    while True:
+                        try:
+                            if reserve_ext is not None:
+                                return reserve_ext(fp, ring, slots, session_id=rid)
+                            return store.reserve(fp, ring, slots, session_id=rid, **kw)
+                        except MaskExhaustedError:
+                            # overcommit: wait for the factory (bounded), then fail closed as without it
+                            if time.monotonic() + delay > give_up:
+                                raise
+                            time.sleep(delay)
+                            delay = min(0.2, delay * 1.5)
+
+                w = WindowedReservation(res, extend, cap=entitled, window=chunk, ahead=True, public=public,
+                                        chunked=True)
+                self.mask_ledger.add(w)  # publishes this process's entitlement before the lock is released
+            finally:
+                if shared is not None:
+                    shared.release()
         return w, first
+
+    def _shared_ledger(self) -> Any:
+        """The cross-process entitlement ledger of this ``(fingerprint, ring)`` (``mask_ledger_dir``), or None."""
+        root = getattr(self.settings, "mask_ledger_dir", None)
+        if root is None or not self.fingerprint:
+            return None
+        if self.mask_ledger.shared is None:
+            from pgw.gateway.masks import SharedLedger
+
+            self.mask_ledger.shared = SharedLedger(Path(root) / f"{self.fingerprint[:16]}-{self.ring.name}")
+        return self.mask_ledger.shared
 
     async def _reserve_for(self, ids: list[int], params: SamplingParams, rid: str,
                            reused: int = 0) -> tuple[Any, int]:
@@ -1937,6 +1974,21 @@ async def _reserve_shielded(store: Any, fingerprint: str, ring: RingParams, slot
                     log.exception("closing an orphaned mask reservation failed", extra={"request_id": rid})
 
         fut.add_done_callback(_burn)
+        raise
+
+
+async def _acquire_shielded(shared: Any) -> None:
+    """``shared.acquire()`` in a worker thread; if the caller is cancelled meanwhile, the lock the thread still
+    takes is released at once (never left held by an abandoned admission)."""
+    fut = asyncio.ensure_future(asyncio.to_thread(shared.acquire))
+    try:
+        await asyncio.shield(fut)
+    except asyncio.CancelledError:
+        def _release(f: asyncio.Future[Any]) -> None:
+            if not f.cancelled() and f.exception() is None:
+                shared.release()
+
+        fut.add_done_callback(_release)
         raise
 
 
