@@ -873,8 +873,9 @@ JOBS["pgw-x3-he-e2e-7b-r2"] = {"machine_shape": "NvidiaTeslaT4x2",
 
 # SDK release pins (docs/sdk/models.md): the pack fingerprints of every release model, derived on a CPU kernel from
 # the public checkpoints at the pinned commits (scripts/pin_model_fingerprints.py, default packing parameters).
-# 0.5B / 1.5B re-derive the baked pins (the pack is environment-independent); 3B / 7B are new. One checkpoint at
-# a time (the script removes each pack; the HF cache is dropped after each model).
+# Pack format 2 pins of every release model (the pack is environment-independent), with --compare-format1: the
+# format-1 pack must reproduce the old pin and load bit-identical float32 plain tensors. One checkpoint at a time
+# (the script removes each pack; the HF cache is dropped after each model).
 _HF_DROP = "rm -rf ~/.cache/huggingface/hub/models--Qwen--*"
 #: The pin script imports pgw.core, pgw.modelpack and pgw.sdk only (keeps the bundle under Kaggle's ~1 MB limit).
 _PINS_KEEP = {"core", "modelpack", "sdk"}
@@ -886,7 +887,8 @@ JOBS["pgw-sdk-pins"] = {"gpu": False, "exclude": ["tests", "benchmarks", "rust",
     {"kind": "shell", "name": "cpu_info", "cmd": "nproc; free -g; df -h / /tmp /kaggle/working", "timeout": 60},
     *[{"kind": "shell", "name": f"pin_{tag}",
        "cmd": f"mkdir -p /tmp/pinwork && PYTHONPATH=src python scripts/pin_model_fingerprints.py {model} "
-              f"--work /tmp/pinwork > /tmp/pin_{tag}.out; rc=$?; cat /tmp/pin_{tag}.out >> /kaggle/working/pins.jsonl; "
+              f"--compare-format1 --work /tmp/pinwork > /tmp/pin_{tag}.out; rc=$?; "
+              f"cat /tmp/pin_{tag}.out >> /kaggle/working/pins.jsonl; "
               f"cat /tmp/pin_{tag}.out; {_HF_DROP}; exit $rc",
        "timeout": 3600}
       for tag, model in (("05b", "qwen2.5-0.5b-instruct"), ("15b", "qwen2.5-1.5b-instruct"),

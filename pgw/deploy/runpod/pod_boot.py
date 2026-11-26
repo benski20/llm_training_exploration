@@ -377,12 +377,29 @@ def _demote(uid: int | None) -> Any:
     return fn
 
 
+#: Pack format ``pgw pack`` writes (pgw.modelpack.manifest.PACK_VERSION; format 2: bfloat16 embeddings / head).
+#: A pack of another format on the volume is rebuilt: the client library pins the format-2 fingerprints.
+PACK_FORMAT_VERSION = 2
+
+
+def _pack_format(dst: Path) -> int | None:
+    try:
+        v = json.loads((dst / "manifest.json").read_text(encoding="utf-8")).get("version")
+    except (OSError, ValueError, AttributeError):
+        return None
+    return v if isinstance(v, int) else None
+
+
 def ensure_pack(model: str, packs: Path, hf_home: Path, *, uid: int | None = None) -> Path:
-    """``packs/<model>`` built once from the pinned revision (``pgw pack``), as the service user."""
+    """``packs/<model>`` built once from the pinned revision (``pgw pack``), as the service user; rebuilt once when
+    the volume holds a pack of an older format (the pinned fingerprints are of :data:`PACK_FORMAT_VERSION`)."""
     repo, rev = MODELS[model]
     dst = packs / model
     if (dst / "manifest.json").exists():
-        return dst
+        found = _pack_format(dst)
+        if found == PACK_FORMAT_VERSION:
+            return dst
+        log(f"{model}: pack format {found} on the volume, rebuilding as format {PACK_FORMAT_VERSION}")
     tmp = packs / f".{model}.partial"
     shutil.rmtree(tmp, ignore_errors=True)
     log(f"packing {model} ({repo}@{rev[:12]}) into the volume (first boot only)")
@@ -394,7 +411,14 @@ def ensure_pack(model: str, packs: Path, hf_home: Path, *, uid: int | None = Non
     t0 = time.time()
     subprocess.run([sys.executable, "-m", "pgw.cli", "pack", repo, str(tmp), "--name", model, "--revision", rev,  # noqa: S603
                     "-q"], env=env, check=True, preexec_fn=_demote(uid))
-    os.replace(tmp, dst)
+    if dst.exists():  # an older-format pack: replaced only once the new one is complete
+        old = packs / f".{model}.old"
+        shutil.rmtree(old, ignore_errors=True)
+        os.replace(dst, old)
+        os.replace(tmp, dst)
+        shutil.rmtree(old, ignore_errors=True)
+    else:
+        os.replace(tmp, dst)
     shutil.rmtree(hf_home / "hub", ignore_errors=True)  # the checkpoint is not needed once packed
     log(f"packed {model} in {time.time() - t0:.0f}s")
     return dst

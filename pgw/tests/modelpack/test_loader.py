@@ -197,12 +197,12 @@ def test_header_layout_mismatch_detected(pack_copy, tiny_pack_dir):
 def test_load_tensor_shape_check(pack_copy):
     m = Manifest.from_file(pack_copy)
     tensors = dict(m.tensors)
-    # point final_norm at a tensor of the right name in a file where its dtype differs
-    tensors["final_norm"] = tensors["final_norm"].model_copy(update={"dtype": "float16"})
+    # a dtype the manifest allows (format 2: bfloat16 embeddings) but the file does not hold
+    tensors["embed_tokens"] = tensors["embed_tokens"].model_copy(update={"dtype": "bfloat16"})
     _rewrite_manifest(pack_copy, tensors=tensors)
     p = ModelPack.open(pack_copy, verify="fingerprint", components=("linears",))
-    with pytest.raises(ShapeError, match="final_norm"):
-        p.load_plain("final_norm")
+    with pytest.raises(ShapeError, match="embed_tokens"):
+        p.load_plain("embed_tokens")
 
 
 def test_iterators_and_layers(tiny_pack):

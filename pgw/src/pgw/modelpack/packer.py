@@ -48,11 +48,13 @@ from pgw.modelpack.manifest import (
 )
 from pgw.modelpack.st_io import SafetensorsStreamWriter, TensorPlan
 
-__all__ = ["TOKENIZER_FILES", "CheckpointReader", "pack_checkpoint", "pack_state_dict"]
+__all__ = ["PLAIN_DTYPES", "TOKENIZER_FILES", "CheckpointReader", "pack_checkpoint", "pack_state_dict"]
 
 log = logging.getLogger(__name__)
 
-PlainDType = Literal["float32", "float16", "bfloat16"]
+PlainDType = Literal["source", "float32", "float16", "bfloat16"]
+#: Accepted ``plain_dtype`` values: ``"source"`` (format 2, the default) or one dtype for both (format 1).
+PLAIN_DTYPES: tuple[str, ...] = ("source", "float32", "float16", "bfloat16")
 
 #: Files copied from the checkpoint into ``<pack>/tokenizer`` when present.
 TOKENIZER_FILES: tuple[str, ...] = (
@@ -69,7 +71,7 @@ TOKENIZER_FILES: tuple[str, ...] = (
 )
 _HUB_PATTERNS = ["*.json", "*.safetensors", "*.txt", "*.model", "*.jinja"]
 _PLAIN_FLOAT_NAMES = ("embed_tokens", "lm_head")  # stored in plain_dtype; norms always float32
-_TOOL = "pgw-modelpack/1"
+_TOOL = "pgw-modelpack/2"
 
 
 # ---- tensor sources --------------------------------------------------------------------------
@@ -82,6 +84,10 @@ class TensorSource(Protocol):
 
     def shape(self, name: str) -> tuple[int, ...]:
         """Shape without loading the data."""
+        ...
+
+    def dtype(self, name: str) -> torch.dtype:
+        """Stored dtype without loading the data."""
         ...
 
     def get(self, name: str) -> torch.Tensor:
@@ -98,6 +104,9 @@ class _StateDictSource:
 
     def shape(self, name: str) -> tuple[int, ...]:
         return tuple(self._sd[name].shape)
+
+    def dtype(self, name: str) -> torch.dtype:
+        return self._sd[name].dtype
 
     def get(self, name: str) -> torch.Tensor:
         return self._sd[name].detach().to("cpu")
@@ -160,6 +169,15 @@ class CheckpointReader:
         except KeyError as exc:
             raise ConfigError(f"checkpoint has no tensor {name!r}") from exc
         return tuple(self._handles[fn].get_slice(name).get_shape())
+
+    def dtype(self, name: str) -> torch.dtype:
+        """Stored dtype from the header (no data read)."""
+        try:
+            fn = self._where[name]
+        except KeyError as exc:
+            raise ConfigError(f"checkpoint has no tensor {name!r}") from exc
+        st = str(self._handles[fn].get_slice(name).get_dtype())
+        return _ST_TORCH.get(st.upper(), torch.float32)  # other codes: not bfloat16 (ints are rejected later)
 
     def get(self, name: str) -> torch.Tensor:
         """Load one tensor (memory-mapped, CPU)."""
@@ -249,6 +267,22 @@ def _check_float(name: str, t: torch.Tensor) -> torch.Tensor:
     return t
 
 
+#: safetensors dtype codes of the float types a checkpoint may hold (anything else counts as float32 storage).
+_ST_TORCH: dict[str, torch.dtype] = {"BF16": torch.bfloat16, "F16": torch.float16, "F32": torch.float32,
+                                     "F64": torch.float64}
+
+
+def _plain_storage_dtype(plain_dtype: PlainDType, pname: str, src_dtype: torch.dtype) -> str:
+    """Storage dtype of one plain tensor. Norms: float32. ``embed_tokens`` / ``lm_head``: ``plain_dtype`` (format
+    1), or with ``"source"`` (format 2) the checkpoint's own dtype when it is bfloat16 (stored unconverted), else
+    float32 (an exact widening of float16 / float32 sources; float64 rounds as in format 1)."""
+    if pname not in _PLAIN_FLOAT_NAMES:
+        return "float32"
+    if plain_dtype != "source":
+        return plain_dtype
+    return "bfloat16" if src_dtype == torch.bfloat16 else "float32"
+
+
 def _shard_name(i: int, total: int) -> str:
     return f"linears-{i:05d}-of-{total:05d}.safetensors"
 
@@ -292,7 +326,8 @@ def _write_pack(
     n_shards = plans[-1].shard + 1
     tensors: dict[str, TensorEntry] = {}
     entries: list[LinearEntry] = []
-    meta = {"format": "pt", "pgw": "modelpack-v1"}
+    version = 2 if plain_dtype == "source" else 1
+    meta = {"format": "pt", "pgw": f"modelpack-v{version}"}
     for s in range(n_shards):
         fn = _shard_name(s, n_shards)
         shard_plans = [p for p in plans if p.shard == s]
@@ -348,7 +383,7 @@ def _write_pack(
     for pname, hf in hf_plain.items():
         if hf not in keys:
             raise ConfigError(f"checkpoint is missing {hf}", details={"tensor": hf})
-        dt = plain_dtype if pname in _PLAIN_FLOAT_NAMES else "float32"
+        dt = _plain_storage_dtype(plain_dtype, pname, src.dtype(hf))
         want = (arch.vocab_size, arch.hidden_size) if pname in _PLAIN_FLOAT_NAMES else (arch.hidden_size,)
         if src.shape(hf) != want:
             raise ShapeError(f"{hf}: shape {list(src.shape(hf))} != expected {list(want)} from config.json")
@@ -356,6 +391,7 @@ def _write_pack(
     with SafetensorsStreamWriter(out / PLAIN_FILE, pplans, metadata=meta) as w:
         for tp in pplans:
             hf = hf_plain[tp.name]
+            # format 2 with a bfloat16 source: no conversion, the checkpoint's bytes are stored as they are
             t = _check_float(hf, src.get(hf)).to(_torch_dtype(tp.dtype))
             if not bool(torch.isfinite(t).all()):  # e.g. float32 values beyond the float16 range
                 raise ConfigError(f"{hf}: values overflow plain_dtype {tp.dtype}", details={"tensor": hf})
@@ -364,6 +400,7 @@ def _write_pack(
 
     tok = _copy_tokenizer(tokenizer_dir, out)
     manifest = Manifest(
+        version=version,
         name=name,
         source=source,
         arch=arch,
@@ -519,7 +556,7 @@ def pack_checkpoint(
     *,
     name: str | None = None,
     revision: str | None = None,
-    plain_dtype: PlainDType = "float32",
+    plain_dtype: PlainDType = "source",
     shard_bytes: int = 2 << 30,
     overwrite: bool = False,
     license: str | None = None,
@@ -540,7 +577,10 @@ def pack_checkpoint(
         out_dir: Pack directory to create.
         name: Served model name (default: derived from ``source``).
         revision: Hub revision (branch, tag or commit); recorded in the manifest.
-        plain_dtype: Storage dtype of ``embed_tokens``/``lm_head`` (norms are always float32).
+        plain_dtype: Storage of ``embed_tokens``/``lm_head`` (norms are always float32). ``"source"`` (default,
+            pack format 2): each in the checkpoint's dtype when that is bfloat16, else float32; loaders widen to
+            float32 exactly. ``"float32"`` / ``"float16"`` / ``"bfloat16"``: that dtype for both (format 1; with
+            ``"float32"`` the fingerprints of packs written before format 2).
         shard_bytes: Target maximum size of a ``linears-*`` shard (a group is never split).
         overwrite: Replace an existing ``out_dir``.
         license: Optional license identifier recorded in the manifest.
@@ -555,7 +595,7 @@ def pack_checkpoint(
         ConfigError: unsupported architecture, missing tensors or existing ``out_dir`` without ``overwrite``.
         ShapeError: checkpoint tensor shapes disagree with ``config.json``.
     """
-    if plain_dtype not in ("float32", "float16", "bfloat16"):
+    if plain_dtype not in PLAIN_DTYPES:
         raise ConfigError(f"invalid plain_dtype {plain_dtype!r}")
     ckpt, info = _resolve_source(source, revision)
     if license is not None:
@@ -586,11 +626,13 @@ def pack_state_dict(
     name: str,
     source: SourceInfo,
     tokenizer_dir: str | Path | None = None,
-    plain_dtype: PlainDType = "float32",
+    plain_dtype: PlainDType = "source",
     shard_bytes: int = 2 << 30,
     overwrite: bool = False,
 ) -> Manifest:
     """Same as :func:`pack_checkpoint` but from an in-memory HF-named state dict (used by tests)."""
+    if plain_dtype not in PLAIN_DTYPES:
+        raise ConfigError(f"invalid plain_dtype {plain_dtype!r}")
     src = _StateDictSource(state_dict)
     tok = Path(tokenizer_dir) if tokenizer_dir is not None else None
     return _write_atomic(
