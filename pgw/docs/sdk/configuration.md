@@ -17,7 +17,8 @@ behaviour of the OpenAI client it replaces.
 | `mask_scheme` | `"pks-v3"` | how one-time masks are generated: `"pks-v3"`, `"mlwe"` or `"plain"` ([Concepts](concepts.md#mask-schemes)) |
 | `hint` | `"local"` | how the one-time `pks-v3` setup is built: `"local"` builds it on your machine from the public weights (at 7B about 10-16 CPU-minutes with AMX or AVX-512 VNNI, 1.5-2 CPU-hours with AVX2 only; once, then cached; `pgw sdk prepare` does it ahead of time, [below](#preparing-a-model-ahead-of-time)); `"provider"` lets our GPU compute the expensive part for seeds your process chose, and your process accepts it only after a check (faster on few cores, but it downloads about 44 GB at 7B) |
 | `mask_workers` | a quarter of the CPUs (1 to 8) | background mask-generation processes per model (low priority) |
-| `mask_store_gb` | 8 | disk budget of the mask stock per model |
+| `mask_store_gb` | 8 | disk budget of the mask stock per model. A request starts only when the stock covers the prompt + `max_tokens` of every running request: at 7B the default holds about one such request at a time; size it for your concurrency ([Scaling](scaling.md)) |
+| `mask_admission` | `PGW_MASK_ADMISSION`, else `"entitled"` | `"overcommit"` (opt-in): a request starts when the stock covers its prompt and one chunk per running answer; answers that find the stock short wait for the factory (up to 30 s) instead of new requests queueing ([Scaling](scaling.md#when-the-stock-runs-short-bursts)) |
 | `masked_head` | `"auto"` | the model's output layer as one more masked step on our GPU when we serve it (`"on"`, `"off"`) |
 | `prefix_cache` | `"auto"` | exact reuse of the previous turn of a conversation (`extra_body={"conversation_id": ...}`) when the output layer runs in your process |
 | `lane` | `"auto"` | our fast connection for the per-token round trips when the service offers it (`"stream"`, `"off"`) |
@@ -29,7 +30,8 @@ behaviour of the OpenAI client it replaces.
 | `log_level` | `PGW_SDK_LOG`, else silent | structured (JSON) logs on stderr at this level |
 
 There is no `base_url`: the provider address comes from the key. Use one client per process and share it
-between threads or tasks; it is safe for concurrent use and batches concurrent requests.
+between threads or tasks; it is safe for concurrent use and batches concurrent requests. For many concurrent
+users and several worker processes, see [Scaling](scaling.md).
 
 ## Request parameters (`chat.completions.create`)
 
