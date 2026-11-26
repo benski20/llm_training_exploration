@@ -19,8 +19,8 @@ SLA pilot. Three reasons:
 
 How to read this file: the verdict above is the v0.1.0 release view (2026-11-17). Workstreams append dated
 sections. The 2026-11-25 sections follow this summary. The 2026-11-19 to 2026-11-23 updates come next, then the
-release report's numbered sections (1-6). The **2026-11-26 sections are at the end**, ending with the integration
-sweep. A note in *italics* marks a statement that a later section superseded.
+release report's numbered sections (1-6). The **2026-11-26 sections are at the end**, ending with the client mask
+CPU per slot, round 3. A note in *italics* marks a statement that a later section superseded.
 
 **What the product is now.** The client library (`pip install pgw-sdk`, `from pgw import OpenAI`) runs the gateway
 in the application's process against our provider service. Defaults:
@@ -54,6 +54,10 @@ unpacked and range-checked on the device too, and uploads are staged by a host t
 (estimated H100 maskgen 450 / 135 / 81 slots/s at 7B / 32B / 72B, from 264 / 87 / 56; the device wire forms and
 keys validated on a Kaggle T4, every item byte-identical). The mask store uses AES-256-GCM on AWS-LC
 (same format). The security review's findings S1-S15 and S20 are fixed or closed.
+
+On the client, the mask factory's CPU per slot (one core, every part including the request and reply handling,
+1024-slot segments) is 35 / 112 / 166 ms at 7B / 32B / 72B, about 29 / 9 / 6 slots/s per core (was 56 / 199 / 299
+counted the same way; last section: upload and reply written in place, AVX-512 keystream for `r`, buffer reuse).
 
 **Verified:**
 * CPU end to end at 0.5B, every answer bit-identical to the gateway path;
@@ -4054,3 +4058,73 @@ tiny N=16) could join the driver; the noise statistics of sampled answers stay i
 16 answers, each ending a driver call); leases prepared for the next part at request end are wasted work on the
 lease-ahead thread (about 40 % of those prepared with 32-token answers); a GPU-provider run, where the client's
 per-trip time is the larger share of a trip and these changes show as tokens/s.
+
+
+## 2026-11-26: client mask CPU per slot at 32B-72B, round 3 (request and reply in place, AVX-512 keystream, buffer reuse; exact)
+
+Goal: less client CPU per mask slot at 32B / 72B shapes, where the factory's CPU caps the users one client machine
+serves; no change to the scheme, its parameters, single use, fresh randomness, the check material (p31 `u W8`, the
+40-bit private self-check) or wiping. Details, per-part table and what was tried: `docs/sdk/scaling.md`, section
+"Round 3: wire, keystream, buffers".
+
+**Profile first.** `benchmarks/pks_slot_breakdown.py` now also times what `RemotePKS` does around the post (numpy
+`pack_bits` of the 56-bit upload and the msgpack request; the reply's msgpack decode and copy) and touches memory once
+before measuring (this VM charges ~17 us for the first touch of a page, ~20x a normal fault). New
+`benchmarks/pks_factory_e2e.py` runs the real chain (`MaskGenerator` + `PKSMaskBackend` + `RemotePKS` + `MaskStore`,
+one decoder layer of real shapes, synthetic weights and hint, a stand-in provider whose CPU is subtracted); `pks-bench
+stages / freq / ifma` time the IFMA kernels part by part. One core (`taskset`), 1024-slot segments. Before (branch
+head `923d078`), ms per slot, 7B / 32B / 72B: `r` 5.8 / 19.6 / 31.1; encryption + reply keys 15.6 / 55.4 / 82.6;
+**upload wire form 14.3 / 54.3 / 82.1** and **reply decode 3.5 / 11.0 / 19.0**, both missing from the earlier
+per-slot figure (33.5 / 103 / 157 "scaled"); decryption 9.5 / 30.4 / 45.0; self-check 3.1 / 10.2 / 14.9; `u W8`
+1.2 / 7.8 / 9.2; writer 3.0 / 8.9 / 13.3; total **56.4 / 199.3 / 299.2**. Underneath: the `r` keystream at 4-8 ns per
+element (the `chacha20` crate, a fresh array per chunk) against 1.6 for AVX-512 ChaCha20, and a fresh, page-faulted
+buffer for every large array (~0.16 ns per byte on a warm box, much more on first touch here).
+
+**Changes** (default on; each switch restores the old path):
+- `r`: `pgw_fast`'s ring stream runs a 16-block AVX-512 ChaCha20 with the ring mask in the store (factory and the
+  gateway's mask fetch; same bytes; `PGW_FAST_CHACHA512=0`); the factory fills each chunk's `r` into a zeroed buffer
+  of an earlier chunk (`mask_rows_into`, `MaskGenerator`'s `_RBuffers`: one per shape, at most two chunks of the
+  widest linear; `PGW_FACTORY_R_REUSE=0`).
+- Upload in place: `pgw_pks.encrypt_wire` writes the bodies' bit planes and the reply keys' wire form straight into the
+  request `bytes` around the msgpack head and middle (`wire.maskgen_v3_frame`, `RemotePKS.frame`/`send`,
+  `Customer.encrypt_wire`): no `b` array, no `pack_bits`, no message copy; the reply keys are computed before the
+  upload (independent streams). Same request bytes for the same seeds and id (`PGW_PKS_WIRE_FUSED=0`).
+- Reply in place: `wire.decode_maskgen_response_view` walks the message, decodes everything but the `y` payloads with
+  the same code and checks, and hands the decryption a read-only view into the response body (anything it does not
+  handle takes the copying decode); the native decryption reads any byte buffer.
+- Decryption output reused: the segment writer hands back each zeroed output (`PKSMaskBackend.release_output`), the next
+  call of that shape decrypts into it (`decrypt_into`; several passes write their rows into one output); one per
+  shape, 1 GiB (`PGW_PKS_OUT_REUSE=0`).
+
+**After** (same measurements, ms per slot, 7B / 32B / 72B): `r` 1.6 / 5.2 / 8.1; encryption + keys + upload wire in
+one call 17.9 / 55.4 / 83.5 (were 30.4 / 111.3 / 166.7); reply decode 0.0; decryption 7.7 / 25.8 / 36.9; the rest
+unchanged; **total 34.8 / 112.0 / 165.8 (-38 / -44 / -45 %)**, i.e. **28.7 / 8.9 / 6.0 slots/s per client core** (were
+17.7 / 5.0 / 3.3). End to end (`pks_factory_e2e.py`, decoder layers, two runs each but the first 7B one): 68.1 -> 39.5 / 227-238 ->
+127-137 / 379-410 -> 220-240 ms per slot, 25 / 7.3-7.9 / 4.2-4.5 slots/s per core (were 14.7 / 4.2-4.4 / 2.4-2.6).
+Gateway open + retirement unchanged (3.9 / 13.1-13.6 / 17.4-17.7).
+
+**Tried, measured no gain on this box, not kept:** pad primes of 36 bits with fully lazy NTT butterflies (8 instead of
+10-12 vector operations; bit-identical, tested at the range extremes), radix-4 passes of the inverse NTTs (half the
+loads and stores), other L1 block sizes and prefetching for the cross-block NTT levels, an IFMA copy of the self-check
+(also L2-tiled). The HE kernels stay as they were (encryption ~15 ns per input value and slot at 4 groups, decryption
+~5 ns per output value and slot); without hardware counters on this VM the bound of the NTT loops was not pinned down.
+
+Tests: `cargo test -p pgw-pks` (packed output == packed words for every ISA and thread count, odd offsets; the pad
+exact at the range extremes against an i128 schoolbook product; the check kernels), `cargo test -p pgw-fast --lib`
+(the vector ChaCha20 == the crate, heads / tails / parallel parts / the last block, every width);
+tests/hemask/test_pks.py (frame == encode; `encrypt_wire`'s body == the encoded request of `encrypt` + `pack_ksk`,
+same secrets; `PKSMaskBackend` sends the same bytes fused and unfused; `decrypt_into` == `decrypt`; released outputs
+reused with the same masks; the generator's stores with and without buffer reuse == local generation, ring and p31,
+two segments; the view decode == the copying decode on valid and malformed replies, refusals marked as the provider's);
+tests/native/test_store.py (`mask_rows_into`; the vector and portable paths in child processes). Directory runs, one
+at a time with the rebuilt `pgw_pks` / `pgw_fast` in `src/`: tests/hemask 485 + 20 skips; tests/factory 485 + 9
+CUDA skips; tests/native 373; tests/maskstore 247; tests/service 600 + 80 skips (one `test_lane_persistent` case
+failed once while the SDK suite ran alongside; it passed alone and in the full rerun); tests/sdk 206 + 1 opt-in skip;
+tests/docs/test_code_consistency.py 24 (the four new switches listed); `cargo test -p pgw-pks` 15, `cargo test -p
+pgw-fast --lib` 89.
+
+Open: the reply keys (~3.5 ms per linear and group: a scalar NTT of `t'` per prime and the noise layout loop, ~4 ms
+per slot at 72B); the request `bytes` is a fresh allocation per call (httpx takes `bytes`) and the HTTP layer's own
+copies and TLS are not in these figures; with the default 8 GB stock, 32B / 72B segments are one 256-slot group per
+request, which pays the public `a`'s forward NTTs per group (~6 ns more per input value and slot): a larger
+`mask_store_gb`; the NTT kernels' bound (a run with hardware counters on a bare-metal AMX box).

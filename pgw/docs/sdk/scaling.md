@@ -7,10 +7,13 @@ client machine as the number of concurrent streams grows, how to size it, and ho
 ## What limits a client, in order
 
 1. **Mask production (CPU).** Every generated token and every prompt token that is not reused from the previous
-   turn consumes one mask slot, and each slot costs client CPU in the background factory: about 11 ms at 0.5B,
-   34 ms at 7B, 103 ms at 32B and 157 ms at 72B (pks-v3, one core, every part counted; the breakdown is
-   [below](#mask-cost-per-slot-by-component)). At 7B, 16 streams of 17 tokens/s with 500-token prompts need
-   about 800 slots/s, i.e. 27 cores of mask workers. This is the dominant cost at every size: it is linear in
+   turn consumes one mask slot, and each slot costs client CPU in the background factory. Since the third round of
+   2026-11-26 ([below](#round-3-wire-keystream-buffers)), counting also the request and reply handling the earlier
+   figures left out, one core spends about 35 ms per slot at 7B, 112 ms at 32B and 166 ms at 72B (per-part
+   benchmark; the factory as production chains it, decoder layers only: 40 / 127-137 / 220-240 ms), i.e. 25-29 /
+   7.3-8.9 / 4.2-6.0 slots/s per core; before that round the same measurements gave 56 / 199 / 299 ms (68 / 227-238
+   / 379-410 end to end). The [breakdown](#mask-cost-per-slot-by-component) below has every part. At 7B, 16 streams
+   of 17 tokens/s with 500-token prompts need about 800 slots/s, i.e. about 28-32 cores of mask workers. This is the dominant cost at every size: it is linear in
    tokens and has no batching gain. Prompt tokens cost as much as answer tokens, so conversation prefix reuse
    (below) is the main lever.
 2. **Mask stock (disk).** The stock absorbs bursts above the factory rate. With the default admission, a request
@@ -80,6 +83,10 @@ per slot is the complete figure of the [breakdown](#mask-cost-per-slot-by-compon
 helper threads). These figures predate the switch of the store's AES-GCM to AWS-LC (same day), which cuts the
 writer by about 35-45 % and the open by about 45 % ([below](#the-stores-aes-256-gcm-writer-open-retirement)); the
 table is not recomputed: the factory total falls by about 5 %, the gateway's open + retirement by about a third. "Stock writes" is the disk write bandwidth of the factory at that rate.
+The table also predates [round 3](#round-3-wire-keystream-buffers) (same day): its factory figures left out the
+request and reply handling (about 13 / 44 / 67 ms per slot at 7B / 32B / 72B scaled the same way), and with it
+counted the factory now costs about 25 / 75 / 110 ms scaled (35 / 112 / 166 on this box), so the factory cores at a
+given N are about 25-30 % lower than the table says.
 
 | model | N | tok/s each | mask slots/s | factory cores | gateway procs | gateway cores | cores total | RAM GB | mask stock GB (entitled / overcommit) | stock writes GB/s | cache GB |
 |---|---|---|---|---|---|---|---|---|---|---|---|
@@ -188,6 +195,66 @@ Not changed, with the reason:
 * The HE kernels themselves (upload, reply keys, decryption: hand-written AVX-512 IFMA, earlier audit) and the
   `r` keystream (normative SPEC 7.3 derivation, 8 keystream bytes per element) are unchanged; they are now 70-80 %
   of the total.
+
+### Round 3: wire, keystream, buffers
+
+Measured 2026-11-26 after the changes above, profiling first (`benchmarks/pks_slot_breakdown.py`, now also counting
+the upload's wire form and the reply's decode; `benchmarks/pks_factory_e2e.py`, the real factory chain; `pks-bench
+stages`, the IFMA kernels part by part). One core (`taskset`), 1024-slot segments, p31, memory touched once before
+measuring (on this VM the first touch of a page costs ~20x a normal fault), best of 3; before = the branch head's
+build and code; ms per slot:
+
+| part | 7B | 32B | 72B |
+|---|---|---|---|
+| `r` keystream (ChaCha20) | 5.8 -> **1.6** | 19.6 -> **5.2** | 31.1 -> **8.1** |
+| upload encryption + reply keys | 15.6 | 55.4 | 82.6 |
+| reply keys' wire form | 0.5 | 1.7 | 2.1 |
+| upload wire form (`pack_bits(b)`, msgpack request) | 14.3 | 54.3 | 82.1 |
+| the three above, now one native call (`encrypt_wire`) | 30.4 -> **17.9** | 111.3 -> **55.4** | 166.7 -> **83.5** |
+| reply decode (msgpack, `y` handed to the decryption) | 3.5 -> **0.0** | 11.0 -> **0.0** | 19.0 -> **0.0** |
+| reply decryption | 9.5 -> **7.7** | 30.4 -> **25.8** | 45.0 -> **36.9** |
+| every-row 40-bit self-check | 3.1 | 10.2-11.1 | 14.9-15.4 |
+| segment check vectors `u W8 mod p` | 1.2-1.3 | 5.7-7.8 | 9.0-9.2 |
+| writer (pack, AES-GCM, `pwrite`, fsync) | 3.0-3.2 | 8.9 | 12.9-13.3 |
+| **factory total** | **56.4 -> 34.8** | **199.3 -> 112.0** | **299.2 -> 165.8** |
+| slots/s per core | 17.7 -> 28.7 | 5.0 -> 8.9 | 3.3 -> 6.0 |
+| end to end, decoder layers (`pks_factory_e2e.py`) | 68.1 -> 39.5 | 227-238 -> 127-137 | 379-410 -> 220-240 |
+| gateway: open + retirement (unchanged) | 3.9 | 13.1-13.6 | 17.4-17.7 |
+
+What the profile showed: the earlier per-slot figure left out the upload's wire form and the reply's decode, which
+were the largest single parts from 7B up (numpy `pack_bits` of the 56-bit bodies, 10 ns per value, the msgpack
+request copy, 9 ns per value, and the reply's copy: 101 ms of 299 at 72B); the `r` keystream ran at 4-8 ns per element (the `chacha20`
+crate and a fresh array per chunk) where AVX-512 ChaCha20 takes 1.6; and every fresh buffer (r, bodies, decryption
+output, reply copies) cost its page faults and the kernel's zeroing again, about 0.16 ns per byte on a warm box.
+Changes (each bit-identical, tested; scheme, parameters, check material, single use and wiping unchanged):
+
+* **`r` keystream**: `pgw_fast`'s ring stream (factory and gateway) runs a 16-block AVX-512 ChaCha20 with the ring
+  mask in the store (same bytes; `PGW_FAST_CHACHA512=0`: the crate), and the factory fills each chunk's `r` into a
+  zeroed buffer of the same shape from an earlier chunk (`mask_rows_into`; `PGW_FACTORY_R_REUSE=0`: fresh arrays).
+* **Upload written in place** (`pgw_pks.encrypt_wire`, `Customer.encrypt_wire`, `RemotePKS.frame`): the encryption
+  kernel writes the bodies' three bit planes (`pack_bits(b, 56)`) and the reply keys' wire form straight into the
+  request's `bytes` between the msgpack head and middle (`wire.maskgen_v3_frame`): no `b` array, packing pass or
+  message copy; the same request bytes for the same seeds (`PGW_PKS_WIRE_FUSED=0`: the old path).
+* **Reply in place**: `decode_maskgen_response_view` hands the decryption a read-only view of `y` in the response
+  body (the rest of the message decoded and checked by the same code; anything unusual takes the copying decode);
+  the native decryption reads any byte buffer.
+* **Decryption output reused**: the factory's segment writer hands each zeroed output back
+  (`PKSMaskBackend.release_output`), the next call of that shape decrypts into it (`decrypt_into`; several passes
+  write their rows straight into it); at most one per shape, 1 GiB (`PGW_PKS_OUT_REUSE=0`: fresh arrays).
+
+Tried and not kept (measured no gain on this box): smaller pad primes (2^36) with fully lazy NTT butterflies
+(8 instead of 10-12 vector operations per butterfly), radix-4 passes of the inverse NTTs (half the loads and
+stores), other L1 block sizes, prefetching the cross-block NTT columns, an IFMA (`vpmadd52luq`) copy of the
+self-check and an L2-tiled one. The HE kernels themselves are unchanged: encryption about 15 ns per input value and
+slot at 4 groups per request (pad inverse NTTs 6 per group, noise 2.2, output 1.8, the public `a`'s keystream and
+forward NTTs 8 per request), decryption about 5 ns per output value and slot (inverse NTT mod `q1` 3.1, combine 0.8,
+hint load 1 per request).
+
+Open: reply keys per (linear, group) ~3.5 ms (scalar NTT of `t'` per prime, the noise layout loop): ~4 ms per slot
+at 72B; the encryption's request `bytes` is a fresh allocation per call (httpx takes `bytes`); the HTTP layer's own
+copies and TLS are not counted here; with the default 8 GB stock, 32B / 72B segments hold one 256-slot group per
+request, so the public `a`'s forward NTT is paid per group (about 6 ns more per input value and slot than at 1024
+slots): a larger `mask_store_gb` gives 1024-slot segments.
 
 ### The store's AES-256-GCM (writer, open, retirement)
 

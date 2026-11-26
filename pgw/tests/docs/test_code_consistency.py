@@ -123,6 +123,10 @@ _NON_FIELD_ENV = {
     "PGW_PKS_ISA",  # pgw_pks (Rust): caps the ISA of the pks-v3 and check-vector kernels
     "PGW_MASK_ADMISSION",  # SDKOptions.mask_admission
     "PGW_PKS_COMPACT",  # pks-v3 compact output switch read by pgw.hemask.pks_backend
+    "PGW_PKS_WIRE_FUSED",  # pks-v3 upload written in place into the request (pgw.hemask.pks_backend)
+    "PGW_PKS_OUT_REUSE",  # pks-v3 decryption outputs reused (pgw.hemask.pks_backend)
+    "PGW_FACTORY_R_REUSE",  # the factory's r buffers reused (pgw.factory.generator)
+    "PGW_FAST_CHACHA512",  # pgw_fast (Rust): the AVX-512 ChaCha20 of the mask ring stream
     "PGW_VECMAT_NATIVE",  # native vecmat switch read by pgw.factory.kernels
     "PGW_WRITER_THREADS",  # segment writer threads read by pgw.maskstore.segment_io
 
