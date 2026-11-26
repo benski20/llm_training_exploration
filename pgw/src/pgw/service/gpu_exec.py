@@ -47,7 +47,14 @@ from typing import Any
 import torch
 
 from pgw.core.errors import ConfigError
-from pgw.core.ringmm import offset_byte_consts, offset_byte_core, offset_byte_rows
+from pgw.core.ringmm import (
+    chunk_rows_for,
+    eager_work_budget,
+    offset_byte_consts,
+    offset_byte_core,
+    offset_byte_rows,
+    offset_byte_work_bytes,
+)
 from pgw.core.triton_gemv import TRITON_GEMV_KS, low32, max_rows, ring_gemv, self_check
 
 __all__ = [
@@ -60,6 +67,7 @@ __all__ = [
     "cuda_graph_capturer",
     "device_executor",
     "eager_capturer",
+    "eager_work_bytes",
     "from_compact",
     "to_compact",
     "validate_buckets",
@@ -195,6 +203,19 @@ def cuda_graph_capturer(device: torch.device) -> Capturer:
     return capture
 
 
+def eager_work_bytes(k: int, b: int, n: int, np_: int, mp: int, m: int) -> int:
+    """Peak transient device bytes of one eager :class:`DeviceExecutor` call of ``b`` rows: the staged input,
+    :func:`pgw.core.ringmm.offset_byte_work_bytes` and the compact conversion of the ``(b, m)`` result."""
+    staged = 8 * b * n
+    if k == 32:
+        compact = 8 * b * mp + 16 * b * m  # (y + 2^31) & mask - 2^31: two int64 temporaries at a time
+    elif k < 32:
+        compact = 8 * b * mp + 4 * b * m
+    else:
+        compact = 8 * b * mp + (8 * b * m if m != mp else 0)  # a strided (b, m) view is made contiguous to copy
+    return staged + max(offset_byte_work_bytes(k, b, n, np_, mp), compact)
+
+
 @dataclass
 class ExecutorStats:
     """Counters (tests, benchmarks, logs)."""
@@ -205,6 +226,7 @@ class ExecutorStats:
     capture_failures: int = 0
     pinned_copies: int = 0
     gemv: int = 0
+    chunked: int = 0
 
 
 @dataclass(eq=False)
@@ -443,11 +465,27 @@ class DeviceExecutor:
             return self._eager(x, k, w, rowsum, m)
 
     def _eager(self, x: torch.Tensor, k: int, w: torch.Tensor, rowsum: torch.Tensor, m: int) -> torch.Tensor:
-        xd = self._stage_in(x, None)
         self.stats.eager += 1
         sh, pm = self._const(k)  # cached: no per-call host-to-device constant copies
-        y = offset_byte_core(xd, k, w, rowsum, sh, pm, offset_byte_rows(k, int(x.shape[0])))[:, :m]
-        return self._stage_out(to_compact(y, k))
+        b, n = int(x.shape[0]), int(x.shape[1])
+        mp, np_ = int(w.shape[0]), int(w.shape[1])
+        step = chunk_rows_for(eager_work_budget(), lambda r: eager_work_bytes(k, r, n, np_, mp, m), b)
+        if step >= b:
+            xd = self._stage_in(x, None)
+            y = offset_byte_core(xd, k, w, rowsum, sh, pm, offset_byte_rows(k, b))[:, :m]
+            return self._stage_out(to_compact(y, k))
+        # A prefill-sized call (up to max_batch_rows) in row chunks of bounded device memory: each output row
+        # depends only on its own input row, so the result is bit-identical. Before 2026-11-26 one call staged
+        # the whole input and held ~24 bytes per digit row and output column (15 GB for 4096 rows of 7B's gate_up).
+        self.stats.chunked += 1
+        out = torch.empty((b, m), dtype=compact_dtype(k))
+        for r0 in range(0, b, step):
+            xc = x[r0:r0 + step]
+            xd = self._stage_in(xc, None)
+            yc = offset_byte_core(xd, k, w, rowsum, sh, pm, offset_byte_rows(k, int(xc.shape[0])))[:, :m]
+            out[r0:r0 + int(xc.shape[0])].copy_(to_compact(yc, k))  # device-to-pageable: synchronous
+            del xd, yc
+        return out
 
     def _capture_and_run(
         self, x: torch.Tensor, k: int, w: torch.Tensor, rowsum: torch.Tensor, m: int, p: int, graphs: KernelGraphs

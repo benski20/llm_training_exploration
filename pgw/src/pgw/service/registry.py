@@ -272,6 +272,7 @@ class ModelRegistry:
                     details={"rings": list(self.rings), "max_in_features": pack.max_in_features()},
                 )
             specs = pack.linear_specs()
+            self._memory_preflight(pack, specs)
             placement = self._placement(specs, pack.num_layers)
             kernels: dict[str, ComputeKernel | ShardedKernel] = {}
             for spec in specs:
@@ -324,6 +325,34 @@ class ModelRegistry:
             entry.device_bytes, time.perf_counter() - t0,
         )
         return entry
+
+    def _memory_preflight(self, pack: Any, specs: Sequence[LinearSpec]) -> None:
+        """Log an error before loading when the provider memory plan (:mod:`pgw.service.memplan`) says the pack
+        does not fit its CUDA device(s) next to what is already allocated (an out-of-memory start-up costs
+        minutes of GPU time; the plan costs nothing). Advisory only: the load proceeds either way."""
+        if not self.devices or self.devices[0].type != "cuda":
+            return
+        try:  # pragma: no cover - GPU only
+            from pgw.service import memplan
+
+            name = str(pack.name)
+            lins = [(s.id.key, s.out_features, s.in_features) for s in specs]
+            if self.masked_head != "off":
+                arch = pack.arch
+                lins.append((f"{int(arch.num_layers)}.head", int(arch.vocab_size), int(arch.hidden_size)))
+            n = len(self.devices)
+            cfg = memplan.MemConfig(
+                masked_head=False, tp=self.tp_group.size if self.tp_group is not None else 1,
+                pipeline=n if self.tp_group is None and self.placement == "by_layer" else 1,
+                graph_buckets=tuple(self.cuda_graph_buckets), cuda_graphs=self.cuda_graphs, warmup=self.warmup)
+            resident = [int(torch.cuda.memory_allocated(d)) for d in self.devices]
+            msg = memplan.check_fit(name, lins, memplan.gpu_spec_of(self.devices[0]), cfg, resident)
+            if msg is not None:
+                log.error("memory plan: %s", msg)
+            else:
+                log.info("memory plan: %s fits on %s", name, ",".join(str(d) for d in self.devices))
+        except Exception as exc:  # pragma: no cover - advisory
+            log.debug("memory plan unavailable: %s", exc)
 
     def _masked_head_entry(self, pack: Any, entry: RegisteredModel) -> RegisteredModel:
         """The masked-LM-head entry of ``pack``: the derived fingerprint, ``entry``'s kernels (shared, no copy) plus

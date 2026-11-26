@@ -58,6 +58,7 @@ from pgw.core.ringmm import (
     cpu_int8_fast,
     cuda_int8_available,
     int8_ring_matmul,
+    weight_rowsum,
 )
 from pgw.core.types import LinearSpec
 from pgw.service.gpu_exec import (
@@ -198,6 +199,32 @@ def _maskgen_block_tn(wpad: torch.Tensor, raw: torch.Tensor, m: int, n: int, con
     return y.view(torch.uint8).view(m, cb, 8)[:, :, ylo:yhi]
 
 
+#: Largest maskgen result (bytes) :meth:`ComputeKernel.mulmod64` keeps whole on the device before copying it
+#: back; larger ones are copied back per column block (:func:`_maskgen_blocks_to_host`).
+MASKGEN_OUT_DEVICE_BYTES = 256 << 20
+
+
+def _maskgen_blocks_to_host(wpad: torch.Tensor, draw: torch.Tensor, m: int, n: int, const: torch.Tensor,
+                            ylo: int, yhi: int, step: int, *, pinned: bool = False) -> np.ndarray:
+    """``(m, cols, yhi - ylo)`` uint8 host array of :func:`_maskgen_block_tn` over column blocks of ``step``,
+    each block copied to the host as soon as it is computed (device memory: one block). Device agnostic (the
+    CPU tests run it); ``pinned`` stages each block in pinned memory (CUDA)."""
+    cols = int(draw.shape[1])
+    nbo = yhi - ylo
+    res = np.empty((m, cols, nbo), dtype=np.uint8)
+    stage: torch.Tensor | None = None
+    for c0 in range(0, cols, step):
+        cb = min(step, cols - c0)
+        blk = _maskgen_block_tn(wpad, draw[:, c0:c0 + cb], m, n, const, ylo, yhi)
+        if stage is None or stage.numel() < m * cb * nbo:
+            stage = torch.empty(m * cb * nbo, dtype=torch.uint8, pin_memory=pinned)
+        sv = stage[: m * cb * nbo].view(m, cb, nbo)
+        sv.copy_(blk)  # device to host: waits for the block
+        res[:, c0:c0 + cb] = sv.numpy()
+        del blk
+    return res
+
+
 _STREAMS: dict[torch.device, list[torch.cuda.Stream]] = {}
 _STREAMS_LOCK = threading.Lock()
 
@@ -316,6 +343,25 @@ class ComputeKernel:
         self._gemv = False
         self._gemv_checked: set[tuple[int, int]] = set()
         self._mg_consts: dict[tuple[int, int], torch.Tensor] = {}  # maskgen per-row constants (cached rowsum)
+        if self.backend == "cuda_int8":  # pragma: no cover - GPU only
+            # One device copy of the weight, padded (``_w_dev``), made straight from the host tensor (a pack's
+            # memory-mapped view; padded on the host if its shape needs it): no unpadded device copy next to it
+            # at load (two copies of the largest linear at once before 2026-11-26). A weight already on this
+            # device is cloned so the kernel never aliases the caller's tensor.
+            src = w8.detach()
+            if src.device == self.device:
+                src = src.clone()
+            self._pw = PreparedWeight(src, device=self.device, backend=self.backend,  # type: ignore[arg-type]
+                                      cache_float=cache_float)
+            del src
+            # ``w8`` becomes a view of the padded copy (keeping the unpadded one doubled the provider's GPU
+            # memory: 13.2 GiB for 7B's linears, no room on a 16 GB T4; Kaggle run1_7b).
+            self._pw.w8 = self._pw._w_dev[: spec.out_features, : spec.in_features]  # type: ignore[index]
+            self._exec = device_executor(self.device)
+            self._exec.reserve(self.in_features, self.out_features, self._buckets)
+            self._graphs = KernelGraphs() if cuda_graphs else None
+            self._gemv = bool(triton_gemv) and self._exec.gemv_ready()  # startup self-check (once per device)
+            return
         # Own the memory: a pack's tensors may be memory-mapped views of files.
         wd = w8.detach().to(self.device)
         if wd.data_ptr() == w8.data_ptr():
@@ -328,17 +374,6 @@ class ComputeKernel:
                 wd, device=self.device, backend=self.backend,  # type: ignore[arg-type]
                 cache_float=cache_float,
             )
-            if self._pw._resolved == "cuda_int8" and self._pw._w_dev is not None:  # pragma: no cover - GPU only
-                # The CUDA path keeps the weight once, padded (``_w_dev``); ``w8`` becomes a view of it. Keeping the
-                # unpadded device copy as well doubled the provider's GPU memory (13.2 GiB for 7B's linears: no room
-                # on a 16 GB T4).
-                self._pw.w8 = self._pw._w_dev[: wd.shape[0], : wd.shape[1]]
-                del wd
-        if self.backend == "cuda_int8":  # pragma: no cover - GPU only
-            self._exec = device_executor(self.device)
-            self._exec.reserve(self.in_features, self.out_features, self._buckets)
-            self._graphs = KernelGraphs() if cuda_graphs else None
-            self._gemv = bool(triton_gemv) and self._exec.gemv_ready()  # startup self-check (once per device)
 
     # ---- metadata ------------------------------------------------------------------------
     @property
@@ -363,12 +398,12 @@ class ComputeKernel:
 
     @property
     def device_bytes(self) -> int:
-        """Device memory held by this kernel (weights and cached float copies)."""
+        """Device memory held by this kernel (weights, cached float copies and row sums)."""
         if self._w is not None:
             return int(self._w.numel() * self._w.element_size())
         assert self._pw is not None
         total = 0
-        for t in (self._pw._w_dev, self._pw._w_float):
+        for t in (self._pw._w_dev, self._pw._w_float, self._pw._w_rowsum):
             if t is not None:
                 total += int(t.numel() * t.element_size())
         return total
@@ -543,11 +578,11 @@ class ComputeKernel:
         m = self.out_features
         if self.device.type == "cuda":  # pragma: no cover - GPU only
             assert self._pw is not None and self._pw._w_dev is not None
-            cached = self._pw._w_rowsum  # the compute path's cached rowsum, if it already exists
-            rs_dev = cached if cached is not None else self._pw._w_dev.sum(1, dtype=torch.int64)
-            rs = rs_dev[:m].cpu().numpy()  # padded rows are 0; sum(dtype=) avoids an int64 weight copy
+            # the compute path's cached row sums (made here if maskgen comes first), in row chunks: no int64 copy
+            # of the weight (``sum(1, dtype=torch.int64)`` makes one: 4.1 GiB for 7B's masked LM head)
+            rs = self._pw._rowsum()[:m].cpu().numpy()  # padded rows are 0
         else:
-            rs = self._maskgen_w_cpu().sum(1, dtype=torch.int64).numpy()  # no int64 copy of the weight
+            rs = weight_rowsum(self._maskgen_w_cpu()).numpy()  # no int64 copy of the weight
         scale = (128 * sum(1 << (8 * d) for d in range(nb))) % (1 << 64)
         cu = rs.astype(np.int64).view(np.uint64) * np.uint64(scale) + np.uint64(rnd)  # wraps mod 2^64
         t = torch.from_numpy(cu.view(np.int64).reshape(m, 1).copy())
@@ -604,8 +639,14 @@ class ComputeKernel:
                 host = torch.empty((n, cols, nb), dtype=torch.uint8, pin_memory=True)
                 host.numpy()[...] = raw  # the only host-side pass over the request bytes
                 draw = host.to(dev, non_blocking=True)
-                dout = torch.empty((m, cols, nbo), dtype=torch.uint8, device=dev)
                 step = _maskgen_block_cols(mp, nb, cols, MASKGEN_PART_BYTES_CUDA, 32)
+                if m * cols * nbo > MASKGEN_OUT_DEVICE_BYTES:
+                    # a large result (the pks-v3 hint build: (m, 4096, 8) bytes, 5 GB for 7B's masked head) goes
+                    # to the host block by block instead of being held whole on the device
+                    out = _maskgen_blocks_to_host(wpad, draw, m, n, const, ylo, yhi, step, pinned=True)
+                    stream.synchronize()
+                    return out
+                dout = torch.empty((m, cols, nbo), dtype=torch.uint8, device=dev)
                 for c0 in range(0, cols, step):
                     cb = min(step, cols - c0)
                     dout[:, c0:c0 + cb] = _maskgen_block_tn(wpad, draw[:, c0:c0 + cb], m, n, const, ylo, yhi)

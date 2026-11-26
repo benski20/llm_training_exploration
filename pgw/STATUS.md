@@ -1950,3 +1950,105 @@ on exhaustion. Full note: `research/reviews/pks-v3-client-disk.md`.
   decompressing `W8` every segment): not pursued.
 - Tests: `tests/provision` 44 passed / 1 skipped (new `test_public_source_factory_pack_shares_plain_files`);
   `tests/sdk` 103 passed / 1 skipped. tests/hemask and tests/service were not run (the change does not touch them).
+
+
+## 2026-11-26 — Provider (GPU server) performance audit: memory headroom, bounded transients, H100 measurement plan
+
+Trigger: the Kaggle T4 run of Qwen2.5-7B (`results/kaggle/sdk-7b-validation/run1_7b`) died at provider start-up with
+CUDA OOM (a 4.06 GiB int64 copy of the masked LM head for its row sums, on top of 13.2 GiB of doubled weights).
+`bfee514` fixed that call site. This audit looked for the same class of problem everywhere in the provider (load,
+warm-up, serving, maskgen) and for the per-trip and throughput costs that matter at 72B. Outputs bit-identical
+everywhere; the provider sees exactly the same bytes; no tenant data mixes (rows of different tenants share a GEMM
+only where they already did, each reply is its own rows); no check weakened. No GPU was used: GPU memory is computed
+from shapes and the transient models are checked against allocations measured on CPU (same torch code).
+
+**Verified `bfee514`**: one resident copy of each weight (`w8` is a view of the padded device copy) and chunked row
+sums. Still open after it, now fixed (ranked by impact):
+
+| # | issue | evidence | impact before | fix (bit-identical) |
+|---|---|---|---|---|
+| 1 | eager (prefill-sized) ring matmul unbounded: a call held 24 B per digit row x output column (three stacked `(K/8, b, mp)` int64 temporaries) and staged its whole input | `offset_byte_core`; measured on CPU (`tests/core/test_ringmm_memory.py`: old combine 2-3x the new peak) | one 4096-row call (the default `max_batch_rows`): 7B gate_up K=48 **21 GB**, 72B **33 GB**, the 7B masked head ~84 GB: OOM on any GPU, even at 7B on an H100 | in-place combine from the int32 GEMM result (4 B per digit row + two `(b, mp)` int64); `DeviceExecutor._eager` and `_offset_byte_mm` split rows to `PGW_SERVICE_EAGER_WORK_MB` (512 MiB). Graph pool 0.44 -> 0.15 GiB |
+| 2 | pks-v3 device key switch (`pks_gpu.keyswitch`) unblocked: ~(8 + 2G) x 32 KiB per output row at once | shapes in the code; `memplan` | one 4-group item: 72B gate_up ~19 GB, 7B masked head ~78 GB; two concurrent items | blocks of whole reply ciphertexts within `PGW_SERVICE_PKS_GPU_WORK_MB` (512 MiB) |
+| 3 | `ComputeKernel.mulmod64` on CUDA (v3 GEMM and per-seed hint build) kept the whole `(m, cols, 8)` result on the device | `_maskgen_planes_cuda` | 5 GB for 7B's head hint (4096 columns), 1.9 GB at 72B gate_up, per concurrent item | results > 256 MiB copied back per column block (`_maskgen_blocks_to_host`) |
+| 4 | maskgen constant via `w.sum(1, dtype=torch.int64)`, which casts the whole weight first (the comment said it did not) | torch profiler (`test_weight_rowsum_never_copies_the_weight_to_int64`) | the run1 OOM again (4.1 GiB at 7B's head, 9.3 GiB at 72B's) when maskgen precedes any compute on a linear (warm-up off) | `weight_rowsum` (byte-bounded chunks), shared with the compute path |
+| 5 | weight upload made an unpadded device copy next to the padded one | `pad_weight_cuda`, `ComputeKernel` | +1 largest linear at load (1.16 GiB at 72B: the head) | host weights padded on the host (only if needed) and uploaded once |
+| 6 | wire-v2 maskgen tail-bit decode: ~13 B of int64 per value at once | `v2_planes_source` | 1.6 GB per 4096-column 72B item | decoded in groups (`TAIL_GROUPS`) |
+| 7 | maskgen column loop kept the previous block's planes, partials and result referenced while allocating the next | `maskgen_device` | +1 block (~0.7 GB) per item | `del` per block |
+| 8 | Triton timing gate (T4 class) made int64 copies of its two 64 MB weights | `_timing_gate` | 1 GB transient at start-up on a 16 GB T4 | `weight_rowsum` |
+
+Not fixed here (findings, by impact; the measurement plan below quantifies each):
+
+- **pks-v3 provider hint does not fit any cache at 32B+ (throughput, host RAM).** `PKSProvider` keeps the switched
+  hint `round(H q1 / 2^56)` as `m x 4096` uint64 per (model, customer seed, linear): **50.5 GB per seed at 7B, 157 GB
+  at 32B, 230 GB at 72B**, against `PGW_SERVICE_PKS_CACHE_GB=8`. A decode cycle over all linears evicts every entry, so
+  each item rebuilds its hint: a 4096-column GEMM plus the host-side modulus switch (`pks.switch_hint`, numpy, one
+  thread: ~2 s per 4096 rows on this box, ~30 s for 72B's gate_up) plus a 2 GB host-to-device upload in the key
+  switch. Proposal (needs the H100 numbers first): build and switch the hint on the device per item (the GEMM is
+  ~10 ms on an H100 at 72B gate_up, the switch is the `_round_mul_shift` already in `pks_gpu`) and never cache it on
+  the host above 7B; keep `y` on the device between the GEMM and the key switch (today device -> host -> device).
+- **Maskgen device memory is bounded by count, not bytes** (2 concurrent items per GPU): the default v3 shapes need
+  ~1.7-2.4 GB per item at 72B (`memplan`: 4.2 GiB of the 7.3 GiB headroom on one H100 with the masked head). A
+  larger item (`max_request_bytes` allows ~11k columns on 7B's head) can still exhaust a small GPU. Proposal: a
+  per-device byte budget for maskgen items from the plan (queueing only, never a refusal); not done here because it
+  sits in the admission code other teams are changing.
+- **Lane fixed cost (~0.13 ms estimated).** The native hot path's CPU work per trip is ~1 us (5 short String
+  allocations and 4-5 global mutex acquisitions in admission and stats; lock contention only at many connections). The
+  rest is wake-ups and synchronisation: `PGW_SERVICE_LANE_READ_SPIN_US=0` (blocking reads: one socket wake-up per
+  trip) and `PGW_SERVICE_LANE_SPIN_US=50` against device times of 0.1-0.2 ms at 32B-72B gate_up/down (the wait falls
+  through to `cuStreamSynchronize`). The session sweeps both over a real NIC; candidates for defaults only with numbers.
+- **Start-up**: 72B lane graph capture is 321 linears x 8 row counts = 2568 graphs, each self-checked 3 times against
+  the eager digit-GEMM path; warm-up captures the bucket graphs the fused GEMV does not take (one per linear on an
+  H100, three on a T4); `verify=full` hashes 67 GB. All timed per stage in the session's `memory` phase.
+- **Per-request Python (stream channel)**: K=32 rows are unpacked to int64 and then cut to their low 32 bits again
+  for the GEMV (4-9 us per trip at 7B-72B widths, measured here); the lane path has no Python per trip.
+- **Coalescing**: the Python batcher already merges rows of all tenants per (model, ring, linear) and splits replies by
+  row range; the lane's coalescer (`PGW_SERVICE_LANE_COALESCE`, opt-in) merges concurrent same-linear calls into one
+  launch (lane graphs exist for 1-8 rows; larger merges take the kernel path). Throughput at 1-64 connections with and
+  without it is in the session (`lane_nic_bench.py serve --coalesce`).
+- **Tensor parallel 72B** is implemented (output-row shards, `ShardedKernel`, sharded lane graphs and persistent
+  workers, byte-identical replies). The plan gives 40.1 GiB peak per H100 at TP=2 (39.6 GiB headroom) and 72.3 GiB
+  on one H100 (7.3 GiB headroom). Open: the masked head is not sharded (1.16 GiB extra on the first device); TP gather
+  overhead per trip and multi-GPU maskgen balance are measured in the session (`provider_scale_bench --tp 1,2`).
+
+**Memory plan** (`python -m pgw.service.memplan`; peak GiB per device with the masked head, the lane on, pks-v3
+maskgen at 1024 columns x 2 concurrent items, 4096-row eager calls; `--json` gives the breakdown):
+
+| model | GPU (torch capacity GiB) | TP | weights | steady | peak load | peak serving | headroom |
+|---|---|---|---|---|---|---|---|
+| 7B | T4 (14.56) | 1 | 6.58 | 7.49 | 7.68 | 11.43 | 3.13 |
+| 7B | L4 / A10G (22.03) | 1 | 6.58 | 7.49 | 7.52 | 11.44 | 10.6 |
+| 14B | L4 / A10G (22.03) | 1 | 13.03 | 13.95 | 13.99 | 16.73 | 5.3 |
+| 32B | L40S (44.52) | 1 | 29.79 | 30.77 | 30.8 | 34.66 | 9.86 |
+| 32B | H100 80GB (79.65) | 1 | 29.79 | 30.77 | 30.8 | 34.66 | 44.99 |
+| 72B | H100 80GB (79.65) | 1 | 66.55 | 67.59 | 67.62 | 72.33 | 7.32 |
+| 72B | H100 80GB | 2 | 33.86 | 34.81 | 34.84 | 40.1 | 39.55 |
+| 72B | H200 (140.4) | 1 | 66.55 | 67.59 | 67.62 | 72.33 | 68.07 |
+
+Before (same settings): `rev=run1` 7B on the T4 needs 14.37 GiB resident + the 4.06 GiB copy at warm-up: the plan
+reproduces the run's log from shapes alone (`tests/service/test_memplan.py`). `rev=bfee514`: 7B load fits (8.9 GiB)
+but serving does not fit any GPU (one 4096-row K=48 eager call on gate_up 21 GB; the unblocked key switch tens of
+GB); 72B on one H100: 69 GiB at load, serving out of memory. Not possible at all: 32B on one 24 GB card, 72B on one
+48 GB card. The registry now logs the plan's verdict (and the shortfall with its breakdown) before a pack loads on CUDA
+(advisory; the load proceeds).
+
+**H100 measurement plan** (`deploy/runpod/provider_perf_session.py`, ~75 min of one H100 + a CPU client pod; `--dry-run`
+prints it): `env`; `memory` (7B/32B/72B at full size with random weights through the service's kernel path: load,
+warm-up, lane capture, a 4096-row eager call on the largest linear and the head, the pks-v3 hint build, host switch and
+key switch; measured `memory_allocated`/peak and seconds per stage against the plan); `device_time`
+(`provider_scale_bench.py`: kernel / graph / persistent service time and the GEMV floor at 7B/32B/72B, 1-8 rows, TP 1
+and 2); `gemv_table` (H100 launch table); `lane_local` (UDS/shm lane next to Python-path and maskgen-GEMM load);
+`maskgen` (wire v2 fused, 1/4/16 groups, 1/2/4 concurrent, decode next to it); `lane_nic`
+(`benchmarks/lane_nic_bench.py serve` on the GPU pod and `client` on the client pod: trip p50/p90/p99, `compute_us`,
+TCP RTT -> `lane_fixed_us = trip - compute - rtt` and `transport_us` from a zero-compute stub listener; 1/4/16/64
+connections; rerun with `--read-spin-us 2000 --zero-copy`, client `--spin-auto-us 400`, and `--coalesce`). Decisions
+it feeds: lane spin/zero-copy/coalesce defaults; whether the pks-v3 hint moves to the device; maskgen byte budget;
+72B on one H100 vs TP=2.
+
+Tests (CPU, this box): `tests/core/test_ringmm_memory.py` (measured allocations vs the model, old vs new combine,
+chunked == whole, row sums without the int64 copy, padding), `tests/service/test_memplan.py` (run1 reproduction,
+targets fit, legacy model vs measured, CLI), `tests/service/test_pks_gpu_memory.py` (blocked key switch == whole == CPU
+path), `tests/service/test_kernels_memory.py` (blockwise maskgen result == whole), `tests/service/test_maskgen_gpu.py`
+(tail decode in groups), `tests/benchmarks/test_provider_perf_tools.py` (NIC bench over loopback TLS, session dry
+run). New settings (all keep outputs identical): `PGW_SERVICE_EAGER_WORK_MB` (512), `PGW_SERVICE_PKS_GPU_WORK_MB`
+(512). GPU confirmation of the CUDA-only code paths (one upload in `ComputeKernel`, `_maskgen_planes_cuda`'s
+blockwise copy) is in the session's `memory` phase; no Kaggle kernel was spent.

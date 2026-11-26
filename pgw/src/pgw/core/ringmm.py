@@ -44,19 +44,24 @@ __all__ = [
     "INT_MM_MAX_INNER_CPU",
     "Backend",
     "PreparedWeight",
+    "chunk_rows_for",
     "cpu_int8_available",
     "cpu_int8_fast",
     "cuda_int8_available",
+    "eager_work_budget",
     "int8_digit_gemm",
     "int8_ring_matmul",
     "int_mm_max_inner",
     "offset_byte_consts",
     "offset_byte_core",
     "offset_byte_rows",
+    "offset_byte_work_bytes",
     "pad_weight_cuda",
+    "padded_shape",
     "ringmm",
     "ringmm_reference",
     "select_backend",
+    "weight_rowsum",
 ]
 
 log = logging.getLogger(__name__)
@@ -287,7 +292,17 @@ def _offset_byte_mm(x: torch.Tensor, k: int, w: torch.Tensor, rowsum: torch.Tens
     if k % 8 or not 8 <= k <= 56:
         raise ShapeError(f"offset-byte matmul needs K a multiple of 8 in [8, 56], got {k}")
     sh, pm = offset_byte_consts(k, x.device)
-    return offset_byte_core(x, k, w, rowsum, sh, pm, offset_byte_rows(k, int(x.shape[0])))[:, :m]
+    b, n = int(x.shape[0]), int(x.shape[1])
+    mp, np_ = int(w.shape[0]), int(w.shape[1])
+    step = chunk_rows_for(eager_work_budget(), lambda r: offset_byte_work_bytes(k, r, n, np_, mp), b)
+    if step >= b:
+        return offset_byte_core(x, k, w, rowsum, sh, pm, offset_byte_rows(k, b))[:, :m]
+    # rows in chunks (each output row depends only on its own input row: bit-identical), bounded memory
+    out = torch.empty((b, m), dtype=torch.int64, device=x.device)
+    for r0 in range(0, b, step):
+        xc = x[r0:r0 + step]
+        out[r0:r0 + step] = offset_byte_core(xc, k, w, rowsum, sh, pm, offset_byte_rows(k, int(xc.shape[0])))[:, :m]
+    return out
 
 
 def offset_byte_rows(k: int, b: int) -> int:
@@ -313,7 +328,14 @@ def offset_byte_core(
 
     No host synchronization and no host-to-device copies, so it can be captured in a CUDA graph.
     ``p >= (K/8) * b`` is the padded GEMM row count (the caller picks a shape ``torch._int_mm``
-    accepts); ``sh``/``pm`` come from :func:`offset_byte_consts`. Columns past ``m`` are padding.
+    accepts); ``sh``/``pm`` come from :func:`offset_byte_consts` (kept for the callers; the per-plane
+    shifts and masks are the same constants, passed as kernel scalars). Columns past ``m`` are padding.
+
+    Working memory (:func:`offset_byte_work_bytes`): the int32 GEMM result and two ``(b, mp)`` int64
+    buffers. The planes are recombined in place (``acc += (plane_i & (2^(K-8i) - 1)) << 8i``), not as
+    ``K/8`` stacked int64 temporaries (three ``(K/8) b mp`` int64 tensors at once before 2026-11-26: 24
+    bytes per digit row and output column, e.g. 7.5 GB for a 2048-digit-row call on a 152k-row LM head).
+    Same integers in the same int64 wrap-around arithmetic, so the result is bit-identical.
     """
     nb = k // 8
     b, n = x.shape
@@ -324,32 +346,132 @@ def offset_byte_core(
     planes = (x.contiguous().view(torch.uint8).view(b, n, 8)[:, :, :nb] ^ 0x80).view(torch.int8)
     d8 = torch.zeros((p, np_), dtype=torch.int8, device=x.device)
     d8[:rows, :n].view(nb, b, n).copy_(planes.permute(2, 0, 1))
-    y32: torch.Tensor | None = None
-    for c0 in range(0, np_, INT_MM_MAX_INNER):
-        c1 = min(np_, c0 + INT_MM_MAX_INNER)
-        part = torch._int_mm(d8[:, c0:c1].contiguous(), w[:, c0:c1].t())[:rows].to(torch.int64)
-        y32 = part if y32 is None else y32 + part
-    assert y32 is not None
-    y = y32.view(nb, b, mp)
-    acc = ((y & pm) << sh).sum(0)
+    del planes
+    if np_ <= INT_MM_MAX_INNER:
+        y = torch._int_mm(d8, w.t())  # (p, mp) int32, exact: |sum| <= 128 * 128 * n < 2^31
+    else:  # inner chunks summed in int64 (each chunk's int32 partial is exact)
+        y = torch._int_mm(d8[:, :INT_MM_MAX_INNER].contiguous(), w[:, :INT_MM_MAX_INNER].t())[:rows].to(torch.int64)
+        for c0 in range(INT_MM_MAX_INNER, np_, INT_MM_MAX_INNER):
+            c1 = min(np_, c0 + INT_MM_MAX_INNER)
+            y.add_(torch._int_mm(d8[:, c0:c1].contiguous(), w[:, c0:c1].t())[:rows])
+    del d8
+    acc = torch.empty((b, mp), dtype=torch.int64, device=x.device)
+    acc.copy_(y[:b])  # int32 -> int64 sign extension, as ``.to(torch.int64)``
+    acc.bitwise_and_((1 << k) - 1)
+    if nb > 1:
+        tmp = torch.empty((b, mp), dtype=torch.int64, device=x.device)
+        for i in range(1, nb):
+            tmp.copy_(y[i * b:(i + 1) * b])
+            tmp.bitwise_and_((1 << (k - 8 * i)) - 1)  # reduced mod 2^(K - 8i) before the shift: no overflow
+            tmp.bitwise_left_shift_(8 * i)
+            acc.add_(tmp)
+        del tmp
+    del y
     c = (128 * sum(1 << (8 * i) for i in range(nb))) % (1 << k)
-    return (acc + c * rowsum) & ((1 << k) - 1)
+    acc.add_(rowsum, alpha=c)  # int64 wrap-around == mod 2^64, then reduced mod 2^K
+    return acc.bitwise_and_((1 << k) - 1)
+
+
+def offset_byte_work_bytes(k: int, b: int, n: int, np_: int, mp: int, p: int | None = None) -> int:
+    """Peak bytes :func:`offset_byte_core` allocates for a ``(b, n)`` call on a padded ``(mp, np_)`` weight
+    (its result included; the input and the weight are not). Used to size row chunks and by
+    :mod:`pgw.service.memplan`; checked against measured allocations on CPU (``tests/core/test_ringmm.py``).
+    cuBLAS workspaces are outside (a fixed per-stream reservation, counted by the memory plan).
+    """
+    nb = k // 8
+    rows = nb * b
+    p = offset_byte_rows(k, b) if p is None else int(p)
+    ph_planes = b * n * nb + p * np_  # byte planes + the padded digit operand
+    if np_ <= INT_MM_MAX_INNER:
+        ph_gemm = p * np_ + 4 * p * mp
+        y_bytes = 4 * p * mp
+    else:
+        ch = INT_MM_MAX_INNER
+        ph_gemm = p * np_ + 8 * rows * mp + 4 * p * mp + p * ch + (p * ch if np_ % ch else 0)
+        y_bytes = 8 * rows * mp
+    ph_combine = y_bytes + (16 if nb > 1 else 8) * b * mp
+    return max(ph_planes, ph_gemm, ph_combine)
+
+
+def chunk_rows_for(budget: int, work: Callable[[int], int], rows: int, *, align: int = 8) -> int:
+    """Largest row count ``r <= rows`` with ``work(r) <= budget`` (at least 1), rounded down to ``align`` when
+    above it. ``work`` must be non-decreasing in ``r``."""
+    if rows <= 1 or work(rows) <= budget:
+        return max(1, rows)
+    lo, hi = 1, rows  # work(lo) may exceed the budget: one row is the floor
+    while lo < hi:
+        mid = (lo + hi + 1) // 2
+        if work(mid) <= budget:
+            lo = mid
+        else:
+            hi = mid - 1
+    return lo // align * align if lo >= align else lo
+
+
+#: Working-memory budget of one eager offset-byte call before it is split into row chunks (bytes). A call's
+#: rows are independent (every output row depends only on its own input row), so chunking is bit-identical.
+#: ``PGW_SERVICE_EAGER_WORK_MB`` overrides it (read by :func:`eager_work_budget`).
+EAGER_WORK_BYTES = 512 << 20
+ENV_EAGER_WORK_MB = "PGW_SERVICE_EAGER_WORK_MB"
+
+
+def eager_work_budget() -> int:
+    """Bytes of transient device memory one eager ring-matmul call may use (:data:`EAGER_WORK_BYTES`)."""
+    import os
+
+    raw = (os.environ.get(ENV_EAGER_WORK_MB) or "").strip()
+    if not raw:
+        return EAGER_WORK_BYTES
+    try:
+        mb = int(raw)
+    except ValueError as exc:
+        raise ConfigError(f"{ENV_EAGER_WORK_MB} must be an integer number of MiB, got {raw!r}") from exc
+    if mb < 16:
+        raise ConfigError(f"{ENV_EAGER_WORK_MB} must be at least 16 (MiB), got {mb}")
+    return mb << 20
+
+
+def padded_shape(m: int, n: int) -> tuple[int, int]:
+    """``(m, n)`` rounded up to the CUDA operand alignment (:func:`pad_weight_cuda`)."""
+    return -(-m // _CUDA_ALIGN) * _CUDA_ALIGN, -(-n // _CUDA_ALIGN) * _CUDA_ALIGN
 
 
 def pad_weight_cuda(w8: torch.Tensor, device: torch.device | str) -> torch.Tensor:
-    """``w8 (m, n)`` zero padded to multiples of 32 in both dimensions on ``device`` (CUDA layout)."""
+    """``w8 (m, n)`` zero padded to multiples of 32 in both dimensions on ``device`` (CUDA layout).
+
+    Device memory: exactly one padded copy. A host weight is padded on the host (only when its shape needs it)
+    and copied once; a CUDA weight already on ``device``, contiguous and aligned, is returned as is (no copy).
+    Before 2026-11-26 every call made a zeroed padded tensor *and* a full unpadded device copy of ``w8`` (two
+    copies of the largest linear at once during load).
+    """
+    dev = torch.device(device)
     m, n = w8.shape
-    mp, np_ = -(-m // _CUDA_ALIGN) * _CUDA_ALIGN, -(-n // _CUDA_ALIGN) * _CUDA_ALIGN
-    w = torch.zeros((mp, np_), dtype=torch.int8, device=device)
-    w[:m, :n] = w8.to(device)
+    mp, np_ = padded_shape(int(m), int(n))
+    aligned = (mp, np_) == (int(m), int(n))
+    if dev.type == "cuda" and w8.device.type == "cuda" and aligned and w8.is_contiguous() \
+            and w8.device.index == (dev.index if dev.index is not None else torch.cuda.current_device()):
+        return w8
+    if dev.type == "cuda" and w8.device.type == "cpu":
+        if aligned:
+            return w8.contiguous().to(dev)
+        host = torch.zeros((mp, np_), dtype=torch.int8)
+        host[:m, :n] = w8
+        return host.to(dev)
+    w = torch.zeros((mp, np_), dtype=torch.int8, device=dev)
+    w[:m, :n] = w8
     return w
 
 
-def weight_rowsum(w8: torch.Tensor, chunk_rows: int = 4096) -> torch.Tensor:
+def weight_rowsum(w8: torch.Tensor, chunk_rows: int | None = None, *, chunk_bytes: int = 32 << 20) -> torch.Tensor:
     """Exact int64 row sums of an int8 weight, in row chunks: never an int64 copy of the whole weight (that is
-    8x the weight: 4.1 GiB for a 152k x 3584 LM head, which ran a 7B provider out of memory on a 16 GB T4)."""
-    out = torch.empty(int(w8.shape[0]), dtype=torch.int64, device=w8.device)
-    for r0 in range(0, int(w8.shape[0]), chunk_rows):
+    8x the weight: 4.1 GiB for a 152k x 3584 LM head, which ran a 7B provider out of memory on a 16 GB T4).
+    Note that ``w8.sum(1, dtype=torch.int64)`` *does* make that copy (torch casts the input first).
+    Chunks hold at most ``chunk_bytes`` of int64 (or ``chunk_rows`` rows)."""
+    rows, n = int(w8.shape[0]), int(w8.shape[1]) if w8.ndim == 2 else 1
+    if chunk_rows is None:
+        chunk_rows = max(1, chunk_bytes // max(1, 8 * n))
+    out = torch.empty(rows, dtype=torch.int64, device=w8.device)
+    for r0 in range(0, rows, chunk_rows):
         out[r0 : r0 + chunk_rows] = w8[r0 : r0 + chunk_rows].to(torch.int64).sum(1)
     return out
 
