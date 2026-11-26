@@ -1,0 +1,24 @@
+{"qwen2.5-72b-instruct": {"repo": "Qwen/Qwen2.5-72B-Instruct", "revision": "495f39366efef23836d0cfae4fbe635880d2be31", "layers": 80, "tie_word_embeddings": false, "checkpoint_bytes": 145.412, "max_shard_bytes": 3.995, "max_spill_bytes": 0.484, "peak_scratch_bytes": 8.475, "output_bytes": 75.231, "largest_item": "plain:embed_tokens", "largest_item_input_bytes": 2.491, "shards": 37}}
+
+---stderr---
+Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+
+Parse safetensors files:   0%|          | 0/37 [00:00<?, ?it/s]
+Parse safetensors files:   3%|▎         | 1/37 [00:00<00:27,  1.31it/s]
+Parse safetensors files:  11%|█         | 4/37 [00:00<00:06,  4.95it/s]
+Parse safetensors files:  16%|█▌        | 6/37 [00:01<00:04,  7.29it/s]
+Parse safetensors files:  24%|██▍       | 9/37 [00:01<00:03,  7.45it/s]
+Parse safetensors files:  30%|██▉       | 11/37 [00:01<00:03,  7.69it/s]
+Parse safetensors files:  35%|███▌      | 13/37 [00:01<00:03,  7.85it/s]
+Parse safetensors files:  46%|████▌     | 17/37 [00:02<00:01, 10.03it/s]
+Parse safetensors files:  51%|█████▏    | 19/37 [00:02<00:02,  8.12it/s]
+Parse safetensors files:  54%|█████▍    | 20/37 [00:02<00:02,  7.76it/s]
+Parse safetensors files:  59%|█████▉    | 22/37 [00:02<00:01,  8.48it/s]
+Parse safetensors files:  70%|███████   | 26/37 [00:03<00:00, 12.06it/s]
+Parse safetensors files:  76%|███████▌  | 28/37 [00:03<00:01,  8.85it/s]
+Parse safetensors files:  81%|████████  | 30/37 [00:03<00:00,  9.76it/s]
+Parse safetensors files:  86%|████████▋ | 32/37 [00:03<00:00,  9.26it/s]
+Parse safetensors files:  92%|█████████▏| 34/37 [00:04<00:00, 10.21it/s]
+Parse safetensors files:  97%|█████████▋| 36/37 [00:04<00:00,  8.44it/s]
+Parse safetensors files: 100%|██████████| 37/37 [00:04<00:00,  5.89it/s]
+Parse safetensors files: 100%|██████████| 37/37 [00:04<00:00,  7.64it/s]

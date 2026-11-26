@@ -1,0 +1,13 @@
+{"qwen2.5-32b-instruct": {"hf_repo": "Qwen/Qwen2.5-32B-Instruct", "revision": "5ede1c97bbab6ce5cda5812749b4c0bdf79b18dd", "format": 2, "packer": "shardwise (hash only)", "stats": {"shards": 17, "fetched_gb": 65.528, "peak_scratch_gb": 8.38, "spill_peak_gb": 0.566, "peak_rss_gb": 7.981, "peak_rss_anon_gb": 4.247, "fetch_s": 234.6, "compute_s": 1417.4, "seconds": 1432.1}, "fingerprint": "a4cf6ba9ac2b654fdd8a14b850a792772d7f3f918d671b0b6a124b01020dd372", "baked": null, "matches": null}}
+Filesystem      Size  Used Avail Use% Mounted on
+overlay         8.0T  5.6T  2.5T  70% /
+2.7M	/root/.cache/huggingface
+
+---stderr---
+Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+
+Parse safetensors files:   0%|          | 0/17 [00:00<?, ?it/s]
+Parse safetensors files:   6%|▌         | 1/17 [00:00<00:02,  5.86it/s]
+Parse safetensors files:  53%|█████▎    | 9/17 [00:00<00:00, 31.31it/s]
+Parse safetensors files:  76%|███████▋  | 13/17 [00:00<00:00, 33.54it/s]
+Parse safetensors files: 100%|██████████| 17/17 [00:00<00:00, 32.13it/s]

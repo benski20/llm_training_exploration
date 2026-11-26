@@ -59,6 +59,22 @@ at a fixed commit), so a service serving anything else is refused before any dow
 You can re-derive any of them from the public checkpoint with `scripts/pin_model_fingerprints.py`
 (`pgw pack <repo> --revision <commit> --name <model>` with the default parameters).
 
+The larger Qwen2.5 Instruct models are pinned the same way ahead of their support (they are not yet accepted as
+`model=`; see [Planned](#planned)), so their first use will check the service against a baked fingerprint and never
+needs the checkpoint:
+
+| model id | pinned checkpoint commit | pack fingerprint |
+|---|---|---|
+| `qwen2.5-14b-instruct` | `cf98f3b3...` | `d4afbe77ff07ee3e0b9fc2f1c2074930e2f8acfd358b73d3e4cdc5329c34c0b4` |
+| `qwen2.5-32b-instruct` | `5ede1c97...` | `a4cf6ba9ac2b654fdd8a14b850a792772d7f3f918d671b0b6a124b01020dd372` |
+| `qwen2.5-72b-instruct` | `495f3936...` | `5e8001c02d7903a66f56d01f99890d56bff3bc5373eeaa451b80ceb0b98ab02f` |
+
+These were derived with the shard-wise packer (one checkpoint shard of about 4 GB on disk at a time, hash only),
+which produces exactly the same pack as `pgw pack`: `scripts/pin_model_fingerprints.py <model>` needs about 4.5 GB of
+scratch disk and a few GB of memory even at 72B (`--write-pack` also writes the pack, 16 / 34 / 75 GB).
+A model pinned without a fingerprint is checked on first use by packing the public checkpoint on your machine the
+same way, shard by shard: about one shard plus the int8 pack in disk, never the whole bfloat16 checkpoint.
+
 More vCPUs raise tokens per second until the round trips to our GPU dominate. For reference, in our lab
 (measured, 2026-11-23) a CPU-only gateway with 48 cores placed next to an H100 decoded Qwen2.5-7B at about
 28 tokens per second over back-to-back chats (22 tokens per second for a single warm chat), with mask
@@ -66,5 +82,5 @@ generation keeping up. A small pilot machine will be slower.
 
 ## Planned
 
-Larger Qwen2.5 models (14B, 32B) and other open-weight families are planned. Tell us which models matter
-to you.
+Larger Qwen2.5 models (14B, 32B, 72B; their fingerprints are already pinned, above) and other open-weight
+families are planned. Tell us which models matter to you.

@@ -445,12 +445,20 @@ provision(model, *, session: pgw.sdk.session.Session, cache_dir: Path, progress:
   fingerprint (0.5B `d773a502...`, 1.5B `3d198de4...`, 3B `0ec0b8b2...`, 7B `f7c6fb4f...`:
   `scripts/pin_model_fingerprints.py`, i.e. `pgw pack <repo> --revision <commit> --name <model>` with default
   parameters, pack format 2; derived on a Kaggle CPU kernel, 0.5B / 1.5B also on the integration box, identical;
-  the 0.5B pin is also re-derived and checked by `tests/sdk/test_e2e_product.py` when the checkpoint is cached). A
+  the 0.5B pin is also re-derived and checked by `tests/sdk/test_e2e_product.py` when the checkpoint is cached). The
+  larger models are pinned ahead of `SUPPORTED_MODELS`: 14B `d4afbe77...` (`cf98f3b3...`), 32B `a4cf6ba9...`
+  (`5ede1c97...`, the provider image's commit), 72B `5e8001c0...` (`495f3936...`), derived on Kaggle CPU kernels with
+  the shard-wise packer (`pgw.modelpack.shardwise`, byte-identical to `pgw pack`; at 14B also checked file by file
+  against `pgw pack` on the whole checkpoint). A
   provider serving another fingerprint is refused (`FingerprintMismatchError`) before any download. A pin without a
-  fingerprint (a future model; every release model has one) is checked on first use instead: the entry's
+  fingerprint (a future model) is checked on first use instead: the entry's
   `hf_repo`/`revision` must equal the pin, and the first provisioning runs `provision(source="hf", hf_repo=...,
-  hf_revision=...)`, which packs the public checkpoint locally and requires the provider's fingerprint; the result
-  is remembered in `models/<fp16>/public-check.json`. `SDKOptions.model_fingerprints` adds or replaces pins (custom
+  hf_revision=...)`, which packs the public checkpoint locally and requires the provider's fingerprint (verified in
+  full); the result is remembered in `models/<fp16>/public-check.json`. That pack is built shard by shard
+  (`stream_pack_checkpoint`: one checkpoint shard downloaded, packed and deleted at a time, resumable from
+  `models/<fp16>/hf-stream`), so it needs about one shard (4 GB) plus the int8 pack in disk, not the bfloat16
+  checkpoint (29 / 65 / 145 GB at 14B / 32B / 72B); a checkpoint already complete in the local Hugging Face cache is
+  read there. `SDKOptions.model_fingerprints` adds or replaces pins (custom
   packs; tests with the tiny model).
 * **Hint.** `hint="local"` (default; decision: the provider-built path streams ~44 GB of `H` at 7B):
   `provision(hint="none")` and the background factory builds the pks-v3 hint from the factory pack

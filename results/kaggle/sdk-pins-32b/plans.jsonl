@@ -1,0 +1,1 @@
+{"qwen2.5-32b-instruct": {"repo": "Qwen/Qwen2.5-32B-Instruct", "revision": "5ede1c97bbab6ce5cda5812749b4c0bdf79b18dd", "layers": 64, "tie_word_embeddings": false, "checkpoint_bytes": 65.528, "max_shard_bytes": 3.917, "max_spill_bytes": 0.283, "peak_scratch_bytes": 8.1, "output_bytes": 34.343, "largest_item": "plain:embed_tokens", "largest_item_input_bytes": 1.557, "shards": 17}}

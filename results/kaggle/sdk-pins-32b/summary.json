@@ -1,0 +1,92 @@
+{
+ "job": {
+  "gpu": false,
+  "exclude": [
+   "tests",
+   "benchmarks",
+   "rust",
+   "examples",
+   "SPEC.md",
+   "INTERFACE_NOTES.md",
+   "STATUS.md",
+   "scripts/client_demo",
+   "src/pgw/__pycache__",
+   "src/pgw/cli",
+   "src/pgw/console",
+   "src/pgw/design",
+   "src/pgw/engine",
+   "src/pgw/enroll",
+   "src/pgw/factory",
+   "src/pgw/gateway",
+   "src/pgw/hemask",
+   "src/pgw/maskstore",
+   "src/pgw/moe",
+   "src/pgw/observability",
+   "src/pgw/platform",
+   "src/pgw/provision",
+   "src/pgw/service",
+   "src/pgw/wire"
+  ],
+  "steps": [
+   {
+    "kind": "shell",
+    "name": "cpu_info",
+    "cmd": "nproc; free -g; df -h / /tmp /kaggle/working; python -c 'import huggingface_hub as h; print(h.__version__)'",
+    "timeout": 60
+   },
+   {
+    "kind": "shell",
+    "name": "plan_32b",
+    "cmd": "PYTHONPATH=src python scripts/pin_model_fingerprints.py qwen2.5-32b-instruct --plan --prefetch 1 | tee -a /kaggle/working/plans.jsonl",
+    "timeout": 600
+   },
+   {
+    "kind": "shell",
+    "name": "pin_32b",
+    "cmd": "mkdir -p /tmp/pinwork && HF_XET_CHUNK_CACHE_SIZE_BYTES=0 PYTHONPATH=src python scripts/pin_model_fingerprints.py qwen2.5-32b-instruct --prefetch 1 --work /tmp/pinwork > /tmp/pin_32b.out; rc=$?; cat /tmp/pin_32b.out >> /kaggle/working/pins.jsonl; cat /tmp/pin_32b.out; df -h /tmp; du -sh ~/.cache/huggingface 2>/dev/null; rm -rf ~/.cache/huggingface/hub/models--Qwen--*; exit $rc",
+    "timeout": 7200
+   }
+  ]
+ },
+ "steps": {
+  "pip_install": {
+   "rc": 0,
+   "seconds": 14.8,
+   "tail": "\n---stderr---\n"
+  },
+  "pip_freeze": {
+   "rc": 0,
+   "seconds": 1.2,
+   "tail": "o==1.8.0\ntorchmetrics==1.9.0\ntorchsummary==1.5.1\ntorchtune==0.6.1\ntorchvision @ https://download.pytorch.org/whl/cpu/torchvision-0.26.0%2Bcpu-cp313-cp313-manylinux_2_28_x86_64.whl\ntornado==6.5.7\nTPOT==1.1.0\ntqdm==4.67.3\ntraitlets==5.16.1\ntraittypes==0.2.3\ntransformers==5.20.2\ntreescope==0.1.10\ntruststore==0.10.5\ntrx-python==0.6\ntsfresh==0.21.2\ntuf==7.0.1\ntweepy==4.17.0\ntypeguard==4.6.0\ntyper==0.27.3\ntypes-pytz==2026.5.0.20261006\ntypes-PyYAML==6.0.12.20261122\ntypes-setuptools==84.0.0.20261006\ntyping-inspect==0.9.0\ntyping-inspection==0.4.4\ntyping_extensions==4.16.0\ntzdata==2026.5\ntzlocal==5.4.5\nujson==6.1.0\numap-learn==0.5.12\numf==1.0.3\nuniversal_pathlib==0.3.10\nupdate_checker==1.0.1\nuri-template==1.3.0\nuritemplate==4.2.0\nurllib3==2.8.0\nurwid==5.1.3\nurwid_readline==0.15.1\nuuid_utils==0.18.0\nuvicorn==0.54.0\nuvloop==0.23.0\nvega-datasets==0.9.0\nvisions==0.8.1\nvtk==9.7.2\nwadllib==1.3.6\nWand==0.7.2\nwandb==0.28.1\nwasabi==1.1.3\nwatchdog==6.0.0\nwatchfiles==1.3.0\nwavio==0.0.9\nwcwidth==0.9.3\nweasel==1.0.0\nwebcolors==25.10.0\nwebencodings==0.6.1\nwebsocket-client==1.9.2\nwebsockets==15.0.1\nWerkzeug==3.1.9\nwheel==0.48.0\nwidgetsnbextension==4.0.16\nwoodwork==0.31.0\nwordcloud==1.9.6\nwrapt==2.5.1\nwsproto==1.3.2\nxarray==2025.12.0\nxarray-einstats==0.11.0\nxee==0.1.2\nxgboost==3.4.1\nxlrd==2.0.2\nxvfbwrapper==0.2.38\nxxhash==4.0.2\nxyzservices==2026.9.1\nyarl==1.25.1\nydata-profiling==4.18.4\nydf==0.15.0\nydf_tf==2.21.0\nyellowbrick==1.5\nyfinance==0.2.66\nzict==3.0.0\nzipp==4.1.2\nzstandard==0.25.0\n\n---stderr---\n"
+  },
+  "cpu_info": {
+   "rc": 0,
+   "seconds": 0.2,
+   "tail": "4\n               total        used        free      shared  buff/cache   available\nMem:              31           1          25           0           4          30\nSwap:              0           0           0\nFilesystem      Size  Used Avail Use% Mounted on\noverlay         8.0T  5.6T  2.5T  70% /\noverlay         8.0T  5.6T  2.5T  70% /\n/dev/loop2       20G  608K   20G   1% /kaggle/working\n1.33.0\n\n---stderr---\n"
+  },
+  "plan_32b": {
+   "rc": 0,
+   "seconds": 5.0,
+   "tail": "{\"qwen2.5-32b-instruct\": {\"repo\": \"Qwen/Qwen2.5-32B-Instruct\", \"revision\": \"5ede1c97bbab6ce5cda5812749b4c0bdf79b18dd\", \"layers\": 64, \"tie_word_embeddings\": false, \"checkpoint_bytes\": 65.528, \"max_shard_bytes\": 3.917, \"max_spill_bytes\": 0.283, \"peak_scratch_bytes\": 8.1, \"output_bytes\": 34.343, \"largest_item\": \"plain:embed_tokens\", \"largest_item_input_bytes\": 1.557, \"shards\": 17}}\n\n---stderr---\nWarning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.\n\nParse safetensors files:   0%|          | 0/17 [00:00<?, ?it/s]\nParse safetensors files:   6%|\u258c         | 1/17 [00:00<00:04,  3.69it/s]\nParse safetensors files:  47%|\u2588\u2588\u2588\u2588\u258b     | 8/17 [00:00<00:00, 25.51it/s]\nParse safetensors files:  71%|\u2588\u2588\u2588\u2588\u2588\u2588\u2588   | 12/17 [00:00<00:00, 23.66it/s]\nParse safetensors files: 100%|\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588| 17/17 [00:00<00:00, 24.34it/s]\nParse safetensors files: 100%|\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588| 17/17 [00:00<00:00, 22.15it/s]\n"
+  },
+  "pin_32b": {
+   "rc": 0,
+   "seconds": 1434.7,
+   "tail": "{\"qwen2.5-32b-instruct\": {\"hf_repo\": \"Qwen/Qwen2.5-32B-Instruct\", \"revision\": \"5ede1c97bbab6ce5cda5812749b4c0bdf79b18dd\", \"format\": 2, \"packer\": \"shardwise (hash only)\", \"stats\": {\"shards\": 17, \"fetched_gb\": 65.528, \"peak_scratch_gb\": 8.38, \"spill_peak_gb\": 0.566, \"peak_rss_gb\": 7.981, \"peak_rss_anon_gb\": 4.247, \"fetch_s\": 234.6, \"compute_s\": 1417.4, \"seconds\": 1432.1}, \"fingerprint\": \"a4cf6ba9ac2b654fdd8a14b850a792772d7f3f918d671b0b6a124b01020dd372\", \"baked\": null, \"matches\": null}}\nFilesystem      Size  Used Avail Use% Mounted on\noverlay         8.0T  5.6T  2.5T  70% /\n2.7M\t/root/.cache/huggingface\n\n---stderr---\nWarning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.\n\nParse safetensors files:   0%|          | 0/17 [00:00<?, ?it/s]\nParse safetensors files:   6%|\u258c         | 1/17 [00:00<00:02,  5.86it/s]\nParse safetensors files:  53%|\u2588\u2588\u2588\u2588\u2588\u258e    | 9/17 [00:00<00:00, 31.31it/s]\nParse safetensors files:  76%|\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u258b  | 13/17 [00:00<00:00, 33.54it/s]\nParse safetensors files: 100%|\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588| 17/17 [00:00<00:00, 32.13it/s]\n"
+  }
+ },
+ "env": {
+  "python": "3.13.18 (main, Oct 26 2026, 15:28:15) [GCC 13.3.0]",
+  "torch": "2.11.0+cpu",
+  "cuda": null,
+  "gpu": null,
+  "gpu_count": 0,
+  "cpu_count": 4,
+  "mem": [
+   "MemTotal:       32869296 kB",
+   "MemFree:        27494856 kB"
+  ],
+  "disk": "Filesystem      Size  Used Avail Use% Mounted on\noverlay         8.0T  5.6T  2.5T  70% /\noverlay         8.0T  5.6T  2.5T  70% /\n/dev/loop2       20G  580K   20G   1% /kaggle/working\n"
+ },
+ "total_minutes": 24.3
+}

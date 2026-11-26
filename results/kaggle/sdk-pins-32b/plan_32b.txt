@@ -1,0 +1,11 @@
+{"qwen2.5-32b-instruct": {"repo": "Qwen/Qwen2.5-32B-Instruct", "revision": "5ede1c97bbab6ce5cda5812749b4c0bdf79b18dd", "layers": 64, "tie_word_embeddings": false, "checkpoint_bytes": 65.528, "max_shard_bytes": 3.917, "max_spill_bytes": 0.283, "peak_scratch_bytes": 8.1, "output_bytes": 34.343, "largest_item": "plain:embed_tokens", "largest_item_input_bytes": 1.557, "shards": 17}}
+
+---stderr---
+Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+
+Parse safetensors files:   0%|          | 0/17 [00:00<?, ?it/s]
+Parse safetensors files:   6%|▌         | 1/17 [00:00<00:04,  3.69it/s]
+Parse safetensors files:  47%|████▋     | 8/17 [00:00<00:00, 25.51it/s]
+Parse safetensors files:  71%|███████   | 12/17 [00:00<00:00, 23.66it/s]
+Parse safetensors files: 100%|██████████| 17/17 [00:00<00:00, 24.34it/s]
+Parse safetensors files: 100%|██████████| 17/17 [00:00<00:00, 22.15it/s]

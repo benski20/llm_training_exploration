@@ -1,0 +1,11 @@
+4
+               total        used        free      shared  buff/cache   available
+Mem:              31           1          25           0           4          30
+Swap:              0           0           0
+Filesystem      Size  Used Avail Use% Mounted on
+overlay         8.0T  5.6T  2.5T  70% /
+overlay         8.0T  5.6T  2.5T  70% /
+/dev/loop2       20G  616K   20G   1% /kaggle/working
+1.33.0
+
+---stderr---
