@@ -14,7 +14,7 @@
 use chacha20::cipher::consts::U10;
 use chacha20::cipher::{Block, KeyIvInit, StreamCipher, StreamCipherCore, StreamCipherSeek, StreamCipherSeekCore};
 use chacha20::{ChaCha20, ChaChaCore};
-use numpy::{PyArray2, PyArrayMethods};
+use numpy::{PyArray2, PyArrayMethods, PyUntypedArrayMethods};
 use pgw_core_rs::prng::{Label, SeedExpander, MAX_STREAM_BYTES};
 use pyo3::buffer::PyBuffer;
 use pyo3::exceptions::{PyTypeError, PyValueError};
@@ -74,7 +74,7 @@ fn ring_mask(k: u32) -> Result<u64, String> {
 
 /// Elements `[elem_offset, elem_offset + out.len())` of the ring stream keyed by `key`:
 /// `u64_le(8 keystream bytes) & (2^k - 1)`, stored as `i64` (wrapping for `k = 64`, like numpy's
-/// `astype(np.int64)`). `out` must be zero on entry (the keystream is XORed in).
+/// `astype(np.int64)`). `out` is overwritten (its contents on entry do not matter).
 pub(crate) fn fill_ring(key: &[u8; 32], elem_offset: u64, out: &mut [i64], k: u32) -> Result<(), String> {
     let mask = ring_mask(k)?;
     let beyond = "stream offset beyond the 2^32-block ChaCha20 counter range";
@@ -83,8 +83,41 @@ pub(crate) fn fill_ring(key: &[u8; 32], elem_offset: u64, out: &mut [i64], k: u3
     if end > MAX_STREAM_BYTES {
         return Err(beyond.into());
     }
-    for_each_part(out, 8, PAR_MIN_BYTES, |first, part| {
-        let pos = byte_off + 8 * first as u64;
+    #[cfg(target_arch = "x86_64")]
+    if crate::chacha::available() {
+        for_each_part(out, 8, PAR_MIN_BYTES, |first, part| {
+            let e0 = elem_offset + first as u64;
+            // whole 64-byte blocks (8 elements) in the middle: AVX-512, masked in the store; the partial
+            // blocks at either end through the portable path below (same bytes)
+            let head = ((8 - e0 % 8) % 8).min(part.len() as u64) as usize;
+            let mid = (part.len() - head) / 8 * 8;
+            let (h, rest) = part.split_at_mut(head);
+            let (m, t) = rest.split_at_mut(mid);
+            if !h.is_empty() {
+                fill_ring_portable(key, e0, h, mask);
+            }
+            if !m.is_empty() {
+                // SAFETY: AVX-512F detected; i64 and u64 have the same layout. Blocks e1/8 .. (e1 + mid)/8 lie
+                // below 2^32 (end <= MAX_STREAM_BYTES checked above).
+                let e1 = e0 + head as u64;
+                let mu = unsafe { std::slice::from_raw_parts_mut(m.as_mut_ptr().cast::<u64>(), m.len()) };
+                unsafe { crate::chacha::ring_blocks(key, (e1 / 8) as u32, mu, mask) };
+            }
+            if !t.is_empty() {
+                fill_ring_portable(key, e0 + (head + mid) as u64, t, mask);
+            }
+        });
+        return Ok(());
+    }
+    for_each_part(out, 8, PAR_MIN_BYTES, |first, part| fill_ring_portable(key, elem_offset + first as u64, part, mask));
+    Ok(())
+}
+
+/// [`fill_ring`] of one part with the `chacha20` crate (XOR into zero, then mask); `out` overwritten.
+fn fill_ring_portable(key: &[u8; 32], elem_offset: u64, part: &mut [i64], mask: u64) {
+    part.fill(0);
+    {
+        let pos = 8 * elem_offset;
         // SAFETY: an i64 slice is a valid, aligned u8 slice of 8x the length; no other reference.
         let bytes = unsafe { std::slice::from_raw_parts_mut(part.as_mut_ptr().cast::<u8>(), part.len() * 8) };
         // The `cipher` wrapper refuses to emit the whole last block (counter 2^32 - 1), which
@@ -110,8 +143,7 @@ pub(crate) fn fill_ring(key: &[u8; 32], elem_offset: u64, out: &mut [i64], k: u3
         for v in part.iter_mut() {
             *v = (u64::from_le(*v as u64) & mask) as i64;
         }
-    });
-    Ok(())
+    }
 }
 
 /// Zero-extend `N`-byte little-endian elements of `src` into `out`.
@@ -267,6 +299,30 @@ fn mask_rows_with_key<'py>(
     let key: Zeroizing<[u8; 32]> =
         Zeroizing::new(raw.as_slice().try_into().map_err(|_| value_err("key must be exactly 32 bytes"))?);
     rows_from_key(py, &key, cols, k, row_start, rows)
+}
+
+/// [`mask_rows_with_key`] written into `out` (a C-contiguous, writable int64 `(rows, cols)` array, overwritten):
+/// rows `[row_start, row_start + rows)` of the `(*, cols)` ring matrix. The same values as
+/// `mask_rows_with_key(key, cols, k, row_start, rows)`, without a fresh allocation (the mask factory reuses its
+/// zeroed `r` buffers: no page faults and no zeroing of new pages per chunk).
+#[pyfunction]
+#[pyo3(signature = (key, out, k, row_start))]
+fn mask_rows_into<'py>(
+    py: Python<'py>,
+    key: &Bound<'py, PyAny>,
+    out: &Bound<'py, PyArray2<i64>>,
+    k: u32,
+    row_start: i64,
+) -> PyResult<()> {
+    let raw = secret_bytes(key)?;
+    let key: Zeroizing<[u8; 32]> =
+        Zeroizing::new(raw.as_slice().try_into().map_err(|_| value_err("key must be exactly 32 bytes"))?);
+    let shape = out.shape().to_vec();
+    let mut rw = out.try_readwrite().map_err(|e| value_err(format!("out must be writable: {e}")))?;
+    let (_, _, off) = row_range(shape[1] as i64, row_start, shape[0] as i64)?;
+    ring_mask(k).map_err(value_err)?;
+    let sl = rw.as_slice_mut().map_err(|_| value_err("out must be C-contiguous"))?;
+    py.allow_threads(|| fill_ring(&key, off, sl, k)).map_err(value_err)
 }
 
 /// `rows` rows of `cols` packed `k/8`-byte little-endian ring elements starting at row
@@ -537,6 +593,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(mask_rows, m)?)?;
     m.add_function(wrap_pyfunction!(mask_key, m)?)?;
     m.add_function(wrap_pyfunction!(mask_rows_with_key, m)?)?;
+    m.add_function(wrap_pyfunction!(mask_rows_into, m)?)?;
     m.add_function(wrap_pyfunction!(unpack_rows, m)?)?;
     m.add_function(wrap_pyfunction!(unpack_rows_u32, m)?)?;
     Ok(())
@@ -568,6 +625,30 @@ mod tests {
             let mut got = vec![0i64; cols * rows];
             fill_ring(&key, cols as u64 * start, &mut got, k).unwrap();
             assert!(want.iter().zip(&got).all(|(&w, &g)| w as i64 == g), "cols={cols} start={start}");
+        }
+    }
+
+    #[test]
+    fn fill_ring_vector_path_matches_portable() {
+        // the AVX-512 path (heads, whole blocks, tails, parallel parts) against the crate path, every width
+        let key: [u8; 32] = std::array::from_fn(|i| 200u8.wrapping_sub(i as u8));
+        let mut lcg = 12345u64;
+        let mut next = |m: u64| {
+            lcg = lcg.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            (lcg >> 17) % m
+        };
+        let mut cases: Vec<(u64, usize, u32)> = vec![(0, 1, 32), (7, 1, 32), (5, 3, 8), (8, 8, 64), (3, 200_000, 32),
+                                                     (LAST_BLOCK_START / 8 - 37, 37, 32), (LAST_BLOCK_START / 8 - 5, 13, 64)];
+        for _ in 0..200 {
+            cases.push((next(MAX_STREAM_BYTES / 8 - 300), next(300) as usize, 1 + next(64) as u32));
+        }
+        for (off, len, k) in cases {
+            let len = len.min((MAX_STREAM_BYTES / 8 - off) as usize);
+            let mut got = vec![-1i64; len];
+            fill_ring(&key, off, &mut got, k).unwrap();
+            let mut want = vec![-1i64; len];
+            fill_ring_portable(&key, off, &mut want, ring_mask(k).unwrap());
+            assert_eq!(got, want, "off={off} len={len} k={k}");
         }
     }
 

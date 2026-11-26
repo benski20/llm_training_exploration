@@ -211,7 +211,7 @@ pub unsafe fn enc_out(k: &crate::simd::EncConsts, s: *const u32, nu: usize, lane
                 };
                 let msg = _mm256_slli_epi64(_mm256_and_si256(msg, m32), 24);
                 let v = _mm256_and_si256(_mm256_add_epi64(_mm256_add_epi64(x, e), msg), m56);
-                _mm256_storeu_si256(b.add(f * cols + u0) as *mut _, v);
+                _mm256_storeu_si256(b.wrapping_add(f * cols + u0) as *mut _, v);
             }
         }
     }

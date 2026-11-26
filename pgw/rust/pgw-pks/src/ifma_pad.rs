@@ -364,10 +364,94 @@ pub unsafe fn pad_out(pc: &Pad, s: &[u64], lanes: usize, c0: usize, cols: usize,
                 };
                 let msg = _mm512_slli_epi64(_mm512_and_si512(msg, m32), 24);
                 let v = _mm512_and_si512(_mm512_add_epi64(_mm512_add_epi64(x, e), msg), m56);
-                _mm512_storeu_si512(b.add(f * cols + u0) as *mut _, v);
+                _mm512_storeu_si512(b.wrapping_add(f * cols + u0) as *mut _, v);
             }
         }
     }
     xs = [[_mm512_setzero_si512(); 8]; 2];
     std::hint::black_box(&xs);
+}
+
+#[cfg(test)]
+mod tests {
+    //! The two-prime pad at the extremes of its range: `a_C` all `2^56 - 1` (or patterns of large values)
+    //! against ternary secrets that make `|a t|` as large as it gets (`4095 (2^56 - 1)`), compared with the exact
+    //! negacyclic product (i128 schoolbook) mod `2^56`.
+    use super::*;
+    use crate::kernel::RANK;
+
+    fn exact(a: &[u64], t: &[i8]) -> Vec<u64> {
+        let n = a.len();
+        let mut out = vec![0i128; n];
+        for (i, &ai) in a.iter().enumerate() {
+            for (j, &tj) in t.iter().enumerate() {
+                if tj == 0 {
+                    continue;
+                }
+                let p = ai as i128 * tj as i128;
+                if i + j < n {
+                    out[i + j] += p;
+                } else {
+                    out[i + j - n] -= p;
+                }
+            }
+        }
+        out.iter().map(|&v| (v.rem_euclid(1i128 << 56)) as u64).collect()
+    }
+
+    #[test]
+    fn lazy_pad_is_exact_at_the_range_extremes() {
+        if !crate::arith::Isa::detect().eq(&crate::arith::Isa::Avx512Ifma) {
+            return;
+        }
+        let n = 4096usize;
+        let pc = pad_ctx(n);
+        assert!((pc.t[0].p as u128 * pc.t[1].p as u128) > 1u128 << 70);
+        let m56 = (1u64 << 56) - 1;
+        // lane patterns of a: all max, alternating max/0, max minus small, a ramp of large values
+        let lanes = 4usize;
+        let mut raw = vec![0u8; L * n * 8];
+        let pat = |l: usize, c: usize| -> u64 {
+            match l {
+                0 => m56,
+                1 => if c % 2 == 0 { m56 } else { 0 },
+                2 => m56 - (c as u64 % 7),
+                _ => m56 - (c as u64 * 977) % (1 << 20),
+            }
+        };
+        for l in 0..lanes {
+            for c in 0..n {
+                raw[(l * n + c) * 8..(l * n + c + 1) * 8].copy_from_slice(&pat(l, c).to_le_bytes());
+            }
+        }
+        let mut a64 = vec![0u64; 2 * n * L];
+        unsafe { pad_a(pc, &raw, lanes, &mut a64) };
+        // secrets: all +1, all -1, alternating, the sign pattern that maximises coefficient 0 against lane 1
+        let ts: Vec<Vec<i8>> = vec![
+            vec![1; n],
+            vec![-1; n],
+            (0..n).map(|j| if j % 2 == 0 { 1 } else { -1 }).collect(),
+            (0..n).map(|j| if j == 0 { 1 } else if j % 2 == 0 { -1 } else { 0 }).collect(),
+        ];
+        for t in &ts {
+            let mut th: [Vec<u64>; 2] = Default::default();
+            let mut ths: [Vec<u64>; 2] = Default::default();
+            secret_hat(pc, t, &mut th, &mut ths);
+            let mut s64 = vec![0u64; 2 * n * L];
+            unsafe { pad_mul(pc, &a64, &th, &ths, &mut s64) };
+            let noise = vec![0i32; L * RANK * 256];
+            let r = vec![0i64; 1];
+            let mut b = vec![0u64; L * RANK * 256];
+            unsafe { pad_out(pc, &s64, lanes, 0, 256, RANK * L, r.as_ptr(), 0, noise.as_ptr(), b.as_mut_ptr()) };
+            for l in 0..lanes {
+                let a: Vec<u64> = (0..n).map(|c| pat(l, c)).collect();
+                let want = exact(&a, t);
+                for u in 0..256 {
+                    for kk in 0..RANK {
+                        assert_eq!(b[(l * RANK + kk) * 256 + u], want[RANK * u + kk], "lane {l} coef {}", RANK * u + kk);
+                    }
+                }
+            }
+        }
+    }
 }

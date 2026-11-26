@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import contextlib
 import logging
+import os
 import queue
 import threading
 import time
@@ -250,12 +251,18 @@ class _CpuRing:
         self.native = bool(use_native)
         self._keys: dict[str, bytearray] = {}
 
-    def rows(self, linear: str, cols: int, k: int, row_start: int, row_count: int) -> torch.Tensor:
+    def rows(self, linear: str, cols: int, k: int, row_start: int, row_count: int,
+             out: torch.Tensor | None = None) -> torch.Tensor:
+        """The rows as a fresh int64 tensor, or written into ``out`` (a ``(row_count, cols)`` int64 CPU tensor whose
+        contents are overwritten; native only, else ignored): the same values either way."""
         key = self._keys.get(linear)
         if key is None:
             self.wipe()  # earlier linears are finished (tasks run in order)
             key = self._keys[linear] = bytearray(self._exp.stream_key("r", linear))
         if self.native:
+            if out is not None and hasattr(native.fast, "mask_rows_into"):
+                native.fast.mask_rows_into(key, out.numpy(), k, row_start)
+                return out
             return torch.from_numpy(native.fast.mask_rows_with_key(key, cols, k, row_start, row_count))
         if 8 * cols * (row_start + row_count) > MAX_STREAM_BYTES:  # native fill_ring checks the end too
             raise ConfigError("mask rows beyond the 2^32-block ChaCha20 counter range")
@@ -265,6 +272,47 @@ class _CpuRing:
         for key in self._keys.values():
             key[:] = bytes(len(key))
         self._keys.clear()
+
+
+class _RBuffers:
+    """Zeroed CPU ``r`` buffers of one :meth:`MaskGenerator.generate` call, reused by later chunks of the same shape.
+
+    A chunk's ``r`` is zeroed when it is finished (as before); with this pool the zeroed buffer is then filled again by
+    a later chunk of the same shape instead of being freed and a fresh one allocated (a fresh buffer costs page faults
+    and the kernel's zeroing of every page: about as much CPU as the ChaCha20 keystream that fills it). At most one
+    buffer per shape and ``max_bytes`` in all are kept; they are dropped (already zero) when the call ends. Same
+    values in ``r`` either way (the fill overwrites every element)."""
+
+    def __init__(self, max_bytes: int):
+        self.max_bytes = int(max_bytes)
+        self._free: dict[tuple[int, int], torch.Tensor] = {}
+        self._lock = threading.Lock()
+        self.reused = 0
+
+    def take(self, rows: int, cols: int) -> torch.Tensor | None:
+        with self._lock:
+            t = self._free.pop((rows, cols), None)
+            if t is not None:
+                self.reused += 1
+            return t
+
+    def give(self, t: torch.Tensor) -> None:
+        """Keep a zeroed buffer for reuse (dropped when the pool is full or holds one of that shape already)."""
+        if t.device.type != "cpu" or t.dtype != torch.int64 or t.dim() != 2 or not t.is_contiguous():
+            return
+        key = (int(t.shape[0]), int(t.shape[1]))
+        with self._lock:
+            held = sum(b.numel() * 8 for b in self._free.values())
+            if key not in self._free and held + t.numel() * 8 <= self.max_bytes:
+                self._free[key] = t
+
+    def clear(self) -> None:
+        with self._lock:
+            self._free.clear()
+
+
+#: Reuse the factory's zeroed ``r`` buffers across chunks (``PGW_FACTORY_R_REUSE=0``: a fresh buffer per chunk).
+_R_REUSE = os.environ.get("PGW_FACTORY_R_REUSE", "1").strip().lower() not in ("0", "false", "no", "off")
 
 
 class _HostCopy:
@@ -708,6 +756,9 @@ class MaskGenerator:
         he0 = dict(he_stats) if isinstance(he_stats, dict) else None
         n_limbs = _gp.limbs(k)
         cpu_ring = _CpuRing(exp, self.native_rng)
+        # zeroed r buffers reused across chunks (CPU, native ChaCha20): at most two chunks' worth of the widest linear
+        rbuf = (_RBuffers(2 * 8 * chunk_slots * max(s.in_features for s in specs))
+                if _R_REUSE and not cuda and self.native_rng and dev_prng is None else None)
         copier = _HostCopy(self.device) if cuda else None
         lag = max(0, int(self._output_lag))
         he_depth = self.he_pipeline_depth()
@@ -719,7 +770,13 @@ class MaskGenerator:
         def make_r(task: tuple[int, int, int]) -> torch.Tensor:
             i, start, rows = task
             t0 = time.perf_counter()
-            r = cpu_ring.rows(specs[i].id.key, specs[i].in_features, k, start, rows)
+            buf = rbuf.take(rows, specs[i].in_features) if rbuf is not None else None
+            try:
+                r = cpu_ring.rows(specs[i].id.key, specs[i].in_features, k, start, rows, out=buf)
+            except BaseException:
+                if buf is not None:
+                    buf.zero_()
+                raise
             if cuda:  # pragma: no cover - GPU only
                 pinned = r.pin_memory()
                 r.zero_()
@@ -816,6 +873,8 @@ class MaskGenerator:
             finally:
                 if c.r is not None:
                     c.r.zero_()
+                    if rbuf is not None:
+                        rbuf.give(c.r)  # zeroed: filled again by a later chunk of this shape
                     c.r = None
             stats.gemm_seconds += dt
             stats.wr_bytes += c.wr.numel() * self.ring.bytes_per_element
@@ -915,6 +974,9 @@ class MaskGenerator:
             if pending is not None and pending.done() and not pending.cancelled() and pending.exception() is None:
                 pending.result().zero_()  # prefetched r of a chunk that was never used
             cpu_ring.wipe()
+            if rbuf is not None:
+                stats.extra["r_reused"] = rbuf.reused
+                rbuf.clear()
             stats.rng_seconds = rng_time[0]
             stats.seconds = time.perf_counter() - t_start
             if he0 is not None and isinstance(he_stats, dict):
@@ -1169,6 +1231,13 @@ class MaskGenerator:
     def _drive(self, writer: Any, chunks: Iterator[GeneratedLinear], write_time: list[float]) -> None:
         """Feed generated chunks to ``writer.write_linear`` (in a writer thread when pipelined)."""
         uw_by_linear: dict[str, torch.Tensor] = {}
+        # the encrypted backend reuses its zeroed outputs (PKSMaskBackend.release_output): no fresh pages per chunk
+        release = getattr(self.remote, "release_output", None)
+
+        def done(item: GeneratedLinear) -> None:
+            item.wr.zero_()
+            if release is not None:
+                release(item.wr)
 
         def write(item: GeneratedLinear) -> None:
             if item.uw is not None:
@@ -1176,7 +1245,7 @@ class MaskGenerator:
             t = time.perf_counter()
             writer.write_linear(item.id, item.wr, uw_by_linear[item.id.key])
             write_time[0] += time.perf_counter() - t
-            item.wr.zero_()
+            done(item)
 
         if not self.pipeline:
             try:
@@ -1199,7 +1268,7 @@ class MaskGenerator:
                     return
                 if failure:
                     assert isinstance(item, GeneratedLinear)
-                    item.wr.zero_()  # drain after an error
+                    done(item)  # drain after an error
                     continue
                 try:
                     assert isinstance(item, GeneratedLinear)

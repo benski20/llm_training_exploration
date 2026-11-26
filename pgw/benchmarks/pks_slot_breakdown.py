@@ -4,8 +4,14 @@ Where ``benchmarks/pks_client_slot_bench.py`` times the HE parts only, this runs
 step the factory and the store do for one mask slot, each with the function the production path calls:
 
 factory, per slot (one row of every linear, the masked LM head included)
-  * ``r``           the mask rows' ChaCha20 keystream (``pgw_fast.mask_rows_with_key``, as ``_CpuRing``)
-  * ``encrypt``     upload encryption + reply keys (``Customer.encrypt``), ``ksk_pack`` their wire form
+  * ``r``           the mask rows' ChaCha20 keystream (``pgw_fast.mask_rows_into`` a reused buffer, as ``_CpuRing``
+                    with the generator's ``_RBuffers``; ``PGW_FACTORY_R_REUSE=0``: ``mask_rows_with_key``, fresh)
+  * ``encrypt``     upload encryption + reply keys (``Customer.encrypt``), ``ksk_pack`` their wire form,
+                    ``upload_wire`` ``RemotePKS``'s ``pack_bits(b)`` and msgpack request; by default (as
+                    ``PKSMaskBackend``) all three in one: ``Customer.encrypt_wire`` writes the packed upload in place
+                    into the request body (``PGW_PKS_WIRE_FUSED=0``: the three separately, the path before)
+  * ``reply_wire``  ``RemotePKS.send``'s decode of the reply (msgpack; ``y`` handed to the decryption as a view into
+                    the body, before: a copy)
   * ``decrypt``     the reply decryption with the compact hint (``Customer.decrypt``; stand-in random reply)
   * ``widen``       ``PKSMaskBackend.matmul``'s uint32 -> int64 copy of ``W8 r`` (``PGW_PKS_COMPACT=0``, the path
                     before 2026-11-26; the compact default hands the decryption's uint32 buffer on: 0)
@@ -36,6 +42,7 @@ import json
 import os
 import tempfile
 import time
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -53,7 +60,7 @@ SHAPES: dict[str, tuple[int, dict[str, tuple[int, int]]]] = {
                  "lm_head": (152064, 8192)}),
 }
 #: per-slot factory parts, per-segment parts, use-time parts (``priv_vw`` is reported separately)
-FACTORY = ("r", "encrypt", "ksk_pack", "decrypt", "widen", "self_check", "seal", "uw")
+FACTORY = ("r", "encrypt", "ksk_pack", "upload_wire", "reply_wire", "decrypt", "widen", "self_check", "seal", "uw")
 USE_TIME = ("open", "retire")
 
 
@@ -84,6 +91,9 @@ class _Ctx:
         self.a_seed = new_seed()
         self.check_field = check_field
         self.uw_f64 = uw_f64
+        self.wire_fused = os.environ.get("PGW_PKS_WIRE_FUSED", "1") != "0" and getattr(self.cust, "has_wire", False)
+        # buffer reuse of the factory (r, decryption output): PGW_FACTORY_R_REUSE / PGW_PKS_OUT_REUSE
+        self.reuse = os.environ.get("PGW_FACTORY_R_REUSE", "1") != "0" and getattr(self.cust, "has_wire", False)
         # warm-up: torch's int8 GEMM probe and thread pools must not count against the first linear
         ring_vecmat(SeedExpander(new_seed()).ring_uniform((2, 64), 32, "v"), torch.ones((64, 64), dtype=torch.int8),
                     self.ring)
@@ -99,8 +109,21 @@ def measure_kind(ctx: _Ctx, kind: str, m: int, n: int, slots: int, reps: int, tm
     from pgw.factory.generator import check_flags
     from pgw.factory.kernels import prime_vecmat, ring_vecmat
     from pgw.hemask.pks import NR, PACK
+    from pgw.hemask.pks_backend import RemotePKS
     from pgw.hemask.pks_native import GroupSecret
-    from pgw.hemask.wire import V3_Y_BITS
+    from pgw.hemask.wire import (
+        V3_B_BITS,
+        V3_Y_BITS,
+        MaskgenItem,
+        MaskgenRequest,
+        MaskgenResponse,
+        MaskgenResult,
+        decode_maskgen_response,
+        decode_maskgen_response_view,
+        encode_maskgen_request,
+        encode_maskgen_response,
+        pack_bits,
+    )
     from pgw.maskstore.format import chunk_aad, chunk_nonce
     from pgw.maskstore.segment_io import shred_file
     from pgw.service.pks_provider import pack_ksk
@@ -114,17 +137,54 @@ def measure_kind(ctx: _Ctx, kind: str, m: int, n: int, slots: int, reps: int, tm
     hint[..., 2] &= 0x7F
     key = bytearray(SeedExpander(new_seed()).stream_key("r", lid))
 
-    res["r"] = _best(lambda: st.__setitem__("r", native.fast.mask_rows_with_key(key, n, 32, 0, slots)), reps)
+    if ctx.reuse and hasattr(native.fast, "mask_rows_into"):
+        # the factory's default: each chunk's r filled into a reused, zeroed buffer (generator._RBuffers)
+        st["r"] = np.zeros((slots, n), dtype=np.int64)
+        res["r"] = _best(lambda: native.fast.mask_rows_into(key, st["r"], 32, 0), reps)
+    else:
+        res["r"] = _best(lambda: st.__setitem__("r", native.fast.mask_rows_with_key(key, n, 32, 0, slots)), reps)
     r = st["r"]
-    res["encrypt"] = _best(lambda: st.__setitem__("enc", cust.encrypt(ctx.a_seed, lid, r)), reps)
-    _, beta, secrets = st.pop("enc")
-    res["ksk_pack"] = _best(lambda: pack_ksk(beta), reps)
+    remote = RemotePKS(lambda *a: None, "f" * 64, {lid: m}, ctx.a_seed)
+    if ctx.wire_fused:
+        # PKSMaskBackend's default: encryption, reply keys and their wire form, the packed upload written in place
+        # into the request body (Customer.encrypt_wire); ksk_pack and upload_wire are inside "encrypt"
+        def enc_wire() -> None:
+            st["enc"] = cust.encrypt_wire(ctx.a_seed, lid, r, lambda c, bl, kl: remote.frame(lid, c, bl, kl))
+
+        res["encrypt"] = _best(enc_wire, reps)
+        req, _, secrets = st.pop("enc")
+        res["ksk_pack"] = res["upload_wire"] = 0.0
+    else:
+        res["encrypt"] = _best(lambda: st.__setitem__("enc", cust.encrypt(ctx.a_seed, lid, r)), reps)
+        b, beta, secrets = st.pop("enc")
+        res["ksk_pack"] = _best(lambda: st.__setitem__("ksk", pack_ksk(beta)), reps)
+        ksk = st.pop("ksk")
+
+        def upload_wire() -> None:  # RemotePKS.__call__ up to the post: pack_bits(b) and the msgpack request
+            item = MaskgenItem(lid, int(b.shape[1]), pack_bits(b, V3_B_BITS), 0, 64, V3_B_BITS, V3_Y_BITS, ksk)
+            rq = MaskgenRequest(uuid.uuid4().hex, "f" * 64, (item,), 3, RemotePKS.VERSIONS, ctx.a_seed)
+            st["body"] = encode_maskgen_request(rq)
+            st["req"] = rq
+
+        res["upload_wire"] = _best(upload_wire, reps)
+        req = st.pop("req")
+        del b, beta, ksk, st["body"]
     y = rng.integers(0, 256, len(secrets) * (m // PACK) * NR * V3_Y_BITS // 8, dtype=np.uint8).tobytes()
+    reply = encode_maskgen_response(MaskgenResponse(req.request_id, (MaskgenResult(lid, req.items[0].cols, y),), 3,
+                                                    (1, 2, 3)))
+    # RemotePKS.send's decode of the reply (msgpack, size check, what is handed to the decryption): a read-only view
+    # of y in the body by default (decode_maskgen_response_view), before: a copy
+    if ctx.reuse:
+        res["reply_wire"] = _best(lambda: decode_maskgen_response_view(reply, req, {lid: m}).items[0].y, reps)
+    else:
+        res["reply_wire"] = _best(lambda: bytes(decode_maskgen_response(reply, req, {lid: m}).items[0].y), reps)
     best = float("inf")
     for _ in range(reps):
         sec = [GroupSecret(s.t.copy(), s.t_reply.copy(), s.trhat.copy(), s.rows) for s in secrets]
+        # the factory's default: the decryption writes into a reused output (PKSMaskBackend.release_output)
+        buf = st.get("wr32") if ctx.reuse and getattr(cust, "has_wire", False) else None
         c0 = time.process_time()
-        st["wr32"] = cust.decrypt(hint, y, sec)
+        st["wr32"] = cust.decrypt(hint, y, sec, out=buf) if buf is not None else cust.decrypt(hint, y, sec)
         best = min(best, time.process_time() - c0)
     res["decrypt"] = best
     wr32 = st.pop("wr32")
@@ -249,8 +309,16 @@ def main() -> None:
     ap.add_argument("--kinds", nargs="*", default=None)
     ap.add_argument("--tmpdir", default=None, help="a directory on the store's disk (fsync cost)")
     ap.add_argument("--threads", type=int, default=1, help="kernel threads (CPU seconds are reported)")
+    ap.add_argument("--prefault-gb", type=float, default=6.0,
+                    help="touch and free this much memory first: on a VM whose host backs guest pages lazily, the "
+                         "first touch of a page costs ~20x a normal page fault, which would be charged to whichever "
+                         "part allocates first (0: off)")
     a = ap.parse_args()
     os.environ["PGW_PKS_THREADS"] = str(a.threads)
+    if a.prefault_gb > 0:
+        warm = np.empty(int(a.prefault_gb * (1 << 30)), dtype=np.uint8)
+        warm[::4096] = 1
+        del warm
     import torch
 
     torch.set_num_threads(a.threads)

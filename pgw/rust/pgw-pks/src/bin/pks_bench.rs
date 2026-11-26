@@ -200,6 +200,120 @@ fn main() {
             let (s, _) = time(5, || kernel::cbd(isa, &k, 0, &mut out));
             println!("{{\"mode\":\"cbd\",\"isa\":\"{}\",\"ns_per_sample\":{:.3}}}", isa.name(), s * 1e9 / size as f64);
         }
-        _ => eprintln!("modes: decrypt | encrypt | ksk | keyswitch | ntt | cbd"),
+        #[cfg(target_arch = "x86_64")]
+        "stages" => {
+            // IFMA kernels one 16-block chunk at a time, per stage (ns per value: one coefficient-lane of a
+            // 4096 (upload) / 8192 (reply) ring element): what `encrypt` / `decrypt` spend their time on
+            use pgw_pks::ifma_pad;
+            let reps = size.max(1);
+            let pc = ifma_pad::pad_ctx(NU);
+            let mut raw = vec![0u8; 16 * NU * 8];
+            let k = key(&mut g);
+            let (s_ks, _) = time(3, || for _ in 0..reps { kernel::keystream_isa(isa, &k, 0, &mut raw) });
+            let mut a64 = vec![0u64; 2 * NU * 16];
+            let (s_pa, _) = time(3, || for _ in 0..reps { unsafe { ifma_pad::pad_a(pc, &raw, 16, &mut a64) } });
+            let t: Vec<i8> = (0..NU).map(|_| (g.next() % 3) as i8 - 1).collect();
+            let mut th: [Vec<u64>; 2] = Default::default();
+            let mut ths: [Vec<u64>; 2] = Default::default();
+            ifma_pad::secret_hat(pc, &t, &mut th, &mut ths);
+            let mut s64 = vec![0u64; 2 * NU * 16];
+            let (s_pm, _) = time(3, || for _ in 0..reps { unsafe { ifma_pad::pad_mul(pc, &a64, &th, &ths, &mut s64) } });
+            let mut noise = vec![0i32; 16 * RANK * D];
+            let (s_cb, _) = time(3, || for _ in 0..reps { kernel::cbd(isa, &k, 0, &mut noise) });
+            let n_in = 256usize;
+            let r: Vec<i64> = (0..D * n_in).map(|_| (g.next() & 0xFFFF_FFFF) as i64).collect();
+            let mut b = vec![0u64; n_in * D];
+            let (s_po, _) = time(3, || for _ in 0..reps {
+                unsafe { ifma_pad::pad_out(pc, &s64, 16, 0, D, n_in, r.as_ptr(), D, noise.as_ptr(), b.as_mut_ptr()) }
+            });
+            let per = (reps * NU * 16) as f64;
+            println!(
+                "{{\"mode\":\"stages\",\"part\":\"encrypt\",\"keystream_a\":{:.3},\"pad_a\":{:.3},\"pad_mul\":{:.3},\"cbd\":{:.3},\"pad_out\":{:.3}}}",
+                s_ks * 1e9 / per, s_pa * 1e9 / per, s_pm * 1e9 / per, s_cb * 1e9 / per, s_po * 1e9 / per
+            );
+            let qc = pgw_pks::ifma::q1ctx(&cx.qp[0], &cx.qp[1]);
+            let hint: Vec<u8> = (0..16 * 2 * NR * 3).map(|i| (g.next() as u8) & if i % 3 == 2 { 0x7f } else { 0xff }).collect();
+            let mut h16 = vec![0u32; 2 * NR * 16];
+            let (s_lh, _) = time(3, || for _ in 0..reps {
+                for i in 0..2 {
+                    let src: [*const u8; 16] = std::array::from_fn(|l| hint[(l * 2 + i) * NR * 3..].as_ptr());
+                    unsafe { pgw_pks::simd::load_hint(&src, 16, NR, h16[i * NR * 16..].as_mut_ptr()) };
+                }
+            });
+            let mut h64 = vec![0u64; NR * 16];
+            let (s_hq, _) = time(3, || for _ in 0..reps { unsafe { pgw_pks::ifma::hint_to_q1(qc, &h16, NR, &mut h64) } });
+            let tq: Vec<u64> = (0..NR).map(|_| g.next() % qc.q).collect();
+            let tqs: Vec<u64> = tq.iter().map(|&v| (((v as u128) << 52) / qc.q as u128) as u64).collect();
+            let mut o64 = vec![0u64; NR * 16];
+            let (s_im, _) = time(3, || for _ in 0..reps { unsafe { pgw_pks::ifma::inv_mul_q1(qc, &mut o64, &h64, &tq, &tqs) } });
+            let m = 16 * PACK;
+            let c0r: Vec<u64> = (0..16 * NR).map(|_| g.next() & ((1 << 36) - 1)).collect();
+            let mut out = vec![0u32; D * m];
+            let kc = pgw_pks::simd::DecConsts { p0: cx.qp[0].p, p1: cx.qp[1].p, pn1: cx.qp[1].pn, inv01_m: 1,
+                c0scale: 2f64.powi(-4), wscale: (1u64 << 32) as f64 / cx.q1 as f64 };
+            let (s_dc, _) = time(3, || for _ in 0..reps {
+                for u in 0..D {
+                    let idx0: [usize; 16] = std::array::from_fn(|l| l * NR + PACK * u);
+                    let outp: [*mut u32; 16] = std::array::from_fn(|l| unsafe { out.as_mut_ptr().add(u * m + PACK * l) });
+                    unsafe { pgw_pks::ifma::dec_combine_q1(qc, &kc, o64[PACK * u * 16..].as_ptr(), 16,
+                        pgw_pks::simd::C0p::Words(c0r.as_ptr()), &idx0, &outp) };
+                }
+            });
+            let per = (reps * NR * 16) as f64;
+            println!(
+                "{{\"mode\":\"stages\",\"part\":\"decrypt\",\"load_hint\":{:.3},\"hint_to_q1\":{:.3},\"inv_mul_q1\":{:.3},\"combine\":{:.3}}}",
+                s_lh * 1e9 / per, s_hq * 1e9 / per, s_im * 1e9 / per, s_dc * 1e9 / per
+            );
+        }
+        #[cfg(target_arch = "x86_64")]
+        "freq" => {
+            // core clock estimate: a chain of dependent 64-bit multiplies, 3 cycles each
+            let n = 1u64 << 30;
+            let t0 = Instant::now();
+            let mut x = std::hint::black_box(1u64);
+            for _ in 0..n / 8 {
+                unsafe {
+                    std::arch::asm!("imul {0}, {0}", "imul {0}, {0}", "imul {0}, {0}", "imul {0}, {0}", "imul {0}, {0}", "imul {0}, {0}",
+                                    "imul {0}, {0}", "imul {0}, {0}", inout(reg) x);
+                }
+            }
+            std::hint::black_box(x);
+            println!("{{\"mode\":\"freq\",\"ghz\":{:.3}}}", 3.0 * n as f64 / t0.elapsed().as_secs_f64() / 1e9);
+        }
+        #[cfg(target_arch = "x86_64")]
+        "ifma" => {
+            // throughput of 512-bit IFMA (vpmadd52luq) and of 32-bit multiplies (vpmulld / vpmuludq), per cycle at
+            // the clock `freq` measures: 8 independent accumulators
+            use std::arch::x86_64::*;
+            #[target_feature(enable = "avx512f,avx512ifma")]
+            unsafe fn run(kind: u32, n: usize) -> u64 {
+                let mut a = [_mm512_set1_epi64(1); 8];
+                let b = _mm512_set1_epi64(3);
+                let c = _mm512_set1_epi64(5);
+                for _ in 0..n {
+                    for x in a.iter_mut() {
+                        *x = match kind {
+                            0 => _mm512_madd52lo_epu64(*x, b, c),
+                            1 => _mm512_mullo_epi32(*x, b),
+                            2 => _mm512_mul_epu32(*x, b),
+                            _ => _mm512_add_epi64(*x, b),
+                        };
+                    }
+                }
+                let mut s = 0u64;
+                for x in a {
+                    s = s.wrapping_add(_mm512_reduce_add_epi64(x) as u64);
+                }
+                s
+            }
+            let n = 1usize << 24;
+            for (kind, name) in [(0u32, "vpmadd52luq"), (1, "vpmulld"), (2, "vpmuludq"), (3, "vpaddq")] {
+                let t0 = Instant::now();
+                let s = unsafe { run(kind, n) };
+                std::hint::black_box(s);
+                println!("{{\"op\":\"{name}\",\"ns_per_op\":{:.4}}}", t0.elapsed().as_secs_f64() * 1e9 / (8 * n) as f64);
+            }
+        }
+        _ => eprintln!("modes: decrypt | encrypt | ksk | keyswitch | ntt | cbd | stages | freq | ifma"),
     }
 }

@@ -311,7 +311,7 @@ pub unsafe fn enc_out(k: &EncConsts, s: *const u32, nu: usize, lanes: usize, c0:
                 };
                 let msg = _mm512_slli_epi64(_mm512_and_si512(msg, m32), 24);
                 let v = _mm512_and_si512(_mm512_add_epi64(_mm512_add_epi64(x, e), msg), m56);
-                _mm512_storeu_si512(b.add(f * cols + u0) as *mut _, v);
+                _mm512_storeu_si512(b.wrapping_add(f * cols + u0) as *mut _, v);
             }
         }
     }

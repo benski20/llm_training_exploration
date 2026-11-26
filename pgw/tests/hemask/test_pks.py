@@ -651,3 +651,260 @@ def test_hint_rebuild_refused_while_another_process_has_the_store_open(tmp_path:
     st3 = PKSHintStore.open_or_build(tmp_path, pack, only={"blk.0.q", "blk.0.o"})  # once it is closed, the rebuild goes ahead
     assert set(st3.meta["row_norms"]) == {"blk.0.q", "blk.0.o"} and st3.a_seed != st.a_seed
     st3.close()
+
+
+# ---- client CPU per mask slot: the upload written in place into the request body (same bytes) --------------
+
+@pytest.mark.parametrize(("cols", "b_len", "versions"), [(256, 7 * 16 * 256, (1, 2, 3)), (1024, 7 * 48 * 1024, ()),
+                                                         (256, 7 * 8192 * 256, (3,)), (1, 7, (3,)), (8, 300, ())])
+def test_maskgen_v3_frame_equals_encode(cols: int, b_len: int, versions: tuple[int, ...]) -> None:
+    from pgw.hemask.wire import maskgen_v3_frame
+
+    rng = np.random.default_rng(cols)
+    b = rng.integers(0, 256, b_len, dtype=np.uint8).tobytes()
+    ksk = bytearray(rng.integers(0, 256, 4321, dtype=np.uint8).tobytes())
+    req = MaskgenRequest("ab" * 16, "f" * 64, (MaskgenItem("3.gate_up", cols, b, 0, 64, 56, 36, ksk),), 3, versions,
+                         bytes(range(32)))
+    head, mid = maskgen_v3_frame(req, len(b), len(ksk))
+    assert head + b + mid + ksk == encode_maskgen_request(req)
+    # the item's own b and ksk are ignored: only their lengths go into the frame
+    req0 = MaskgenRequest(req.request_id, req.fingerprint, (MaskgenItem("3.gate_up", cols, b"", 0, 64, 56, 36, b""),),
+                          3, versions, req.a_seed)
+    assert maskgen_v3_frame(req0, len(b), len(ksk)) == (head, mid)
+
+
+@NATIVE
+@pytest.mark.parametrize(("rows", "n"), [(256, 48), (300, 64), (1024, 32), (1, 16)])
+def test_encrypt_wire_is_the_encoded_request_of_encrypt(rows: int, n: int) -> None:
+    """``Customer.encrypt_wire``'s body is byte for byte the request ``RemotePKS`` builds from ``encrypt``'s ``b`` and
+    reply keys for the same seeds (``pack_bits`` + ``encode_maskgen_request``), with the same secrets."""
+    from pgw.hemask.pks_backend import RemotePKS
+    from pgw.service.pks_provider import pack_ksk
+
+    k_hat = pks.ks_a(bytes(range(7, 39)))
+    cust = pn.Customer(k_hat, threads=2)
+    assert cust.has_wire
+    a_seed = bytes(range(32))
+    rng = np.random.default_rng(rows + n)
+    r = rng.integers(0, 1 << 32, (rows, n), dtype=np.int64)
+    groups = -(-rows // pks.D)
+    seeds = [bytes([g + 1]) * 32 for g in range(groups)]
+    b, beta, sec_a = cust.encrypt(a_seed, "0.qkv", r, seeds=seeds)
+    remote = RemotePKS(lambda *a: None, "f" * 64, {"0.qkv": 64}, a_seed)
+    rid = "c" * 32
+    item = MaskgenItem("0.qkv", groups * pks.D, pack_bits(b, 56), 0, 64, 56, 36, pack_ksk(beta))
+    want = encode_maskgen_request(MaskgenRequest(rid, "f" * 64, (item,), 3, RemotePKS.VERSIONS, a_seed))
+
+    def frame(cols: int, b_len: int, ksk_len: int) -> tuple[Any, bytes, bytes]:
+        from dataclasses import replace
+
+        from pgw.hemask.wire import maskgen_v3_frame
+
+        req, _, _ = remote.frame("0.qkv", cols, b_len, ksk_len)
+        req = replace(req, request_id=rid)
+        return (req, *maskgen_v3_frame(req, b_len, ksk_len))
+
+    req, body, sec_b = cust.encrypt_wire(a_seed, "0.qkv", r, frame, seeds=seeds)
+    assert isinstance(body, bytes) and body == want
+    assert req.request_id == rid and req.items[0].cols == groups * pks.D
+    for sa, sb in zip(sec_a, sec_b, strict=True):
+        assert sa.rows == sb.rows
+        assert np.array_equal(sa.t, sb.t) and np.array_equal(sa.t_reply, sb.t_reply)
+        assert np.array_equal(sa.trhat, sb.trhat)
+
+
+@NATIVE
+def test_backend_wire_fused_sends_the_same_bytes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """``PKSMaskBackend`` with the fused upload (default) sends the same request bodies as with
+    ``PGW_PKS_WIRE_FUSED=0`` for the same seeds and request ids, and returns the same ``W8 r mod 2^32``."""
+    import itertools
+    import uuid as uuid_mod
+
+    from pgw.core.ring import RingParams
+    from pgw.hemask import pks_backend as pb
+
+    pack = _Pack({"blk.0.q": (64, 48), "blk.0.down": (32, 96)})
+    store = pb.PKSHintStore.open_or_build(tmp_path, pack)
+    out = {k: w.shape[0] for k, w in pack.w.items()}
+    sent: dict[bool, list[bytes]] = {True: [], False: []}
+    results: dict[bool, list[np.ndarray]] = {True: [], False: []}
+    for fused in (True, False):
+        ctr = itertools.count()
+        monkeypatch.setattr(pn, "new_seed", lambda c=ctr: next(c).to_bytes(32, "little"))
+        ids = itertools.count()
+        monkeypatch.setattr(pb.uuid, "uuid4", lambda i=ids: uuid_mod.UUID(int=next(i)))
+        prov = _LocalProvider(pack)
+
+        def post(body: bytes, rid: str, decode: Any, prov: Any = prov, fused: bool = fused) -> Any:
+            sent[fused].append(bytes(body))
+            return prov(body, rid, decode)
+
+        remote = pb.RemotePKS(post, pack.fingerprint, out, store.a_seed)
+        be = pb.PKSMaskBackend(pack, RingParams.from_name("K32A12C27"), store, remote, groups_per_call=2)
+        be.wire_fused = fused
+        rng = np.random.default_rng(4)
+        for key, w in pack.w.items():
+            r = rng.integers(0, 1 << 32, (600, w.shape[1]), dtype=np.int64)
+            got = be.matmul(key, torch.from_numpy(r)).numpy()
+            assert np.array_equal(got, (r @ w.astype(np.int64).T) & 0xFFFFFFFF)
+            results[fused].append(got)
+    assert len(sent[True]) == 4 and sent[True] == sent[False]
+    assert all(np.array_equal(a, b) for a, b in zip(results[True], results[False], strict=True))
+
+
+
+@NATIVE
+def test_decrypt_into_equals_decrypt() -> None:
+    """``Customer.decrypt(..., out=)`` (the factory's reused output buffers) writes exactly ``decrypt``'s masks over
+    any previous contents, and wipes the secrets as before."""
+    k_hat = pks.ks_a(bytes(range(9, 41)))
+    cust = pn.Customer(k_hat, threads=2)
+    rng = np.random.default_rng(8)
+    m, rows = 64, 300
+    hint = rng.integers(0, 256, (m // pks.PACK, 2, pks.NR, 3), dtype=np.uint8)
+    hint[..., 2] &= 0x7F
+    r = rng.integers(0, 1 << 32, (rows, 48), dtype=np.int64)
+    seeds = [bytes([g + 5]) * 32 for g in range(2)]
+
+    def secrets() -> list[pn.GroupSecret]:
+        return cust.encrypt(bytes(32), "0.o", r, seeds=seeds)[2]
+
+    y = rng.integers(0, 256, 2 * (m // pks.PACK) * pks.NR * 36 // 8, dtype=np.uint8).tobytes()
+    want = cust.decrypt(hint, y, secrets())
+    out = np.full((rows, m), 0xDEADBEEF, dtype=np.uint32)
+    sec = secrets()
+    got = cust.decrypt(hint, y, sec, out=out)
+    assert got is out and np.array_equal(out, want)
+    assert all(not s.t_reply.any() and not s.trhat.any() for s in sec)
+
+
+@NATIVE
+def test_backend_reuses_released_outputs_with_the_same_masks(tmp_path: Path) -> None:
+    from pgw.core.ring import RingParams
+    from pgw.hemask.pks_backend import PKSHintStore, PKSMaskBackend, RemotePKS
+
+    pack = _Pack({"blk.0.q": (64, 48)})
+    store = PKSHintStore.open_or_build(tmp_path, pack)
+    remote = RemotePKS(_LocalProvider(pack), pack.fingerprint, {"blk.0.q": 64}, store.a_seed)
+    be = PKSMaskBackend(pack, RingParams.from_name("K32A12C27"), store, remote, groups_per_call=1)
+    w = pack.w["blk.0.q"].astype(np.int64)
+    rng = np.random.default_rng(5)
+    r1 = rng.integers(0, 1 << 32, (300, 48), dtype=np.int64)
+    a = be.matmul("blk.0.q", torch.from_numpy(r1), compact=True)
+    assert np.array_equal(a.numpy().view(np.uint32), (r1 @ w.T) & 0xFFFFFFFF)  # two passes into one output
+    a.zero_()
+    be.release_output(a)
+    r2 = rng.integers(0, 1 << 32, (300, 48), dtype=np.int64)
+    b = be.matmul("blk.0.q", torch.from_numpy(r2), compact=True)
+    assert b.data_ptr() == a.data_ptr()  # the released buffer, written again
+    assert np.array_equal(b.numpy().view(np.uint32), (r2 @ w.T) & 0xFFFFFFFF)
+    be.release_output(torch.zeros((300, 64), dtype=torch.int64))  # not a compact output: ignored
+    c = be.matmul("blk.0.q", torch.from_numpy(r2), compact=True)
+    assert c.data_ptr() != b.data_ptr() and torch.equal(c, b)
+
+
+@pytest.mark.parametrize("reuse", [False, True])
+def test_generator_buffer_reuse_stores_the_same_masks(tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+                                                      reuse: bool) -> None:
+    """The factory's reused ``r`` buffers and decryption outputs (default) store the same masks and check vectors as
+    local generation (same seed), every row self-checked."""
+    from pgw.core.ring import RingParams
+    from pgw.factory import MaskGenerator
+    from pgw.factory import generator as gen_mod
+    from pgw.hemask.pks_backend import PKSHintStore, PKSMaskBackend, RemotePKS
+    from pgw.maskstore import FileKeyProvider, MaskStore
+
+    monkeypatch.setattr(gen_mod, "_R_REUSE", reuse)
+    pack = _LayerPack()
+    ring = RingParams.from_name("K32A12C27")
+    hints = PKSHintStore.open_or_build(tmp_path / "hint", pack)
+    out = {k: w.shape[0] for k, w in pack.w.items()}
+    be = PKSMaskBackend(pack, ring, hints, RemotePKS(_LocalProvider(pack), pack.fingerprint, out, hints.a_seed),
+                        groups_per_call=1)
+    be.reuse_output = reuse
+    kp = FileKeyProvider(tmp_path / "kek", create=True)
+    seed = bytes(range(3, 35))
+    got: dict[str, dict[str, list[tuple[torch.Tensor, torch.Tensor]]]] = {}
+    for mode in ("he", "local"):
+        gen = MaskGenerator(pack, ring, device="cpu", remote=be if mode == "he" else None, check_field="p31")
+        ms = MaskStore.open(tmp_path / f"store-{mode}-{reuse}", kp)
+        try:
+            for i in range(2):  # two segments: buffers carry over within and across calls
+                gen.generate_into_store(ms, 300, seed=bytes([i]) + seed[1:], chunk_slots=256)
+                if mode == "he":
+                    assert gen.last_stats.self_checked_rows == 300 * 4
+                    assert (gen.last_stats.extra.get("r_reused", 0) > 0) == reuse
+            got[mode] = {}
+            for _ in range(2):
+                with ms.reserve(pack.fingerprint, ring, 300) as res:
+                    for s in pack.linear_specs():
+                        uw = torch.from_numpy(np.array(res.checks_compact(s.id)[2], dtype=np.int64))
+                        got[mode].setdefault(s.id.key, []).append((res.take(s.id, 300)[1].clone(), uw))
+        finally:
+            ms.close()
+    for key, items in got["he"].items():
+        for (wr, uw), (wr_l, uw_l) in zip(items, got["local"][key], strict=True):
+            assert torch.equal(_canon(wr), _canon(wr_l)) and torch.equal(uw, uw_l), key
+    if reuse:
+        assert be._free_out  # outputs came back from the segment writer
+
+
+
+def _reply_cases() -> list[tuple[str, bytes, Any]]:
+    """(name, response bytes, request) for the zero-copy reply decode: valid replies and malformed ones."""
+    import msgpack
+
+    from pgw.hemask.wire import MaskgenResponse, MaskgenResult, encode_maskgen_response
+
+    rng = np.random.default_rng(11)
+    cases = []
+    for n_items, nbytes in ((1, 64 * 256 * 36 // 8), (3, 32 * 256 * 36 // 8), (1, 300), (1, 70000)):
+        items = tuple(MaskgenItem(f"0.l{i}", 256, b"", 0, 64, 56, 36, b"") for i in range(n_items))
+        req = MaskgenRequest("ab" * 16, "f" * 64, items, 3, (1, 2, 3), bytes(32))
+        ys = [rng.integers(0, 256, nbytes, dtype=np.uint8).tobytes() for _ in items]
+        good = encode_maskgen_response(MaskgenResponse(req.request_id, tuple(
+            MaskgenResult(it.linear, it.cols, y) for it, y in zip(items, ys, strict=True)), 3, (1, 2, 3)))
+        cases.append((f"good{n_items}-{nbytes}", good, req))
+        cases.append(("trailing", good + b"\xc0", req))
+        cases.append(("truncated", good[:-1], req))
+        obj = msgpack.unpackb(good, raw=False)
+        obj["items"][0]["y"] = ys[0][:-1]
+        cases.append(("short-y", msgpack.packb(obj, use_bin_type=True), req))
+        obj = msgpack.unpackb(good, raw=False)
+        obj["items"][0]["y"] = "text"
+        cases.append(("str-y", msgpack.packb(obj, use_bin_type=True), req))
+        obj = msgpack.unpackb(good, raw=False)
+        obj["id"] = "x"
+        cases.append(("bad-id", msgpack.packb(obj, use_bin_type=True), req))
+        obj = msgpack.unpackb(good, raw=False)
+        obj["extra"] = [1.5, -3, None, True, {"k": msgpack.ExtType(5, b"e")}]
+        cases.append(("ext", msgpack.packb(obj, use_bin_type=True), req))
+        # a duplicate y key (msgpack keeps the last one)
+        dup = good.replace(b"\xa1y", b"\xa1z", 1)
+        cases.append(("renamed-y", dup, req))
+    return cases
+
+
+@pytest.mark.parametrize("case", range(len(_reply_cases())))
+def test_reply_view_decode_equals_copying_decode(case: int) -> None:
+    """``decode_maskgen_response_view`` (the factory's zero-copy reply) accepts and refuses exactly what
+    ``decode_maskgen_response`` does, with the same ``y`` bytes (views into the body), and marks refusals as the
+    provider's (``details["reply"]``)."""
+    from pgw.hemask.wire import decode_maskgen_response, decode_maskgen_response_view
+
+    name, data, req = _reply_cases()[case]
+    m_of = {it.linear: (len(data) // len(req.items)) * 8 // (256 * 36) for it in req.items}  # about the right m
+    for of in (None, m_of, {k: v + 32 for k, v in m_of.items()}):
+        try:
+            want = decode_maskgen_response(data, req, of)
+        except Exception as exc:
+            with pytest.raises(type(exc)) as got_exc:
+                decode_maskgen_response_view(data, req, of)
+            if isinstance(exc, ProtocolError):
+                assert got_exc.value.details.get("reply") is True
+            continue
+        got = decode_maskgen_response_view(data, req, of)
+        assert got.request_id == want.request_id and got.version == want.version and got.versions == want.versions
+        assert [(i.linear, i.cols, bytes(i.y)) for i in got.items] == [(i.linear, i.cols, i.y) for i in want.items]
+        if name.startswith("good"):
+            assert all(isinstance(i.y, memoryview) and i.y.readonly for i in got.items)

@@ -24,6 +24,28 @@ fn isa_of(name: &str) -> PyResult<Isa> {
     Isa::parse(name).ok_or_else(|| verr(format!("unknown isa {name:?} (auto, avx512ifma, avx512, avx2, scalar)")))
 }
 
+/// The packed reply of :func:`decrypt` / :func:`decrypt_into`: ``bytes`` or any C-contiguous byte buffer (the factory
+/// passes a read-only ``memoryview`` into the HTTP response body: no copy of the 4.5 bytes per output and slot).
+struct ReplyBytes {
+    buf: pyo3::buffer::PyBuffer<u8>,
+}
+
+impl ReplyBytes {
+    fn get(y: &Bound<'_, PyAny>) -> PyResult<Self> {
+        let buf = pyo3::buffer::PyBuffer::<u8>::get(y)?;
+        if !buf.is_c_contiguous() {
+            return Err(verr("y must be a C-contiguous byte buffer"));
+        }
+        Ok(ReplyBytes { buf })
+    }
+
+    fn as_slice(&self) -> &[u8] {
+        // SAFETY: a C-contiguous buffer of `len_bytes` bytes that `self.buf` keeps exported (so its exporter cannot
+        // resize or free it) for as long as the returned slice lives; only read.
+        unsafe { std::slice::from_raw_parts(self.buf.buf_ptr() as *const u8, self.buf.len_bytes()) }
+    }
+}
+
 fn key32(b: &[u8]) -> PyResult<[u8; 32]> {
     b.try_into().map_err(|_| verr("stream keys are 32 bytes"))
 }
@@ -97,6 +119,78 @@ fn encrypt<'py>(
     Ok(Array2::from_shape_vec((n, groups * D), b).map_err(|e| verr(e.to_string()))?.into_pyarray(py))
 }
 
+/// :func:`encrypt` straight into a maskgen v3 request body: returns ``head + pack_bits(b, 56) + mid +
+/// pack_ksk(beta, ksk_bits)`` as one ``bytes`` object (:func:`pgw.hemask.wire.maskgen_v3_frame` gives ``head`` and
+/// ``mid``), the packed bodies written in place by the kernel and the reply keys' wire form packed in place: no
+/// ``b`` array, no packing pass over it, no copy of the payloads through Python. Same ``b`` as :func:`encrypt` and
+/// the same key bytes as :func:`pack_ksk` for the same inputs.
+#[pyfunction]
+#[pyo3(signature = (a_key, r, t, e_keys, head, mid, beta, ksk_bits, threads = 1, isa = "auto"))]
+#[allow(clippy::too_many_arguments)]
+fn encrypt_wire<'py>(
+    py: Python<'py>,
+    a_key: &[u8],
+    r: PyReadonlyArray2<'py, i64>,
+    t: PyReadonlyArray2<'py, i8>,
+    e_keys: Vec<Vec<u8>>,
+    head: &[u8],
+    mid: &[u8],
+    beta: PyReadonlyArray4<'py, u32>,
+    ksk_bits: Vec<u32>,
+    threads: usize,
+    isa: &str,
+) -> PyResult<Bound<'py, PyBytes>> {
+    let isa = isa_of(isa)?;
+    let (rows, n) = (r.shape()[0], r.shape()[1]);
+    let groups = e_keys.len();
+    let ek: Vec<[u8; 32]> = e_keys.iter().map(|k| key32(k)).collect::<PyResult<_>>()?;
+    let it = EncItem {
+        a_key: key32(a_key)?,
+        n,
+        r: r.as_slice().map_err(|_| verr("r must be C-contiguous"))?,
+        rows,
+        t: t.as_slice().map_err(|_| verr("t must be C-contiguous"))?,
+        e_keys: &ek,
+    };
+    let sh = beta.shape();
+    if sh[0] != groups || sh[1] != ksk_bits.len() || sh[2] != RANK || sh[3] != NR
+        || ksk_bits.iter().any(|&b| !(8..=32).contains(&b))
+    {
+        return Err(verr("beta must be (groups, len(ksk_bits), 16, 8192) with 8 <= bits <= 32"));
+    }
+    let bsl = beta.as_slice().map_err(|_| verr("beta must be C-contiguous"))?;
+    let ksk_len: usize = groups * ksk_bits.iter().map(|&b| RANK * NR * b as usize / 8).sum::<usize>();
+    let payload = n.checked_mul(groups * D).and_then(|c| c.checked_mul(7)).ok_or_else(|| verr("size overflow"))?;
+    let total = head.len() + payload + mid.len() + ksk_len;
+    // SAFETY: a fresh, uninitialised bytes object of `total` bytes, filled completely below before any Python code
+    // can see it (the GIL is released while the kernels write their ranges; the object is not yet shared).
+    let obj = unsafe {
+        let p = pyo3::ffi::PyBytes_FromStringAndSize(std::ptr::null(), total as pyo3::ffi::Py_ssize_t);
+        Bound::from_owned_ptr_or_err(py, p)?.downcast_into_unchecked::<PyBytes>()
+    };
+    struct Buf(*mut u8);
+    unsafe impl Send for Buf {}
+    let buf = Buf(unsafe { pyo3::ffi::PyBytes_AsString(obj.as_ptr()) as *mut u8 });
+    let res = py.allow_threads(|| -> Result<(), kernel::Error> {
+        let buf = buf;
+        // SAFETY: the whole fresh object, exclusively ours until it is returned.
+        let all = unsafe { std::slice::from_raw_parts_mut(buf.0, total) };
+        let (h, rest) = all.split_at_mut(head.len());
+        let (body, rest) = rest.split_at_mut(payload);
+        let (m, kk) = rest.split_at_mut(mid.len());
+        h.copy_from_slice(head);
+        m.copy_from_slice(mid);
+        let mut pos = 0usize;
+        for (j, chunk) in bsl.chunks_exact(RANK * NR).enumerate() {
+            pos += crate::arith::pack_bits_to(chunk, ksk_bits[j % ksk_bits.len()], &mut kk[pos..]).map_err(kernel::Error)?;
+        }
+        debug_assert_eq!(pos, kk.len());
+        kernel::encrypt_item_to(isa, &it, kernel::EncOut::Packed56(body), threads)
+    });
+    res.map_err(kerr)?;
+    Ok(obj)
+}
+
 /// Reply key of one group: ``(beta (4, 16, 8192) uint32, trhat (2, 8192) uint32)``.
 #[pyfunction]
 #[pyo3(signature = (khat, t, tr, e_key, isa = "auto"))]
@@ -131,7 +225,7 @@ fn reply_key<'py>(
 fn decrypt<'py>(
     py: Python<'py>,
     hint: PyReadonlyArray4<'py, u8>,
-    y: &Bound<'py, PyBytes>,
+    y: &Bound<'py, PyAny>,
     yb: u32,
     trhat: PyReadonlyArray3<'py, u32>,
     rows: Vec<usize>,
@@ -142,7 +236,8 @@ fn decrypt<'py>(
     let nb = hint.shape()[0];
     let m = nb * PACK;
     let groups = rows.len();
-    let data = y.as_bytes();
+    let yb_buf = ReplyBytes::get(y)?;
+    let data = yb_buf.as_slice();
     let hs = hint.as_slice().map_err(|_| verr("hint must be C-contiguous"))?;
     let th = trhat.as_slice().map_err(|_| verr("trhat must be C-contiguous"))?;
     let total: usize = rows.iter().sum();
@@ -168,6 +263,58 @@ fn decrypt<'py>(
     })
     .map_err(kerr)?;
     Ok(Array2::from_shape_vec((total, m), out).map_err(|e| verr(e.to_string()))?.into_pyarray(py))
+}
+
+/// :func:`decrypt` written into ``out`` (a C-contiguous, writable ``(sum(rows), m)`` uint32 array; every element is
+/// overwritten): the same values without a fresh allocation (the mask factory reuses its zeroed output buffers).
+#[pyfunction]
+#[pyo3(signature = (hint, y, yb, trhat, rows, out, threads = 1, isa = "auto"))]
+#[allow(clippy::too_many_arguments)]
+fn decrypt_into<'py>(
+    py: Python<'py>,
+    hint: PyReadonlyArray4<'py, u8>,
+    y: &Bound<'py, PyAny>,
+    yb: u32,
+    trhat: PyReadonlyArray3<'py, u32>,
+    rows: Vec<usize>,
+    out: &Bound<'py, PyArray2<u32>>,
+    threads: usize,
+    isa: &str,
+) -> PyResult<()> {
+    let isa = isa_of(isa)?;
+    let nb = hint.shape()[0];
+    let m = nb * PACK;
+    let groups = rows.len();
+    let yb_buf = ReplyBytes::get(y)?;
+    let data = yb_buf.as_slice();
+    let hs = hint.as_slice().map_err(|_| verr("hint must be C-contiguous"))?;
+    let th = trhat.as_slice().map_err(|_| verr("trhat must be C-contiguous"))?;
+    let total: usize = rows.iter().sum();
+    if out.shape() != [total, m] {
+        return Err(verr(format!("out must be ({total}, {m})")));
+    }
+    let mut rw = out.try_readwrite().map_err(|e| verr(format!("out must be writable: {e}")))?;
+    let outs_all = rw.as_slice_mut().map_err(|_| verr("out must be C-contiguous"))?;
+    py.allow_threads(|| -> Result<(), kernel::Error> {
+        let count = groups * nb * NR;
+        let words;
+        let c0r = if yb == 36 {
+            C0::Packed36 { data, count }
+        } else {
+            words = unpack(data, count, yb).map_err(kernel::Error)?;
+            C0::Words(&words)
+        };
+        let mut outs: Vec<&mut [u32]> = Vec::with_capacity(groups);
+        let mut rest = outs_all;
+        for &r in &rows {
+            let (a, b) = rest.split_at_mut(r * m);
+            outs.push(a);
+            rest = b;
+        }
+        let it = DecItem { hint: hs, m, c0r, yb, trhat: th, rows: &rows };
+        kernel::decrypt_item(isa, &it, &mut outs, threads)
+    })
+    .map_err(kerr)
 }
 
 /// Provider reply (``y`` given: ``(G, nb, 8192)`` uint64 below ``2^yb``) or compact-hint build (``y=None``,
@@ -391,6 +538,8 @@ fn pgw_pks(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(info, m)?)?;
     m.add_function(wrap_pyfunction!(ternary, m)?)?;
     m.add_function(wrap_pyfunction!(encrypt, m)?)?;
+    m.add_function(wrap_pyfunction!(encrypt_wire, m)?)?;
+    m.add_function(wrap_pyfunction!(decrypt_into, m)?)?;
     m.add_function(wrap_pyfunction!(reply_key, m)?)?;
     m.add_function(wrap_pyfunction!(decrypt, m)?)?;
     m.add_function(wrap_pyfunction!(keyswitch, m)?)?;

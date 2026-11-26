@@ -168,3 +168,40 @@ def test_mask_rows_with_stream_key_matches_python() -> None:
         np.testing.assert_array_equal(
             SeedExpander.ring_uniform_rows_with_key(bytearray(key), cols, 32, start, rows).numpy(), want
         )
+
+
+@pytest.mark.skipif(not native.native_available("mask_rows_into"), reason="pgw_fast without mask_rows_into")
+@pytest.mark.parametrize("k", (24, 32, 64))
+@pytest.mark.parametrize(("cols", "start", "rows"), [(7, 3, 2), (18944, 11, 3), (3584, 0, 40), (3, 5, 1),
+                                                     (29568, 7, 33)])
+def test_mask_rows_into_overwrites_with_the_same_rows(k: int, cols: int, start: int, rows: int) -> None:
+    """``mask_rows_into`` (the factory's reused ``r`` buffers) writes exactly ``mask_rows_with_key``'s rows over any
+    previous contents, on the AVX-512 path and on the portable one (``PGW_FAST_CHACHA512=0`` is read once per
+    process, so the portable path is checked against the same reference in a child process)."""
+    key = SeedExpander(SEED).stream_key("r", "1.o")
+    want = native.fast.mask_rows_with_key(bytearray(key), cols, k, start, rows)
+    _check(want, _ref(SEED, ["r", "1.o"], cols, k, start, rows))
+    out = np.full((rows, cols), -12345, dtype=np.int64)
+    native.fast.mask_rows_into(bytearray(key), out, k, start)
+    _check(out, want)
+    with pytest.raises(ValueError):
+        native.fast.mask_rows_into(bytearray(key), np.zeros((rows, cols), dtype=np.int64)[:, ::-1], k, start)
+    with pytest.raises(ValueError):
+        native.fast.mask_rows_into(bytearray(key[:31]), out, k, start)
+
+
+def test_mask_rows_portable_and_vector_paths_agree() -> None:
+    import os
+    import subprocess
+    import sys
+
+    code = ("import numpy as np; from pgw.core import native; from pgw.core.prng import SeedExpander; "
+            "k = SeedExpander(bytes(range(32))).stream_key('r', '1.o'); "
+            "print(int(np.bitwise_xor.reduce(native.fast.mask_rows_with_key(bytearray(k), 18944, 32, 3, 9).ravel())))")
+    outs = []
+    for flag in ("1", "0"):
+        env = dict(os.environ, PGW_FAST_CHACHA512=flag)
+        outs.append(subprocess.run([sys.executable, "-c", code], env=env, capture_output=True, text=True,  # noqa: S603
+                                   check=True).stdout.strip())
+    want = int(np.bitwise_xor.reduce(_ref(SEED, ["r", "1.o"], 18944, 32, 3, 9).ravel()))
+    assert outs == [str(want), str(want)]

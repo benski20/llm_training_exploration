@@ -29,6 +29,8 @@ use pyo3::prelude::*;
 
 pub mod attn;
 pub mod bitpack;
+#[cfg(target_arch = "x86_64")]
+pub mod chacha;
 #[cfg(unix)]
 pub mod decode;
 pub mod decode_f2;

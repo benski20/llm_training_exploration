@@ -10,6 +10,7 @@ reply key's noise (``"pks-e-ksk"``) are distinct HKDF labels of it (independent)
 from __future__ import annotations
 
 import os
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
@@ -141,26 +142,95 @@ class Customer:
                 ts.fill(0)
             raise
 
-    def decrypt(self, hint: np.ndarray, y: bytes, secrets: list[GroupSecret]) -> np.ndarray:
+    @property
+    def has_wire(self) -> bool:
+        """True when :meth:`encrypt_wire` can run (the native kernels with the in-place wire form)."""
+        return self.nat is not None and hasattr(self.nat, "encrypt_wire")
+
+    def encrypt_wire(self, a_seed: bytes, linear: str, r: np.ndarray,
+                     frame: Callable[[int, int, int], tuple[Any, bytes, bytes]], *,
+                     seeds: list[bytes] | None = None) -> tuple[Any, bytes, list[GroupSecret]]:
+        """:meth:`encrypt` straight into a maskgen request body (native only, :attr:`has_wire`).
+
+        ``frame(cols, b_len, ksk_len) -> (req, head, mid)`` (:meth:`pgw.hemask.pks_backend.RemotePKS.frame`) gives
+        the message around the two payloads; returns ``(req, body, secrets)`` with ``body = head + pack_bits(b, 56)
+        + mid + pack_ksk(beta)``, ``b`` and the reply keys exactly those of :meth:`encrypt` for the same seeds,
+        both payloads written in place by the native call (no ``b`` array, packing pass or copy).
+        """
+        nat = self.nat
+        if nat is None or not hasattr(nat, "encrypt_wire"):
+            raise ConfigError("encrypt_wire needs the native pgw_pks kernels")
+        from pgw.hemask.wire import V3_KSK_BITS, V3_KSK_BYTES
+
+        rows, n = r.shape
+        if n % RANK or rows == 0:
+            raise ConfigError(f"pks-v3: in_features {n} must be a multiple of {RANK}")
+        groups = -(-rows // D)
+        seeds = [new_seed() for _ in range(groups)] if seeds is None else seeds
+        sxs = [SeedExpander(s) for s in seeds]
+        secrets: list[GroupSecret] = []
+        beta = np.empty((groups, 4, RANK, NR), dtype=np.uint32)
+        r = np.ascontiguousarray(r, dtype=np.int64)
+        ts = np.empty((groups, NU), dtype=np.int8)
+        try:
+            for g, sx in enumerate(sxs):
+                tg = _ternary(nat, sx, NU, "pks-t")
+                ts[g] = tg
+                tg.fill(0)
+            # the reply keys first (they depend on t and their own streams only): their wire form goes in the tail
+            for g, sx in enumerate(sxs):
+                tr = _ternary(nat, sx, NR, "pks-t-reply")
+                bg, th = nat.reply_key(self._kh, ts[g], tr, sx.stream_key("pks-e-ksk"))
+                beta[g] = bg
+                secrets.append(GroupSecret(ts[g].copy(), tr, np.asarray(th), min(D, rows - g * D)))
+            req, head, mid = frame(groups * D, 7 * n * groups * D, groups * V3_KSK_BYTES)
+            body: bytes = nat.encrypt_wire(SeedExpander(a_seed).stream_key(pks.A_LABEL, linear), r, ts,
+                                           [sx.stream_key("pks-e") for sx in sxs], head, mid, beta,
+                                           list(V3_KSK_BITS), self.threads)
+            return req, body, secrets
+        except BaseException:
+            for s in secrets:
+                s.wipe()
+            raise
+        finally:
+            ts.fill(0)
+
+    def decrypt(self, hint: np.ndarray, y: bytes | memoryview, secrets: list[GroupSecret], *,
+                out: np.ndarray | None = None) -> np.ndarray:
         """``W8 r mod 2^32`` (``(sum rows, m)`` uint32, groups stacked) from the packed reply ``y``
         (``(G, m/32, 8192)`` values at 36 bits) and the stored compact hint ``(m/32, 2, 8192, 3)``. Wipes
-        the secrets."""
+        the secrets. ``out``: a C-contiguous uint32 ``(sum rows, m)`` array to write into (returned; every element
+        overwritten) instead of a fresh one."""
         try:
             nb = hint.shape[0]
             rows = [s.rows for s in secrets]
             if self.nat is not None:
                 th = np.ascontiguousarray(np.stack([s.trhat for s in secrets]), dtype=np.uint32)
                 try:
-                    out: np.ndarray = self.nat.decrypt(hint, bytes(y), _PAR.yb, th, rows, self.threads)
+                    # y: bytes or a view into the reply (the native kernels read any byte buffer in place)
+                    yv = y if isinstance(y, bytes) or hasattr(self.nat, "decrypt_into") else bytes(y)
+                    if out is not None and hasattr(self.nat, "decrypt_into"):
+                        self.nat.decrypt_into(hint, yv, _PAR.yb, th, rows, out, self.threads)
+                        return out
+                    res: np.ndarray = self.nat.decrypt(hint, yv, _PAR.yb, th, rows, self.threads)
                 finally:
                     th.fill(0)
-                return out
+                if out is not None:
+                    out[...] = res
+                    res.fill(0)
+                    return out
+                return res
             from pgw.hemask.wire import unpack_bits
 
             c0 = unpack_bits(y, len(secrets) * nb * NR, _PAR.yb).reshape(len(secrets), nb, NR)
             parts = [pks.decrypt_pks(c0[g], hint, s.t_reply.astype(np.int64), s.rows, _PAR)
                      for g, s in enumerate(secrets)]
-            return np.concatenate(parts, axis=0).astype(np.uint32)
+            ref = np.concatenate(parts, axis=0).astype(np.uint32)
+            if out is not None:
+                out[...] = ref
+                ref.fill(0)
+                return out
+            return ref
         finally:
             for s in secrets:
                 s.wipe()

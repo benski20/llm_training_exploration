@@ -173,7 +173,7 @@ class MaskgenRequest:
 class MaskgenResult:
     linear: str
     cols: int
-    y: bytes | bytearray
+    y: bytes | bytearray | memoryview
 
 
 @dataclass(frozen=True)
@@ -259,6 +259,26 @@ def encode_maskgen_request(req: MaskgenRequest) -> bytes:
         "v": req.version, "type": "maskgen", "id": req.request_id, "fp": req.fingerprint, **_vs(req.versions),
         **extra, "items": items,
     }, use_bin_type=True))
+
+
+def maskgen_v3_frame(req: MaskgenRequest, b_len: int, ksk_len: int) -> tuple[bytes, bytes]:
+    """``(head, mid)`` with ``head + b + mid + ksk == encode_maskgen_request(req')``, where ``req'`` is ``req`` (one v3
+    item) with the item's ``b`` and ``ksk`` replaced by any ``b_len`` and ``ksk_len`` bytes: the customer writes both
+    payloads in place (:meth:`pgw.hemask.pks_native.Customer.encrypt_wire`) instead of building ``b``, packing it
+    and copying it into the message. The item's own ``b`` and ``ksk`` are ignored. Same bytes as
+    :func:`encode_maskgen_request` (tested)."""
+    if req.version != 3 or len(req.items) != 1 or not req.items[0].v3 or len(req.a_seed) != 32:
+        raise ValueError("maskgen_v3_frame: one v3 item and a 32-byte a_seed")
+    it = req.items[0]
+    pk = msgpack.Packer(use_bin_type=True)
+    outer: dict[str, Any] = {"v": req.version, "type": "maskgen", "id": req.request_id, "fp": req.fingerprint,
+                             **_vs(req.versions), "aseed": bytes(req.a_seed)}
+    parts = [pk.pack_map_header(len(outer) + 1)]
+    for k, v in outer.items():
+        parts += [pk.pack(k), pk.pack(v)]
+    parts += [pk.pack("items"), pk.pack_array_header(1), pk.pack_map_header(4), pk.pack("linear"), pk.pack(it.linear),
+              pk.pack("cols"), pk.pack(it.cols), pk.pack("b"), _bin_header(b_len)]
+    return b"".join(parts), pk.pack("ksk") + _bin_header(ksk_len)
 
 
 def _decode_item_v1(i: int, it: dict[str, Any]) -> MaskgenItem:
@@ -380,8 +400,136 @@ def decode_maskgen_response(data: bytes | bytearray | memoryview, req: MaskgenRe
         raise
 
 
+# ---- zero-copy reply ``y`` (the customer's decryption reads it in place) -------------------------------------
+
+class _WalkError(Exception):
+    """A message the walker does not handle (the caller falls back to the copying decode)."""
+
+
+def _skip(d: memoryview, pos: int) -> int:
+    """End offset of the msgpack object at ``pos`` (nil, bool, int, float, str, bin, array, map; no ext)."""
+    b = d[pos]
+    if b <= 0x7F or b >= 0xE0 or b in (0xC0, 0xC2, 0xC3):
+        return pos + 1
+    if 0xA0 <= b <= 0xBF:
+        return pos + 1 + (b & 0x1F)
+    if 0x90 <= b <= 0x9F or 0x80 <= b <= 0x8F:
+        n, pos = (b & 0x0F) * (2 if b <= 0x8F else 1), pos + 1
+        for _ in range(n):
+            pos = _skip(d, pos)
+        return pos
+    fixed = {0xCA: 4, 0xCB: 8, 0xCC: 1, 0xCD: 2, 0xCE: 4, 0xCF: 8, 0xD0: 1, 0xD1: 2, 0xD2: 4, 0xD3: 8}
+    if b in fixed:
+        return pos + 1 + fixed[b]
+    sized = {0xC4: 1, 0xC5: 2, 0xC6: 4, 0xD9: 1, 0xDA: 2, 0xDB: 4}
+    if b in sized:
+        w = sized[b]
+        return pos + 1 + w + int.from_bytes(d[pos + 1:pos + 1 + w], "big")
+    counted = {0xDC: (2, 1), 0xDD: (4, 1), 0xDE: (2, 2), 0xDF: (4, 2)}
+    if b in counted:
+        w, per = counted[b]
+        n, pos = int.from_bytes(d[pos + 1:pos + 1 + w], "big") * per, pos + 1 + w
+        for _ in range(n):
+            pos = _skip(d, pos)
+        return pos
+    raise _WalkError(f"msgpack type 0x{b:02x}")
+
+
+def _container(d: memoryview, pos: int, kind: str) -> tuple[int, int]:
+    """``(entries, first entry offset)`` of the map (``kind`` "map") or array at ``pos``."""
+    b = d[pos]
+    if kind == "map":
+        if 0x80 <= b <= 0x8F:
+            return b & 0x0F, pos + 1
+        if b in (0xDE, 0xDF):
+            w = 2 if b == 0xDE else 4
+            return int.from_bytes(d[pos + 1:pos + 1 + w], "big"), pos + 1 + w
+    else:
+        if 0x90 <= b <= 0x9F:
+            return b & 0x0F, pos + 1
+        if b in (0xDC, 0xDD):
+            w = 2 if b == 0xDC else 4
+            return int.from_bytes(d[pos + 1:pos + 1 + w], "big"), pos + 1 + w
+    raise _WalkError(f"expected a {kind}")
+
+
+def _key(d: memoryview, pos: int) -> str | None:
+    """The str key at ``pos`` (``None`` for any other type)."""
+    b = d[pos]
+    if 0xA0 <= b <= 0xBF:
+        return bytes(d[pos + 1:pos + 1 + (b & 0x1F)]).decode("utf-8", "replace")
+    if b == 0xD9:
+        n = d[pos + 1]
+        return bytes(d[pos + 2:pos + 2 + n]).decode("utf-8", "replace")
+    return None
+
+
+def _y_spans(d: memoryview) -> list[tuple[int, int, int]]:
+    """``(header, payload start, payload end)`` of every item's ``y`` bin in a ``maskgen_result`` (the top-level map's
+    single ``items`` key, each item a map with one ``y``); the whole message must parse to its last byte."""
+    n, pos = _container(d, 0, "map")
+    spans: list[tuple[int, int, int]] | None = None
+    for _ in range(n):
+        key = _key(d, pos)
+        pos = _skip(d, pos)
+        if key != "items":
+            pos = _skip(d, pos)
+            continue
+        if spans is not None:
+            raise _WalkError("duplicate items")
+        spans = []
+        count, pos = _container(d, pos, "array")
+        for _ in range(count):
+            fields, pos = _container(d, pos, "map")
+            found = None
+            for _ in range(fields):
+                k = _key(d, pos)
+                pos = _skip(d, pos)
+                end = _skip(d, pos)
+                if k == "y":
+                    b = d[pos]
+                    if found is not None or b not in (0xC4, 0xC5, 0xC6):
+                        raise _WalkError("y")
+                    w = {0xC4: 1, 0xC5: 2, 0xC6: 4}[b]
+                    found = (pos, pos + 1 + w, end)
+                pos = end
+            if found is None:
+                raise _WalkError("no y")
+            spans.append(found)
+    if spans is None or pos != len(d):
+        raise _WalkError("trailing bytes or no items")
+    return spans
+
+
+def decode_maskgen_response_view(data: bytes | bytearray | memoryview, req: MaskgenRequest,
+                                 out_features: dict[str, int] | None = None) -> MaskgenResponse:
+    """:func:`decode_maskgen_response` whose items' ``y`` are read-only views into ``data`` instead of copies (the
+    v3 reply is 4.5 bytes per output and slot; the customer decrypts it in place). Every check is the same: the
+    message without the ``y`` payloads is decoded and checked by the same code, then the views take the payloads'
+    place (sizes checked on them). A message the walker does not handle takes the copying decode (same result)."""
+    d = memoryview(data).cast("B")
+    try:
+        spans = _y_spans(d)
+    except (_WalkError, IndexError, ValueError, RecursionError):
+        return decode_maskgen_response(data, req, out_features)
+    small = bytearray()
+    last = 0
+    for hdr, _, end in spans:
+        small += d[last:hdr]
+        small += b"\xc4\x00"  # an empty bin in the payload's place
+        last = end
+    small += d[last:]
+    views = [d[start:end].toreadonly() for _, start, end in spans]
+    try:
+        return _decode_response(small, req, out_features, views)
+    except ProtocolError as exc:
+        exc.details["reply"] = True
+        raise
+
+
 def _decode_response(data: bytes | bytearray | memoryview, req: MaskgenRequest,
-                     out_features: dict[str, int] | None) -> MaskgenResponse:
+                     out_features: dict[str, int] | None,
+                     views: list[memoryview] | None = None) -> MaskgenResponse:
     obj = _load(data, "maskgen_result", (req.version,))
     if obj.get("id") != req.request_id:
         raise ProtocolError("maskgen: response id does not match the request")
@@ -393,7 +541,7 @@ def _decode_response(data: bytes | bytearray | memoryview, req: MaskgenRequest,
         if not isinstance(it, dict) or it.get("linear") != q.linear or it.get("cols") != q.cols \
                 or not isinstance(it.get("y"), bytes):
             raise ProtocolError(f"maskgen: response items[{i}] does not match the request")
-        y = it["y"]
+        y = it["y"] if views is None else views[i]
         if out_features is not None and q.linear in out_features:
             want = q.y_nbytes(out_features[q.linear])
             if len(y) != want:

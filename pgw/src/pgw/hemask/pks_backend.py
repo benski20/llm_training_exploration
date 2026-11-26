@@ -27,12 +27,14 @@ from __future__ import annotations
 
 import contextlib
 import fcntl
+import functools
 import hashlib
 import hmac
 import json
 import logging
 import os
 import shutil
+import threading
 import time
 import uuid
 from collections.abc import Callable, Iterable
@@ -54,8 +56,9 @@ from pgw.hemask.wire import (
     V3_Y_BITS,
     MaskgenItem,
     MaskgenRequest,
-    decode_maskgen_response,
+    decode_maskgen_response_view,
     encode_maskgen_request,
+    maskgen_v3_frame,
     pack_bits,
 )
 
@@ -473,6 +476,11 @@ def _digest(path: Path) -> str:
     return h.hexdigest()
 
 
+#: Reuse the compact outputs the factory hands back (:meth:`PKSMaskBackend.release_output`; ``PGW_PKS_OUT_REUSE=0``:
+#: a fresh array per call).
+_OUT_REUSE = os.environ.get("PGW_PKS_OUT_REUSE", "1").strip().lower() not in ("0", "false", "no", "off")
+
+
 class RemotePKS:
     """Maskgen wire v3 requests for one pack (``post(body, request_id, decode)`` sends them: the HTTP
     :class:`pgw.wire.ComputeClient` or an in-process provider). A service that does not serve v3 is a
@@ -496,21 +504,36 @@ class RemotePKS:
 
         return cls(post, fingerprint, out_features, a_seed)
 
-    def __call__(self, linear: str, b: np.ndarray, ksk: bytes | bytearray) -> bytes:
+    def __call__(self, linear: str, b: np.ndarray, ksk: bytes | bytearray) -> bytes | memoryview:
         cols = int(b.shape[1])
         item = MaskgenItem(linear, cols, pack_bits(b, V3_B_BITS), 0, 64, V3_B_BITS, V3_Y_BITS, ksk)
         req = MaskgenRequest(uuid.uuid4().hex, self.fingerprint, (item,), 3, self.VERSIONS, self.a_seed)
-        body = encode_maskgen_request(req)
+        return self.send(req, encode_maskgen_request(req))
+
+    def frame(self, linear: str, cols: int, b_len: int, ksk_len: int) -> tuple[MaskgenRequest, bytes, bytes]:
+        """The request of one item whose packed upload (``b_len`` bytes) and reply keys (``ksk_len`` bytes) the
+        caller writes in place: ``(req, head, mid)`` with ``head + pack_bits(b, 56) + mid + pack_ksk(beta)`` the
+        bytes :meth:`__call__` would send (:func:`pgw.hemask.wire.maskgen_v3_frame`). ``req.items[0]`` holds empty
+        ``b`` and ``ksk`` (the reply check needs only the linear and ``cols``)."""
+        item = MaskgenItem(linear, int(cols), b"", 0, 64, V3_B_BITS, V3_Y_BITS, b"")
+        req = MaskgenRequest(uuid.uuid4().hex, self.fingerprint, (item,), 3, self.VERSIONS, self.a_seed)
+        head, mid = maskgen_v3_frame(req, b_len, ksk_len)
+        return req, head, mid
+
+    def send(self, req: MaskgenRequest, body: bytes) -> bytes | memoryview:
+        """Post one encoded request (:meth:`__call__` or a :meth:`frame` body) and return its reply's ``y``."""
         self.calls += 1
         self.bytes_up += len(body)
 
-        def decode(data: bytes) -> bytes:
-            resp = decode_maskgen_response(data, req, self.out_features)
+        def decode(data: bytes) -> bytes | memoryview:
+            # y as a read-only view into the response body: the decryption reads it in place (same checks)
+            resp = decode_maskgen_response_view(data, req, self.out_features)
             self.bytes_down += len(data)
-            return bytes(resp.items[0].y)
+            y = resp.items[0].y
+            return y if isinstance(y, bytes | memoryview) else bytes(y)
 
         try:
-            out: bytes = self.post(body, req.request_id, decode)
+            out: bytes | memoryview = self.post(body, req.request_id, decode)
         except PGWError as exc:
             # a malformed reply (details["reply"]) is the provider's integrity failure, not a refusal of v3
             if exc.code in (ErrorCode.VERSION_MISMATCH, ErrorCode.PROTOCOL) and not exc.details.get("reply"):
@@ -577,6 +600,10 @@ class PKSMaskBackend:
                 raise ConfigError(f"pks-v3 hint store has no hint for {key}; delete it to rebuild")
             self.params.check_noise(float(norms[key]), key, margin_bits)  # refuse before any request
         self.customer = Customer(pks.ks_a(store.ks_seed), threads=threads)
+        # zeroed compact outputs handed back by the factory (release_output), reused by later calls of that shape
+        self._free_out: dict[tuple[int, int], np.ndarray] = {}
+        self._free_lock = threading.Lock()
+        self.reuse_output = _OUT_REUSE
         self.engine = f"pks-v3:{self.customer.engine}"
         self.stats = {"groups": 0, "encrypt_s": 0.0, "remote_s": 0.0, "decrypt_s": 0.0, "wall_s": 0.0, "passes": 0,
                       "max_inflight": 1, "jobs": 0, "yield_s": 0.0}
@@ -592,6 +619,11 @@ class PKSMaskBackend:
     #: as int32 (the low 32 bits) straight from the decryption, without the int64 copy (``PGW_PKS_COMPACT=0``: off).
     compact_output = os.environ.get("PGW_PKS_COMPACT", "1").strip().lower() not in ("0", "false", "no", "off")
 
+    #: The packed upload written by the encryption kernel straight into the request body
+    #: (:meth:`Customer.encrypt_wire`; same bytes as packing ``b`` and encoding the request), for a
+    #: :class:`RemotePKS` remote. ``PGW_PKS_WIRE_FUSED=0``: off (build ``b``, ``pack_bits``, encode).
+    wire_fused = os.environ.get("PGW_PKS_WIRE_FUSED", "1").strip().lower() not in ("0", "false", "no", "off")
+
     def matmul(self, linear: str, r: torch.Tensor, *, compact: bool = False) -> torch.Tensor:
         """``W8 r mod 2^32`` for ``r`` ``(rows, n)``: int64 ``(rows, m)``, or with ``compact`` int32 holding the low
         32 bits (the same values mod 2^32; the decryption's own buffer when one request covers every row)."""
@@ -604,32 +636,50 @@ class PKSMaskBackend:
         t_wall = time.perf_counter()
         hint = self.store.hint(linear)
         step = D * self.groups_per_call
+        rp = self.remote if isinstance(self.remote, RemotePKS) else None
+        into = compact and self.customer.nat is not None and hasattr(self.customer.nat, "decrypt_into")
+        wire = rp is not None and self.wire_fused and self.customer.has_wire
         one_pass = compact and 0 < rn.shape[0] <= step
         # the caller owns (and wipes) it
-        out = None if one_pass else np.empty((rn.shape[0], spec.out_features), dtype=np.uint32 if compact else np.int64)
+        if into:  # every pass decrypts straight into its rows of one (reused when possible) uint32 output
+            out = self._take_output(rn.shape[0], spec.out_features)
+        else:
+            out = None if one_pass else np.empty((rn.shape[0], spec.out_features),
+                                                 dtype=np.uint32 if compact else np.int64)
         try:
             for r0 in range(0, rn.shape[0], step):
                 rc = rn[r0:r0 + step]
                 if not rc.flags.c_contiguous:
                     rc = np.ascontiguousarray(rc)
                 t0 = time.perf_counter()
-                b, beta, secrets = self.customer.encrypt(self.store.a_seed, linear, rc)
+                if wire and rp is not None:  # the packed upload written in place into the request body (same bytes)
+                    req, body, secrets = self.customer.encrypt_wire(self.store.a_seed, linear, rc,
+                                                                    functools.partial(rp.frame, linear))
+                else:
+                    b, beta, secrets = self.customer.encrypt(self.store.a_seed, linear, rc)
+                    ksk = pack_ksk(beta)
+                    del beta
                 if rc.base is None:  # a contiguous copy of masks: wipe it
                     rc.fill(0)
-                ksk = pack_ksk(beta)
-                del beta
                 t1 = time.perf_counter()
                 wr: np.ndarray | None = None
                 try:
-                    y = self.remote(linear, b, ksk)
-                    t2 = time.perf_counter()
-                    wr = self.customer.decrypt(hint, y, secrets)
-                    if out is None:  # compact, one request: hand on the decryption's buffer itself
-                        out = np.ascontiguousarray(wr, dtype=np.uint32)
-                        if out is wr:
-                            wr = None
+                    if wire and rp is not None:
+                        y = rp.send(req, body)
+                        del body
                     else:
-                        out[r0:r0 + wr.shape[0]] = wr  # W8 r mod 2^32 (secret): no other copy is kept
+                        y = self.remote(linear, b, ksk)
+                    t2 = time.perf_counter()
+                    if into and out is not None:  # straight into this pass's rows: no other copy exists
+                        self.customer.decrypt(hint, y, secrets, out=out[r0:r0 + rc.shape[0]])
+                    else:
+                        wr = self.customer.decrypt(hint, y, secrets)
+                        if out is None:  # compact, one request: hand on the decryption's buffer itself
+                            out = np.ascontiguousarray(wr, dtype=np.uint32)
+                            if out is wr:
+                                wr = None
+                        else:
+                            out[r0:r0 + wr.shape[0]] = wr  # W8 r mod 2^32 (secret): no other copy is kept
                 finally:
                     for s in secrets:
                         s.wipe()
@@ -647,6 +697,32 @@ class PKSMaskBackend:
         if compact:
             return torch.from_numpy(out.view(np.int32))
         return torch.from_numpy(out)
+
+    def _take_output(self, rows: int, m: int) -> np.ndarray:
+        if self.reuse_output:
+            with self._free_lock:
+                buf = self._free_out.pop((rows, m), None)
+            if buf is not None:
+                return buf
+        return np.empty((rows, m), dtype=np.uint32)
+
+    #: Bytes of zeroed outputs kept for reuse (one per shape).
+    OUTPUT_POOL_BYTES = 1 << 30
+
+    def release_output(self, wr: torch.Tensor) -> None:
+        """Take back a compact output of :meth:`matmul` that its consumer has **zeroed** and no longer uses (the
+        factory's segment writer, after writing it): a later call of the same shape decrypts into it instead of a
+        fresh array (no page faults or kernel zeroing of new pages). Anything else is ignored."""
+        if not self.reuse_output or wr.dtype != torch.int32 or wr.dim() != 2 or wr.device.type != "cpu":
+            return
+        arr = wr.numpy().view(np.uint32)
+        if not arr.flags.c_contiguous or not arr.flags.writeable:
+            return
+        key = (int(arr.shape[0]), int(arr.shape[1]))
+        with self._free_lock:
+            held = sum(a.nbytes for a in self._free_out.values())
+            if key not in self._free_out and held + arr.nbytes <= self.OUTPUT_POOL_BYTES:
+                self._free_out[key] = arr
 
     def _add(self, **kw: float) -> None:
         for k, v in kw.items():

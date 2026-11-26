@@ -610,7 +610,21 @@ pub fn pack_bits_into(vals: &[u32], bits: u32, out: &mut Vec<u8>) -> Result<(), 
     }
     let start = out.len();
     out.resize(start + count * bits as usize / 8, 0);
-    let dst = &mut out[start..];
+    pack_bits_to(vals, bits, &mut out[start..]).map(|_| ())
+}
+
+/// [`pack_bits_into`] written over the start of `dst` (every byte of the packed range is written); returns the
+/// packed length `vals.len() * bits / 8`.
+pub fn pack_bits_to(vals: &[u32], bits: u32, dst: &mut [u8]) -> Result<usize, String> {
+    let count = vals.len();
+    if !(1..=32).contains(&bits) || !count.is_multiple_of(8) {
+        return Err(format!("pack_bits: {count} values of {bits} bits (needs a multiple of 8, bits <= 32)"));
+    }
+    let len = count * bits as usize / 8;
+    if dst.len() < len {
+        return Err(format!("pack_bits: {len} bytes do not fit in {}", dst.len()));
+    }
+    let dst = &mut dst[..len];
     let (mut off, mut pos) = (0u32, 0usize);
     while bits - off >= 8 {
         let w = [32u32, 16, 8].into_iter().find(|&c| c <= bits - off).unwrap();
@@ -635,7 +649,7 @@ pub fn pack_bits_into(vals: &[u32], bits: u32, out: &mut Vec<u8>) -> Result<(), 
             o.copy_from_slice(&word.to_le_bytes()[..tb]);
         }
     }
-    Ok(())
+    Ok(len)
 }
 
 #[cfg(test)]

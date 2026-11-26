@@ -92,6 +92,43 @@ struct Shared<T>(*mut T);
 unsafe impl<T> Send for Shared<T> {}
 unsafe impl<T> Sync for Shared<T> {}
 
+/// Where [`encrypt_item_to`] writes the upload bodies `b` (`n x cols`, row-major, values `< 2^56`).
+pub enum EncOut<'a> {
+    /// `b` as u64 words.
+    Words(&'a mut [u64]),
+    /// The maskgen wire form of `b`, `pgw.hemask.wire.pack_bits(b, 56)`: three planes of `n cols` values each,
+    /// bits 0..32 as little-endian u32, bits 32..48 as u16, bits 48..56 as u8 (`7 n cols` bytes, any alignment).
+    Packed56(&'a mut [u8]),
+}
+
+/// [`EncOut`] for the worker threads.
+#[derive(Clone, Copy)]
+enum Sink {
+    Words(Shared<u64>),
+    Packed56(Shared<u8>),
+}
+
+/// Rows `16 c0 .. 16 (c0 + lanes)` of group `g`, written by a chunk into the scratch `scr` (row stride `D`), into
+/// the three planes of the packed form (`count = n cols` values per plane).
+#[inline(always)]
+fn flush56(p: Shared<u8>, scr: &[u64], c0: usize, lanes: usize, cols: usize, g: usize, count: usize) {
+    for rr in 0..lanes * RANK {
+        let i0 = (c0 * RANK + rr) * cols + g * D;
+        let src = &scr[rr * D..(rr + 1) * D];
+        // SAFETY: values i0 .. i0 + D of each plane belong to this chunk and group only; in bounds
+        // (encrypt_item_to checks the length).
+        unsafe {
+            let (lo, mid, hi) = (p.0.add(4 * i0) as *mut u32, p.0.add(4 * count + 2 * i0) as *mut u16,
+                                 p.0.add(6 * count + i0));
+            for (u, &v) in src.iter().enumerate() {
+                lo.add(u).write_unaligned((v as u32).to_le());
+                mid.add(u).write_unaligned(((v >> 32) as u16).to_le());
+                *hi.add(u) = (v >> 48) as u8;
+            }
+        }
+    }
+}
+
 /// ChaCha20 (zero nonce) keystream bytes `offset ..` of the stream `key`. Block-aligned ranges use the
 /// 16-block AVX-512 or 8-block AVX2 copy (same bytes, tested against the `chacha20` crate).
 fn keystream(fast: Vx, key: &[u8; 32], offset: u64, out: &mut [u8]) {
@@ -282,8 +319,8 @@ pub struct EncItem<'a> {
 
 #[inline(always)]
 #[allow(clippy::too_many_arguments)]
-fn enc_chunk(fast: Vx, cx: &Ctx, it: &EncItem<'_>, c0: usize, that: &[Vec<Vec<u32>>], b: Shared<u64>, a16: &mut [u32],
-             s16: &mut [u32], raw: &mut [u8], xb: &mut [u64]) {
+fn enc_chunk(fast: Vx, cx: &Ctx, it: &EncItem<'_>, c0: usize, that: &[Vec<Vec<u32>>], sink: Sink, scr: &mut [u64],
+             a16: &mut [u32], s16: &mut [u32], raw: &mut [u8], xb: &mut [u64]) {
     let nblk = it.n / RANK;
     let groups = it.e_keys.len();
     let cols = groups * D;
@@ -320,6 +357,11 @@ fn enc_chunk(fast: Vx, cx: &Ctx, it: &EncItem<'_>, c0: usize, that: &[Vec<Vec<u3
     let half2 = e2 / 2;
     let mut noise = Wiping(vec![0i32; L * RANK * D]);
     for g in 0..groups {
+        // b rows of this chunk: straight into the words, or into the scratch (row stride D) for the packed form
+        let (bp, bcols) = match sink {
+            Sink::Words(b) => (b.0.wrapping_add(g * D), cols),
+            Sink::Packed56(_) => (scr.as_mut_ptr().wrapping_sub(c0 * RANK * D), D),
+        };
         for i in 0..3 {
             let pr = &cx.ep[i];
             let (a, s) = (&a16[i * NU * L..(i + 1) * NU * L], &mut s16[i * NU * L..(i + 1) * NU * L]);
@@ -344,12 +386,13 @@ fn enc_chunk(fast: Vx, cx: &Ctx, it: &EncItem<'_>, c0: usize, that: &[Vec<Vec<u3
             let (rp, valid) = (it.r.as_ptr().wrapping_add(g * D * it.n), it.rows.saturating_sub(g * D).min(D));
             unsafe {
                 if fast.z() {
-                    crate::simd::enc_out(&kc, s16.as_ptr(), NU, lanes, c0, cols, it.n, rp, valid, noise.0.as_ptr(),
-                                         b.0.add(g * D));
+                    crate::simd::enc_out(&kc, s16.as_ptr(), NU, lanes, c0, bcols, it.n, rp, valid, noise.0.as_ptr(), bp);
                 } else {
-                    crate::simd2::enc_out(&kc, s16.as_ptr(), NU, lanes, c0, cols, it.n, rp, valid, noise.0.as_ptr(),
-                                          b.0.add(g * D));
+                    crate::simd2::enc_out(&kc, s16.as_ptr(), NU, lanes, c0, bcols, it.n, rp, valid, noise.0.as_ptr(), bp);
                 }
+            }
+            if let Sink::Packed56(p) = sink {
+                flush56(p, scr, c0, lanes, cols, g, it.n * cols);
             }
             continue;
         }
@@ -385,9 +428,12 @@ fn enc_chunk(fast: Vx, cx: &Ctx, it: &EncItem<'_>, c0: usize, that: &[Vec<Vec<u3
                     let msg = if u < valid { (it.r[(g * D + u) * it.n + f] as u64) & 0xFFFF_FFFF } else { 0 };
                     *o = xb[(RANK * u + k) * L + l].wrapping_add(er[u] as i64 as u64).wrapping_add(msg << (QBITS - K)) & M56;
                 }
-                // SAFETY: rows 16 c0 .. 16 (c0 + lanes) of b are written by this chunk only.
-                unsafe { std::ptr::copy_nonoverlapping(row.as_ptr(), b.0.add(f * cols + g * D), D) };
+                // SAFETY: rows 16 c0 .. 16 (c0 + lanes) of b (or of the scratch) are written by this chunk only.
+                unsafe { std::ptr::copy_nonoverlapping(row.as_ptr(), bp.wrapping_add(f * bcols), D) };
             }
+        }
+        if let Sink::Packed56(p) = sink {
+            flush56(p, scr, c0, lanes, cols, g, it.n * cols);
         }
     }
 }
@@ -396,7 +442,7 @@ fn enc_chunk(fast: Vx, cx: &Ctx, it: &EncItem<'_>, c0: usize, that: &[Vec<Vec<u3
 type ThQ = ([Vec<u64>; 2], [Vec<u64>; 2]);
 
 #[inline(always)]
-fn enc_worker(fast: Vx, it: &EncItem<'_>, that: &[Vec<Vec<u32>>], thq: &[ThQ], bp: Shared<u64>, th: usize,
+fn enc_worker(fast: Vx, it: &EncItem<'_>, that: &[Vec<Vec<u32>>], thq: &[ThQ], sink: Sink, th: usize,
               threads: usize) {
     let cx = ctx();
     let chunks = (it.n / RANK).div_ceil(L);
@@ -408,14 +454,16 @@ fn enc_worker(fast: Vx, it: &EncItem<'_>, that: &[Vec<Vec<u32>>], thq: &[ThQ], b
     // IFMA pad: a in the NTT domain (public) and the pad (secret-dependent), 2 primes x NU x 16 lanes
     let mut a64 = vec![0u64; if zi { 2 * NU * L } else { 0 }];
     let mut s64 = Wiping(vec![0u64; if zi { 2 * NU * L } else { 0 }]);
+    // packed form: one group's b rows of a chunk (public ciphertext), then the plane stores
+    let mut scr = vec![0u64; if matches!(sink, Sink::Packed56(_)) { L * RANK * D } else { 0 }];
     for ch in (th..chunks).step_by(threads) {
         #[cfg(target_arch = "x86_64")]
         if zi {
-            enc_chunk_ifma(cx, it, ch * L, thq, bp, &mut raw, &mut a64, &mut s64.0);
+            enc_chunk_ifma(cx, it, ch * L, thq, sink, &mut scr, &mut raw, &mut a64, &mut s64.0);
             continue;
         }
         let _ = (thq, &mut a64);
-        enc_chunk(fast, cx, it, ch * L, that, bp, &mut a16.0, &mut s16.0, &mut raw, &mut xb.0);
+        enc_chunk(fast, cx, it, ch * L, that, sink, &mut scr, &mut a16.0, &mut s16.0, &mut raw, &mut xb.0);
     }
 }
 
@@ -423,8 +471,8 @@ fn enc_worker(fast: Vx, it: &EncItem<'_>, that: &[Vec<Vec<u32>>], thq: &[ThQ], b
 #[cfg(target_arch = "x86_64")]
 #[inline(always)]
 #[allow(clippy::too_many_arguments)]
-fn enc_chunk_ifma(cx: &Ctx, it: &EncItem<'_>, c0: usize, thq: &[ThQ], b: Shared<u64>, raw: &mut [u8], a64: &mut [u64],
-                  s64: &mut [u64]) {
+fn enc_chunk_ifma(cx: &Ctx, it: &EncItem<'_>, c0: usize, thq: &[ThQ], sink: Sink, scr: &mut [u64], raw: &mut [u8],
+                  a64: &mut [u64], s64: &mut [u64]) {
     let _ = cx;
     let pc = crate::ifma_pad::pad_ctx(NU);
     let nblk = it.n / RANK;
@@ -442,16 +490,23 @@ fn enc_chunk_ifma(cx: &Ctx, it: &EncItem<'_>, c0: usize, thq: &[ThQ], b: Shared<
         unsafe { crate::ifma_pad::pad_mul(pc, a64, th, ths, s64) };
         cbd_into(Vx::Zi, &it.e_keys[g], c0 * RANK * D, &mut noise.0[..lanes * RANK * D]);
         let (rp, valid) = (it.r.as_ptr().wrapping_add(g * D * it.n), it.rows.saturating_sub(g * D).min(D));
+        let (bp, bcols) = match sink {
+            Sink::Words(b) => (b.0.wrapping_add(g * D), cols),
+            Sink::Packed56(_) => (scr.as_mut_ptr().wrapping_sub(c0 * RANK * D), D),
+        };
         unsafe {
-            crate::ifma_pad::pad_out(pc, s64, lanes, c0, cols, it.n, rp, valid, noise.0.as_ptr(), b.0.add(g * D));
+            crate::ifma_pad::pad_out(pc, s64, lanes, c0, bcols, it.n, rp, valid, noise.0.as_ptr(), bp);
+        }
+        if let Sink::Packed56(p) = sink {
+            flush56(p, scr, c0, lanes, cols, g, it.n * cols);
         }
     }
 }
 
-crate::multiversion!(fn enc_worker_isa(fast: Vx, it: &EncItem<'_>, that: &[Vec<Vec<u32>>], thq: &[ThQ], bp: Shared<u64>,
+crate::multiversion!(fn enc_worker_isa(fast: Vx, it: &EncItem<'_>, that: &[Vec<Vec<u32>>], thq: &[ThQ], sink: Sink,
     th: usize, threads: usize) => enc_worker);
 
-fn encrypt_inner(isa: Isa, it: &EncItem<'_>, b: &mut [u64], threads: usize) {
+fn encrypt_inner(isa: Isa, it: &EncItem<'_>, out: EncOut<'_>, threads: usize) {
     let cx = ctx();
     let groups = it.e_keys.len();
     let fast = Vx::of(isa);
@@ -471,12 +526,15 @@ fn encrypt_inner(isa: Isa, it: &EncItem<'_>, b: &mut [u64], threads: usize) {
         }
     }
     let chunks = (it.n / RANK).div_ceil(L);
-    let bp = Shared(b.as_mut_ptr());
+    let sink = match out {
+        EncOut::Words(b) => Sink::Words(Shared(b.as_mut_ptr())),
+        EncOut::Packed56(p) => Sink::Packed56(Shared(p.as_mut_ptr())),
+    };
     let threads = threads.clamp(1, chunks.max(1));
     std::thread::scope(|s| {
         for th in 0..threads {
             let (that, thq) = (&that, &thq);
-            s.spawn(move || enc_worker_isa(isa, fast, it, that, thq, bp, th, threads));
+            s.spawn(move || enc_worker_isa(isa, fast, it, that, thq, sink, th, threads));
         }
     });
     for g in that.iter_mut() {
@@ -494,13 +552,23 @@ fn encrypt_inner(isa: Isa, it: &EncItem<'_>, b: &mut [u64], threads: usize) {
 /// Ring-LWE upload of one item: writes `b` (`n x 256 groups`, mod 2^56): `b[16 C + k, 256 g + u] =
 /// (a_C t_g)[16 u + k] + e_g[16 C + k, u] + 2^24 r[256 g + u, 16 C + k]`.
 pub fn encrypt_item(isa: Isa, it: &EncItem<'_>, b: &mut [u64], threads: usize) -> Result<(), Error> {
+    encrypt_item_to(isa, it, EncOut::Words(b), threads)
+}
+
+/// [`encrypt_item`] into either output form ([`EncOut`]: the same `b`, as words or in its wire form).
+pub fn encrypt_item_to(isa: Isa, it: &EncItem<'_>, out: EncOut<'_>, threads: usize) -> Result<(), Error> {
     let groups = it.e_keys.len();
+    let count = it.n * groups * D;
+    let len_ok = match &out {
+        EncOut::Words(b) => b.len() == count,
+        EncOut::Packed56(p) => p.len() == 7 * count,
+    };
     if it.n == 0 || !it.n.is_multiple_of(RANK) || groups == 0 || it.rows > groups * D || it.r.len() != it.rows * it.n
-        || it.t.len() != groups * NU || b.len() != it.n * groups * D
+        || it.t.len() != groups * NU || !len_ok
     {
         return err("encrypt_item: inconsistent shapes");
     }
-    encrypt_inner(isa, it, b, threads);
+    encrypt_inner(isa, it, out, threads);
     Ok(())
 }
 
@@ -1300,6 +1368,40 @@ mod tests {
                     assert_eq!(got, want, "{isa:?} threads {threads} n {n}");
                 }
             }
+        }
+    }
+
+    /// `pgw.hemask.wire.pack_bits(b, 56)`: planes of bits 0..32, 32..48, 48..56.
+    fn pack56(b: &[u64]) -> Vec<u8> {
+        let mut out = Vec::with_capacity(7 * b.len());
+        out.extend(b.iter().flat_map(|&v| (v as u32).to_le_bytes()));
+        out.extend(b.iter().flat_map(|&v| ((v >> 32) as u16).to_le_bytes()));
+        out.extend(b.iter().map(|&v| (v >> 48) as u8));
+        out
+    }
+
+    #[test]
+    fn encrypt_packed_equals_packed_words() {
+        let mut g = Lcg(33);
+        for &(n, groups, rows) in &[(48usize, 2usize, 300usize), (272, 1, 256), (16 * 40, 3, 600), (16, 1, 1)] {
+            let r: Vec<i64> = (0..rows * n).map(|_| g.next() as i64 - (1 << 52)).collect();
+            let t: Vec<i8> = (0..groups * NU).map(|_| (g.next() % 3) as i8 - 1).collect();
+            let ek: Vec<[u8; 32]> = (0..groups).map(|_| g.key()).collect();
+            let it = EncItem { a_key: g.key(), n, r: &r, rows, t: &t, e_keys: &ek };
+            let mut words = vec![0u64; n * groups * D];
+            encrypt_item(Isa::Scalar, &it, &mut words, 1).unwrap();
+            let want = pack56(&words);
+            for isa in isas() {
+                for threads in [1usize, 2, 3] {
+                    // odd offset into a larger buffer: the planes need no alignment
+                    let mut buf = vec![0xA5u8; 7 * n * groups * D + 3];
+                    encrypt_item_to(isa, &it, EncOut::Packed56(&mut buf[1..1 + 7 * n * groups * D]), threads).unwrap();
+                    assert_eq!(&buf[1..buf.len() - 2], &want[..], "{isa:?} threads {threads} n {n}");
+                    assert!(buf[0] == 0xA5 && buf[buf.len() - 2..] == [0xA5, 0xA5]);
+                }
+            }
+            let mut short = vec![0u8; 7 * n * groups * D - 1];
+            assert!(encrypt_item_to(Isa::Scalar, &it, EncOut::Packed56(&mut short), 1).is_err());
         }
     }
 
