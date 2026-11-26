@@ -2676,3 +2676,189 @@ Tests:
   `tests/benchmarks/test_provider_perf_tools.py` 2 passed.
 - New setting: `PGW_SERVICE_PKS_GPU_NTT` (default `auto`); `PGW_SERVICE_PKS_NTT_WARPS` (default 8) is for tuning.
 - Cloud spend: one Kaggle T4 kernel (36 min).
+
+
+## 2026-11-26 — pks-v3 device item, round 2: fused hint switch, device ring rows, wire forms on the device, pinned copies
+
+Goal: raise pks-v3 mask throughput on the provider's device path past the fused NTTs (section above: an estimated
+24 slots/s at 72B on an H100, 43 s per 1024-slot cycle). The scheme, the wire and the replies are unchanged; the
+provider sees the same public data (`a_seed`, the ring rows, `b`, the keys) as before.
+
+**What changed** (`pgw.service.pks_fused`, `pks_gpu`, `pks_ntt`, `pks_provider`):
+1. **Fused recombination + hint switch** (`pks_fused.combine`, `PGW_SERVICE_PKS_GPU_SWITCH`). One Triton pass per
+   GEMM column block: it reads the 7 int32 plane partials, recombines them mod 2^56 and applies the exact 14-bit-digit
+   `round(h q1 / 2^56) mod q1`. Per value that is 28 B read and 8 B written, against ~628 B for the eager int64
+   operators. There are no int64 temporaries, and nothing wraps before the final mask: `lo + (c mod 2^56) +
+   ((hi mod 2^24) << 32)`. The same kernel, without the switch, recombines `y`.
+2. **Ring rows on the device** (`pks_fused.ring_rows`, `PGW_SERVICE_PKS_GPU_RING`). A ChaCha20 kernel (RFC 8439
+   block function, zero nonce, 32-bit counter) expands the stream key of `(A_LABEL, linear)`. The host derives that
+   key with HKDF, as before, so only 32 bytes go up instead of `n/16 x 4096` uint64. A tensor-parallel item no longer
+   expands the stream once per shard. The fallback is the host stream cut at ring-row boundaries (block-counter
+   seeks) on a thread pool. OpenSSL's ChaCha20 runs without the GIL, so 4 threads run 4.6x faster than one here. It
+   runs in the background while the item queues its uploads (`ring_rows_async`).
+3. **4-prime forward NTT** (`pks_ntt.forward4`, `PGW_SERVICE_PKS_GPU_FWD4`). Each program reads the `(32, 256)` hint
+   tile once, coalesced, transposes it on chip and runs the four primes' transforms. It is exact, but **slower on the
+   T4**: 3.14 against 2.50 us per output row for 4 groups. The transforms are SM-bound, and four on-chip transposes
+   cost more than the per-prime kernel's strided gather. So it is **off unless set** (`auto` or `fused`), and the
+   RunPod session measures it on the H100.
+4. **Pinned, overlapped copies** (`PGW_SERVICE_PKS_PINNED`, default on):
+   - The uploads go through pinned staging buffers on a per-thread side stream: the keys as uint32, widened on the
+     device, and `b` with its planes. The item's stream waits for them only before the first `y` GEMM, so the copies
+     overlap the ring rows, the hint operand's planes and the first row block's hint GEMMs.
+   - Each row block's reply goes into pinned buffers by a non-blocking copy. The host drains the previous block while
+     the device computes the next.
+5. **Wire forms on the device** (`PGW_SERVICE_PKS_GPU_WIRE`). The T4 items showed a stage the model had never
+   counted: `PKSProvider.run_item` unpacked the 56-bit upload and packed the 36-bit reply with numpy on one host
+   thread. That costs 8.4 and 20.5 ns per value here, about 37 s + 147 s per 1024-slot cycle at 72B (4.4e9 upload
+   values, 7.2e9 reply values) on top of the device work. With the T4's rates, the model reproduces the run's whole
+   items within 25 % only with this stage included. Both formats are plain bit fields (`pack_bits`):
+   - The upload's wire bytes go up as they are, 7 B per value instead of 8, and the device unpacks them column block
+     by column block (`32 | 16 << 32 | 8 << 48`).
+   - The device packs each row block's reply into the 32-bit field and the 4-bit tail stream. It writes them into
+     views of the reply's wire buffer (`PackedReply`), shard offsets included, so 4.5 B per value come back instead
+     of 8 and the host only copies.
+   - `PackedUpload` keeps the host unpack for the fallback and the cache path.
+
+Every kernel follows the NTT's rule (`pks_gpu.FusedChoice`):
+- Under `auto`, a CUDA device uses the kernel only after a start-up self-test matched the torch / host path bit for
+  bit there.
+- Any mismatch or error falls back to the plain path on that device for good, with the same bits.
+- `fused` forces the kernel and lets errors propagate; `torch` disables it.
+- The self-tests are `_switch_self_test`, `_ring_self_test`, `_fwd4_self_test` and `_wire_self_test`.
+- `item_self_test` now also checks the wire forms end to end against `pack_bits` of the host path.
+- `pks_gpu.fused_status(dev)` reports what each device uses.
+
+**Exactness evidence**
+- CPU, Triton interpreter (`tests/service/test_pks_fused.py`, 34 tests). Each of these equals its reference bit for bit:
+  - **The fused combine:** equals `_combine_planes` (torch and numpy). The switch equals `_round_mul_shift` and
+    `pks.switch_hint`. Inputs: partials at +-(2^31 - 1) and -2^31, constants at 0, -1, +-2^63 and 2^56, the rounding
+    boundaries `(2k + 1) 2^55 / q1`, `2^56 - 1` (which wraps to 0), shapes that are not block multiples, 1 row, and
+    strided output views.
+  - **Device ring rows:** equal `pks.public_ring_rows` for 3 seeds and linears. The threaded host stream equals it
+    for 1, 64 and 150 ring rows.
+  - **`forward4`:** equals `forward` and `pks.Ntt` on edge rows. The key switch with it equals torch for 1 and 2
+    groups.
+  - **The wire forms:** the device pack and the host block pack equal `pack_bits`, and the device unpack equals
+    `unpack_bits`, at the field boundaries.
+  - **`pks_gpu.item`:** equals the host path (numpy GEMM, `pks.switch_hint`, CPU key switch) with every kernel
+    forced, and with the wire forms in and out at a shard offset.
+  - **`PKSProvider`:** with every kernel forced, it returns the cache path's bytes, and the customer decrypts them
+    to `W8 r mod 2^32`.
+  - **Selection and fallback:** each self-test detects a one-bit error. Selection, env parsing and the permanent
+    fallback are tested.
+  - **Compilation:** all new kernels compile for sm_75 and sm_90 within 64 KiB of shared memory per block
+    (`forward4` uses 32 KiB).
+- Kaggle T4 (`pgw-pks-ntt-t4` version 2: torch 2.11 + cu130, Triton 3.6; one kernel, 6.5 min; raw files in
+  `results/kaggle/pks-ntt-t4-r2`):
+  - **The bench's exactness sections passed in full.**
+    - The forward and the MAC + inverse equal `pks.Ntt` on all 4 primes.
+    - **The one-group path fixed after the first run now works on CUDA.** For 1 and 2 groups, with and without
+      `forward4`, the fused key switch equals both torch and the CPU, including one group of one ciphertext.
+    - 2048 rows x 4 groups: fused = fwd4 = torch.
+    - The fused combine and switch equal torch, numpy and `pks.switch_hint` at 64x300, 2048x512 and 1x256, and at
+      the rounding boundaries.
+    - The device ring rows and the threaded host stream equal `public_ring_rows` up to 72B's 29568 inputs.
+    - `forward4` equals `forward` and `pks.Ntt`.
+    - Every self-test passed, and `auto` chose every kernel there.
+  - **Whole items are byte-identical in all three configurations.** The bench ran the largest linears of 7B, 32B and
+    72B through `ComputeKernel` + `PKSProvider` with every kernel plain, with the fused NTTs only (the previous
+    state), and with every kernel under `auto`.
+  - pytest on CUDA: 45 passed, 2 failed, 1 skipped (CPU only). Both failures were test bugs, now fixed:
+    - a uint32 xor that CUDA does not implement;
+    - a test keyed `cuda` instead of `cuda:0`.
+  - The wire forms on the device were added after this run, from what it showed. They are **not GPU-measured**: they
+    are tested on CPU (pure torch integer ops, no Triton), self-tested at start-up, and the RunPod session measures
+    them.
+
+**T4, measured** (`stages`: 72B's gate_up shape, 2048-row blocks, medians of 5; per unit):
+
+| stage | before | after | |
+|---|---|---|---|
+| hint switch + recombination (us / row) | 12.53 (torch) | 0.637 (fused) | 19.7x; 36 B per value at ~72 % of the T4's bandwidth |
+| `y` recombination (us / row) | 0.987 | 0.177 | 5.6x |
+| ring rows (us / input feature) | 1.445 (host, 1 thread) | 0.035 (device ChaCha20) | 41x; 4 host threads: 0.742 |
+| upload of `b` (ns / value) | 2.81 (pageable) | 2.21 (pinned) | the host staging copy is included |
+| reply copy (us / row, not overlapped) | 2.52 (pageable) | 1.65 (pinned) | the item also overlaps it with the next block |
+| key switch, 4 groups (us / row) | 2.50 (fused NTTs) | 2.50 (unchanged) | 3.14 with `forward4`; torch: 97.6 |
+| hint GEMM / `y` GEMM (us / row), planes (us / feature) | 13.2 / 3.26 / 2.40 | same | now the T4's largest stage |
+
+Whole items on the T4, seconds:
+
+| linear | every kernel plain | fused NTTs only (before) | this round under `auto` (host wire) |
+|---|---|---|---|
+| 7B gate_up | 5.25 | 1.70 | 1.20 |
+| 7B down | 0.91 | 0.58 | 0.58 |
+| 7B head | 20.90 | 6.62 | 4.69 |
+| 32B gate_up | 7.74 | 2.57 | 1.91 |
+| 32B down | 1.43 | 0.98 | 0.88 |
+| 72B gate_up | 8.57 | 3.12 | 2.54 |
+| 72B down | 2.08 | 1.40 | 1.27 |
+
+Notes on the whole items:
+- The "after" column still packed and unpacked the wire on the host, and it ran `forward4`, which `auto` picked at
+  the time.
+- With the T4's rates (`memplan.T4_RATES`) the model reproduces both columns within 25 % (before) and 30 % (after),
+  per item (`test_memplan_reproduces_the_t4_items`).
+- The model attributes ~1.2 s of the 72B gate_up item to the host's pack of its 60M-value reply.
+
+**Model** (`memplan`):
+- New option: `MemConfig.pks_kernels` (`--pks-kernels all|ntt`, default `all`).
+- New: `--pks-gpu h100|t4` (`T4_RATES`, measured).
+- The key switch is recalibrated on this run's direct 1- and 4-group measurements (`T4_R2_S`). The first run
+  measured 3.59 us per row for 4 groups on another T4 instance; this run measured 2.50 for the same kernels.
+- New stages: `wire_host`, `keys_host`, and the reply keys' upload.
+- New kernel costs: the fused combine and the device ChaCha20, each the larger of its traffic and its T4-calibrated
+  SM work (an upper bound where the T4 was memory-bound).
+- The `all` path models the copies as overlapped. The upload is exposed only beyond the ring rows, the planes and the
+  first row block's hint; the packed reply only for the last row block.
+
+H100 at 72B, ESTIMATES, seconds per 1024-slot cycle (`python -m pgw.service.memplan --pks-throughput`):
+
+| stage | before | after |
+|---|---|---|
+| host wire: upload unpack + reply pack (not modelled before) | 184.5 | 0 (device: 0.04) |
+| hint GEMM + switch + recombination | 18.6 | 4.6 (GEMM 3.3, fused switch <= 1.2) |
+| host ChaCha20 of the ring rows | 8.9 | 0.04 (device) |
+| key switch (recalibrated) | 4.6 (6.6 with the first run's T4) | 4.6 |
+| uploads (`b` + keys) | 5.0 | 4.4 (wire bytes, pinned staging; host copy at 10 GB/s assumed) |
+| host unpack of the reply keys (not modelled before) | 3.0 | 3.0 |
+| reply copy back | 2.9 | 0.2 (4.5 B per value, overlapped but the last block) |
+| `y` GEMM + recombination, planes | 1.6 | 1.6 |
+| **cycle** | **229.1** (41.6 without the two host stages it never modelled) | **18.4** |
+
+Slots per second (1024 slots per cycle; H100 = estimates, T4 = the model with the T4's measured rates):
+
+| model | H100 before (as modelled before this round) | H100 before (with the host wire work) | H100 after | T4 before | T4 after |
+|---|---|---|---|---|---|
+| 7B | 122 | 20.9 | 264 | 11.8 | 47.6 |
+| 32B | 37.9 | 6.65 | 86.8 | 3.52 | 11.9 |
+| 72B | 24.6 | 4.47 | 55.6 | 2.14 | 5.86 |
+
+What is left at 72B (H100 estimate, 18.4 s per cycle):
+- the key switch, 4.6 s;
+- the hint GEMM + switch, 4.6 s;
+- the uploads, 4.4 s: host staging copies, which overlap device work only when 2 items run at once (not modelled);
+- the host unpack of the reply keys, 3.0 s. It could move to the device too, with its range check kept there;
+- on the T4 the int8 GEMMs dominate (35.7 TOPS measured).
+
+**RunPod** (`deploy/runpod/provider_perf_session.py`, `maskgen` phase, now ~30 min). Device items run:
+- under `auto` at every work budget;
+- at 512 MB with `fwd4`, `prev` (the fused NTTs only) and `torch`.
+
+Each run records `fused_status`, the replies must be byte-identical, and the estimates `device_fused` / `device_prev`
+sit next to them. The CPU smoke run passes.
+
+Tests:
+- `tests/service`, one directory at a time: 550 passed, 77 skipped (CUDA). This includes `test_pks_fused.py` (34,
+  new), `test_pks_ntt.py` (21) and `test_pks_device_item.py` (20, two memplan assertions updated for the new
+  stages and the recalibration).
+- `tests/benchmarks/test_provider_perf_tools.py`: 2 passed.
+- The bench's CPU smoke run (`benchmarks/pks_ntt_bench.py --cpu`) passes.
+
+New settings:
+- `PGW_SERVICE_PKS_GPU_SWITCH`, `PGW_SERVICE_PKS_GPU_RING` and `PGW_SERVICE_PKS_GPU_WIRE`, default `auto`.
+- `PGW_SERVICE_PKS_GPU_FWD4`, off by default.
+- `PGW_SERVICE_PKS_PINNED`, default on.
+- `PGW_SERVICE_PKS_HOST_THREADS`, default `min(8, cpus)`.
+
+Cloud spend: one Kaggle T4 kernel (6.5 min). No other compute.

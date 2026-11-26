@@ -1,0 +1,470 @@
+{
+ "device": "Tesla T4",
+ "torch": "2.11.0+cu130",
+ "triton": "3.6.0",
+ "exact": {
+  "fwd_equals_pks_ntt": [
+   true,
+   true,
+   true,
+   true
+  ],
+  "mac_inv_equals_pks_ntt": [
+   true,
+   true,
+   true,
+   true
+  ],
+  "keyswitch_g1_fused_equals_torch": true,
+  "keyswitch_g1_fused_equals_cpu": true,
+  "keyswitch_g1_fwd4_fused_equals_torch": true,
+  "keyswitch_g1_fwd4_fused_equals_cpu": true,
+  "keyswitch_g1_1ct_g1": true,
+  "keyswitch_g2_fused_equals_torch": true,
+  "keyswitch_g2_fused_equals_cpu": true,
+  "keyswitch_g2_fwd4_fused_equals_torch": true,
+  "keyswitch_g2_fwd4_fused_equals_cpu": true,
+  "keyswitch_g2_1ct_g1": true,
+  "fused_self_test": true,
+  "keyswitch_2048rows_g4_fused_equals_torch": true,
+  "keyswitch_2048rows_g4_fwd4_equals_torch": true,
+  "all": true
+ },
+ "exact_new": {
+  "combine_64x300_equals_torch": true,
+  "combine_64x300_equals_numpy": true,
+  "switch_64x300_equals_torch": true,
+  "switch_64x300_equals_host_switch_hint": true,
+  "combine_2048x512_equals_torch": true,
+  "combine_2048x512_equals_numpy": true,
+  "switch_2048x512_equals_torch": true,
+  "switch_2048x512_equals_host_switch_hint": true,
+  "combine_1x256_equals_torch": true,
+  "combine_1x256_equals_numpy": true,
+  "switch_1x256_equals_torch": true,
+  "switch_1x256_equals_host_switch_hint": true,
+  "switch_rounding_boundaries_equal_host": true,
+  "ring_rows_device_and_threaded_host_equal_public_ring_rows": [
+   true,
+   true,
+   true,
+   true,
+   true,
+   true,
+   true,
+   true
+  ],
+  "fwd4_equals_forward": [
+   true,
+   true,
+   true,
+   true
+  ],
+  "fwd4_equals_pks_ntt": [
+   true,
+   true,
+   true,
+   true
+  ],
+  "fwd4_self_test": true,
+  "switch_self_test": true,
+  "ring_self_test": true,
+  "item_self_test": true,
+  "fused_status": {
+   "ntt": "fused",
+   "fwd4": "fused",
+   "switch": "fused",
+   "ring": "fused"
+  },
+  "all": true
+ },
+ "ntt_us": {
+  "polys": 2048,
+  "warps_4": {
+   "first_call_s": 40.88,
+   "fwd_us": 1.288,
+   "fwd4_us": 1.459,
+   "mac_inv_us": 2.981,
+   "keyswitch_g4_us_per_row": 4.13,
+   "keyswitch_g4_fwd4_us_per_row": 4.493
+  },
+  "warps_8": {
+   "first_call_s": 0.02,
+   "fwd_us": 1.071,
+   "fwd4_us": 1.271,
+   "mac_inv_us": 1.432,
+   "keyswitch_g4_us_per_row": 2.372,
+   "keyswitch_g4_fwd4_us_per_row": 3.087
+  },
+  "warps_16": {
+   "first_call_s": 16.79,
+   "fwd_us": 1.186,
+   "fwd4_us": 1.162,
+   "mac_inv_us": 2.383,
+   "keyswitch_g4_us_per_row": 3.737,
+   "keyswitch_g4_fwd4_us_per_row": 3.008
+  },
+  "torch": {
+   "fwd_us": 29.855,
+   "inv_us": 30.963
+  }
+ },
+ "warps_used": "8",
+ "keyswitch": {
+  "rows": 2048,
+  "g1": {
+   "torch_us_per_row": 70.291,
+   "fused_us_per_row": 1.931,
+   "fused_fwd4_us_per_row": 2.46,
+   "speedup": 36.4,
+   "identical": true
+  },
+  "g4": {
+   "torch_us_per_row": 97.64,
+   "fused_us_per_row": 2.504,
+   "fused_fwd4_us_per_row": 3.14,
+   "speedup": 38.99,
+   "identical": true
+  }
+ },
+ "cycle": {
+  "qwen2.5-7b": {
+   "rows": 1542656,
+   "torch_s": 150.6,
+   "fused_s": 3.9,
+   "fused_fwd4_s": 4.8
+  },
+  "qwen2.5-32b": {
+   "rows": 4805120,
+   "torch_s": 469.2,
+   "fused_s": 12.0,
+   "fused_fwd4_s": 15.1
+  },
+  "qwen2.5-72b": {
+   "rows": 7012864,
+   "torch_s": 684.7,
+   "fused_s": 17.6,
+   "fused_fwd4_s": 22.0
+  }
+ },
+ "stages": {
+  "rows": 2048,
+  "n": 8192,
+  "cols": 1024,
+  "seconds": {
+   "ring_rows": {
+    "before_host_1thread": 0.011838,
+    "host_threaded": 0.00608,
+    "after_device": 0.000285
+   },
+   "upload_b": {
+    "before_pageable": 0.023584,
+    "after_pinned": 0.018518
+   },
+   "a_planes": {
+    "same": 0.019653
+   },
+   "hint_gemm": {
+    "same": 0.026987
+   },
+   "y_gemm": {
+    "same": 0.006685
+   },
+   "hint_switch_recombination": {
+    "before_torch": 0.025656,
+    "after_fused": 0.001305
+   },
+   "y_recombination": {
+    "before_torch": 0.002022,
+    "after_fused": 0.000363
+   },
+   "key_switch": {
+    "before_fused": 0.004667,
+    "after_fused_fwd4": 0.006043
+   },
+   "reply_d2h": {
+    "before_pageable": 0.005156,
+    "after_pinned": 0.003385
+   }
+  },
+  "recombination_identical": true,
+  "unit_s": {
+   "ring_rows": {
+    "before_host_1thread": 1.445e-06,
+    "host_threaded": 7.422e-07,
+    "after_device": 3.481e-08
+   },
+   "upload_b": {
+    "before_pageable": 2.811e-09,
+    "after_pinned": 2.208e-09
+   },
+   "a_planes": {
+    "same": 2.399e-06
+   },
+   "hint_gemm": {
+    "same": 1.318e-05
+   },
+   "y_gemm": {
+    "same": 3.264e-06
+   },
+   "hint_switch_recombination": {
+    "before_torch": 1.253e-05,
+    "after_fused": 6.371e-07
+   },
+   "y_recombination": {
+    "before_torch": 9.871e-07,
+    "after_fused": 1.771e-07
+   },
+   "key_switch": {
+    "before_fused": 2.279e-06,
+    "after_fused_fwd4": 2.951e-06
+   },
+   "reply_d2h": {
+    "before_pageable": 2.518e-06,
+    "after_pinned": 1.653e-06
+   }
+  },
+  "t4_cycle": {
+   "qwen2.5-7b": {
+    "before": {
+     "cycle_s": 48.1,
+     "slots_per_s": 21.31,
+     "stages_s": {
+      "hint_switch_recombination": 19.33,
+      "hint_gemm": 11.37,
+      "reply_d2h": 3.88,
+      "key_switch": 3.52,
+      "y_gemm": 2.82,
+      "upload_b": 2.4,
+      "a_planes": 2.0,
+      "y_recombination": 1.52,
+      "ring_rows": 1.21
+     }
+    },
+    "after": {
+     "cycle_s": 26.5,
+     "slots_per_s": 38.69,
+     "stages_s": {
+      "hint_gemm": 11.37,
+      "key_switch": 4.55,
+      "y_gemm": 2.82,
+      "reply_d2h": 2.55,
+      "a_planes": 2.0,
+      "upload_b": 1.89,
+      "hint_switch_recombination": 0.98,
+      "y_recombination": 0.27,
+      "ring_rows": 0.03
+     }
+    }
+   },
+   "qwen2.5-32b": {
+    "before": {
+     "cycle_s": 170.7,
+     "slots_per_s": 6.0,
+     "stages_s": {
+      "hint_switch_recombination": 60.2,
+      "hint_gemm": 51.45,
+      "y_gemm": 12.75,
+      "reply_d2h": 12.1,
+      "key_switch": 10.95,
+      "upload_b": 7.94,
+      "a_planes": 6.62,
+      "y_recombination": 4.74,
+      "ring_rows": 3.99
+     }
+    },
+    "after": {
+     "cycle_s": 103.2,
+     "slots_per_s": 9.93,
+     "stages_s": {
+      "hint_gemm": 51.45,
+      "key_switch": 14.18,
+      "y_gemm": 12.75,
+      "reply_d2h": 7.94,
+      "a_planes": 6.62,
+      "upload_b": 6.23,
+      "hint_switch_recombination": 3.06,
+      "y_recombination": 0.85,
+      "ring_rows": 0.1
+     }
+    }
+   },
+   "qwen2.5-72b": {
+    "before": {
+     "cycle_s": 301.0,
+     "slots_per_s": 3.4,
+     "stages_s": {
+      "hint_gemm": 114.95,
+      "hint_switch_recombination": 87.85,
+      "y_gemm": 28.47,
+      "reply_d2h": 17.65,
+      "key_switch": 15.98,
+      "upload_b": 12.49,
+      "a_planes": 10.41,
+      "y_recombination": 6.92,
+      "ring_rows": 6.27
+     }
+    },
+    "after": {
+     "cycle_s": 201.8,
+     "slots_per_s": 5.07,
+     "stages_s": {
+      "hint_gemm": 114.95,
+      "y_gemm": 28.47,
+      "key_switch": 20.69,
+      "reply_d2h": 11.59,
+      "a_planes": 10.41,
+      "upload_b": 9.81,
+      "hint_switch_recombination": 4.47,
+      "y_recombination": 1.24,
+      "ring_rows": 0.15
+     }
+    }
+   }
+  }
+ },
+ "items": {
+  "cols": 1024,
+  "qwen2.5-7b:0.gate_up": {
+   "m": 37888,
+   "n": 3584,
+   "torch_s": 5.249,
+   "torch_device_items": 2,
+   "prev_s": 1.698,
+   "prev_device_items": 2,
+   "fused_s": 1.199,
+   "fused_device_items": 2,
+   "fused_status": {
+    "ntt": "fused",
+    "fwd4": "fused",
+    "switch": "fused",
+    "ring": "fused"
+   },
+   "identical": true,
+   "speedup_vs_prev": 1.42,
+   "speedup_vs_torch": 4.38,
+   "model_estimate_device_s": 0.155
+  },
+  "qwen2.5-7b:0.down": {
+   "m": 3584,
+   "n": 18944,
+   "torch_s": 0.909,
+   "torch_device_items": 1,
+   "prev_s": 0.581,
+   "prev_device_items": 1,
+   "fused_s": 0.578,
+   "fused_device_items": 1,
+   "fused_status": {
+    "ntt": "fused",
+    "fwd4": "fused",
+    "switch": "fused",
+    "ring": "fused"
+   },
+   "identical": true,
+   "speedup_vs_prev": 1.01,
+   "speedup_vs_torch": 1.57,
+   "model_estimate_device_s": 0.078
+  },
+  "qwen2.5-7b:28.head": {
+   "m": 152064,
+   "n": 3584,
+   "torch_s": 20.898,
+   "torch_device_items": 1,
+   "prev_s": 6.616,
+   "prev_device_items": 1,
+   "fused_s": 4.689,
+   "fused_device_items": 1,
+   "fused_status": {
+    "ntt": "fused",
+    "fwd4": "fused",
+    "switch": "fused",
+    "ring": "fused"
+   },
+   "identical": true,
+   "speedup_vs_prev": 1.41,
+   "speedup_vs_torch": 4.46,
+   "model_estimate_device_s": 0.583
+  },
+  "qwen2.5-32b:0.gate_up": {
+   "m": 55296,
+   "n": 5120,
+   "torch_s": 7.739,
+   "torch_device_items": 1,
+   "prev_s": 2.572,
+   "prev_device_items": 1,
+   "fused_s": 1.908,
+   "fused_device_items": 1,
+   "fused_status": {
+    "ntt": "fused",
+    "fwd4": "fused",
+    "switch": "fused",
+    "ring": "fused"
+   },
+   "identical": true,
+   "speedup_vs_prev": 1.35,
+   "speedup_vs_torch": 4.06,
+   "model_estimate_device_s": 0.23
+  },
+  "qwen2.5-32b:0.down": {
+   "m": 5120,
+   "n": 27648,
+   "torch_s": 1.432,
+   "torch_device_items": 1,
+   "prev_s": 0.975,
+   "prev_device_items": 1,
+   "fused_s": 0.877,
+   "fused_device_items": 1,
+   "fused_status": {
+    "ntt": "fused",
+    "fwd4": "fused",
+    "switch": "fused",
+    "ring": "fused"
+   },
+   "identical": true,
+   "speedup_vs_prev": 1.11,
+   "speedup_vs_torch": 1.63,
+   "model_estimate_device_s": 0.115
+  },
+  "qwen2.5-72b:0.gate_up": {
+   "m": 59136,
+   "n": 8192,
+   "torch_s": 8.57,
+   "torch_device_items": 1,
+   "prev_s": 3.122,
+   "prev_device_items": 1,
+   "fused_s": 2.541,
+   "fused_device_items": 1,
+   "fused_status": {
+    "ntt": "fused",
+    "fwd4": "fused",
+    "switch": "fused",
+    "ring": "fused"
+   },
+   "identical": true,
+   "speedup_vs_prev": 1.23,
+   "speedup_vs_torch": 3.37,
+   "model_estimate_device_s": 0.266
+  },
+  "qwen2.5-72b:0.down": {
+   "m": 8192,
+   "n": 29568,
+   "torch_s": 2.082,
+   "torch_device_items": 1,
+   "prev_s": 1.402,
+   "prev_device_items": 1,
+   "fused_s": 1.273,
+   "fused_device_items": 1,
+   "fused_status": {
+    "ntt": "fused",
+    "fwd4": "fused",
+    "switch": "fused",
+    "ring": "fused"
+   },
+   "identical": true,
+   "speedup_vs_prev": 1.1,
+   "speedup_vs_torch": 1.64,
+   "model_estimate_device_s": 0.137
+  }
+ },
+ "total_s": 228.0
+}
