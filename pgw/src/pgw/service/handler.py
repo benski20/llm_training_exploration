@@ -455,7 +455,7 @@ class ServiceHandler:
                 fp = str(request.fingerprint)
                 ys = await asyncio.gather(*(self._maskgen_in_slot(
                     model.kernel(it.linear), it,
-                    lambda kern, item, *_: pv.run_item(fp, kern, item, request.a_seed)) for it in request.items))
+                    lambda kern, item, *_: pv.run_item(fp, kern, item, request.a_seed, dims)) for it in request.items))
             else:
                 ys = await asyncio.gather(*(self._maskgen_in_slot(model.kernel(it.linear), it)
                                             for it in request.items))
@@ -487,18 +487,28 @@ class ServiceHandler:
         a cancelled request (client disconnect) cannot stop ``to_thread`` work, so releasing on
         cancellation would let more than :attr:`maskgen_concurrency` items run at once.
         """
+        from pgw.service.maskgen_budget import item_device_bytes, maskgen_budget_for
+
         slots = self._maskgen_slots_for(kern)
         await slots.acquire()
+        budget = maskgen_budget_for(self, kern)  # opt-in per-device byte budget: queueing only
+        charged = 0
         try:
+            if budget is not None:
+                charged = await budget.acquire(item_device_bytes(kern, it))
             if fn is None:
                 fut = asyncio.ensure_future(asyncio.to_thread(_maskgen_item, kern, it, *self._maskgen_extra(kern)))
             else:
                 fut = asyncio.ensure_future(asyncio.to_thread(fn, kern, it))
         except BaseException:
+            if budget is not None:
+                budget.release(charged)
             slots.release()
             raise
 
         def _done(f: asyncio.Future[bytes | bytearray]) -> None:
+            if budget is not None:
+                budget.release(charged)
             slots.release()
             if not f.cancelled():
                 f.exception()  # retrieved: no "exception was never retrieved" for abandoned items
