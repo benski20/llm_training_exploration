@@ -764,7 +764,7 @@ GATE_MARGIN = 1.03
 def _timing_gate(device: torch.device) -> int:  # pragma: no cover - GPU only
     """Largest ``R`` in 2..8 such that the stream variant beats the digit-GEMM path (device time, K=32)
     at every row count ``2..R`` on :data:`GATE_SHAPES`; 0 if it loses at 2 rows. Public random data."""
-    from pgw.core.ringmm import offset_byte_consts, offset_byte_core, offset_byte_rows, pad_weight_cuda
+    from pgw.core.ringmm import offset_byte_consts, offset_byte_core, offset_byte_rows, pad_weight_cuda, weight_rowsum
 
     gen = torch.Generator(device=device).manual_seed(1)
     k = 32
@@ -772,7 +772,7 @@ def _timing_gate(device: torch.device) -> int:  # pragma: no cover - GPU only
     ws = []
     for m, n in GATE_SHAPES:
         wpad = pad_weight_cuda(torch.randint(-128, 128, (m, n), dtype=torch.int8, device=device, generator=gen), device)
-        ws.append((m, n, wpad, wpad.to(torch.int64).sum(1)))
+        ws.append((m, n, wpad, weight_rowsum(wpad)))  # no int64 copy of the weight (512 MB each)
     best = 0
     timings = []
     for b in range(2, MULTIROW_MAX_ROWS + 1):

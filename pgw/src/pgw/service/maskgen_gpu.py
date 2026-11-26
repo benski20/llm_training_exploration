@@ -78,6 +78,9 @@ PART_BYTES = 512 << 20
 #: Smaller blocks while the decode yield is on (each block is one wait point; ~10 ms of T4 GEMM at 7B).
 PART_BYTES_YIELD = 64 << 20
 _ALIGN = 32
+#: Groups of 8 tail values decoded at once by :func:`v2_planes_source` (~1 GB of values per 16 M groups: about
+#: 200 bytes of int64 temporaries per group, i.e. <= ~200 MB at a time).
+TAIL_GROUPS = 1 << 20
 
 
 def fused_enabled() -> bool:
@@ -259,12 +262,18 @@ def v2_planes_source(packed: torch.Tensor, n: int, cols: int, bits: int) -> list
         out.extend((src, j) for j in range(wb))
         pos += count * wb
     if t:
-        tb = packed[pos:pos + count * t // 8].view(count // 8, t).to(torch.int64)
-        word = tb[:, 0].clone()
-        for j in range(1, t):
-            word |= tb[:, j] << (8 * j)
+        # 8 values of t bits per t bytes, decoded in groups of TAIL_GROUPS (bounded int64 temporaries: the whole
+        # tail at once took ~13 bytes of int64 per value, 1.6 GB for one 4096-column item of 72B's down)
+        groups = count // 8
+        vals = torch.empty((groups, 8), dtype=torch.uint8, device=packed.device)
         shifts = torch.arange(0, 8 * t, t, dtype=torch.int64, device=packed.device)
-        vals = ((word.unsqueeze(1) >> shifts) & ((1 << t) - 1)).to(torch.uint8)  # (count/8, 8)
+        tail = packed[pos:pos + count * t // 8].view(groups, t)
+        for g0 in range(0, groups, TAIL_GROUPS):
+            tb = tail[g0:g0 + TAIL_GROUPS].to(torch.int64)
+            word = tb[:, 0].clone()
+            for j in range(1, t):
+                word |= tb[:, j] << (8 * j)
+            vals[g0:g0 + TAIL_GROUPS] = ((word.unsqueeze(1) >> shifts) & ((1 << t) - 1)).to(torch.uint8)
         out.append((vals.view(n, cols, 1), 0))
     return out
 

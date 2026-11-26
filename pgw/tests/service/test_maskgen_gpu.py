@@ -84,6 +84,19 @@ def test_v2_planes_source_is_unpack_bits(bits: int) -> None:
         assert np.array_equal(src[:, :, j].numpy(), ref[:, :, d]), d
 
 
+@pytest.mark.parametrize("bits", BITS)
+def test_v2_planes_source_tail_in_groups(bits: int, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The tail bits are decoded in bounded groups (any group size, incl. a ragged last group): same planes."""
+    n, cols = 5, 72
+    v = _vals(n * cols, bits, bits + 1)
+    packed = torch.from_numpy(np.frombuffer(bytes(pack_bits(v, bits)), dtype=np.uint8).copy())
+    ref = v.reshape(n, cols).view(np.uint8).reshape(n, cols, 8)
+    for groups in (1, 4, 7, 45, 1 << 20):
+        monkeypatch.setattr(mg, "TAIL_GROUPS", groups)
+        for d, (src, j) in enumerate(mg.v2_planes_source(packed, n, cols, bits)):
+            assert np.array_equal(src[:, :, j].numpy(), ref[:, :, d]), (groups, d)
+
+
 def test_v2_planes_source_rejects_bad_size() -> None:
     with pytest.raises(ValueError, match="expected"):
         mg.v2_planes_source(torch.zeros(10, dtype=torch.uint8), 2, 8, 53)
