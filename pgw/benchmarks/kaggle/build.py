@@ -871,6 +871,61 @@ JOBS["pgw-x3-he-e2e-7b-r2"] = {"machine_shape": "NvidiaTeslaT4x2",
 ]}
 
 
+# SDK release pins (docs/sdk/models.md): the pack fingerprints of every release model, derived on a CPU kernel from
+# the public checkpoints at the pinned commits (scripts/pin_model_fingerprints.py, default packing parameters).
+# 0.5B / 1.5B re-derive the baked pins (the pack is environment-independent); 3B / 7B are new. One checkpoint at
+# a time (the script removes each pack; the HF cache is dropped after each model).
+_HF_DROP = "rm -rf ~/.cache/huggingface/hub/models--Qwen--*"
+#: The pin script imports pgw.core, pgw.modelpack and pgw.sdk only (keeps the bundle under Kaggle's ~1 MB limit).
+_PINS_KEEP = {"core", "modelpack", "sdk"}
+JOBS["pgw-sdk-pins"] = {"gpu": False, "exclude": ["tests", "benchmarks", "rust", "examples", "SPEC.md",
+                                                  "INTERFACE_NOTES.md", "STATUS.md", "scripts/client_demo",
+                                                  *sorted(f"src/pgw/{p.name}" for p in (PGW / "src" / "pgw").iterdir()
+                                                          if p.is_dir() and p.name not in _PINS_KEEP)],
+                        "steps": [
+    {"kind": "shell", "name": "cpu_info", "cmd": "nproc; free -g; df -h / /tmp /kaggle/working", "timeout": 60},
+    *[{"kind": "shell", "name": f"pin_{tag}",
+       "cmd": f"mkdir -p /tmp/pinwork && PYTHONPATH=src python scripts/pin_model_fingerprints.py {model} "
+              f"--work /tmp/pinwork > /tmp/pin_{tag}.out; rc=$?; cat /tmp/pin_{tag}.out >> /kaggle/working/pins.jsonl; "
+              f"cat /tmp/pin_{tag}.out; {_HF_DROP}; exit $rc",
+       "timeout": 3600}
+      for tag, model in (("05b", "qwen2.5-0.5b-instruct"), ("15b", "qwen2.5-1.5b-instruct"),
+                         ("3b", "qwen2.5-3b-instruct"), ("7b", "qwen2.5-7b-instruct"))],
+]}
+
+
+# The client library end to end on a T4 (benchmarks/sdk_e2e_gpu.py): provider service on CUDA, ``from pgw import
+# OpenAI`` with the defaults (pks-v3, hint built locally) on loopback, empty cache; provisioning, first answer, TTFT,
+# steady tokens/s, streaming, multi-turn, revocation, every answer checked bit for bit against the gateway path.
+# Native extensions built first (pgw_pks makes the local 7B hint build feasible on 4 cores).
+_SDK_E2E_KEEP_TESTS = {"sdk", "service", "core", "__init__.py", "conftest.py", "enroll_helpers.py"}
+_SDK_E2E_EXCLUDE = ["scripts", "examples", "SPEC.md", "INTERFACE_NOTES.md", "STATUS.md", "rust/pgw-core-rs/tests",
+                    *sorted(f"tests/{p.name}" for p in (PGW / "tests").iterdir() if p.name not in _SDK_E2E_KEEP_TESTS),
+                    *sorted(f"benchmarks/{p.name}" for p in HERE.parent.iterdir() if p.name != "sdk_e2e_gpu.py")]
+BUILD_NATIVE_ALL = {**BUILD_NATIVE, "cmd": BUILD_NATIVE["cmd"] + " && python rust/tools/build_pks.py && "
+                    "python -c 'from pgw.hemask import pks_native; assert pks_native.available(), \"pgw_pks\"; "
+                    "print(\"pgw_pks ok\")'"}
+
+
+def _sdk_e2e_job(model: str, timeout_s: int) -> dict:
+    return {"machine_shape": "NvidiaTeslaT4", "source": "dataset", "exclude": _SDK_E2E_EXCLUDE, "steps": [
+        BUILD_NATIVE_ALL,
+        {"kind": "pytest", "name": "pytest_kernels_gpu", "timeout": 1200,
+         "args": ["tests/service/test_kernels.py", "tests/core/test_ringmm.py", "-q", "-rs", "-m", "gpu",
+                  "--timeout", "900"]},
+        {"kind": "shell", "name": "cpu_info", "cmd": "lscpu | head -20; nproc; free -g; nvidia-smi; df -h / /tmp",
+         "timeout": 60},
+        {"kind": "shell", "name": f"sdk_e2e_{model}",
+         "cmd": f"python benchmarks/sdk_e2e_gpu.py --model {model} --work /tmp/sdke2e --drop-checkpoint "
+                f"--out /kaggle/working/sdk_e2e", "timeout": timeout_s},
+    ]}
+
+
+JOBS["pgw-sdk-e2e-7b"] = _sdk_e2e_job("qwen2.5-7b-instruct", 3 * 3600)
+JOBS["pgw-sdk-e2e-3b"] = _sdk_e2e_job("qwen2.5-3b-instruct", 2 * 3600)
+JOBS["pgw-sdk-e2e-15b"] = _sdk_e2e_job("qwen2.5-1.5b-instruct", 2 * 3600)
+
+
 def source_tarball(exclude: tuple[str, ...] = (), include_top: tuple[str, ...] = ()) -> bytes:
     """xz tarball of pgw/ without the excluded folders (plus ``exclude``: job-specific paths under pgw/;
     ``include_top``: top-level folders of :data:`EXCLUDE_TOP` this job needs after all)."""
@@ -912,11 +967,20 @@ def main() -> None:
         tgz = tarballs[excl]
         d = Path(args.out_root) / slug
         d.mkdir(parents=True, exist_ok=True)
+        datasets: list[str] = []
+        if job.get("source") == "dataset":  # over the script size limit: the tarball goes in a private dataset
+            ds = Path(args.out_root) / f"{slug}-src"
+            ds.mkdir(parents=True, exist_ok=True)
+            (ds / "pgw.tar.xz").write_bytes(base64.b64decode(tgz.replace("\n", "")))
+            (ds / "dataset-metadata.json").write_text(json.dumps(
+                {"title": f"{slug}-src", "id": f"{args.owner}/{slug}-src", "licenses": [{"name": "other"}]}, indent=1))
+            datasets, tgz = [f"{args.owner}/{slug}-src"], ""
+            print(ds, f"(push first: kaggle datasets create -p {ds}, or kaggle datasets version -p {ds} -m ...)")
         (d / "run.py").write_text(template.replace("__JOB__", json.dumps(job)).replace("__PGW_TGZ_B64__", tgz))
         meta = {"id": f"{args.owner}/{slug}", "title": slug, "code_file": "run.py", "language": "python",
                 "kernel_type": "script", "is_private": True, "enable_gpu": job.get("gpu", True),
-                "enable_internet": True, "dataset_sources": [], "competition_sources": [], "kernel_sources": [],
-                "model_sources": []}
+                "enable_internet": True, "dataset_sources": datasets, "competition_sources": [],
+                "kernel_sources": [], "model_sources": []}
         if meta["enable_gpu"]:
             meta["machine_shape"] = job.get("machine_shape", "NvidiaTeslaT4")
         (d / "kernel-metadata.json").write_text(json.dumps(meta, indent=1))

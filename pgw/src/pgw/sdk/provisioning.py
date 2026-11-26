@@ -73,17 +73,21 @@ class ModelPin:
     fingerprint: str | None = None
 
 
-#: The release's pins. 0.5B and 1.5B were derived with ``scripts/pin_model_fingerprints.py`` (the repository's pack
-#: tool on the public checkpoints at these commits); 3B and 7B are pinned by checkpoint commit and verified by
-#: re-deriving the pack from the public checkpoint on first provisioning (run the script on a host with those
-#: checkpoints to bake their fingerprints in). The commits are the provider's (deploy/runpod/pod_boot.MODELS).
+#: The release's pins: every model's pack fingerprint, derived with ``scripts/pin_model_fingerprints.py`` (the
+#: repository's pack tool on the public checkpoints at these commits). 0.5B and 1.5B were derived on the integration
+#: box and re-derived identically on a Kaggle CPU kernel (2026-11-25, torch 2.11 / transformers 5.20); 3B and 7B were
+#: derived on that kernel (results/kaggle/sdk-7b-validation/pins). A pin without a fingerprint (a future model) is
+#: checked by re-deriving the pack from the public checkpoint on first provisioning. The commits are the provider's
+#: (deploy/runpod/pod_boot.MODELS).
 PINNED_MODELS: dict[str, ModelPin] = {
     "qwen2.5-0.5b-instruct": ModelPin("Qwen/Qwen2.5-0.5B-Instruct", "7ae557604adf67be50417f59c2c2f167def9a775",
                                       "915e55c19364542c4fd8ab5c8f7154806e2511048755e0d10426374b5c8fe9c7"),
     "qwen2.5-1.5b-instruct": ModelPin("Qwen/Qwen2.5-1.5B-Instruct", "989aa7980e4cf806f80c7fef2b1adb7bc71aa306",
                                       "81bb7adcea1524171297c0004c0efb1edad9f71dd0535462c9b32ab03ac99348"),
-    "qwen2.5-3b-instruct": ModelPin("Qwen/Qwen2.5-3B-Instruct", "aa8e72537993ba99e69dfaafa59ed015b17504d1"),
-    "qwen2.5-7b-instruct": ModelPin("Qwen/Qwen2.5-7B-Instruct", "a09a35458c702b33eeacc393d103063234e8bc28"),
+    "qwen2.5-3b-instruct": ModelPin("Qwen/Qwen2.5-3B-Instruct", "aa8e72537993ba99e69dfaafa59ed015b17504d1",
+                                    "a8e7bac934d82f6435fe9385bd1eb3cfdf1a68f4ff415829e49a3dd4f23bcd23"),
+    "qwen2.5-7b-instruct": ModelPin("Qwen/Qwen2.5-7B-Instruct", "a09a35458c702b33eeacc393d103063234e8bc28",
+                                    "d3db0ca858981a66dd262143d7f3d5b0120069068e0a98a806e1eea3f12653fa"),
 }
 
 

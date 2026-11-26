@@ -345,6 +345,15 @@ def pad_weight_cuda(w8: torch.Tensor, device: torch.device | str) -> torch.Tenso
     return w
 
 
+def weight_rowsum(w8: torch.Tensor, chunk_rows: int = 4096) -> torch.Tensor:
+    """Exact int64 row sums of an int8 weight, in row chunks: never an int64 copy of the whole weight (that is
+    8x the weight: 4.1 GiB for a 152k x 3584 LM head, which ran a 7B provider out of memory on a 16 GB T4)."""
+    out = torch.empty(int(w8.shape[0]), dtype=torch.int64, device=w8.device)
+    for r0 in range(0, int(w8.shape[0]), chunk_rows):
+        out[r0 : r0 + chunk_rows] = w8[r0 : r0 + chunk_rows].to(torch.int64).sum(1)
+    return out
+
+
 @dataclass
 class PreparedWeight:
     """A public int8 weight prepared for repeated exact ring matmuls on one device/backend.
@@ -449,7 +458,7 @@ class PreparedWeight:
     def _rowsum(self) -> torch.Tensor:
         if self._w_rowsum is None:
             assert self._w_dev is not None
-            self._w_rowsum = self._w_dev.to(torch.int64).sum(1)
+            self._w_rowsum = weight_rowsum(self._w_dev)
         return self._w_rowsum
 
     def _mm_f64(self, x: torch.Tensor, k: int) -> torch.Tensor:

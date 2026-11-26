@@ -170,7 +170,7 @@ class Provider:
 
 
 def start_provider(root: Path, pack_dir: Path, pki: dict[str, Any], *, extra_env: dict[str, str] | None = None,
-                   ) -> Provider:
+                   ready_timeout_s: float = 300.0) -> Provider:
     import secrets as _secrets
 
     port, lane_port = free_port(), free_port()
@@ -215,7 +215,7 @@ def start_provider(root: Path, pack_dir: Path, pki: dict[str, Any], *, extra_env
     fh.close()
     prov = Provider(url, proc, log, tamper, pki["ca_sha256"], lane_port, pack_dir, pki["ca.pem"], admin_token, root)
     t0 = time.monotonic()
-    while time.monotonic() - t0 < 300:
+    while time.monotonic() - t0 < ready_timeout_s:
         if proc.poll() is not None:
             raise AssertionError(f"provider exited {proc.returncode}:\n{prov.tail()}")
         try:

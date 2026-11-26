@@ -328,6 +328,12 @@ class ComputeKernel:
                 wd, device=self.device, backend=self.backend,  # type: ignore[arg-type]
                 cache_float=cache_float,
             )
+            if self._pw._resolved == "cuda_int8" and self._pw._w_dev is not None:  # pragma: no cover - GPU only
+                # The CUDA path keeps the weight once, padded (``_w_dev``); ``w8`` becomes a view of it. Keeping the
+                # unpadded device copy as well doubled the provider's GPU memory (13.2 GiB for 7B's linears: no room
+                # on a 16 GB T4).
+                self._pw.w8 = self._pw._w_dev[: wd.shape[0], : wd.shape[1]]
+                del wd
         if self.backend == "cuda_int8":  # pragma: no cover - GPU only
             self._exec = device_executor(self.device)
             self._exec.reserve(self.in_features, self.out_features, self._buckets)

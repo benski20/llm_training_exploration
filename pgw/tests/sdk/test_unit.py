@@ -331,19 +331,58 @@ def test_provider_provisioner_pins_and_defaults(monkeypatch: pytest.MonkeyPatch,
         SDKOptions(model_fingerprints={"x": "nope"}).validate()
 
 
-def test_provider_provisioner_public_check_for_unbaked_pins(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    """3B / 7B: pinned by checkpoint commit; the first provisioning re-derives the pack from the public checkpoint
-    (source="hf") and the result is remembered; a provider packing another revision is refused."""
+#: The release's pack fingerprints (scripts/pin_model_fingerprints.py; 3B / 7B derived on a Kaggle CPU kernel,
+#: results/kaggle/sdk-7b-validation/pins, where 0.5B / 1.5B re-derived to the integration box's values).
+RELEASE_FINGERPRINTS = {
+    "qwen2.5-0.5b-instruct": "915e55c19364542c4fd8ab5c8f7154806e2511048755e0d10426374b5c8fe9c7",
+    "qwen2.5-1.5b-instruct": "81bb7adcea1524171297c0004c0efb1edad9f71dd0535462c9b32ab03ac99348",
+    "qwen2.5-3b-instruct": "a8e7bac934d82f6435fe9385bd1eb3cfdf1a68f4ff415829e49a3dd4f23bcd23",
+    "qwen2.5-7b-instruct": "d3db0ca858981a66dd262143d7f3d5b0120069068e0a98a806e1eea3f12653fa",
+}
+
+
+def test_every_release_model_has_a_baked_fingerprint(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Every supported model is pinned by its pack fingerprint (no first-use re-derivation from the checkpoint), the
+    pins use the provider image's checkpoint commits, and a provider serving another pack is refused at once."""
     import pgw.provision.client as pc
     from pgw.core.errors import FingerprintMismatchError
+    from pgw.sdk.options import SUPPORTED_MODELS
     from pgw.sdk.provisioning import PINNED_MODELS, ProviderProvisioner
+
+    assert {m: p.fingerprint for m, p in PINNED_MODELS.items()} == RELEASE_FINGERPRINTS
+    assert set(SUPPORTED_MODELS) == set(PINNED_MODELS)
+    pod_boot = Path(__file__).resolve().parents[2] / "deploy" / "runpod" / "pod_boot.py"
+    if pod_boot.is_file():
+        src = pod_boot.read_text()
+        for p in PINNED_MODELS.values():
+            assert f'("{p.hf_repo}", "{p.revision}")' in src
+    calls: list[Any] = []
+    monkeypatch.setattr(pc, "provision", _fake_provision(calls, tmp_path))
+    prov = ProviderProvisioner()
+    for m in ("qwen2.5-3b-instruct", "qwen2.5-7b-instruct"):
+        entry = {"name": m, "fingerprint": RELEASE_FINGERPRINTS[m]}
+        prov(m, session=_fake_session(tmp_path, entry), cache_dir=tmp_path)
+        assert "source" not in calls[-1][1] and calls[-1][1]["expected_fingerprint"] == RELEASE_FINGERPRINTS[m]
+        n = len(calls)
+        with pytest.raises(FingerprintMismatchError, match="pins"):  # refused before any download
+            prov(m, session=_fake_session(tmp_path, {**entry, "fingerprint": "ab" * 32}), cache_dir=tmp_path)
+        assert len(calls) == n
+
+
+def test_provider_provisioner_public_check_for_unbaked_pins(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """A pin without a baked fingerprint (a future model; every release model has one): the first provisioning
+    re-derives the pack from the public checkpoint (source="hf") and the result is remembered; a provider packing
+    another revision is refused."""
+    import pgw.provision.client as pc
+    from pgw.core.errors import FingerprintMismatchError
+    from pgw.sdk.provisioning import PINNED_MODELS, ModelPin, ProviderProvisioner
 
     calls: list[Any] = []
     monkeypatch.setattr(pc, "provision", _fake_provision(calls, tmp_path))
-    pin = PINNED_MODELS["qwen2.5-7b-instruct"]
+    pin = ModelPin(PINNED_MODELS["qwen2.5-7b-instruct"].hf_repo, PINNED_MODELS["qwen2.5-7b-instruct"].revision)
     assert pin.fingerprint is None
     entry = {"name": "qwen2.5-7b-instruct", "fingerprint": "cd" * 32, "hf_repo": pin.hf_repo, "revision": pin.revision}
-    prov = ProviderProvisioner()
+    prov = ProviderProvisioner(pins={"qwen2.5-7b-instruct": pin})
     prov("qwen2.5-7b-instruct", session=_fake_session(tmp_path, entry), cache_dir=tmp_path)
     kw = calls[0][1]
     assert kw["source"] == "hf" and kw["hf_repo"] == pin.hf_repo and kw["hf_revision"] == pin.revision

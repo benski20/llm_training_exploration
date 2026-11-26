@@ -46,10 +46,18 @@ built on your machine on first use (`hint="local"`): at 7B about 10-16 CPU-minut
 (1.5-2 CPU-hours on AVX2-only CPUs), once; `pgw sdk prepare` builds it ahead of time
 ([Configuration](configuration.md#preparing-a-model-ahead-of-time)).
 
-Fingerprints: the library pins every model above. 0.5B and 1.5B are pinned by their pack fingerprint; 3B and 7B
-by the public checkpoint's commit, and on first use the library re-derives the model from that public checkpoint
-to check our service's fingerprint (a one-time download of the checkpoint from Hugging Face: about 6 GB at 3B,
-15 GB at 7B, in place of the int8 weights from us), until a later release bakes their fingerprints in too.
+Fingerprints: the library pins every model above by its pack fingerprint (the int8 pack of the public checkpoint
+at a fixed commit), so a service serving anything else is refused before any download:
+
+| model id | pinned checkpoint commit | pack fingerprint |
+|---|---|---|
+| `qwen2.5-0.5b-instruct` | `7ae55760...` | `915e55c19364542c4fd8ab5c8f7154806e2511048755e0d10426374b5c8fe9c7` |
+| `qwen2.5-1.5b-instruct` | `989aa798...` | `81bb7adcea1524171297c0004c0efb1edad9f71dd0535462c9b32ab03ac99348` |
+| `qwen2.5-3b-instruct` | `aa8e7253...` | `a8e7bac934d82f6435fe9385bd1eb3cfdf1a68f4ff415829e49a3dd4f23bcd23` |
+| `qwen2.5-7b-instruct` | `a09a3545...` | `d3db0ca858981a66dd262143d7f3d5b0120069068e0a98a806e1eea3f12653fa` |
+
+You can re-derive any of them from the public checkpoint with `scripts/pin_model_fingerprints.py`
+(`pgw pack <repo> --revision <commit> --name <model>` with the default parameters).
 
 More vCPUs raise tokens per second until the round trips to our GPU dominate. For reference, in our lab
 (measured, 2026-11-23) a CPU-only gateway with 48 cores placed next to an H100 decoded Qwen2.5-7B at about

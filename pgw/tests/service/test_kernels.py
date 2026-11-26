@@ -147,3 +147,25 @@ def test_cuda_int8_exact(rows: int, ring: RingParams) -> None:  # pragma: no cov
     assert k.backend == "cuda_int8"
     y = k.run(x, ring)
     assert y.device.type == "cpu" and torch.equal(y, expected(x, w, ring))
+
+
+@pytest.mark.gpu
+def test_cuda_kernel_holds_its_weight_once() -> None:  # pragma: no cover - GPU only
+    """The CUDA kernel keeps one (padded) device copy of the weight: ``w8`` is a view of it. Two copies doubled the
+    provider's GPU memory (13.2 GiB for Qwen2.5-7B's linears) and ran a 16 GB T4 out of memory at start-up."""
+    m, n = 96, 160  # already 32-aligned: the padded copy is the size of the weight
+    w = torch.randint(-128, 128, (m, n), dtype=torch.int8)
+    torch.cuda.synchronize()
+    before = torch.cuda.memory_allocated()
+    k = ComputeKernel(_spec(m, n), w, device="cuda", backend="cuda_int8", cuda_graphs=False, triton_gemv=False)
+    torch.cuda.synchronize()
+    pw = k._pw
+    assert pw is not None and pw._w_dev is not None
+    assert pw.w8.untyped_storage().data_ptr() == pw._w_dev.untyped_storage().data_ptr()
+    assert tuple(pw.w8.shape) == (m, n) and torch.equal(pw.w8.cpu(), w)
+    assert torch.cuda.memory_allocated() - before < 2 * m * n  # one copy (plus allocator rounding), not two
+    ring = RingParams(32, 12)
+    x = rand_x(3, n, ring)
+    w_ref = w.clone()
+    w.zero_()  # the kernel owns its memory
+    assert torch.equal(k.run(x, ring), expected(x, w_ref, ring))
