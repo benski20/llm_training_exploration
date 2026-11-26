@@ -208,7 +208,7 @@ def run_client(prov: Any, model: str, work: Path, sampler: Sampler, overrides: d
                ) -> list[dict[str, Any]]:
     """The customer's side with the library's defaults; returns the recorded requests for the reference."""
     from pgw import OpenAI
-    from pgw.sdk import AuthenticationError, PGWAPIError
+    from pgw.sdk import AuthenticationError, NotReadyError, PGWAPIError
     from pgw.sdk.options import SDKOptions
 
     d = SDKOptions()
@@ -227,6 +227,32 @@ def run_client(prov: Any, model: str, work: Path, sampler: Sampler, overrides: d
                **overrides)
     sampler.client = c
     rec: list[dict[str, Any]] = []
+
+    def stock() -> int:
+        with contextlib.suppress(Exception):
+            return int(c.status()["models"][model].get("masks_available") or 0)
+        return 0
+
+    def stocked(name: str, fn: Any) -> Any:
+        """``fn()``; when the library refuses it for lack of masks (``mask_exhausted``: refused at admission, no mask
+        used, the default ``mask_wait_s``), wait for the factory's next segment and send it again. On a slow
+        provider (a T4) the factory, not the request, is the bottleneck; every wait is recorded."""
+        for _ in range(40):
+            try:
+                return fn()
+            except NotReadyError as e:
+                if e.code != "mask_exhausted":
+                    raise
+                have, t_w = stock(), time.monotonic()
+                while stock() < have + 64 and time.monotonic() - t_w < 1800:
+                    time.sleep(10)
+                R.setdefault("mask_stock_waits", []).append(
+                    {"request": name, "at_s": round(t_w - T0, 1), "available": have, "waited_s":
+                     round(time.monotonic() - t_w, 1), "available_after": stock()})
+                log("mask stock wait", R["mask_stock_waits"][-1])
+                save()
+        raise RuntimeError(f"{name}: still no mask stock after 40 waits")
+
     try:
         t = time.monotonic()
         c.warmup(model)
@@ -237,25 +263,29 @@ def run_client(prov: Any, model: str, work: Path, sampler: Sampler, overrides: d
         save()
 
         t = time.monotonic()
-        r = c.chat.completions.create(model=model, messages=PROMPT, **GREEDY)
+        r = stocked("greedy", lambda: c.chat.completions.create(model=model, messages=PROMPT, **GREEDY))
         R["timings"]["first_request_after_warmup_s"] = round(time.monotonic() - t, 1)
         rec.append({"name": "greedy", "messages": PROMPT, "body": GREEDY, "stream": False, "resp": r.to_dict()})
         log("first answer", repr(r.choices[0].message.content))
         save()
 
-        chunks = list(c.chat.completions.create(model=model, messages=PROMPT, stream=True,
-                                                stream_options={"include_usage": True}, **SAMPLED))
+        chunks = stocked("sampled_stream", lambda: list(c.chat.completions.create(
+            model=model, messages=PROMPT, stream=True, stream_options={"include_usage": True}, **SAMPLED)))
         rec.append({"name": "sampled_stream", "messages": PROMPT, "body": SAMPLED, "stream": True,
                     "chunks": [ch.to_dict() for ch in chunks]})
 
-        for i in range(2):  # time to first token and steady decode, streaming
-            t = time.monotonic()
+        def long_stream() -> tuple[float, list[float], list[Any]]:
+            t = time.monotonic()  # per attempt: a refused attempt's wait is not part of the time to first token
             times, chunks = [], []
             for ch in c.chat.completions.create(model=model, messages=LONG_PROMPT, stream=True,
                                                 stream_options={"include_usage": True}, **LONG):
                 if ch.choices and ch.choices[0].delta.content:
                     times.append(time.monotonic() - t)
                 chunks.append(ch)
+            return t, times, chunks
+
+        for i in range(2):  # time to first token and steady decode, streaming
+            t, times, chunks = stocked(f"long_stream_{i}", long_stream)
             n = len(times)
             R["timings"][f"long_stream_{i}"] = {
                 "ttft_s": round(times[0], 3), "total_s": round(time.monotonic() - t, 2), "content_chunks": n,
@@ -269,8 +299,11 @@ def run_client(prov: Any, model: str, work: Path, sampler: Sampler, overrides: d
         msgs: list[dict[str, Any]] = [SYSTEM]
         for i, u in enumerate(TURNS):  # a short conversation: each turn carries the history so far
             msgs = [*msgs, {"role": "user", "content": u}]
-            t = time.monotonic()
-            r = c.chat.completions.create(model=model, messages=msgs, **TURN)
+            def turn(m: list[dict[str, Any]] = msgs) -> tuple[float, Any]:
+                t = time.monotonic()
+                return t, c.chat.completions.create(model=model, messages=m, **TURN)
+
+            t, r = stocked(f"turn_{i}", turn)
             R["timings"][f"turn_{i}_s"] = round(time.monotonic() - t, 2)
             rec.append({"name": f"turn_{i}", "messages": msgs, "body": TURN, "stream": False, "resp": r.to_dict()})
             msgs = [*msgs, {"role": "assistant", "content": r.choices[0].message.content}]
@@ -285,7 +318,11 @@ def run_client(prov: Any, model: str, work: Path, sampler: Sampler, overrides: d
         check("factory_scheme_not_halted", f.get("scheme") == c.options.mask_scheme and not f.get("halted")
               and not f.get("provider_integrity_failures"), {k: f.get(k) for k in ("scheme", "halted")})
         if c.options.mask_scheme == "pks-v3":
-            check("hint_built_locally", bool(list((root / "cache" / "models").glob("*/hint/*"))))
+            hf = [q for q in (root / "cache" / "models").glob("*/hint/**/*") if q.is_file()]
+            check("hint_built_locally", bool(hf), {
+                "files": len(hf), "gb": round(sum(q.stat().st_size for q in hf) / 1e9, 2),
+                "first_mtime": min((q.stat().st_mtime for q in hf), default=None),
+                "last_mtime": max((q.stat().st_mtime for q in hf), default=None)})
         R["masked_head"] = bool(st.get("masked_head"))
 
         with contextlib.suppress(Exception):
@@ -455,4 +492,9 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    rc = main()
+    sys.stdout.flush()
+    sys.stderr.flush()
+    # results are written; skip interpreter teardown (a local 0.5B smoke segfaulted once after DONE, in teardown
+    # with native extensions and daemon threads still loaded), so the exit code is the run's verdict
+    os._exit(rc)

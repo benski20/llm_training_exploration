@@ -1,0 +1,115 @@
+{
+ "checks": {
+  "provider_pack_equals_baked_pin": {
+   "pass": true,
+   "detail": {
+    "provider": "d3db0ca858981a66dd262143d7f3d5b0120069068e0a98a806e1eea3f12653fa",
+    "baked": "d3db0ca858981a66dd262143d7f3d5b0120069068e0a98a806e1eea3f12653fa"
+   }
+  }
+ },
+ "timings": {
+  "provider_checkpoint_download_s": 95.6,
+  "provider_pack_s": 309.8,
+  "provider_start_s": 55.3,
+  "client_enroll_provision_s": 284.7,
+  "first_request_after_warmup_s": 1405.6
+ },
+ "errors": [
+  "Traceback (most recent call last):\n  File \"/tmp/pgwsrc/pgw/src/pgw/sdk/engine.py\", line 660, in _open\n    sess = (await rt.open_sessions([ids], params, request_id=rid, prefix_key=prefix_key,\n            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n                                   conversation=conversation))[0]\n                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/tmp/pgwsrc/pgw/src/pgw/gateway/runtime.py\", line 1598, in open_sessions\n    reservation, slots = await self._reserve_for(ids, params, srid, reused)\n                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/tmp/pgwsrc/pgw/src/pgw/gateway/runtime.py\", line 1738, in _reserve_for\n    return await self._reserve_incremental(rows0, need, cap, rid, public)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/tmp/pgwsrc/pgw/src/pgw/gateway/runtime.py\", line 1669, in _reserve_incremental\n    raise MaskExhaustedError(\n    ...<5 lines>...\n    )\npgw.core.errors.MaskExhaustedError: not enough mask slots for this request: it can use up to 42 (34 prompt rows + the decode budget), 14 are available and 0 are promised to running requests. Lower max_tokens, or retry when the mask factory has added more (the Masks page shows the stock)\n\nThe above exception was the direct cause of the following exception:\n\nTraceback (most recent call last):\n  File \"/tmp/pgwsrc/pgw/benchmarks/sdk_e2e_gpu.py\", line 424, in main\n    recs = run_client(prov, a.model, a.work, sampler, a.client_opts)\n  File \"/tmp/pgwsrc/pgw/benchmarks/sdk_e2e_gpu.py\", line 246, in run_client\n    chunks = list(c.chat.completions.create(model=model, messages=PROMPT, stream=True,\n                                            stream_options={\"include_usage\": True}, **SAMPLED))\n  File \"/tmp/pgwsrc/pgw/src/pgw/sdk/client.py\", line 257, in __next__\n    raise from_pgw_error(item) if not isinstance(item, PGWAPIError) else item\n  File \"/tmp/pgwsrc/pgw/src/pgw/sdk/client.py\", line 228, in pump\n    async for c in engine.chat_stream(req, conversation=conversation, timeout_s=request_timeout_s):\n        self._q.put(c)\n  File \"/tmp/pgwsrc/pgw/src/pgw/sdk/engine.py\", line 891, in chat_stream\n    async for item in self._chat_stream_body(req, conversation, meta, timeout_s, chunk):\n        yield item\n  File \"/tmp/pgwsrc/pgw/src/pgw/sdk/engine.py\", line 903, in _chat_stream_body\n    async for h, ev in self.chat_events(req, conversation=conversation, meta=meta, timeout_s=timeout_s):\n    ...<13 lines>...\n                      \"finish_reason\": str(ev.finish_reason) if ev.finish_reason else None}])\n  File \"/tmp/pgwsrc/pgw/src/pgw/sdk/engine.py\", line 742, in chat_events\n    async for item in self._chat_events(req, conversation=conversation, meta=meta, timeout_s=timeout_s):\n    ...<2 lines>...\n        yield item\n  File \"/tmp/pgwsrc/pgw/src/pgw/sdk/engine.py\", line 809, in _chat_events\n    sess = await self._open(h, rt, ids, params, rid if attempt == 0 else f\"{rid}-r{attempt}\",\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n    ...<2 lines>...\n                            conversation=strict)\n                            ^^^^^^^^^^^^^^^^^^^^\n  File \"/tmp/pgwsrc/pgw/src/pgw/sdk/engine.py\", line 678, in _open\n    raise NotReadyError(f\"no masks in stock for model {h.name!r} after waiting{why}\",\n                        code=str(exc.code), request_id=rid) from exc\npgw.sdk.errors.NotReadyError: no masks in stock for model 'qwen2.5-7b-instruct' after waiting\n"
+ ],
+ "model": "qwen2.5-7b-instruct",
+ "device": "cuda",
+ "env": {
+  "torch": "2.11.0+cu130",
+  "gpu": [
+   "Tesla T4",
+   "Tesla T4"
+  ],
+  "cpus": 4,
+  "native": {
+   "pgw_fast": true,
+   "pgw_ntt": true,
+   "pgw_pks": true
+  }
+ },
+ "phase": "reference",
+ "min_mem_avail_gb": 23.18,
+ "fingerprint": "d3db0ca858981a66dd262143d7f3d5b0120069068e0a98a806e1eea3f12653fa",
+ "sdk_defaults": {
+  "mask_scheme": "pks-v3",
+  "hint": "local",
+  "masked_head": "auto",
+  "workers": 1
+ },
+ "client_overrides": {},
+ "after_warmup": {
+  "model": "qwen2.5-7b-instruct",
+  "state": "ready",
+  "error": null,
+  "progress": "done: 1 / 1 models",
+  "masked_head": true,
+  "ring": "K32A12C27",
+  "requests": 0,
+  "verified_requests": 0,
+  "integrity_failures": 0,
+  "requests_waiting_for_masks": 0,
+  "last_integrity_check_ok_at": null,
+  "last_integrity_failure_at": null,
+  "provisioned": {
+   "fingerprint": "d3db0ca858981a66dd262143d7f3d5b0120069068e0a98a806e1eea3f12653fa",
+   "source": "provider",
+   "pack_path": "/tmp/sdke2e/client/cache/models/d3db0ca858981a66/pack",
+   "hint_dir": null
+  },
+  "lane": "open",
+  "fingerprint": "2c6c430bdfeb748da521481b8ead963f0b6965624e8ef087d537133907d7130b",
+  "masks_available": 0,
+  "native": {
+   "trip_engine": true,
+   "trip_native": true,
+   "decode_native": true,
+   "prime_check": true
+  },
+  "backend": {
+   "calls": 0,
+   "rows": 0,
+   "round_trips": 0,
+   "bytes_up": 0,
+   "bytes_down": 0,
+   "freivalds_checked": 0,
+   "freivalds_skipped": 0,
+   "integrity_failures": 0,
+   "remote_seconds": 0.0,
+   "local_seconds": 0.0,
+   "decode_calls": 0,
+   "decode_remote_seconds": 0.0,
+   "decode_local_seconds": 0.0,
+   "deferred_checks": 0,
+   "pad_rows": 0,
+   "dummy_calls": 0,
+   "local_calls": 0,
+   "local_rows": 0
+  },
+  "breaker": {
+   "open": false,
+   "trips": 0,
+   "cooldown_s": null,
+   "open_for_s": null,
+   "last_code": null
+  },
+  "factory": {
+   "owner": true,
+   "running": true,
+   "starts": 1,
+   "consecutive_failures": 0,
+   "last_child_error": null,
+   "workers": 1,
+   "scheme": "pks-v3",
+   "target_slots": 1296,
+   "low_water_slots": 648,
+   "halted": false
+  }
+ },
+ "total_min": 38.0
+}
