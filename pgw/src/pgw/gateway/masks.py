@@ -46,6 +46,24 @@ def _decrypt_ahead() -> bool:
 __all__ = ["EntitlementLedger", "WindowedReservation", "chunk_entitlement"]
 
 
+def _decrypt_first_leases(part: Any) -> None:
+    """With ``PGW_TRIP_DECRYPT_AHEAD``: start decrypting the first trip lease's ``W r`` chunks of every linear of a
+    part the background extension just reserved (``MaskReservation.decrypt_ahead``: nothing handed out, plaintext
+    zeroed unless a lease takes it). Without it the first lease of each linear in each part (every
+    ``mask_chunk_slots`` tokens in incremental mode) decrypted its chunks on the token's critical path: the leases of
+    the current part were created before this part existed, so their own look-ahead could not reach it. Timing
+    only (same rows, bytes and checks); errors are left to the lease, which decrypts again and fails closed."""
+    ahead = getattr(part, "decrypt_ahead", None)
+    keys = getattr(part, "linear_keys", None)
+    if ahead is None or not keys or not _decrypt_ahead():
+        return
+    try:
+        for key in keys:
+            ahead(key)
+    except Exception as exc:  # e.g. the part closed meanwhile; the lease path decides
+        log.debug("decrypt-ahead of a new part skipped: %s", type(exc).__name__)
+
+
 def chunk_entitlement(first: int, cap: int, chunk: int) -> int:
     """Most slots an incremental session can ever reserve: ``first`` plus whole chunks up to ``cap``."""
     first, cap, chunk = int(first), int(cap), int(chunk)
@@ -373,6 +391,7 @@ class WindowedReservation:
                 part = self._reserve(n)
             except Exception as exc:  # the step's own (synchronous) extension reports exhaustion
                 log.debug("background mask extension failed: %s", getattr(exc, "message", type(exc).__name__))
+            added = None
             with self._lock:
                 self._pending = 0
                 self._ahead_thread = None
@@ -380,9 +399,11 @@ class WindowedReservation:
                     self._parts.append(part)
                     self.extensions += 1
                     self.ahead_reservations += 1
-                    part = None
+                    added, part = part, None
             if part is not None:  # the session closed meanwhile: burn it
                 part.close()
+            if added is not None:
+                _decrypt_first_leases(added)
 
         t = threading.Thread(target=run, name="pgw-mask-ahead", daemon=True)
         self._ahead_thread = t
