@@ -52,7 +52,12 @@ def unpack_ksk(data: bytes | bytearray, groups: int) -> np.ndarray:
 
 
 def pack_ksk(beta: np.ndarray) -> bytearray:
-    """Inverse of :func:`unpack_ksk` (customer side)."""
+    """Inverse of :func:`unpack_ksk` (customer side; natively when ``pgw_pks`` has ``pack_ksk``, same bytes)."""
+    from pgw.hemask.pks_native import native
+
+    nat = native()
+    if nat is not None and hasattr(nat, "pack_ksk") and beta.ndim == 4 and beta.shape[1] == len(V3_KSK_BITS):
+        return bytearray(nat.pack_ksk(np.ascontiguousarray(beta, dtype=np.uint32), list(V3_KSK_BITS)))
     out = bytearray()
     for g in range(beta.shape[0]):
         for i, bits in enumerate(V3_KSK_BITS):

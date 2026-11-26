@@ -12,7 +12,9 @@ The default provisioner is :class:`ProviderProvisioner`, a thin layer over :func
   (``public-check.json``) and the derived pack is reused. ``SDKOptions.model_fingerprints`` adds or replaces pins
   (custom packs); a replaced pin is the caller's explicit decision.
 * **Hint.** ``hint="local"`` (default): the background mask factory builds the pks-v3 hint itself from the
-  fingerprint-checked int8 weights (one-time: about 20-30 min of CPU at 7B on 4 cores, then cached).
+  fingerprint-checked int8 weights (one-time: about 10-16 CPU-minutes at 7B with AMX / AVX-512 VNNI, then cached),
+  unless :meth:`ProviderProvisioner.prepare` (``pgw sdk prepare``) built it ahead of time in the same pass as the
+  factory pack; a prepared store is used when its ``meta.json`` verifies under the cache's hint key.
   ``hint="provider"`` (opt-in): the provider computes the expensive part for client-chosen seeds and the client
   accepts it only after a >= 40-bit check against the same weights (see :mod:`pgw.provision.client`); it streams
   about 44 GB at 7B.
@@ -194,11 +196,29 @@ class ProviderProvisioner:
                  progress: Callable[[str], None] | None = None, masked_head: bool = False) -> Provisioned:
         """Provision ``model`` (blocking; the engine runs it in a worker thread).
 
+        With ``hint="local"`` a complete hint store prepared ahead of time (:meth:`prepare`, ``pgw sdk prepare``;
+        here or on another host whose cache was copied) is handed to the factory when its ``meta.json`` verifies
+        under the cache's hint key (:func:`pgw.provision.client.find_prepared_hint`); otherwise the factory builds the
+        hint on first use, as before.
+
         Raises:
             FingerprintMismatchError: the provider serves another pack than the pin (or than the public checkpoint).
             IntegrityError: an artifact, a weight or a provider hint operand failed its check.
             ConfigError / ModelNotFoundError / ServiceUnavailableError (from :func:`pgw.provision.client.provision`).
         """
+        return self._provision(model, session=session, cache_dir=cache_dir, progress=progress,
+                               masked_head=masked_head)
+
+    def prepare(self, model: str, *, session: Any, cache_dir: Path, progress: Callable[[str], None] | None = None,
+                masked_head: bool = False, build_hint: bool = True) -> Provisioned:
+        """The one-time setup of ``model`` ahead of the first request (``pgw sdk prepare``): artifacts, the factory
+        pack and, with ``hint="local"`` and ``build_hint``, the pks-v3 hint, built in one pass over the weights on
+        every core and resumable after an interruption (:func:`pgw.provision.client.provision` with ``resume``)."""
+        return self._provision(model, session=session, cache_dir=cache_dir, progress=progress,
+                               masked_head=masked_head, build_hint=build_hint, resume=True)
+
+    def _provision(self, model: str, *, session: Any, cache_dir: Path, progress: Callable[[str], None] | None,
+                   masked_head: bool, build_hint: bool = False, resume: bool = False) -> Provisioned:
         from pgw.core.fingerprint import validate_fingerprint
         from pgw.provision.client import provision
         from pgw.provision.session import ProvisionSession
@@ -232,10 +252,14 @@ class ProviderProvisioner:
         ps = ProvisionSession(base_url=session.service_url, token=session.token().get_secret_value(),
                               ca_file=session.ca_file, client_cert_file=session.client_cert_file,
                               client_key_file=session.client_key_file, timeout_s=self.timeout_s)
-        hint: Literal["provider", "none"] = "provider" if self.hint == "provider" else "none"  # "local": the factory
+        hint: Literal["provider", "local", "none"] = "provider" if self.hint == "provider" else "none"
+        if build_hint and self.hint == "local":
+            hint = "local"  # prepare: the fused, resumable build now (else: the factory on first use)
         source = "provider"
         kw: dict[str, Any] = {"session": ps, "cache_dir": root, "progress": say, "expected_fingerprint": served,
                               "masked_head": masked_head, "factory_pack": True}
+        if resume:
+            kw["resume"] = True
         try:
             if expected is None and not self._public_check_ok(root, served, pin):
                 assert pin is not None
@@ -251,10 +275,16 @@ class ProviderProvisioner:
             ps.close()
         try:
             has_hint = pm.hint_store is not None
-            return Provisioned(name=model, fingerprint=pm.fingerprint, pack_path=pm.pack_dir,
-                               hint_dir=pm.hint_root if has_hint else None,
-                               hint_key_file=pm.hint_key_file if has_hint else None,
-                               source=source, factory_pack_path=pm.factory_pack_dir)
+            hint_dir, key_file = (pm.hint_root, pm.hint_key_file) if has_hint else (None, None)
+            if not has_hint and self.hint == "local":
+                from pgw.provision.client import find_prepared_hint
+
+                found = find_prepared_hint(root, pm.fingerprint, masked_head=masked_head)
+                if found is not None:
+                    hint_dir, key_file = found
+                    source += "+prepared-hint"
+            return Provisioned(name=model, fingerprint=pm.fingerprint, pack_path=pm.pack_dir, hint_dir=hint_dir,
+                               hint_key_file=key_file, source=source, factory_pack_path=pm.factory_pack_dir)
         finally:
             pm.close()  # the factory opens the hint store itself
 

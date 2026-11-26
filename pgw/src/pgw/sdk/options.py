@@ -81,7 +81,9 @@ class SDKOptions:
         mask_nice: Niceness increment of the factory processes (default 10: low priority).
         mask_store_gb: Disk budget of the mask stock per model; sets the factory target [``PGW_MASK_STORE_GB``].
         mask_target_slots / mask_low_water_slots: Explicit stock target / refill threshold (slots).
-        mask_segment_slots: Slots per factory segment (small: masks become usable sooner).
+        mask_segment_slots: Slots per factory segment (default 1024, capped by the stock target; small: masks become
+            usable sooner; pks-v3: rounded down to whole 256-slot groups, and four groups per segment cost about
+            25 % less client CPU per mask slot than one).
         mask_wait_s: How long a request waits for masks when the stock is empty before failing (back-pressure).
             During a model's first fill on a host (the factory still building its one-time setup) a request without
             an explicit ``timeout`` waits up to ``ready_timeout_s`` instead.
@@ -136,7 +138,7 @@ class SDKOptions:
     mask_store_gb: float = 8.0
     mask_target_slots: int | None = None
     mask_low_water_slots: int | None = None
-    mask_segment_slots: int = 256
+    mask_segment_slots: int = 1024
     mask_wait_s: float = 120.0
     factory: bool = True
     lane: Literal["auto", "stream", "off"] = "auto"

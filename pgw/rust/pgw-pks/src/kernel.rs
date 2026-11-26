@@ -829,6 +829,10 @@ pub fn decrypt_item(isa: Isa, it: &DecItem<'_>, outs: &mut [&mut [u32]], threads
 /// hint build) in the NTT domain (`(groups, 4, RANK, NR)`, `< p`). With `y` (`m x 256 groups`, `W8 b mod
 /// 2^56`) the output is the reply `c0` rounded to `yb` bits, `(groups, nb, NR)`; without it (hint build,
 /// one group) the output is `c1` in NTT hint form, `(nb, 2, NR)` u32 residues.
+///
+/// `raw`: `hs` holds the unswitched `H = W8 A mod 2^56` (masked to 56 bits) and the switch
+/// `round(H q1 / 2^56) mod q1` ([`switch_hint`]) is applied per 32-row block on the fly (the hint build: one
+/// pass over `H`, no switched copy). Same values as switching first.
 pub struct KsItem<'a> {
     pub hs: &'a [u64],
     pub m: usize,
@@ -836,50 +840,216 @@ pub struct KsItem<'a> {
     pub groups: usize,
     pub y: Option<&'a [u64]>,
     pub yb: u32,
+    pub raw: bool,
+}
+
+/// The four reply primes as constants (`ctx().qp`, checked by [`keyswitch`]): the CRT / ModDown remainders
+/// below compile to multiply-shift sequences instead of 64-bit divisions (same values).
+const KP0: u64 = 16760833;
+const KP1: u64 = 16580609;
+const KP2: u64 = 1073692673;
+const KP3: u64 = 1073643521;
+
+/// `round(h q1 / 2^56) mod q1` for `h mod 2^56` (`pgw.hemask.pks.switch_hint`).
+#[inline(always)]
+fn switch1(h: u64, q1: u64) -> u64 {
+    ((((h & M56) as u128 * q1 as u128) + (1u128 << 55)) >> 56) as u64 % q1
 }
 
 #[inline(always)]
-fn ks_block(cx: &Ctx, it: &KsItem<'_>, b: usize, opt: &[Vec<u32>], out: Shared<u64>, a16: &mut [u32], acc: &mut [u32]) {
-    let nb = it.m / PACK;
-    let q1 = cx.q1;
-    let half = q1.div_ceil(2);
-    // A~_l[32 u + j] = hs[32 b + j, 256 l + u], centred lift, residues (x R^-1), forward NTT
-    for i in 0..4 {
-        let pr = &cx.qp[i];
-        let q1r = pr.reduce(pr.res56(q1));
-        let a = &mut a16[i * NR * L..(i + 1) * NR * L];
-        for u in 0..D {
-            for j in 0..PACK {
-                let row = &it.hs[(PACK * b + j) * NU..(PACK * b + j + 1) * NU];
-                let c = PACK * u + j;
-                for l in 0..L {
-                    let v = row[D * l + u];
-                    let r = pr.reduce(pr.res56(v));
-                    a[c * L + l] = if v >= half { red(r.wrapping_add(pr.p).wrapping_sub(q1r), pr.p) } else { r };
+fn switch_kernel(h: &[u64], out: &mut [u64], q1: u64) {
+    for (o, &v) in out.iter_mut().zip(h) {
+        *o = switch1(v, q1);
+    }
+}
+
+crate::multiversion!(fn switch_isa(h: &[u64], out: &mut [u64], q1: u64) => switch_kernel);
+
+/// `round((H mod 2^56) q1 / 2^56) mod q1` element-wise (`pgw.hemask.pks.switch_hint`), multi-threaded.
+pub fn switch_hint(isa: Isa, h: &[u64], out: &mut [u64], threads: usize) -> Result<(), Error> {
+    if h.len() != out.len() {
+        return err("switch_hint: input and output differ in length");
+    }
+    let q1 = ctx().q1;
+    let threads = threads.clamp(1, (h.len() / 4096).max(1));
+    let step = h.len().div_ceil(threads).max(1);
+    std::thread::scope(|s| {
+        for (hc, oc) in h.chunks(step).zip(out.chunks_mut(step)) {
+            s.spawn(move || switch_isa(isa, hc, oc, q1));
+        }
+    });
+    Ok(())
+}
+
+#[inline(always)]
+fn combine_kernel(part: &[i32], off: &[i32], planes: usize, cols: usize, out: &mut [u64]) {
+    for (r, o) in out.chunks_exact_mut(cols).enumerate() {
+        let pr = &part[r * planes * cols..(r + 1) * planes * cols];
+        let b = off[r] as i64 as u64;
+        for (c, x) in o.iter_mut().enumerate() {
+            let mut v = 0u64;
+            for d in 0..planes {
+                v = v.wrapping_add(((pr[d * cols + c] as i64 as u64).wrapping_add(b)) << (8 * d));
+            }
+            *x = v & M56;
+        }
+    }
+}
+
+crate::multiversion!(fn combine_isa(part: &[i32], off: &[i32], planes: usize, cols: usize, out: &mut [u64])
+    => combine_kernel);
+
+/// `H = sum_d (part[:, d] + off) 2^(8 d) mod 2^56` (`part`: `(rows, planes, cols)` int32 products of the
+/// byte planes of `A` (each byte minus 128) with `W8`; `off`: `128 * rowsum(W8)` per row): the recombination
+/// of the byte-plane GEMM `W8 A` (`pgw.hemask.hint_gemm`). Exact: every term wraps mod `2^64`.
+pub fn combine_planes(isa: Isa, part: &[i32], off: &[i32], planes: usize, cols: usize, out: &mut [u64],
+                      threads: usize) -> Result<(), Error> {
+    let rows = off.len();
+    if planes == 0 || planes > 8 || part.len() != rows * planes * cols || out.len() != rows * cols {
+        return err("combine_planes: inconsistent shapes");
+    }
+    if rows == 0 {
+        return Ok(());
+    }
+    let threads = threads.clamp(1, rows);
+    let step = rows.div_ceil(threads);
+    std::thread::scope(|s| {
+        for ((pc, oc), fc) in part.chunks(step * planes * cols).zip(out.chunks_mut(step * cols)).zip(off.chunks(step)) {
+            s.spawn(move || combine_isa(isa, pc, fc, planes, cols, oc));
+        }
+    });
+    Ok(())
+}
+
+/// Byte planes of the hint operand `A = a_mlwe_rows(ring)` for the hint GEMM, in column blocks of `cb`: row
+/// `(col / cb) 7 cb + d cb + col % cb` of `out` (`n` bytes) holds `byte_d(A[i, col]) ^ 0x80` (`d < 7`; `A < 2^56`),
+/// so each block of `7 cb` rows is one GEMM operand (`cb = NU`: plane-major). Built straight from the `n/16` ring rows (`ring`: `(n/16, NU)`,
+/// `< 2^56`). Row `16 C + k`, component `l`, slot `u` of `A` is coefficient `16 u + (k - l)` of `a_C` for
+/// `l <= k`, else coefficient `16 (u - 1) + (k - l + 16)` (`u >= 1`) or minus coefficient `16 * 255 + (k - l + 16)`
+/// (`u = 0`, negacyclic) mod `2^56` (`pgw.hemask.pks.a_mlwe_rows`).
+#[inline(always)]
+fn a_planes_kernel(ring: &[u64], n: usize, cb: usize, cols: std::ops::Range<usize>, out: Shared<u8>) {
+    let nc = n / RANK;
+    let mut line = vec![0u8; 7 * n];
+    for col in cols {
+        let (l, u) = (col / D, col % D);
+        for c in 0..nc {
+            let r = &ring[c * NU..(c + 1) * NU];
+            for k in 0..RANK {
+                let v = if l <= k {
+                    r[RANK * u + (k - l)]
+                } else if u >= 1 {
+                    r[RANK * (u - 1) + (k + RANK - l)]
+                } else {
+                    0u64.wrapping_sub(r[RANK * (D - 1) + (k + RANK - l)]) & M56
+                };
+                let i = RANK * c + k;
+                for d in 0..7 {
+                    line[d * n + i] = ((v >> (8 * d)) as u8) ^ 0x80;
                 }
             }
         }
-        pr.fwd_l(a);
+        for d in 0..7 {
+            let row = (col / cb) * 7 * cb + d * cb + col % cb;
+            // SAFETY: row (d, col) is written by this thread only (disjoint column ranges).
+            unsafe { std::ptr::copy_nonoverlapping(line[d * n..].as_ptr(), out.0.add(row * n), n) };
+        }
     }
-    let (p0, p1) = (cx.qp[0].p as u64, cx.qp[1].p as u64);
-    let (p2, p3) = (cx.qp[2].p as u64, cx.qp[3].p as u64);
+}
+
+crate::multiversion!(fn a_planes_isa(ring: &[u64], n: usize, cb: usize, cols: std::ops::Range<usize>, out: Shared<u8>)
+    => a_planes_kernel);
+
+/// See [`a_planes_kernel`]; `out` is `7 * NU * n` bytes.
+pub fn a_planes(isa: Isa, ring: &[u64], n: usize, cb: usize, out: &mut [u8], threads: usize) -> Result<(), Error> {
+    if n == 0 || !n.is_multiple_of(RANK) || ring.len() != (n / RANK) * NU || out.len() != 7 * NU * n || cb == 0
+        || !NU.is_multiple_of(cb)
+    {
+        return err("a_planes: inconsistent shapes");
+    }
+    if ring.iter().any(|&v| v > M56) {
+        return err("a_planes: ring value out of range");
+    }
+    let op = Shared(out.as_mut_ptr());
+    let threads = threads.clamp(1, NU);
+    let step = NU.div_ceil(threads);
+    std::thread::scope(|s| {
+        for c0 in (0..NU).step_by(step) {
+            s.spawn(move || a_planes_isa(isa, ring, n, cb, c0..(c0 + step).min(NU), op));
+        }
+    });
+    Ok(())
+}
+
+#[inline(always)]
+#[allow(clippy::too_many_arguments)]
+fn ks_block(fast: Vx, cx: &Ctx, it: &KsItem<'_>, b: usize, opt: &[Vec<u32>], out: Shared<u64>, a16: &mut [u32],
+            acc: &mut [u32], sw: &mut [u64]) {
+    let nb = it.m / PACK;
+    let q1 = cx.q1;
+    let half = q1.div_ceil(2);
+    let rows = &it.hs[PACK * b * NU..PACK * (b + 1) * NU];
+    let rows: &[u64] = if it.raw {
+        switch_kernel(rows, sw, q1);
+        sw
+    } else {
+        rows
+    };
+    // A~_l[32 u + j] = hs[32 b + j, 256 l + u], centred lift, residues (x R^-1) mod all four primes in one
+    // pass over the block, then the forward NTTs (hand-written vector copies)
+    let q1r: [u32; 4] = std::array::from_fn(|i| cx.qp[i].reduce(cx.qp[i].res56(q1)));
+    {
+        let (a01, a23) = a16.split_at_mut(2 * NR * L);
+        let (a0, a1) = a01.split_at_mut(NR * L);
+        let (a2, a3) = a23.split_at_mut(NR * L);
+        let mut dst = [a0, a1, a2, a3];
+        for u in 0..D {
+            for j in 0..PACK {
+                let row = &rows[j * NU..(j + 1) * NU];
+                let c = PACK * u + j;
+                for l in 0..L {
+                    let v = row[D * l + u];
+                    let neg = v >= half;
+                    for (i, d) in dst.iter_mut().enumerate() {
+                        let pr = &cx.qp[i];
+                        let r = pr.reduce(pr.res56(v));
+                        d[c * L + l] = if neg { red(r.wrapping_add(pr.p).wrapping_sub(q1r[i]), pr.p) } else { r };
+                    }
+                }
+            }
+        }
+    }
+    for i in 0..4 {
+        fwd(fast, &cx.qp[i], &mut a16[i * NR * L..(i + 1) * NR * L]);
+    }
     let pm = cx.pmod;
-    let inv23 = powmod(p2, p3 - 2, p3);
-    let pinv = [powmod(pm % p0, p0 - 2, p0), powmod(pm % p1, p1 - 2, p1)];
-    let inv01 = powmod(p0, p1 - 2, p1);
+    let inv23 = powmod(KP2, KP3 - 2, KP3);
+    let pinv = [powmod(pm % KP0, KP0 - 2, KP0), powmod(pm % KP1, KP1 - 2, KP1)];
+    let inv01 = powmod(KP0, KP1 - 2, KP1);
+    let (pm0, pm1) = (pm % KP0, pm % KP1);
+    let (p20, p21) = (KP2 % KP0, KP2 % KP1);
+    let phalf = pm.div_ceil(2);
     for g in 0..it.groups {
         for i in 0..4 {
             let pr = &cx.qp[i];
-            let (p, pn) = (pr.p, pr.pn);
+            let (p, pn, p2) = (pr.p, pr.pn, 2 * pr.p);
             let a = &a16[i * NR * L..(i + 1) * NR * L];
             let o = &opt[g * 4 + i];
             let s = &mut acc[i * NR..(i + 1) * NR];
             for c in 0..NR {
-                let mut v = 0u32;
+                // sum over the 16 components (lanes): products < 2p, pairwise sums kept in [0, 2p)
+                let mut t = [0u32; L];
                 for l in 0..L {
-                    v = red(v.wrapping_add(mont(a[c * L + l], o[c * L + l], p, pn)), 2 * p);
+                    t[l] = mont(a[c * L + l], o[c * L + l], p, pn);
                 }
-                s[c] = v;
+                let mut w = L / 2;
+                while w >= 1 {
+                    for l in 0..w {
+                        t[l] = red(t[l].wrapping_add(t[l + w]), p2);
+                    }
+                    w /= 2;
+                }
+                s[c] = t[0];
             }
             pr.inv(s);
             for x in s.iter_mut() {
@@ -896,29 +1066,22 @@ fn ks_block(cx: &Ctx, it: &KsItem<'_>, b: usize, opt: &[Vec<u32>], out: Shared<u
                 let (u, j) = (c / PACK, c % PACK);
                 let yv = y[(PACK * b + j) * it.groups * D + g * D + u] & M56;
                 let body = (((yv as u128 * q1 as u128) + (1u128 << 55)) >> 56) as u64 % q1;
-                for i in 0..2 {
-                    let pp = cx.qp[i].p as u64;
-                    let pb = (body % pp) * (pm % pp) % pp;
-                    res[i] = (pb + pp - res[i]) % pp;
-                }
-                res[2] = (p2 - res[2]) % p2;
-                res[3] = (p3 - res[3]) % p3;
+                res[0] = ((body % KP0) * pm0 % KP0 + KP0 - res[0]) % KP0;
+                res[1] = ((body % KP1) * pm1 % KP1 + KP1 - res[1]) % KP1;
+                res[2] = (KP2 - res[2]) % KP2;
+                res[3] = (KP3 - res[3]) % KP3;
             }
             // ModDown: [C]_P centred, then (r_i - [C]_P) P^-1 mod p_i
-            let k = ((res[3] + p3 - res[2] % p3) % p3) * inv23 % p3;
-            let mut cp = (res[2] + p2 * k) as i64;
-            if cp >= pm.div_ceil(2) as i64 {
-                cp -= pm as i64;
-            }
-            let mut o = [0u64; 2];
-            for i in 0..2 {
-                let pp = cx.qp[i].p as u64;
-                let cpm = cp.rem_euclid(pp as i64) as u64;
-                o[i] = (res[i] + pp - cpm) % pp * pinv[i] % pp;
-            }
+            let k = ((res[3] + KP3 - res[2] % KP3) % KP3) * inv23 % KP3;
+            let cpu = res[2] + KP2 * k; // [0, P)
+            let neg = cpu >= phalf;
+            // [C]_P mod p_i = (res2 + p2 k) mod p_i, minus P mod p_i when centred down
+            let cm0 = ((res[2] % KP0 + p20 * k % KP0) % KP0 + if neg { KP0 - pm0 } else { 0 }) % KP0;
+            let cm1 = ((res[2] % KP1 + p21 * k % KP1) % KP1 + if neg { KP1 - pm1 } else { 0 }) % KP1;
+            let o = [(res[0] + KP0 - cm0) % KP0 * pinv[0] % KP0, (res[1] + KP1 - cm1) % KP1 * pinv[1] % KP1];
             if it.y.is_some() {
-                let kk = (o[1] + p1 - o[0] % p1) % p1 * inv01 % p1;
-                let cv = o[0] + p0 * kk; // [0, q1)
+                let kk = (o[1] + KP1 - o[0] % KP1) % KP1 * inv01 % KP1;
+                let cv = o[0] + KP0 * kk; // [0, q1)
                 let num = ((cv as u128) << it.yb) + (q1 / 2) as u128;
                 let mut est = (num as f64 / q1 as f64) as u64;
                 while est as u128 * q1 as u128 > num {
@@ -951,17 +1114,18 @@ fn ks_block(cx: &Ctx, it: &KsItem<'_>, b: usize, opt: &[Vec<u32>], out: Shared<u
 }
 
 #[inline(always)]
-fn ks_worker(it: &KsItem<'_>, opt: &[Vec<u32>], op: Shared<u64>, th: usize, threads: usize) {
+fn ks_worker(fast: Vx, it: &KsItem<'_>, opt: &[Vec<u32>], op: Shared<u64>, th: usize, threads: usize) {
     let cx = ctx();
     let mut a16 = vec![0u32; 4 * NR * L];
     let mut acc = vec![0u32; 4 * NR];
+    let mut sw = vec![0u64; if it.raw { PACK * NU } else { 0 }];
     for b in (th..it.m / PACK).step_by(threads) {
-        ks_block(cx, it, b, opt, op, &mut a16, &mut acc);
+        ks_block(fast, cx, it, b, opt, op, &mut a16, &mut acc, &mut sw);
     }
 }
 
-crate::multiversion!(fn ks_worker_isa(it: &KsItem<'_>, opt: &[Vec<u32>], op: Shared<u64>, th: usize, threads: usize)
-    => ks_worker);
+crate::multiversion!(fn ks_worker_isa(fast: Vx, it: &KsItem<'_>, opt: &[Vec<u32>], op: Shared<u64>, th: usize,
+    threads: usize) => ks_worker);
 
 fn keyswitch_inner(isa: Isa, it: &KsItem<'_>, out: &mut [u64], threads: usize) {
     let cx = ctx();
@@ -983,10 +1147,11 @@ fn keyswitch_inner(isa: Isa, it: &KsItem<'_>, out: &mut [u64], threads: usize) {
     let nb = it.m / PACK;
     let op = Shared(out.as_mut_ptr());
     let threads = threads.clamp(1, nb.max(1));
+    let fast = Vx::of(isa);
     std::thread::scope(|s| {
         for th in 0..threads {
             let opt = &opt;
-            s.spawn(move || ks_worker_isa(isa, it, opt, op, th, threads));
+            s.spawn(move || ks_worker_isa(isa, fast, it, opt, op, th, threads));
         }
     });
 }
@@ -1017,7 +1182,10 @@ pub fn keyswitch(isa: Isa, it: &KsItem<'_>, out: &mut [u64], threads: usize) -> 
             return err("keyswitch: operand residue out of range");
         }
     }
-    if it.hs.iter().any(|&v| v >= cx.q1) {
+    if [KP0, KP1, KP2, KP3].iter().zip(&cx.qp).any(|(&k, pr)| k != pr.p as u64) {
+        return err("keyswitch: unexpected reply primes");
+    }
+    if !it.raw && it.hs.iter().any(|&v| v >= cx.q1) {
         return err("keyswitch: switched hint value out of range");
     }
     keyswitch_inner(isa, it, out, threads);

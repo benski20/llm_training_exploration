@@ -15,7 +15,7 @@ behaviour of the OpenAI client it replaces.
 | `cache_dir` | `PGW_CACHE_DIR`, else `~/.cache/pgw` | where enrollment credentials, model data and the mask stock are kept ([below](#cache-directory)) |
 | `state_dir` | `PGW_STATE_DIR`, else `~/.local/state/pgw` | the mask store's key and rollback counter (keep it next to the cache, on a persistent volume) |
 | `mask_scheme` | `"pks-v3"` | how one-time masks are generated: `"pks-v3"`, `"mlwe"` or `"plain"` ([Concepts](concepts.md#mask-schemes)) |
-| `hint` | `"local"` | how the one-time `pks-v3` setup is built: `"local"` builds it on your machine from the public weights (about 20-30 min of CPU at 7B on 4 cores, once; then cached); `"provider"` lets our GPU compute the expensive part for seeds your process chose, and your process accepts it only after a check (faster on few cores, but it downloads about 44 GB at 7B) |
+| `hint` | `"local"` | how the one-time `pks-v3` setup is built: `"local"` builds it on your machine from the public weights (at 7B about 10-16 CPU-minutes with AMX or AVX-512 VNNI, 1.5-2 CPU-hours with AVX2 only; once, then cached; `pgw sdk prepare` does it ahead of time, [below](#preparing-a-model-ahead-of-time)); `"provider"` lets our GPU compute the expensive part for seeds your process chose, and your process accepts it only after a check (faster on few cores, but it downloads about 44 GB at 7B) |
 | `mask_workers` | a quarter of the CPUs (1 to 8) | background mask-generation processes per model (low priority) |
 | `mask_store_gb` | 8 | disk budget of the mask stock per model |
 | `masked_head` | `"auto"` | the model's output layer as one more masked step on our GPU when we serve it (`"on"`, `"off"`) |
@@ -88,8 +88,34 @@ The cache directory holds:
 * **Mask stock**: masks prepared ahead of use, up to `mask_store_gb` (8 GB) per model.
 
 First use of a model, once per machine: enrollment (seconds), the model data and the weights (about 11 GB at
-7B, mostly the 6.5 GB of int8 weights), then the mask setup (about 20-30 min of CPU at 7B on 4 cores with the
-default `hint="local"`). Later starts reuse everything and take seconds.
+7B, mostly the 6.5 GB of int8 weights), then the mask setup (with the default `hint="local"`, at 7B about 10 CPU-minutes
+on a CPU with AMX and 16 with AVX-512 VNNI, about 5 minutes on a 4-vCPU AMX machine; on CPUs with AVX2 only about
+1.5-2 CPU-hours). Later starts reuse everything and take seconds.
+
+### Preparing a model ahead of time
+
+To keep the first request from waiting for this, prepare the model beforehand, for example while the
+application is being deployed:
+
+```bash
+export PGW_API_KEY=pgw_live_...
+pgw sdk prepare --model qwen2.5-7b-instruct      # add --cache-dir / --state-dir if your client sets them
+```
+
+It downloads the model data and the weights, checks them against the pinned fingerprint and builds the mask
+setup in the same pass, on every core, with progress lines. If it is interrupted, run it again: it continues
+where it stopped (what was already built is re-checked, never trusted blindly). A client started later with
+the same cache directory uses the prepared setup at once. Use the same `masked_head` setting as your clients
+(`--masked-head`, default `auto`).
+
+**Set up on a big machine once, then copy.** The mask setup depends only on public data and on values your
+machine draws, so you can prepare a model on a large machine you control and copy the result to your
+application hosts: copy `<cache>/models/<directory of the model>/` and `<cache>/keys/pks-hint.key` to the same
+places under the target's cache directory (nothing else: the enrollment credentials in the cache stay on their
+machine). The key authenticates the setup's metadata (HMAC-SHA256 over its seeds, its noise bounds and the
+SHA-256 of every file); the target uses the copied setup only if the metadata verifies under that key, and
+re-hashes every file before use. Copy the key over a channel you trust and keep it readable by the client's
+user only. Without the key the copied setup is ignored and rebuilt.
 
 Plan the disk per model with [Supported models](models.md#resources-per-model). Deleting the directory is
 safe: the next start enrolls again and prepares the model again. In containers, mount the cache directory

@@ -3,9 +3,9 @@
 
 use crate::arith::{unpack_bits as unpack, Isa};
 use crate::kernel::{self, DecItem, C0, EncItem, KsItem, Wiping, D, NR, NU, PACK, RANK};
-use numpy::ndarray::{Array2, Array3};
+use numpy::ndarray::{Array2, Array3, Array4};
 use numpy::{
-    IntoPyArray, PyArray1, PyArray2, PyArray3, PyArrayMethods, PyReadonlyArray2, PyReadonlyArray3, PyReadonlyArray4,
+    IntoPyArray, PyArray1, PyArray2, PyArray3, PyArray4, PyArrayMethods, PyReadonlyArray1, PyReadonlyArray2, PyReadonlyArray3, PyReadonlyArray4,
     PyUntypedArrayMethods,
 };
 use pyo3::exceptions::PyValueError;
@@ -199,9 +199,109 @@ fn keyswitch<'py>(
     };
     let (shape, len) = if ysl.is_some() { ((groups, nb, NR), groups * nb * NR) } else { ((nb, 2, NR), nb * 2 * NR) };
     let mut out = vec![0u64; len];
-    let it = KsItem { hs: hsl, m, ops: osl, groups, y: ysl, yb };
+    let it = KsItem { hs: hsl, m, ops: osl, groups, y: ysl, yb, raw: false };
     py.allow_threads(|| kernel::keyswitch(isa, &it, &mut out, threads)).map_err(kerr)?;
     Ok(Array3::from_shape_vec(shape, out).map_err(|e| verr(e.to_string()))?.into_pyarray(py))
+}
+
+/// :func:`pgw.hemask.pks.switch_hint`: ``round((h mod 2^56) q1 / 2^56) mod q1`` element-wise (``(m, k)`` uint64).
+#[pyfunction]
+#[pyo3(signature = (h, threads = 1, isa = "auto"))]
+fn switch_hint<'py>(py: Python<'py>, h: PyReadonlyArray2<'py, u64>, threads: usize, isa: &str)
+    -> PyResult<Bound<'py, PyArray2<u64>>> {
+    let isa = isa_of(isa)?;
+    let (m, k) = (h.shape()[0], h.shape()[1]);
+    let hsl = h.as_slice().map_err(|_| verr("h must be C-contiguous"))?;
+    let mut out = vec![0u64; m * k];
+    py.allow_threads(|| kernel::switch_hint(isa, hsl, &mut out, threads)).map_err(kerr)?;
+    Ok(Array2::from_shape_vec((m, k), out).map_err(|e| verr(e.to_string()))?.into_pyarray(py))
+}
+
+/// The compact hint of ``m`` rows in its stored form ``(m/32, 2, 8192, 3)`` uint8 (24-bit little-endian
+/// residues): the key switch of ``switch_hint(h)`` with the public ``k`` (``ops`` ``(1, 4, 16, 8192)``).
+/// ``raw=True``: ``h`` is ``H = W8 A mod 2^56`` and the switch is fused (no switched copy); ``raw=False``:
+/// ``h`` is already switched (below ``q1``). Same bytes as ``keyswitch`` followed by the 3-byte packing.
+#[pyfunction]
+#[pyo3(signature = (h, ops, raw = true, threads = 1, isa = "auto"))]
+fn hint_keyswitch<'py>(py: Python<'py>, h: PyReadonlyArray2<'py, u64>, ops: PyReadonlyArray4<'py, u32>, raw: bool,
+                       threads: usize, isa: &str) -> PyResult<Bound<'py, PyArray4<u8>>> {
+    let isa = isa_of(isa)?;
+    let m = h.shape()[0];
+    if h.shape()[1] != NU || m % PACK != 0 || ops.shape()[0] != 1 {
+        return Err(verr(format!("h must be (m, {NU}) with m a multiple of {PACK}, ops one operand")));
+    }
+    let nb = m / PACK;
+    let hsl = h.as_slice().map_err(|_| verr("h must be C-contiguous"))?;
+    let osl = ops.as_slice().map_err(|_| verr("ops must be C-contiguous"))?;
+    let it = KsItem { hs: hsl, m, ops: osl, groups: 1, y: None, yb: 36, raw };
+    let out = py.allow_threads(|| -> Result<Vec<u8>, kernel::Error> {
+        let mut v = vec![0u64; nb * 2 * NR];
+        kernel::keyswitch(isa, &it, &mut v, threads)?;
+        let mut b = vec![0u8; nb * 2 * NR * 3];
+        for (o, x) in b.chunks_exact_mut(3).zip(&v) {
+            o.copy_from_slice(&(*x as u32).to_le_bytes()[..3]);
+        }
+        Ok(b)
+    }).map_err(kerr)?;
+    Ok(Array4::from_shape_vec((nb, 2, NR, 3), out).map_err(|e| verr(e.to_string()))?.into_pyarray(py))
+}
+
+/// ``(sum_d (part[:, d] + off) << 8 d) mod 2^56``: the recombination of the byte-plane GEMM ``W8 A``
+/// (``part`` ``(rows, planes, cols)`` int32, ``off`` ``(rows,)`` int32); ``(rows, cols)`` uint64.
+#[pyfunction]
+#[pyo3(signature = (part, off, threads = 1, isa = "auto"))]
+fn combine_planes<'py>(py: Python<'py>, part: PyReadonlyArray3<'py, i32>, off: PyReadonlyArray1<'py, i32>,
+                       threads: usize, isa: &str) -> PyResult<Bound<'py, PyArray2<u64>>> {
+    let isa = isa_of(isa)?;
+    let (rows, planes, cols) = (part.shape()[0], part.shape()[1], part.shape()[2]);
+    if off.shape()[0] != rows {
+        return Err(verr("off must have one entry per row"));
+    }
+    let psl = part.as_slice().map_err(|_| verr("part must be C-contiguous"))?;
+    let fsl = off.as_slice().map_err(|_| verr("off must be C-contiguous"))?;
+    let mut out = vec![0u64; rows * cols];
+    py.allow_threads(|| kernel::combine_planes(isa, psl, fsl, planes, cols, &mut out, threads)).map_err(kerr)?;
+    Ok(Array2::from_shape_vec((rows, cols), out).map_err(|e| verr(e.to_string()))?.into_pyarray(py))
+}
+
+/// Byte planes of ``A = a_mlwe_rows(ring)`` for the hint GEMM: ``(7 * 4096, n)`` int8, row
+/// ``(col // cb) * 7 cb + d * cb + col % cb`` holding ``byte_d(A[:, col]) - 128`` (``ring``: ``(n/16, 4096)`` uint64
+/// below ``2^56``; ``cb`` divides 4096).
+#[pyfunction]
+#[pyo3(signature = (ring, cb = 4096, threads = 1, isa = "auto"))]
+fn a_planes<'py>(py: Python<'py>, ring: PyReadonlyArray2<'py, u64>, cb: usize, threads: usize, isa: &str)
+    -> PyResult<Bound<'py, PyArray2<i8>>> {
+    let isa = isa_of(isa)?;
+    if ring.shape()[1] != NU {
+        return Err(verr(format!("ring must be (n/16, {NU})")));
+    }
+    let n = ring.shape()[0] * RANK;
+    let rsl = ring.as_slice().map_err(|_| verr("ring must be C-contiguous"))?;
+    let mut out = vec![0i8; 7 * NU * n];
+    // SAFETY: i8 and u8 have the same size and alignment; the view lives only during the call.
+    let ob = unsafe { std::slice::from_raw_parts_mut(out.as_mut_ptr() as *mut u8, out.len()) };
+    py.allow_threads(|| kernel::a_planes(isa, rsl, n, cb, ob, threads)).map_err(kerr)?;
+    Ok(Array2::from_shape_vec((7 * NU, n), out).map_err(|e| verr(e.to_string()))?.into_pyarray(py))
+}
+
+/// :func:`pgw.service.pks_provider.pack_ksk`: the reply keys' wire form, ``beta`` ``(G, 4, 16, 8192)`` uint32 packed per
+/// (group, prime) with ``bits[i]`` bits (:func:`pgw.hemask.wire.pack_bits` layout).
+#[pyfunction]
+fn pack_ksk<'py>(py: Python<'py>, beta: PyReadonlyArray4<'py, u32>, bits: Vec<u32>) -> PyResult<Bound<'py, PyBytes>> {
+    let sh = beta.shape();
+    if sh[1] != bits.len() || sh[2] != RANK || sh[3] != NR {
+        return Err(verr("beta must be (G, len(bits), 16, 8192)"));
+    }
+    let bsl = beta.as_slice().map_err(|_| verr("beta must be C-contiguous"))?;
+    let per = RANK * NR;
+    let out = py.allow_threads(|| -> Result<Vec<u8>, String> {
+        let mut out = Vec::with_capacity(bsl.len() * 4);
+        for (j, chunk) in bsl.chunks_exact(per).enumerate() {
+            crate::arith::pack_bits_into(chunk, bits[j % bits.len()], &mut out)?;
+        }
+        Ok(out)
+    }).map_err(verr)?;
+    Ok(PyBytes::new(py, &out))
 }
 
 /// :func:`pgw.hemask.wire.unpack_bits` (uint64 values).
@@ -220,6 +320,11 @@ fn pgw_pks(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(reply_key, m)?)?;
     m.add_function(wrap_pyfunction!(decrypt, m)?)?;
     m.add_function(wrap_pyfunction!(keyswitch, m)?)?;
+    m.add_function(wrap_pyfunction!(switch_hint, m)?)?;
+    m.add_function(wrap_pyfunction!(hint_keyswitch, m)?)?;
+    m.add_function(wrap_pyfunction!(combine_planes, m)?)?;
+    m.add_function(wrap_pyfunction!(a_planes, m)?)?;
+    m.add_function(wrap_pyfunction!(pack_ksk, m)?)?;
     m.add_function(wrap_pyfunction!(unpack_bits, m)?)?;
     m.add_class::<KHat>()?;
     Ok(())

@@ -1845,3 +1845,44 @@ provider's compute from the lane replies' `compute_us`).
 - Tests: `tests/sdk/test_speculation.py` (bit-identical greedy / seeded / streamed with lookup and with a draft head;
   provider-metered trips, rows and bytes identical with every draft right vs none; `close()` runs the due dummy
   passes; options), `tests/benchmarks/test_round_trip_model.py`; tests/sdk 99 passed + 1 opt-in skip.
+
+
+## 2026-11-26: client setup and per-token CPU at 32B-72B (pks-v3, scheme unchanged)
+
+Goal: a smaller client burden (one-time setup, per-token CPU) for 32B-72B, with no scheme or parameter change and
+no weaker check. Details, the byte-plane dial and the cache-size analysis: `research/reviews/pks-v3-client-setup-scaling.md`.
+
+- **Hint build kernels** (`pgw_pks`: `a_planes`, `combine_planes`, `switch_hint`, `hint_keyswitch`;
+  `pgw.hemask.hint_gemm`): `A`'s 7 byte planes once per linear instead of 8 per 1024-row block, 512-column int8 GEMMs,
+  switch fused into the key switch, hand-written NTTs in the key switch. 3.8x less CPU on AMX, bit-identical
+  (`tests/hemask/test_hint_build.py`). The int8 path runs only where CPU int8 GEMMs are exact (oneDNN's AVX2 kernel
+  saturates: float64 there, as before).
+- **`pgw sdk prepare --model ...`**: the setup ahead of the first request, the hint built in the same pass as the
+  factory pack, on every core, resumable (partial hint state HMAC-authenticated under the cache's hint key; tampered
+  state discarded, changed files rebuilt). Later clients use the prepared store only if its `meta.json` verifies.
+  "Big box once, copy the cache": `docs/sdk/configuration.md`.
+- **Per-token**: `mask_segment_slots` default 256 -> 1024, pks-v3 segments rounded to whole 256-slot groups (four
+  groups per request amortise the upload's public NTTs); reply-key wire form native (3x).
+- **Not done (measured, not worth it):** the byte-plane dial (at most ~13 % in a narrow band on AVX2-only hosts);
+  hint compaction (48 stored bits vs 47.98 bits of entropy per coefficient pair); dropping the factory pack (the
+  factory redraws `v W8` after every rejected segment).
+
+| | 7B | 32B | 72B | how |
+|---|---|---|---|---|
+| hint build, CPU-s (1 thread, AMX) | 2226 -> 582 | 9618 -> 2319 | 24968 -> 4658 | extrapolated from measured per-row cost at real shapes |
+| hint build, wall on this 4-vCPU box | 24 min -> 5.1 min | 1.95 h -> 19 min | 6.4 h -> 34 min | same |
+| same with AVX-512 VNNI only / AVX2 only (CPU-s) | 2562 -> 934 / ~6200 -> ~5800 | not measured | not measured | 7B extrapolated, oneDNN ISA capped |
+| whole setup, 0.5B end to end | 145 s -> 68 s wall, 383 -> 189 CPU-s | | | measured (`prepare_real_bench.py`) |
+| peak RAM | 0.5B: 2.78 -> 2.14 GB; larger: about the same, bound by the f32 head (2.2 / 3.1 / 5 GB) | | | measured 0.5B; extrapolated |
+| peak disk = cache (gateway pack + factory pack + hint) | ~13 GB, unchanged | ~45 GB, unchanged | ~91 GB, unchanged | measured 0.5B (2.17 GB both); extrapolated |
+| bytes downloaded | ~11 GB, unchanged | ~37 GB | ~80 GB | extrapolated (W8 once + gateway pack) |
+| hint on disk | 2.37 GB | 7.38 GB | 10.77 GB | computed (1.5 KB per output row); no lossless gain |
+| client CPU per mask slot (1 thread) | 28.4 -> 24.9 ms | 90.8 -> 80.0 ms | 137.4 -> 120.8 ms | measured 0.5B (8.4 -> 7.2 ms), extrapolated per part |
+| client cores at 25 tok/s | 0.71 -> 0.62 | 2.27 -> 2.0 | 3.43 -> 3.02 | same; at 32B/72B 1024-slot segments need `mask_store_gb` ~20/28 GB (else 2.23 / 3.38) |
+
+On by default: the native hint kernels and `HintGemm` (where exact), the fused build when `provision` gets
+`hint="local"` with `factory_pack=True`, prepared-store pickup (only with a verifying key), native `pack_ksk`, 1024-slot
+segments. Opt-in: `resume` (used by `pgw sdk prepare`). Tests: tests/hemask, tests/provision, tests/sdk, tests/service
+(1013 passed, 96 skipped; one SDK unit expectation fixed after the run). Open: an exact AVX2 int8 GEMM (~2x there),
+a shard-at-a-time public-check packer (the `source="hf"` path keeps 15 / 65 / 145 GB of bf16 checkpoint), a
+row-block masked-head derivation, baked 32B/72B pins.
