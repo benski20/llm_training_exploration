@@ -253,24 +253,42 @@ def client(a: argparse.Namespace) -> int:
     res: dict[str, Any] = {"preset": info["preset"], "gpu": info.get("gpu"), "server": info.get("server"),
                            "host": host, "rtt_us": _rtt_us(host, port), "runs": []}
     used = {"gpu": 0, "stub": 0}
-    for target, p, key in (("stub", stub_port, "stub_tickets"), ("gpu", port, "tickets")):
-        for c in concs:
+
+    def save() -> None:
+        if a.json:
+            Path(a.json).write_text(json.dumps(res, indent=1))
+
+    # One connection on both listeners first (they give the derived split, the main result), then the higher
+    # levels, each saved as it finishes: if the server's window ends during a level, what was measured is kept.
+    for c in concs:
+        for target, p, key in (("stub", stub_port, "stub_tickets"), ("gpu", port, "tickets")):
             tk = info[key][used[target]:used[target] + c]
             used[target] += c
-            r = _drive(info, host, p, tk, c, a.iters, a.spin_auto_us)
+            try:
+                r = _drive(info, host, p, tk, c, a.iters, a.spin_auto_us)
+            except Exception as exc:  # the listener is gone (window over): keep what was measured
+                res["incomplete"] = f"{target} at {c} connections: {type(exc).__name__}: {exc}"
+                print(json.dumps({"incomplete": res["incomplete"]}), flush=True)
+                break
             r["target"] = target
             res["runs"].append(r)
             print(json.dumps(r), flush=True)
-    by = {(r["target"], r["conc"]): r for r in res["runs"]}
-    if ("stub", 1) in by and ("gpu", 1) in by:
-        rtt = res["rtt_us"]
-        res["derived_1conn"] = {
-            "rtt_us": rtt, "transport_us": round(by[("stub", 1)]["trip_p50_us"] - rtt, 1),
-            "device_us": by[("gpu", 1)]["compute_p50_us"],
-            "lane_fixed_us": round(by[("gpu", 1)]["trip_p50_us"] - by[("gpu", 1)]["compute_p50_us"] - rtt, 1)}
-        print(json.dumps(res["derived_1conn"]), flush=True)
-    if a.json:
-        Path(a.json).write_text(json.dumps(res, indent=1))
+            by = {(x["target"], x["conc"]): x for x in res["runs"]}
+            if "derived_1conn" not in res and ("stub", 1) in by and ("gpu", 1) in by:
+                rtt = res["rtt_us"]
+                res["derived_1conn"] = {
+                    "rtt_us": rtt, "transport_us": round(by[("stub", 1)]["trip_p50_us"] - rtt, 1),
+                    "device_us": by[("gpu", 1)]["compute_p50_us"],
+                    "lane_fixed_us": round(by[("gpu", 1)]["trip_p50_us"] - by[("gpu", 1)]["compute_p50_us"]
+                                           - rtt, 1)}
+                print(json.dumps(res["derived_1conn"]), flush=True)
+            save()
+        if "incomplete" in res:
+            break
+    save()
+    # a window that ended after the one-connection pair still delivers the main result
+    if "derived_1conn" not in res:
+        return 1
     return 0
 
 
