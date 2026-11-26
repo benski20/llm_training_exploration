@@ -364,10 +364,15 @@ ITEM_OPS_PER_BLOCK = 871 + 8 * (28 + 13) + 2 * 13
 #: kernel gathers the int64 hint row, 32 KiB per row, and writes 16 uint32 transforms per 32 rows, 16 KiB per row;
 #: per group and prime the MAC + inverse kernel reads those transforms, 16 KiB per row, the keys stay in L2, and
 #: writes 1 KiB; the tail reads 4 KiB of residues and 2 KiB of ``y`` and writes 2 KiB per group), and
-#: ``FUSED_KS_ROW_OPS`` integer instructions (SASS of the sm_75 build: ~0.5 M per forward transform incl. the
-#: gather, ~1.0 M per MAC + inverse, ~0.4 M per tail of 8192 values). 9 launches per row block.
+#: ``FUSED_KS_ROW_OPS`` "SM work" in 32-bit-instruction equivalents, CALIBRATED on a Kaggle T4
+#: (``results/kaggle/pks-ntt-t4``: 1.066 us per forward transform incl. the gather, 2.53 us per MAC + inverse,
+#: 3.59 us per output row for 4 groups, at 8 warps; times :data:`T4_INT32_OPS_S`). The T4 ran at about 40 % of
+#: its memory bandwidth there, so the kernels are bound by the SMs (shuffles, shared-memory layout changes), not by
+#: HBM: other GPUs scale with SM count x clock. 9 launches per row block.
 FUSED_KS_ROW_BYTES = (4 * (32 + 16) * 1024, (4 * (16 + 1) + 8) * 1024)
-FUSED_KS_ROW_OPS = (4 * 16 * 0.5e6 / 32, (4 * 1.0e6 + 0.4e6) / 32)
+T4_INT32_OPS_S = 0.6 * 40 * 64 * 1.59e9  #: the T4's rate in the same convention as ``PksRates.int32_ops_s``
+FUSED_KS_ROW_OPS = (1.066e-6 * 16 * 4 / 32 * T4_INT32_OPS_S,
+                    (2.53e-6 * 4 / 32 + (3.59e-6 - 1.066e-6 * 16 * 4 / 32 - 4 * 2.53e-6 * 4 / 32) / 4) * T4_INT32_OPS_S)
 FUSED_KS_LAUNCHES = 9
 
 
@@ -388,8 +393,9 @@ class PksRates:
     host_native_switch_row_s: float = 0.115 / 4096  #: ``pgw_pks.switch_hint``, 4 threads (measured)
     host_amlwe_feature_s: float = 0.46 / 8192  #: ``pks.a_mlwe_rows`` numpy per input feature (measured)
     host_stream_bytes_s: float = 1.0e9  #: ``public_ring_rows`` ChaCha20, GIL held (measured)
-    #: 32-bit integer instructions per second of the fused NTT kernels: ~60 % of 132 SMs x 64 lanes x 1.83 GHz
-    int32_ops_s: float = 9.3e12
+    #: SM rate of the fused NTT kernels (32-bit-instruction equivalents per second): 60 % of 132 SMs x 64 lanes x
+    #: 1.83 GHz, the convention :data:`FUSED_KS_ROW_OPS` was calibrated in on a T4 (:data:`T4_INT32_OPS_S`)
+    int32_ops_s: float = 0.6 * 132 * 64 * 1.83e9
 
 
 H100_RATES = PksRates()

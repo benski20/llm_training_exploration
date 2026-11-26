@@ -143,7 +143,7 @@ def _fwd_kernel(HS, AH, Z, ZS, p, half, qp, c24, c24s, N: tl.constexpr, LOGN: tl
 
 
 @triton.jit
-def _mac_inv_kernel(AH, OPS, OUT, ZI, ZIS, p, pinv, scale, scales, G, N: tl.constexpr, LOGN: tl.constexpr,
+def _mac_inv_kernel(AH, OPS, OUT, ZI, ZIS, p, pinv, scale, scales, N: tl.constexpr, LOGN: tl.constexpr,
                     RK: tl.constexpr):
     """Program ``(b, g)``: ``OUT[g, b] = inv(sum_l AH[b, l] OPS[g, l])`` (``OPS``: ``(G, 16, N)`` uint32 key
     residues of this prime; ``scale = 2^32 / N mod p`` undoes the Montgomery factor and applies ``1/N``)."""
@@ -188,6 +188,10 @@ class Tables:
         self.pinv = pow(p, -1, 1 << 32)
         self.scale = (int(nt.ninv) << 32) % p
         self.scales = int(_shoup_of(self.scale, p))
+        # Triton turns an integer argument equal to 1 into a compile-time constant (no ``.to``): never the case for
+        # these primes, checked here so a new prime fails at once instead of at the first launch
+        if 1 in (p, self.half, self.qp, self.c24, self.c24s, self.pinv, self.scale, self.scales):
+            raise ValueError(f"fused NTT: a kernel constant of p = {p} is 1")
 
 
 @cache
@@ -231,7 +235,7 @@ def mac_inverse(ah: torch.Tensor, ops_p: torch.Tensor, p: int, out: torch.Tensor
     elif out.shape != (groups, nb, NR) or out.dtype != torch.uint32 or not out.is_contiguous():
         raise ValueError("fused NTT: bad output")
     _mac_inv_kernel[(groups, nb)](ah.contiguous(), ops_p.contiguous(), out, t.zi, t.zis, p, t.pinv, t.scale,
-                                  t.scales, groups, N=NR, LOGN=LOG_NR, RK=RANK, num_warps=_warps())
+                                  t.scales, N=NR, LOGN=LOG_NR, RK=RANK, num_warps=_warps())
     return out
 
 
@@ -255,7 +259,7 @@ def _round_q1(y, Q1: tl.constexpr):
 
 
 @triton.jit
-def _tail_kernel(RES, Y, OUT, NBLK, G, P0: tl.constexpr, P1: tl.constexpr, P2: tl.constexpr, P3: tl.constexpr,
+def _tail_kernel(RES, Y, OUT, P0: tl.constexpr, P1: tl.constexpr, P2: tl.constexpr, P3: tl.constexpr,
                  PM: tl.constexpr, Q1: tl.constexpr, YB: tl.constexpr, INV23: tl.constexpr, PMINV0: tl.constexpr,
                  PMINV1: tl.constexpr, INV01: tl.constexpr, N: tl.constexpr, PK: tl.constexpr, DD: tl.constexpr,
                  BLOCK: tl.constexpr):
@@ -264,6 +268,9 @@ def _tail_kernel(RES, Y, OUT, NBLK, G, P0: tl.constexpr, P1: tl.constexpr, P2: t
     pid = tl.program_id(0)
     b = tl.program_id(1)
     g = tl.program_id(2)
+    # the grid sizes, not integer arguments: Triton specializes an argument equal to 1 into a constant (G = 1)
+    NBLK = tl.num_programs(1)
+    G = tl.num_programs(2)
     i = pid * BLOCK + tl.arange(0, BLOCK)
     yoff = (b * PK + i % PK).to(tl.int64) * (G * DD) + g * DD + i // PK
     body = _round_q1(tl.load(Y + yoff), Q1)
@@ -323,7 +330,7 @@ def keyswitch(hs_t: torch.Tensor, ops_u: torch.Tensor, y_t: torch.Tensor) -> tor
     p0, p1, p2, p3 = pks.QP
     pm = par.pmod
     _tail_kernel[(NR // _TAIL_BLOCK, nb, groups)](
-        res, y_t.contiguous(), out, nb, groups, P0=p0, P1=p1, P2=p2, P3=p3, PM=pm, Q1=par.q1, YB=par.yb,
+        res, y_t.contiguous(), out, P0=p0, P1=p1, P2=p2, P3=p3, PM=pm, Q1=par.q1, YB=par.yb,
         INV23=pow(p2, -1, p3), PMINV0=pow(pm, -1, p0), PMINV1=pow(pm, -1, p1), INV01=pow(p0, -1, p1), N=NR, PK=PACK,
         DD=D, BLOCK=_TAIL_BLOCK, num_warps=4)
     return out
@@ -332,3 +339,34 @@ def keyswitch(hs_t: torch.Tensor, ops_u: torch.Tensor, y_t: torch.Tensor) -> tor
 def ops_u32(ops_t: torch.Tensor) -> torch.Tensor:
     """``(4, G, 16, 8192)`` uint32 per-prime key residues from the ``(G, 4, 16, 8192)`` int64 reply keys."""
     return ops_t.transpose(0, 1).to(torch.int32).view(torch.uint32).contiguous()
+
+
+def compile_for(arch: int, num_warps: int = 8) -> dict[str, int]:
+    """Compile the three kernels for CUDA compute capability ``arch`` (e.g. 75: T4, 90: H100) with their launch
+    signatures, without a GPU (Triton's bundled ptxas; not under ``TRITON_INTERPRET=1``). Returns the cubin bytes
+    per kernel. Catches what the interpreter cannot: Triton's front end and lowering."""
+    from triton.backends.compiler import GPUTarget
+    from triton.compiler import ASTSource
+
+    from pgw.hemask.pks import PKSParams
+
+    par = PKSParams()
+    p0, p1, p2, p3 = pks.QP
+    tail = dict(P0=p0, P1=p1, P2=p2, P3=p3, PM=par.pmod, Q1=par.q1, YB=par.yb, INV23=pow(p2, -1, p3),
+                PMINV0=pow(par.pmod, -1, p0), PMINV1=pow(par.pmod, -1, p1), INV01=pow(p0, -1, p1), N=NR, PK=PACK,
+                DD=D, BLOCK=_TAIL_BLOCK)
+    jobs = {
+        "fwd": (_fwd_kernel, {"HS": "*i64", "AH": "*u32", "Z": "*u32", "ZS": "*u32", "p": "i32", "half": "i64",
+                              "qp": "i32", "c24": "i32", "c24s": "i32"},
+                dict(N=NR, LOGN=LOG_NR, PK=PACK, RK=RANK, DD=D)),
+        "mac_inv": (_mac_inv_kernel, {"AH": "*u32", "OPS": "*u32", "OUT": "*u32", "ZI": "*u32", "ZIS": "*u32",
+                                      "p": "i32", "pinv": "i64", "scale": "i32", "scales": "i32"},
+                    dict(N=NR, LOGN=LOG_NR, RK=RANK)),
+        "tail": (_tail_kernel, {"RES": "*u32", "Y": "*i64", "OUT": "*i64"}, tail),
+    }
+    out = {}
+    for name, (fn, sig, cx) in jobs.items():
+        src = ASTSource(fn=fn, signature={**sig, **{k: "constexpr" for k in cx}}, constexprs=cx)
+        k = triton.compile(src, target=GPUTarget("cuda", arch, 32), options={"num_warps": num_warps})
+        out[name] = len(k.asm["cubin"])
+    return out

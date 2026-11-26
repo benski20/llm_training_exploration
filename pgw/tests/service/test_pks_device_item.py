@@ -395,10 +395,13 @@ def test_memplan_fused_ntt_key_switch(capsys: pytest.CaptureFixture[str]) -> Non
     torch_t = mp.pks_item_seconds(59136, 8192, 1024, "device", ntt="torch")
     fused_t = mp.pks_item_seconds(59136, 8192, 1024, "device", ntt="fused")
     assert torch_t == mp.pks_item_seconds(59136, 8192, 1024, "device")
-    assert fused_t["key_switch"] < torch_t["key_switch"] / 10
+    assert fused_t["key_switch"] < torch_t["key_switch"] / 5  # ~8x on an H100 (SM-bound; ~20x on the T4)
     assert max(fused_t, key=fused_t.__getitem__) == "hint_gemm_switch"
     assert {k: v for k, v in fused_t.items() if k != "key_switch"} == \
         {k: v for k, v in torch_t.items() if k != "key_switch"}
+    t4 = mp.PksRates(name="T4", hbm_bytes_s=0.7 * 320e9, int32_ops_s=mp.T4_INT32_OPS_S)
+    assert abs(mp.fused_keyswitch_row_seconds(4, t4) - 3.59e-6) < 0.01e-6  # the Kaggle T4 measurement
+    assert 0.5e-6 < mp.fused_keyswitch_row_seconds(4) < 1.5e-6  # H100: SM-bound, ~3.8x the T4
     with pytest.raises(ValueError, match="unknown ntt"):
         mp.pks_item_seconds(64, 64, 256, "device", ntt="cuda")
     for model in ("qwen2.5-7b", "qwen2.5-72b"):

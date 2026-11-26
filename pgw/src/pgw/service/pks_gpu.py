@@ -527,9 +527,9 @@ def _edge_hint_rows(rng: np.random.Generator, m: int) -> np.ndarray:
 
 def fused_self_test(dev: Any, seed: int = 11) -> None:
     """Raise unless the fused key switch (:func:`pgw.service.pks_ntt.keyswitch`) on ``dev`` equals the torch path
-    (:func:`_keyswitch_torch`) bit for bit: 96 rows (3 reply ciphertexts) x 2 groups of public random data with edge
-    values (hint rows at ``0``, ``q1 - 1`` and the centring boundary, ``y`` at ``0`` and ``2^56 - 1``, keys at ``0``
-    and ``p - 1``)."""
+    (:func:`_keyswitch_torch`) bit for bit: 96 rows (3 reply ciphertexts) x 2 groups and 32 rows x 1 group of public
+    random data with edge values (hint rows at ``0``, ``q1 - 1`` and the centring boundary, ``y`` at ``0`` and
+    ``2^56 - 1``, keys at ``0`` and ``p - 1``)."""
     from pgw.service import pks_ntt
 
     dev = torch.device(dev)
@@ -552,3 +552,8 @@ def fused_self_test(dev: Any, seed: int = 11) -> None:
     want = _keyswitch_torch(hs_t, keys.t, y_t)
     if not torch.equal(got.cpu(), want.cpu()):
         raise RuntimeError("pks-v3 fused NTT key switch does not match the torch path")
+    # one group and one reply ciphertext too: grid dimensions of 1 (Triton specializes arguments equal to 1)
+    k1 = _Keys(keys.t[1:])
+    got = pks_ntt.keyswitch(hs_t[:PACK], k1.u32(), y_t[:PACK, D:])
+    if not torch.equal(got.cpu(), _keyswitch_torch(hs_t[:PACK], k1.t, y_t[:PACK, D:]).cpu()):
+        raise RuntimeError("pks-v3 fused NTT key switch does not match the torch path (1 group)")

@@ -121,6 +121,27 @@ def test_fused_keyswitch_equals_torch_and_cpu(groups: int) -> None:
     assert np.array_equal(got.numpy().astype(np.uint64), want)
 
 
+@pytest.mark.parametrize("arch", [75, 90])
+def test_kernels_lower_for_cuda(arch: int) -> None:
+    """Every kernel compiles to a cubin for a T4 (sm_75) and an H100 (sm_90) with the launch signature, without a GPU
+    (Triton's bundled ptxas). The interpreter does not run Triton's front end: a T4 run found that an integer
+    argument equal to 1 (one group) became a compile-time constant there, so the kernels take no such argument and
+    :class:`pks_ntt.Tables` refuses constants equal to 1 (``pks_ntt.compile_for``, in a process without the
+    interpreter)."""
+    import json
+    import subprocess
+    import sys
+
+    code = f"import json; from pgw.service import pks_ntt; print(json.dumps(pks_ntt.compile_for({arch})))"
+    env = dict(os.environ, TRITON_INTERPRET="0")
+    r = subprocess.run([sys.executable, "-c", code], env=env, capture_output=True, text=True, timeout=600)  # noqa: S603
+    if r.returncode and ("ptxas" in r.stderr.lower() or "No module named 'triton.backends" in r.stderr):
+        pytest.skip(f"no CUDA compiler toolchain in this Triton: {r.stderr[-300:]}")
+    assert r.returncode == 0, r.stderr[-3000:]
+    sizes = json.loads(r.stdout.strip().splitlines()[-1])
+    assert set(sizes) == {"fwd", "mac_inv", "tail"} and all(v > 0 for v in sizes.values())
+
+
 def test_fused_self_test_passes() -> None:
     pks_gpu.fused_self_test(DEV)
 
@@ -162,10 +183,10 @@ def test_auto_selection_and_permanent_fallback(monkeypatch: pytest.MonkeyPatch) 
     assert pks_gpu.ntt_impl("cuda:0") == "torch"
     # auto with the fused kernels chosen: an error falls back to torch (same bits) and stays there
     monkeypatch.delenv("PGW_SERVICE_PKS_GPU_NTT")
-    key = str(DEV)
-    pks_gpu._ntt_choice[key] = "fused"
     rng = np.random.default_rng(4)
     hs = torch.from_numpy(rng.integers(0, PAR.q1, (PACK, NU), dtype=np.int64)).to(DEV)
+    key = str(hs.device)  # "cuda:0", not "cuda"
+    pks_gpu._ntt_choice[key] = "fused"
     y = torch.from_numpy(rng.integers(0, 1 << 56, (PACK, D), dtype=np.int64)).to(DEV)
     ops = torch.from_numpy(np.stack([rng.integers(0, p, (RANK, NR), dtype=np.int64) for p in pks.QP])[None]).to(DEV)
     want = pks_gpu._keyswitch_torch(hs, ops, y)

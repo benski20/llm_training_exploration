@@ -2263,3 +2263,129 @@ Tests:
   `tests/service/test_maskgen_budget.py` (5 tests).
 - New settings: `PGW_SERVICE_PKS_DEVICE_HINT` (default `auto`) and `PGW_SERVICE_MASKGEN_DEVICE_MB` (default off).
 - No GPU or cloud spend.
+
+
+## 2026-11-26 — pks-v3 provider key switch: fused Triton NTTs (`PGW_SERVICE_PKS_GPU_NTT`)
+
+Problem (section above): with the hint on the device, the torch key switch was ~56 of 92 s per 1024-slot cycle at
+72B on an H100 (estimate). It runs 16 + G negacyclic NTTs of 8192 points per 32 output rows and prime as ~90 eager
+int64 operators each.
+
+**Kernels** (`pgw.service.pks_ntt`, Triton; one program per polynomial, all 13 butterfly stages on chip):
+1. `forward` (one launch per prime): gathers the centred operand `A~[b, l, 32 u + j] = hs[32 b + j, 256 l + u]`
+   straight from the switched hint rows, reduces it mod p, runs the Cooley-Tukey stages of `pks.Ntt.fwd`
+   (bit-reversed output) and stores uint32.
+2. `mac_inverse` (one launch per prime): per (reply ciphertext, group) the 16 key products, their sum and the
+   Gentleman-Sande stages of `pks.Ntt.inv`.
+3. `tail` (one launch): body `round(y q1 / 2^56)`, ModDown, CRT and the 36-bit reply rounding, the same int64
+   arithmetic as the torch tail, in one pass over the reply.
+
+Arithmetic, all integer, exact for the four primes (2^23 < p < 2^30):
+- twiddle products: Shoup (`w' = floor(w 2^32 / p)`, one `umulhi`, result in `[0, 2p)`, one conditional subtract);
+- key products: Montgomery (R = 2^32); the summed factor 2^-32 and 1/8192 are undone by one Shoup scale
+  `2^32 / 8192 mod p`;
+- input reduction of `hs < 2^48`: 24-bit halves (both below 2p) and a Shoup product by `2^24 mod p`.
+
+Every value is a canonical residue, so the result is the same linear map mod p as `pks.Ntt`: bit-identical. The
+scheme, the wire and the replies are unchanged, and the provider sees the same data as before.
+
+**Selection** (`pgw.service.pks_gpu.ntt_mode` / `ntt_impl`, `PGW_SERVICE_PKS_GPU_NTT`):
+- `auto` (default): fused on a CUDA device only after `fused_self_test` matched the torch path bit for bit there.
+  The self-test uses 96 rows x 2 groups plus 32 rows x 1 group, with edge values: hint rows at 0, q1 - 1 and the
+  centring boundary, y at 0 and 2^56 - 1, keys at 0 and p - 1. Any mismatch or error, at the self-test or later,
+  falls back to torch for that device for good (same bits). Other devices use torch.
+- `torch` / `fused` force one; under `fused`, errors propagate.
+- The existing self-tests (`self_test`, `item_self_test`) also run through the chosen path.
+
+**Exactness evidence**
+- CPU, Triton interpreter (`tests/service/test_pks_ntt.py`, 21 tests, ~4 min here):
+  - forward and MAC + inverse equal `pks.Ntt` on every prime. Inputs are random plus edges: 0, q1 - 1, the
+    centring boundary, 2^24 +- 1, whole ciphertexts at the boundary and at q1 - 1, keys all p - 1, alternating zeros.
+  - the unit vector `X^k` in each of the first 64 slots, and -1 = q1 - 1 the same way; the round trip inv(fwd(x)) = x.
+  - fused key switch = torch key switch = CPU key switch (`pks_native.keyswitch`) for 1 and 2 groups.
+  - `pks_gpu.item` with fused NTTs = the host path.
+  - the self-test passes and detects a one-bit error.
+  - auto / torch / fused selection and the permanent fallback.
+  - all three kernels compile to sm_75 and sm_90 cubins without a GPU (`pks_ntt.compile_for`).
+- Kaggle T4 (`pgw-pks-ntt-t4`, torch 2.11 + cu130, Triton 3.6; one kernel, 36 min; raw files in
+  `results/kaggle/pks-ntt-t4`):
+  - The bench's exactness section passed in full:
+    - forward and MAC + inverse equal `pks.Ntt` on all 4 primes;
+    - fused key switch = torch = CPU on 96 rows x 2 groups with edges;
+    - `fused_self_test` passed;
+    - 2048 rows x 4 groups: fused = torch.
+  - pytest on CUDA: 17 of 19 passed, including `pks_gpu.item` with fused NTTs = host path.
+  - The 2 failures are fixed:
+    - **One group did not compile.** Triton turns an integer argument equal to 1 into a compile-time constant, and
+      the tail kernel called `G.to(...)` on it. The interpreter never runs that front end. The kernels now read
+      grid sizes instead of such arguments, and `Tables` refuses constants equal to 1. `auto` would have caught it:
+      the first one-group item would have fallen back to torch for good.
+    - **A test keyed `cuda` instead of `cuda:0`.**
+
+**T4 speed** (measured, 8 warps; 4 and 16 warps were slower):
+
+| | torch | fused |
+|---|---|---|
+| forward NTT (us per transform) | 29.8 | 1.07 (includes the gather) |
+| inverse NTT (us per transform) | 31.2 (inverse only) | 2.53 (includes the 16 key products) |
+| key switch, 4 groups (us per output row) | not measured (see below) | 3.59 |
+
+- The torch key switch was not timed end to end on the T4: that section ran one group first and hit the compile
+  error. Its NTTs alone come to >= 75 us per row (4 x (16 x 29.8 + 4 x 31.2) / 32), so fused is >= 20x faster.
+- Key-switch seconds per 1024-column item at the largest linears (fused = m x 3.59 us; torch >= m x 75 us):
+
+| model | linear | fused (s) | torch (s) |
+|---|---|---|---|
+| 7B | gate_up | 0.14 | >= 2.8 |
+| 7B | down | 0.013 | >= 0.27 |
+| 7B | head | 0.55 | >= 11.4 |
+| 32B | gate_up | 0.20 | >= 4.2 |
+| 72B | gate_up | 0.21 | >= 4.4 |
+| 72B | down | 0.029 | >= 0.62 |
+
+- Whole cycle: 5.5 / 17 / 25 s (7B / 32B / 72B) against >= 116 / 361 / 527 s.
+- Whole items (torch vs fused through `PKSProvider`) were not measured. With the one-group bug, the device path's
+  self-test failed, and the bench fell back to the host path and ran out of time. The RunPod session measures them.
+- The kernels are bound by the SMs, not HBM: the T4 moved ~0.5 MB per row at 3.59 us, ~40 % of its bandwidth.
+
+**H100, ESTIMATES** (`python -m pgw.service.memplan --pks-throughput`, now `--pks-ntt fused` by default):
+- The fused model is calibrated on the T4 numbers and scaled by SM count x clock (3.8x): 0.95 us per output row
+  for 4 groups. That is ~8x less than the torch model's 7.9 us. Memory traffic would allow 0.22 us.
+- Device-hint path, slots/s (before -> after):
+  - 7B: 53 -> 119;
+  - 32B: 16.6 -> 37;
+  - 72B: 11.1 -> 24 (92 -> 43 s per cycle).
+- Key switch per cycle at 72B: 56 -> 6.6 s.
+- The previous section's ~150 slots/s at 72B assumed only the GEMMs would remain. They do not. What is left at 72B:
+
+| stage | s per cycle |
+|---|---|
+| hint switch + recombination (eager int64 torch, 628 B per hint value) | 18.6 |
+| host ChaCha20 of the ring rows | 8.9 |
+| key switch | 6.6 |
+| uploads | 4.4 |
+| reply copy back | 2.9 |
+| GEMMs | 1.3 |
+
+- So NTTs no longer bound mask throughput. Next levers, in order:
+  1. a fused hint switch + plane recombination kernel (~36 B instead of 628 B per value);
+  2. the ring-row stream off the GIL (or on the device);
+  3. in the forward kernel, a coalesced gather (it now reads 32 hint rows per warp access) and all 4 primes per
+     program (one hint read instead of 4);
+  4. pinned uploads.
+
+**Wiring:**
+- `memplan`: `MemConfig.pks_ntt` and `--pks-ntt torch|fused`; `pks_item_seconds(..., ntt=)`;
+  `fused_keyswitch_row_seconds`; `FUSED_KS_ROW_BYTES` / `FUSED_KS_ROW_OPS`, calibrated on the T4.
+- RunPod `maskgen` phase (now ~25 min): device items at every work budget under `auto`, which records the NTT in
+  use, plus one torch-NTT run at 512 MB. Replies must be byte-identical, next to the torch and fused estimates.
+- Kaggle job `pgw-pks-ntt-t4` (`benchmarks/kaggle/build.py`, 0.5 MB bundle) and `benchmarks/pks_ntt_bench.py`.
+  Rerunning it, ~25 min, would give the missing torch end-to-end and item numbers; it was not rerun, per the
+  one-kernel budget.
+
+Tests:
+- `tests/service` full: 510 passed, 77 skipped (CUDA), before the T4 fixes.
+- After the fixes: `tests/service/test_pks_ntt.py` 21 passed, `tests/service/test_pks_device_item.py` 20 passed, and
+  `tests/benchmarks/test_provider_perf_tools.py` 2 passed.
+- New setting: `PGW_SERVICE_PKS_GPU_NTT` (default `auto`); `PGW_SERVICE_PKS_NTT_WARPS` (default 8) is for tuning.
+- Cloud spend: one Kaggle T4 kernel (36 min).
