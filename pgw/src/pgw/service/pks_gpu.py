@@ -96,11 +96,50 @@ def _round_pow2_div(x: torch.Tensor, bits: int, q: int) -> torch.Tensor:
     return quo
 
 
-def keyswitch(hs: np.ndarray, ops: np.ndarray, y: np.ndarray, dev: Any) -> np.ndarray:
-    """Reply ``(G, m/32, 8192)`` uint64, equal to :func:`pgw.hemask.pks_native.keyswitch` (reply form)."""
-    q1, pm = _PAR.q1, _PAR.pmod
+#: Device working memory of one key-switch call before its output rows are split into blocks
+#: (``PGW_SERVICE_PKS_GPU_WORK_MB``). Every reply ciphertext (32 output rows) is computed independently.
+WORK_BYTES = 512 << 20
+
+
+def _block_bytes(groups: int) -> int:
+    """Approximate peak device bytes per reply ciphertext (32 rows): the hint rows (4096 int64 each) and their
+    copies and NTTs (~8x), the per-group products (2G x), the rows of ``y`` (3 x 256 G int64 each)."""
+    return PACK * NU * 8 * (8 + 2 * groups) + PACK * D * groups * 8 * 3
+
+
+def _work_bytes() -> int:
+    import os
+
+    raw = (os.environ.get("PGW_SERVICE_PKS_GPU_WORK_MB") or "").strip()
+    return (max(16, int(raw)) << 20) if raw else WORK_BYTES
+
+
+def keyswitch(hs: np.ndarray, ops: np.ndarray, y: np.ndarray, dev: Any, *, work_bytes: int | None = None) -> np.ndarray:
+    """Reply ``(G, m/32, 8192)`` uint64, equal to :func:`pgw.hemask.pks_native.keyswitch` (reply form).
+
+    Output rows go in blocks of whole reply ciphertexts so the device working memory stays near ``work_bytes``
+    (:data:`WORK_BYTES`): unblocked, one item held ~``(8 + 2G) x 32 KiB`` per output row at once (e.g. ~19 GB
+    for a 4-group item of 72B's gate_up, ~50 GB for 7B's 152k-row masked head). Bit-identical: every reply
+    ciphertext depends only on its own 32 hint rows and 32 rows of ``y``."""
     m = hs.shape[0]
     nb, groups = m // PACK, ops.shape[0]
+    budget = _work_bytes() if work_bytes is None else int(work_bytes)
+    step = max(1, budget // _block_bytes(groups))
+    ops_t = torch.from_numpy(np.ascontiguousarray(ops).astype(np.int64)).to(dev)
+    if step >= nb:
+        return _keyswitch_rows(hs, ops_t, y, dev)
+    out = np.empty((groups, nb, NR), dtype=np.uint64)
+    for b0 in range(0, nb, step):
+        b1 = min(nb, b0 + step)
+        r0, r1 = b0 * PACK, b1 * PACK
+        out[:, b0:b1] = _keyswitch_rows(hs[r0:r1], ops_t, y[r0:r1], dev)
+    return out
+
+
+def _keyswitch_rows(hs: np.ndarray, ops_t: torch.Tensor, y: np.ndarray, dev: Any) -> np.ndarray:
+    q1, pm = _PAR.q1, _PAR.pmod
+    m = hs.shape[0]
+    nb, groups = m // PACK, ops_t.shape[0]
     hs_t = torch.from_numpy(np.ascontiguousarray(hs).view(np.int64)).to(dev)
     # A~[b, l, 32 u + j] = hs[32 b + j, 256 l + u], centred
     at = hs_t.view(nb, PACK, RANK, D).permute(0, 2, 3, 1).reshape(nb, RANK, NR)
@@ -108,7 +147,6 @@ def keyswitch(hs: np.ndarray, ops: np.ndarray, y: np.ndarray, dev: Any) -> np.nd
     y_t = torch.from_numpy(np.ascontiguousarray(y & np.uint64((1 << 56) - 1)).view(np.int64)).to(dev)
     ys = _round_mul_shift(y_t, q1, 56) % q1  # (m, 256 G)
     body = ys.view(nb, PACK, groups, D).permute(2, 0, 3, 1).reshape(groups, nb, NR)
-    ops_t = torch.from_numpy(np.ascontiguousarray(ops).astype(np.int64)).to(dev)
     res = []
     for i, p in enumerate(pks.QP):
         z, zi, ninv = _dev_tables(p, dev)

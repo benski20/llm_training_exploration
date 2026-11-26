@@ -344,11 +344,14 @@ def maskgen_device(wpad: torch.Tensor, m: int, n: int, dev_data: torch.Tensor, c
         for d, (src, j) in enumerate(srcs):
             torch.bitwise_xor(src[:, c0:c0 + cb, j].t(), 0x80, out=planes[d, :cb, :n])
         part = torch._int_mm(wpad, planes.view(torch.int8).view(nb * cbp, np_).t()).view(mp, nb, cbp)
+        del planes
         y = combine(part, m, cb, const, fused=fused)
+        del part  # (the previous block's planes/partials stayed referenced while the next block allocated)
         if b_bits:
             pack_v2_block(y, b_bits, y_bits, out, cols, c0)
         else:
             out[:, c0:c0 + cb] = y.view(torch.uint8).view(m, cb, 8)[:, :, ylo:yhi]
+        del y
         if after_block is not None:
             after_block()
     return out.view(-1)

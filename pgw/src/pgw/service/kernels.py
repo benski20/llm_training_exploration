@@ -199,6 +199,32 @@ def _maskgen_block_tn(wpad: torch.Tensor, raw: torch.Tensor, m: int, n: int, con
     return y.view(torch.uint8).view(m, cb, 8)[:, :, ylo:yhi]
 
 
+#: Largest maskgen result (bytes) :meth:`ComputeKernel.mulmod64` keeps whole on the device before copying it
+#: back; larger ones are copied back per column block (:func:`_maskgen_blocks_to_host`).
+MASKGEN_OUT_DEVICE_BYTES = 256 << 20
+
+
+def _maskgen_blocks_to_host(wpad: torch.Tensor, draw: torch.Tensor, m: int, n: int, const: torch.Tensor,
+                            ylo: int, yhi: int, step: int, *, pinned: bool = False) -> np.ndarray:
+    """``(m, cols, yhi - ylo)`` uint8 host array of :func:`_maskgen_block_tn` over column blocks of ``step``,
+    each block copied to the host as soon as it is computed (device memory: one block). Device agnostic (the
+    CPU tests run it); ``pinned`` stages each block in pinned memory (CUDA)."""
+    cols = int(draw.shape[1])
+    nbo = yhi - ylo
+    res = np.empty((m, cols, nbo), dtype=np.uint8)
+    stage: torch.Tensor | None = None
+    for c0 in range(0, cols, step):
+        cb = min(step, cols - c0)
+        blk = _maskgen_block_tn(wpad, draw[:, c0:c0 + cb], m, n, const, ylo, yhi)
+        if stage is None or stage.numel() < m * cb * nbo:
+            stage = torch.empty(m * cb * nbo, dtype=torch.uint8, pin_memory=pinned)
+        sv = stage[: m * cb * nbo].view(m, cb, nbo)
+        sv.copy_(blk)  # device to host: waits for the block
+        res[:, c0:c0 + cb] = sv.numpy()
+        del blk
+    return res
+
+
 _STREAMS: dict[torch.device, list[torch.cuda.Stream]] = {}
 _STREAMS_LOCK = threading.Lock()
 
@@ -613,8 +639,14 @@ class ComputeKernel:
                 host = torch.empty((n, cols, nb), dtype=torch.uint8, pin_memory=True)
                 host.numpy()[...] = raw  # the only host-side pass over the request bytes
                 draw = host.to(dev, non_blocking=True)
-                dout = torch.empty((m, cols, nbo), dtype=torch.uint8, device=dev)
                 step = _maskgen_block_cols(mp, nb, cols, MASKGEN_PART_BYTES_CUDA, 32)
+                if m * cols * nbo > MASKGEN_OUT_DEVICE_BYTES:
+                    # a large result (the pks-v3 hint build: (m, 4096, 8) bytes, 5 GB for 7B's masked head) goes
+                    # to the host block by block instead of being held whole on the device
+                    out = _maskgen_blocks_to_host(wpad, draw, m, n, const, ylo, yhi, step, pinned=True)
+                    stream.synchronize()
+                    return out
+                dout = torch.empty((m, cols, nbo), dtype=torch.uint8, device=dev)
                 for c0 in range(0, cols, step):
                     cb = min(step, cols - c0)
                     dout[:, c0:c0 + cb] = _maskgen_block_tn(wpad, draw[:, c0:c0 + cb], m, n, const, ylo, yhi)
