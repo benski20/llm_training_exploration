@@ -862,7 +862,7 @@ def _full_from_hf(hf_repo: str, man_hint: Manifest | None, fp: str | None, work:
                                 allow_patterns=["*.json", "*.safetensors", "tokenizer*", "*.txt", "*.model"])
     out = work / "full"
     shutil.rmtree(out, ignore_errors=True)
-    pack_checkpoint(src, out, name=name, revision=revision, plain_dtype=plain_dtype or "float32",  # type: ignore[arg-type]
+    pack_checkpoint(src, out, name=name, revision=revision, plain_dtype=plain_dtype or "source",  # type: ignore[arg-type]
                     license=man_hint.source.license if man_hint is not None else None)
     full = ModelPack.open(out, verify="full")
     if fp is not None and full.fingerprint != fp:

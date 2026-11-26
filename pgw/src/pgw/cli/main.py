@@ -126,8 +126,9 @@ def doctor(role: str, pack_path: Path | None, ring: str | None, maskstore_root: 
 @click.argument("out_dir", type=click.Path(path_type=Path))
 @click.option("--name", default=None, help="Served model name (default: derived from source)")
 @click.option("--revision", default=None, help="Hub revision (branch, tag or commit)")
-@click.option("--plain-dtype", type=click.Choice(["float32", "float16", "bfloat16"]), default="float32",
-              show_default=True, help="dtype of embeddings / LM head in plain.safetensors")
+@click.option("--plain-dtype", type=click.Choice(["source", "float32", "float16", "bfloat16"]), default="source",
+              show_default=True, help="dtype of embeddings / LM head in plain.safetensors: 'source' keeps a bfloat16 "
+              "checkpoint's bfloat16 (pack format 2, exact); float32 reproduces format-1 packs")
 @click.option("--shard-gib", type=float, default=2.0, show_default=True, help="Max size of a linears shard")
 @click.option("--license", "license_", default=None, help="License identifier recorded in the manifest")
 @click.option("--overwrite", is_flag=True, help="Replace an existing pack directory")

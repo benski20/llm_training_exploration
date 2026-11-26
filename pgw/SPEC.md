@@ -608,6 +608,13 @@ no provider involvement. Derivation (7.3), segment format (7.2) and delivery are
 The service and factory need only the `linears` shards. The gateway needs only `plain` and
 `tokenizer`, plus `linears` for the `plain` and `float` dev modes.
 
+Pack format (`manifest.version`, covered by the fingerprint): **2** (default, `quant.plain_dtype = "source"`)
+stores `embed_tokens` / `lm_head` per tensor in the checkpoint's dtype when it is bfloat16 (its bytes, unconverted),
+else float32; each tensor's `dtype` entry records the choice. Norms are float32. Loaders widen to float32, which is
+exact, so all computation is bit-identical to format **1** (`plain_dtype` one of float32 / float16 / bfloat16 for
+both), which is still written on request (`plain_dtype="float32"` reproduces the earlier fingerprints) and loaded.
+An unknown version is refused with a "re-provision" message.
+
 ### 8.2 Architecture mapping
 `pgw.modelpack.arch.HF_LINEAR_PARTS` is normative: `qkv` rows = [q_proj; k_proj; v_proj], `gate_up` rows =
 [gate_proj; up_proj]. Each `LinearEntry.parts` records `row_start` and `rows` so the engine can split

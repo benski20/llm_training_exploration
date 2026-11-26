@@ -436,9 +436,9 @@ provision(model, *, session: pgw.sdk.session.Session, cache_dir: Path, progress:
 
 * **Pins.** The provider's catalog is never trusted alone. `PINNED_MODELS` pins every supported model to its public
   checkpoint (repo, commit = `deploy/runpod/pod_boot.MODELS`) and, where derived for the release, its pack
-  fingerprint (0.5B `915e55c1...`, 1.5B `81bb7adc...`, 3B `a8e7bac9...`, 7B `d3db0ca8...`:
+  fingerprint (0.5B `d773a502...`, 1.5B `3d198de4...`, 3B `0ec0b8b2...`, 7B `f7c6fb4f...`:
   `scripts/pin_model_fingerprints.py`, i.e. `pgw pack <repo> --revision <commit> --name <model>` with default
-  parameters; 3B / 7B derived on a Kaggle CPU kernel, where 0.5B / 1.5B re-derived to the integration box's values;
+  parameters, pack format 2; derived on a Kaggle CPU kernel, 0.5B / 1.5B also on the integration box, identical;
   the 0.5B pin is also re-derived and checked by `tests/sdk/test_e2e_product.py` when the checkpoint is cached). A
   provider serving another fingerprint is refused (`FingerprintMismatchError`) before any download. A pin without a
   fingerprint (a future model; every release model has one) is checked on first use instead: the entry's

@@ -22,7 +22,9 @@ from pgw.modelpack.manifest import (
     MANIFEST_FILE,
     PACK_FORMAT,
     PACK_VERSION,
+    PACK_VERSIONS,
     PLAIN_FILE,
+    SOURCE_PLAIN_DTYPE,
     TOKENIZER_DIR,
     ArchConfig,
     LinearEntry,
@@ -37,7 +39,7 @@ from pgw.modelpack.packer import TOKENIZER_FILES, CheckpointReader, pack_checkpo
 
 __all__ = [
     "COMPONENTS", "HF_LINEAR_PARTS", "HF_PLAIN_TENSORS", "MANIFEST_FILE", "PACK_FORMAT", "PACK_VERSION",
-    "PLAIN_FILE", "TOKENIZER_DIR", "TOKENIZER_FILES",
+    "PACK_VERSIONS", "PLAIN_FILE", "SOURCE_PLAIN_DTYPE", "TOKENIZER_DIR", "TOKENIZER_FILES",
     "ArchConfig", "CheckpointReader", "Component", "LinearEntry", "LinearMeta", "LinearPart", "LinearWeights",
     "Manifest",
     "ModelPack", "QuantConfig", "SourceInfo", "TensorEntry", "TokenizerFile", "VerifyMode",

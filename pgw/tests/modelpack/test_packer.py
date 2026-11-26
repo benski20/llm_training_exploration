@@ -199,7 +199,8 @@ def test_bf16_checkpoint(tiny_hf_dir, tmp_path):
     w = torch.cat([sd[n].to(torch.bfloat16) for _, n, _ in hf_linear_parts("qwen2", 0, "qkv")])
     w8, sw = quantize_weight_rows(w)
     assert torch.equal(pack.load_linear("0.qkv").w8, w8) and torch.equal(pack.load_linear("0.qkv").scale, sw)
-    assert m.tensors["embed_tokens"].dtype == "float32"
+    assert m.version == 2 and m.tensors["embed_tokens"].dtype == "bfloat16"  # format 2: the source dtype
+    assert torch.equal(pack.load_plain("embed_tokens"), sd["model.embed_tokens.weight"].to(torch.bfloat16).float())
 
 
 def test_existing_output_requires_overwrite(tiny_hf_dir, tmp_path):

@@ -4,7 +4,7 @@ Pack directory layout (SPEC.md section 8.1)::
 
     <pack>/manifest.json                 this schema (canonical JSON not required on disk)
     <pack>/linears-00000-of-0000N.safetensors   int8 weights, float32 scales, float32 biases
-    <pack>/plain.safetensors             embeddings, norms, lm_head (plain_dtype)
+    <pack>/plain.safetensors             embeddings, norms, lm_head (see "Format versions")
     <pack>/tokenizer/...                 tokenizer files copied from the checkpoint
 
 Tensor naming inside safetensors files:
@@ -14,6 +14,18 @@ Tensor naming inside safetensors files:
 * ``linears.<id>.bias``    float32 ``(m,)``    only if the group has a bias
 * ``embed_tokens``, ``final_norm``, ``lm_head`` (absent if tied), ``layers.<i>.input_norm``,
   ``layers.<i>.post_attn_norm``
+
+Format versions (``manifest.version``; covered by the fingerprint):
+
+* **1**: ``embed_tokens`` / ``lm_head`` stored in ``quant.plain_dtype`` (``float32``, or an explicit ``float16`` /
+  ``bfloat16`` conversion). Still written by ``pack_checkpoint(..., plain_dtype="float32")`` etc., so every
+  version-1 fingerprint stays reproducible, and still loaded.
+* **2** (the default since 2026-11): ``quant.plain_dtype == "source"``. ``embed_tokens`` / ``lm_head`` are stored
+  per tensor in the checkpoint's own dtype when that is ``bfloat16`` (the checkpoint's bytes, unconverted), else in
+  ``float32`` (exact for float16 and float32 sources). The choice is each tensor's ``dtype`` entry. Loaders widen
+  to float32 (:meth:`pgw.modelpack.ModelPack.load_plain`); widening bfloat16 is exact, so every float32 value
+  computed with is bit-identical to a version-1 float32 pack of the same checkpoint, at half the bytes. Norms are
+  float32 in both versions.
 """
 
 from __future__ import annotations
@@ -32,7 +44,9 @@ __all__ = [
     "MANIFEST_FILE",
     "PACK_FORMAT",
     "PACK_VERSION",
+    "PACK_VERSIONS",
     "PLAIN_FILE",
+    "SOURCE_PLAIN_DTYPE",
     "TOKENIZER_DIR",
     "ArchConfig",
     "LinearEntry",
@@ -50,7 +64,14 @@ TOKENIZER_DIR = "tokenizer"
 _HEX64 = r"^[0-9a-f]{64}$"
 _SAFE_REL = r"^[A-Za-z0-9._-][A-Za-z0-9._/-]*$"
 PACK_FORMAT: Literal["pgw-modelpack"] = "pgw-modelpack"
-PACK_VERSION: Literal[1] = 1
+#: Format version written by default (``plain_dtype="source"``); see the module docstring.
+PACK_VERSION: Literal[2] = 2
+#: Every format version this library loads.
+PACK_VERSIONS: tuple[int, ...] = (1, 2)
+#: ``quant.plain_dtype`` of a version-2 pack: embeddings / LM head in the checkpoint's dtype, per tensor.
+SOURCE_PLAIN_DTYPE: Literal["source"] = "source"
+#: Dtypes a version-2 pack may store ``embed_tokens`` / ``lm_head`` in.
+SOURCE_STORAGE_DTYPES: tuple[str, ...] = ("bfloat16", "float32")
 
 _STRICT = ConfigDict(extra="forbid", frozen=True)
 
@@ -181,7 +202,11 @@ class QuantConfig(BaseModel):
 
     model_config = _STRICT
     weights: Literal["int8-per-row-symmetric"] = "int8-per-row-symmetric"
-    plain_dtype: Literal["float32", "float16", "bfloat16"] = "float32"
+    plain_dtype: Literal["float32", "float16", "bfloat16", "source"] = Field(
+        default="float32",
+        description="Storage of embed_tokens / lm_head: one dtype for both (format 1), or 'source' (format 2: each "
+        "tensor in the checkpoint's dtype when bfloat16, else float32; recorded in its tensor entry)",
+    )
 
 
 class SourceInfo(BaseModel):
@@ -214,7 +239,7 @@ class Manifest(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
     format: Literal["pgw-modelpack"] = PACK_FORMAT
-    version: Literal[1] = PACK_VERSION
+    version: Literal[1, 2] = PACK_VERSION
     name: str = Field(min_length=1, description="Served model name, e.g. 'qwen2.5-0.5b-instruct'")
     source: SourceInfo
     arch: ArchConfig
@@ -226,6 +251,26 @@ class Manifest(BaseModel):
     created_at: str | None = None
     tool: str | None = None
     notes: str | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _default_version(cls, data: Any) -> Any:
+        """Without an explicit ``version`` (constructed in code), the one ``quant.plain_dtype`` implies."""
+        if isinstance(data, dict) and "version" not in data:
+            q = data.get("quant")
+            pd = q.get("plain_dtype") if isinstance(q, dict) else getattr(q, "plain_dtype", None)
+            data = {**data, "version": 2 if pd == SOURCE_PLAIN_DTYPE else 1}
+        return data
+
+    @model_validator(mode="after")
+    def _version_matches_plain_storage(self) -> Manifest:
+        source = self.quant.plain_dtype == SOURCE_PLAIN_DTYPE
+        if source != (self.version == 2):
+            raise ValueError(
+                f"pack format version {self.version} with quant.plain_dtype {self.quant.plain_dtype!r}: version 2 "
+                "means plain_dtype 'source' and version 1 any other plain_dtype"
+            )
+        return self
 
     # ---- fingerprint ---------------------------------------------------------------------
     def semantic_dict(self) -> dict[str, Any]:
@@ -341,14 +386,17 @@ class Manifest(BaseModel):
             if e.bias is not None:
                 tensor(e.bias, "float32", (m,))
         floats = ("float32", "float16", "bfloat16")
+        # format 2: the embeddings / head in their source dtype (bfloat16) or float32; norms float32
+        big = SOURCE_STORAGE_DTYPES if self.version == 2 else floats
+        small = ("float32",) if self.version == 2 else floats
         h = a.hidden_size
-        tensor("embed_tokens", floats, (a.vocab_size, h))
-        tensor("final_norm", floats, (h,))
+        tensor("embed_tokens", big, (a.vocab_size, h))
+        tensor("final_norm", small, (h,))
         if not a.tie_word_embeddings:
-            tensor("lm_head", floats, (a.vocab_size, h))
+            tensor("lm_head", big, (a.vocab_size, h))
         for i in range(a.num_layers):
-            tensor(f"layers.{i}.input_norm", floats, (h,))
-            tensor(f"layers.{i}.post_attn_norm", floats, (h,))
+            tensor(f"layers.{i}.input_norm", small, (h,))
+            tensor(f"layers.{i}.post_attn_norm", small, (h,))
         referenced = set(self.plain_tensor_names())
         for e in self.linears:
             referenced.update(t for t in (e.weight, e.scale, e.bias) if t is not None)
@@ -381,6 +429,7 @@ class Manifest(BaseModel):
             raise ConfigError(f"no model pack manifest at {p}", details={"path": str(p)}) from exc
         except (OSError, UnicodeDecodeError) as exc:
             raise ConfigError(f"cannot read model pack manifest {p}: {exc}") from exc
+        _check_version(text, p)
         try:
             return cls.model_validate_json(text)
         except ValidationError as exc:
@@ -388,6 +437,24 @@ class Manifest(BaseModel):
                 f"invalid model pack manifest {p}: {exc.error_count()} error(s): {exc.errors()[0]['msg']}",
                 details={"path": str(p)},
             ) from exc
+
+
+def _check_version(text: str, p: Path) -> None:
+    """A clear error for a pack format version this library does not know (instead of a schema error)."""
+    try:
+        raw = json.loads(text)
+    except ValueError:
+        return  # reported by the schema validation
+    if not isinstance(raw, dict) or raw.get("format") != PACK_FORMAT:
+        return
+    v = raw.get("version")
+    if isinstance(v, int) and not isinstance(v, bool) and v not in PACK_VERSIONS:
+        raise ConfigError(
+            f"model pack {p.parent.name} uses pack format version {v}; this pgw reads versions "
+            f"{', '.join(map(str, PACK_VERSIONS))}. Upgrade pgw, or re-provision (re-pack) the model with this "
+            "version",
+            details={"path": str(p), "version": v, "supported": list(PACK_VERSIONS)},
+        )
 
 
 #: Optional :class:`LinearEntry` fields added after format version 1 shipped. When unset they are not

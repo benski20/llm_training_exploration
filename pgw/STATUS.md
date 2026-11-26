@@ -2263,3 +2263,60 @@ Tests:
   `tests/service/test_maskgen_budget.py` (5 tests).
 - New settings: `PGW_SERVICE_PKS_DEVICE_HINT` (default `auto`) and `PGW_SERVICE_MASKGEN_DEVICE_MB` (default off).
 - No GPU or cloud spend.
+
+## 2026-11-26: pack format 2: embeddings / LM head stored in bf16 (the checkpoints' dtype), exact upcast at load
+
+Goal: halve the f32 plain tensors of every pack (gateway pack, factory pack, provider pack) without changing one
+computed bit. The public Qwen2.5 checkpoints are bf16. Format 1 widened `embed_tokens` / `lm_head` to f32 at pack
+time, which is exact, so storing the bf16 bytes and widening at load gives the same f32 values.
+
+- **Exactness, measured on all four release checkpoints** (`scripts/pin_model_fingerprints.py --compare-format1`;
+  Kaggle CPU kernel `pgw-sdk-pins` v2, 26.6 min, `results/kaggle/sdk-pins-format2`; 0.5B / 1.5B also here, same
+  output): every checkpoint tensor checked is bf16 (0.5B/1.5B: all 290/338 tensors; 3B/7B: every plain tensor). The
+  format-1 pack re-derived each old pin exactly (same bytes as the old packer). Every plain tensor loaded from it equals
+  the format-2 pack's bf16 widened to f32, bit for bit (7B: 2 x 545 M elements). Linear tensor entries are identical.
+- **Format** (`manifest.version`, fingerprinted): `2` means `quant.plain_dtype: "source"`. Per tensor, the
+  checkpoint's dtype is kept if it is bf16 (bytes stored unconverted), else f32 is used (f16/f32 sources are never
+  narrowed). The choice is each tensor's `dtype` entry, so the fingerprint covers dtype and bytes. Norms stay f32
+  (enforced for format 2). Format 2 is the default of `pack_checkpoint`, `pgw pack` (`--plain-dtype source`), the hf
+  provisioning path and the pin script. `plain_dtype="float32"` still writes format 1 byte-identically, so the old
+  fingerprints reproduce.
+- **Compat decision: old packs still load.** A format-1 pack is internally consistent and is checked against its own
+  fingerprint exactly as before. Refusing it would only force re-downloads without adding integrity. What changes is
+  the pins. Clients now pin format-2 fingerprints, so a client cache keyed by an old fingerprint is no longer used
+  (provisioning makes a new `models/<fp16>` dir; the old one is orphaned and can be deleted to reclaim the space). A
+  provider still serving a format-1 pack is refused by the existing pin check. An unknown future version gets
+  "uses pack format version N ... re-provision (re-pack)". pgw installs from before format 2 reject format-2 manifests
+  with a schema error ("Input should be 1"), so provider and client must both upgrade.
+- **Provider:** the service and factory load plain tensors through `load_plain` (f32), or, for the int8 head, in the
+  hash-checked stored dtype (`quantize_head` widens bf16 to f64 exactly). Results are unchanged.
+  `deploy/runpod/pod_boot.ensure_pack` now rebuilds a volume's pack once when its format is not 2 (otherwise SDK
+  clients would refuse it). The Modal deploy packs were not touched (there the provider and its own gateway use one
+  volume, so their fingerprints agree).
+- **New pins** (`PINNED_MODELS`, docs/sdk): 0.5B `d773a502fb97...`, 1.5B `3d198de49e61...`, 3B `0ec0b8b24b2b...`,
+  7B `f7c6fb4f5f8f...` (full values in `src/pgw/sdk/provisioning.py`). The format-1 pins are kept in
+  `scripts/pin_model_fingerprints.py:FORMAT1_PINS`, for the reproduction check only.
+- **Disk** (`du -sb` of the cache after `provision(source="hf", hint="local", masked_head=True, factory_pack=True)`
+  at 0.5B, tied head): format 1 1.629 GB, format 2 1.357 GB. The gateway pack went from 0.558 to 0.285 GB, and its
+  plain file is hard-linked into the factory pack. Plain bytes, measured: 0.545 -> 0.272, 0.934 -> 0.467,
+  1.245 -> 0.623 and 4.361 -> 2.181 GB at 0.5B / 1.5B / 3B / 7B. Client totals (provider path, layout of review
+  section 4): 7B 13.3 -> 11.1, 32B 44.8 -> 41.7, 72B 90.9 -> 85.9 GB (32B/72B extrapolated: -3.11 / -4.98 GB).
+- **Tests:**
+  - `tests/modelpack/test_source_dtype.py`: format, the per-tensor choice (including an f32-head / bf16-embedding
+    checkpoint), bit-identical loads and masked head, fingerprint binding v1 vs v2, rejection of a dtype relabel, a
+    re-fingerprinted forgery and a flipped bf16 bit, version / plain_dtype consistency, unknown version.
+  - `tests/gateway/test_source_dtype_gateway.py`: the masked gateway, the plaintext reference and the int8-head
+    reference give identical tokens and logprobs from format-1 and format-2 packs (tiny untied bf16 model and
+    Qwen2.5-0.5B).
+  - `tests/provision/test_source_dtype_provision.py`: the provider path serves the bf16 bytes and verifies them in
+    full, tampering is rejected, the hf path re-derives the v2 pin and hard-links, and the v1 parameters still
+    reproduce the v1 pin.
+  - `tests/deploy/test_runpod.py::test_ensure_pack_rebuilds_older_format`.
+  - Runs (one dir at a time, `PYTHONPATH=src:.`): modelpack 107 passed; provision 46 passed / 1 skipped; core 560 /
+    28 skipped; cli 209 / 3 skipped; enroll 9; deploy/test_runpod 15; gateway masked / masked-head / setup /
+    setup-reuse / enroll-client / source-dtype 54 passed (0.5B case run separately: passed); console all but the
+    known `test_wheel_contains_the_console`; sdk file by file (a whole-dir run was OOM-killed on the shared box)
+    105 passed / 1 skipped. `tests/sdk` needs an absolute PYTHONPATH: otherwise its factory subprocess imports the
+    main checkout's pgw, which reads format 1 only.
+  - The setup wizard's pack job and the enrollment metadata now default a missing `plain_dtype` to `"source"` (they
+    used `"float32"`, which would rebuild format 1 and miss a format-2 service fingerprint).
