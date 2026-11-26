@@ -309,7 +309,7 @@ def test_provider_provisioner_pins_and_defaults(monkeypatch: pytest.MonkeyPatch,
     p = prov("qwen2.5-0.5b-instruct", session=_fake_session(tmp_path, entry), cache_dir=tmp_path / "models",
              masked_head=True)
     assert p.fingerprint == pin.fingerprint and p.factory_pack_path == tmp_path / "factory-pack" and p.hint_dir is None
-    (model, kw), = calls
+    (_model, kw), = calls
     assert kw == {"cache_dir": tmp_path, "expected_fingerprint": pin.fingerprint, "masked_head": True,
                   "factory_pack": True, "hint": "none"}
     # opt-in provider-built hint

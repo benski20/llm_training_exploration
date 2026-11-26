@@ -96,9 +96,10 @@ class SDKOptions:
             (default 120 s). The factory keeps retrying with back-off and resumes by itself when the provider is
             back. A long first-time setup that makes progress is never cut short by this.
         mask_admission: [``PGW_MASK_ADMISSION``] ``"entitled"`` (default): a request starts only when the mask
-            stock covers the whole remaining prompt + ``max_tokens`` of every running request (a running answer never waits for masks; N concurrent
-            requests need a stock of about N x (prompt + max_tokens) slots). ``"overcommit"`` (opt-in): a request
-            starts when the stock covers its prompt and one chunk for every running request; an answer that finds
+            stock covers the whole remaining prompt + ``max_tokens`` of every running request (a running answer
+            never waits for masks; N concurrent requests need a stock of about N x (prompt + max_tokens) slots).
+            ``"overcommit"`` (opt-in): a request starts when the stock covers its prompt and one chunk for every
+            running request; an answer that finds
             the stock short waits for the factory (up to 30 s, then fails closed), so a burst slows every answer to
             the factory's rate instead of queueing new requests. Single use of masks is the same in both.
         factory: Run the background mask factory (``False``: consume existing stock only).

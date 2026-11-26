@@ -63,7 +63,7 @@ def test_old_database_gets_the_report_columns(tmp_path: Path) -> None:
 async def test_enroll_reply_lane_and_masked_head_then_reports_reach_usage_log_and_console(
         tmp_path: Path, tiny_pack_dir: Path) -> None:
     s = _admin_settings(tmp_path, tiny_pack_dir, masked_head="also")
-    key, rec = _new_key(s)
+    key, _rec = _new_key(s)
     async with running_app(s) as app:
         acc = app.state.pgw.accounts
         acc.lane_hint = lambda: {"transport": "tcp", "port": 8444}  # what a running TCP lane announces

@@ -358,7 +358,7 @@ class FactoryProcess:
         with contextlib.suppress(OSError):  # a heartbeat of an earlier child must not count for this one
             (self.plan.state_dir / HEARTBEAT_FILE).unlink()
         try:
-            self._proc = subprocess.Popen(
+            self._proc = subprocess.Popen(  # noqa: S603 - our own factory child (sys.executable -m ...)
                 list(self.command), env=_child_env(self.plan),
                 stdin=subprocess.DEVNULL, stdout=fd, stderr=fd, close_fds=True, cwd=str(self.plan.state_dir))
         finally:
