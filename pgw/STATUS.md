@@ -2052,3 +2052,29 @@ path), `tests/service/test_kernels_memory.py` (blockwise maskgen result == whole
 run). New settings (all keep outputs identical): `PGW_SERVICE_EAGER_WORK_MB` (512), `PGW_SERVICE_PKS_GPU_WORK_MB`
 (512). GPU confirmation of the CUDA-only code paths (one upload in `ComputeKernel`, `_maskgen_planes_cuda`'s
 blockwise copy) is in the session's `memory` phase; no Kaggle kernel was spent.
+
+## 2026-11-26: weight-free client checks: no candidate drops `W8` without a loss; nothing implemented
+
+Question: can the client avoid keeping `W8` on disk (6.5 / 31 / 70 GB) without weakening anything, e.g. with the
+"transposed pks-v3 hint" (open option 3 of `pks-v3-client-disk.md`)? Full note:
+`research/reviews/weight-free-client-checks.md`; numbers, Monte Carlo checks and two attack demos:
+`research/reviews/weight_free_numbers.py`.
+
+- **Structural result:** the online p31 check needs `u W8` for provider-unpredictable `u`, tied to the true `W8` by an
+  anchor. The anchor can only be `W8`, a long-lived secret derived from it, or a public commitment plus proofs.
+- **A0, transposed pks-v3 product used as is: not viable.** An additive shift of the decrypted `u W8` (F1) makes the
+  gateway's verdict a function of a private activation: accepts iff `xq_j == 0` (demonstrated). It also has
+  9504 ring samples for the head (packet states <= 1848) and the head's worst-case column norm is refused
+  (2^14.19; measured 0.5B 2^13.81).
+- **A1, A0 plus a secret sketch: viable with a stated loss.** It has a long-lived secret and costs a second hint of
+  1.28-6.67 GB. It is dominated by B. **A2, A0 plus a public commitment:** no loss in principle, but it is a new
+  proof system (~23-74 MB per opening). Not viable now.
+- **B, secret basis `u = B c`, `v = B_v c`: viable with a stated loss.** Soundness is unchanged while `B` is secret
+  (2^-31 at k = 5, 2^-42 at k_v = 28). Disk is 0.11 / 0.36 / 0.57 GB, and factory CPU on weights drops from G MAC to
+  M MAC. The loss: a one-time leak of `B`, `G` or `k` past `u` breaks integrity for every future segment until a `W8`
+  re-stream (demonstrated: 2000/2000 forged acceptances). It changes SPEC 7.3.
+- **C, no `W8` at rest, streamed and pin-verified once per 64 segments plus a pre-drawn stock: no security loss.**
+  It costs +0.8 / 1.1 / 1.7 % network per segment, a 0.6 / 1.9 / 3.1 GB stock, and a runtime dependency on a `W8`
+  source. This is the client-disk note's lever 1; it is a factory decision.
+- No candidate passed "no loss", so no prototype was written. The default is unchanged. If disk forces it, the
+  recommendation is C; B only as an explicit, documented opt-in with rotation and external review.
