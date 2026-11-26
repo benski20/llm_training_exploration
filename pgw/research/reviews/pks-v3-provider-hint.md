@@ -163,6 +163,10 @@ provider's CPU GEMM included), 13.1 GB of `H` and 0.36 GB of `W8` streamed, 0.70
   `c1`. The client would then receive about `2.3 x` the hint (~5 GB at 7B) and check it with prime-field Freivalds
   (mod `p0`, `p1` of `q1` and the special primes), an NTT-slot projection being rank-1 in (row, column), i.e. one pass
   over `W8`. This changes the upload ring's modulus (2^56 -> q1) and needs its own review.
+  *Analysed 2026-11-26 in `pks-v4-prime-upload.md`: not viable as sketched.* At modulus `q1` the upload noise
+  `W8 e` is no longer divided by `2^8`, so the noise is about 2^20.9 against a budget of 2^15. `C` is linear in
+  `W8` only mod `q1`: the lift to `P` is not, so the `[C]_P` witness can be forged. Every repair costs 22-83 bits
+  of reply-key core-SVP or v3's noise margin.
 * **Streaming the final hint** (`pgw.provision.streaming`, opt-in): from customer storage only (the provider's `H` is
   what is verified, not the final hint), each linear checked against the HMAC'd local `meta.json`; with a cache smaller
   than the hint every segment re-reads it (~55 MB/s at 7B and 25 slots/s).
