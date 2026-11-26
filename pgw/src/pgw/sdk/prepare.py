@@ -4,7 +4,8 @@ What the first request of a model otherwise waits for, done now, with progress, 
 
 1. enrollment of the API key (as the client does on first use);
 2. the gateway's weight-free pack and the factory pack (the int8 weights, streamed from the provider and checked
-   against the pinned fingerprint's manifest, SHA-256 per tensor);
+   against the pinned fingerprint's manifest, SHA-256 per tensor); with ``factory_weights="stream"`` no factory pack
+   (the weights are streamed for the hint and dropped; the factory's first check-stock pass streams them again);
 3. with ``mask_scheme="pks-v3"`` and ``hint="local"`` (the defaults), the pks-v3 compact hint, built from the same
    weights while each linear is in memory (one pass over the weights; native kernels on every core:
    :mod:`pgw.hemask.hint_gemm`).
@@ -92,6 +93,7 @@ def prepare(model: str, *, api_key: str | None = None, options: Any = None, prov
     out: dict[str, Any] = {"model": name, "fingerprint": res.fingerprint, "masked_head": masked,
                            "pack": str(res.pack_path), "factory_pack": str(res.factory_pack_path or ""),
                            "hint_dir": str(res.hint_dir) if res.hint_dir else None, "source": res.source,
+                           "factory_weights": getattr(res, "factory_weights", "pack"),
                            "seconds": round(time.perf_counter() - t0, 1)}
     for k in ("pack", "factory_pack", "hint_dir"):
         p = out[k]

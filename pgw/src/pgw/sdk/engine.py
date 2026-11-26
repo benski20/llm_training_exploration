@@ -633,8 +633,16 @@ class Engine:
         if scheme == "pks-v3":
             hint_key = h.provisioned.hint_key_file or (sdir / "pks-hint.key")
         s = self.session
+        prov = h.provisioned
+        stream = getattr(prov, "factory_weights", "pack") == "stream"
+        if o.factory_weights == "stream" and not stream:
+            from pgw.core.errors import ConfigError
+
+            raise ConfigError("factory_weights='stream' needs the provider provisioner (it provisions the weight-free "
+                              "gateway pack and the hint without keeping the int8 weights)")
         return FactoryPlan(
-            model=h.name, pack_path=h.provisioned.factory_pack_path or h.provisioned.pack_path, ring=h.ring,
+            model=h.name, pack_path=prov.pack_path if stream else (prov.factory_pack_path or prov.pack_path),
+            ring=h.ring,
             state_dir=self.layout.factory_dir(kid) / h.provisioned.fingerprint[:16],
             store_root=self.layout.masks_dir(kid), kek_file=sdir / "masks.kek", counter_file=sdir / "masks.counter",
             scheme=scheme, check_field="p31" if prime else "ring", masked_head=h.masked_head,
@@ -643,7 +651,11 @@ class Engine:
             service_url=s.service_url, token_file=s.token_file, ca_file=s.ca_file,
             client_cert_file=s.client_cert_file, client_key_file=s.client_key_file,
             hint_dir=h.provisioned.hint_dir or (self.layout.models_dir / h.provisioned.fingerprint[:16] / "hint"),
-            hint_key_file=hint_key)
+            hint_key_file=hint_key, factory_weights="stream" if stream else "pack",
+            weights_source=o.factory_weights_source, pack_fingerprint=prov.fingerprint, hf_repo=prov.hf_repo,
+            hf_revision=prov.hf_revision, check_stock_segments=int(o.check_stock_segments),
+            # one private set per worker start and per failed or aborted segment
+            check_stock_private=max(8, 2 * int(o.workers) + 2))
 
     @staticmethod
     def _slot_bytes(rt: Any) -> int:
@@ -754,11 +766,14 @@ class Engine:
                         waiters.append(ticket)
                     fac = h.factory
                     broken = fac is not None and fac.owner and fac.failures >= 3 and fac.last_error
+                    stock_why = _check_stock_trouble(fac)
                     first_fill = self._first_fill(h, setup_deadline)
                     limit = self._mask_limit(h, mask_deadline, setup_deadline)
-                    if broken or time.monotonic() + delay > limit:
+                    if broken or stock_why or time.monotonic() + delay > limit:
                         why = f"; the mask factory is failing: {fac.last_error}" if broken and fac is not None else (
                             "" if self.options.factory else "; the background mask factory is off (factory=False)")
+                        if stock_why:
+                            why += f"; {stock_why}"
                         if first_fill:
                             why += "; the one-time mask setup of this model is still running (see pgw sdk status)"
                         raise NotReadyError(f"no masks in stock for model {h.name!r} after waiting{why}",
@@ -1173,3 +1188,21 @@ def read_status(layout: CacheLayout) -> dict[str, Any]:
             entry["factories"] = {f.name: read_factory_state(f) for f in sorted(fdir.iterdir()) if f.is_dir()}
         out["sessions"].append(entry)
     return out
+
+
+def _check_stock_trouble(fac: Any) -> str | None:
+    """Why a weight-free factory (``factory_weights="stream"``) cannot make masks: its check stock is empty and its
+    weight passes keep failing (3 in a row), else ``None``. Requests then fail closed with this reason instead of
+    waiting out the setup budget."""
+    if fac is None or getattr(fac.plan, "factory_weights", "pack") != "stream":
+        return None
+    try:
+        st = (fac.state() or {}).get("check_stock") or {}
+    except Exception:  # pragma: no cover - status only
+        return None
+    if st.get("segments") or int(st.get("pass_failures") or 0) < 3:
+        return None
+    done = int(st.get("passes") or 0)
+    return ("the weight-free factory has no check material: its stock is empty and "
+            + ("no fingerprint-verified weight pass has completed" if not done else "its refill passes are failing")
+            + f" (last pass error: {st.get('last_pass_error') or '?'}); see pgw sdk status")

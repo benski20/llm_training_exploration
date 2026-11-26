@@ -264,6 +264,51 @@ class FactorySettings(PGWSettings):
         1, ge=1, le=8, description="With he_bulk_port: a request of several 256-slot groups is sent as up to this "
         "many concurrent requests of whole groups (parallel TLS and packing)",
     )
+    # ---- weight-free factory (pgw.factory.checkstock; opt-in) -------------------------------------
+    factory_weights: Literal["pack", "stream"] = Field(
+        "pack", description="Where the encrypted factory's check material comes from. 'pack' (default): pack_path is "
+        "a full pack and the int8 weights W8 stay on disk (each segment's u W8 and the private v W8 are computed "
+        "from them). 'stream' (opt-in; pks-v3 only): pack_path is the weight-free gateway pack, no W8 is kept at "
+        "rest; W8 is streamed from weights_source, checked tensor by tensor against the pinned manifest, and each "
+        "pass pre-draws the next check_stock_segments segments' seeds and u W8 plus check_stock_private private "
+        "self-check sets into a KEK-encrypted, single-use stock (research/reviews/weight-free-stock-security.md). "
+        "The pks-v3 hint must already exist (built at provisioning)",
+    )
+    weights_source: Literal["provider", "hf", "dir"] = Field(
+        "provider", description="factory_weights='stream': the untrusted W8 source of each pass: 'provider' (its "
+        "provisioning endpoint at he_service_url, with he_token_file / he_ca_file / he_client_cert_file), 'hf' (the "
+        "public checkpoint weights_hf_repo@weights_hf_revision, packed locally per pass and deleted; needs the "
+        "checkpoint's size in temporary disk) or 'dir' (a full pack directory weights_dir, e.g. a NAS)",
+    )
+    weights_dir: Path | None = Field(None, description="weights_source='dir': the full pack directory")
+    weights_hf_repo: str | None = Field(None, description="weights_source='hf': hub id or local checkpoint directory")
+    weights_hf_revision: str | None = Field(None, description="weights_source='hf': the pinned commit")
+    pack_fingerprint: str | None = Field(
+        None, description="Expected fingerprint of pack_path (factory_weights='stream': the pin every streamed W8 "
+        "tensor is checked against through the manifest)",
+    )
+    check_stock_dir: Path | None = Field(
+        None, description="factory_weights='stream': where the stock lives (default <state_dir>/check-stock; one "
+        "subdirectory per pack and ring, shared by every worker)",
+    )
+    check_stock_segments: int = Field(
+        64, ge=2, le=4096, description="factory_weights='stream': segment sets a pass fills the stock up to")
+    check_stock_low_water: int | None = Field(
+        None, ge=1, description="factory_weights='stream': start the next pass below this many segment sets "
+        "(default a quarter of check_stock_segments)",
+    )
+    check_stock_private: int = Field(
+        8, ge=2, le=1024, description="factory_weights='stream': private self-check sets a pass fills up to (one "
+        "per worker start and per failed or aborted segment)",
+    )
+    check_stock_private_low_water: int | None = Field(
+        None, ge=1, description="factory_weights='stream': start the next pass below this many private sets "
+        "(default half of check_stock_private)",
+    )
+    check_stock_wait_s: float = Field(
+        600.0, gt=0, description="factory_weights='stream': how long a segment waits for check material when the "
+        "stock is empty before it fails closed (the scheduler then retries with back-off)",
+    )
     # ---- horizontal scale-out (pgw.factory.fleet) ------------------------------------------------
     workers: int = Field(
         1, ge=1, le=64,
@@ -369,7 +414,31 @@ class FactorySettings(PGWSettings):
                 raise ValueError("schedule='fused2' segments carry p61 check words (leave check_field = 'auto')")
             if self.fused2_weights_path is not None and len(self.all_pack_paths) > 1:
                 raise ValueError("fused2_weights_path serves one pack only")
+        if self.factory_weights == "stream":
+            if not self.he_urls or self.he_scheme != "pks-v3" or self.schedule != "standard":
+                raise ValueError("factory_weights='stream' needs the encrypted pks-v3 factory (he_service_url, "
+                                 "he_scheme='pks-v3', schedule='standard'): local masks need W8")
+            if self.mask_service or self.extra_pack_paths:
+                raise ValueError("factory_weights='stream' serves one pack and no mask service")
+            if self.weights_source == "dir" and self.weights_dir is None:
+                raise ValueError("weights_source='dir' needs weights_dir")
+            if self.weights_source == "hf" and not self.weights_hf_repo:
+                raise ValueError("weights_source='hf' needs weights_hf_repo")
+            if self.check_stock_low_water is not None and self.check_stock_low_water >= self.check_stock_segments:
+                raise ValueError("check_stock_low_water must be below check_stock_segments")
+            plw = self.check_stock_private_low_water
+            if plw is not None and plw >= self.check_stock_private:
+                raise ValueError("check_stock_private_low_water must be below check_stock_private")
         return self
+
+    @property
+    def stock_low_water(self) -> tuple[int, int]:
+        """``(segment sets, private sets)`` below which a weight-free factory starts its next pass."""
+        seg = self.check_stock_low_water if self.check_stock_low_water is not None else \
+            max(1, self.check_stock_segments // 4)
+        prv = self.check_stock_private_low_water if self.check_stock_private_low_water is not None else \
+            max(1, self.check_stock_private // 2)
+        return seg, prv
 
     @property
     def effective_check_field(self) -> str:

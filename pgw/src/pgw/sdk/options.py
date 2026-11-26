@@ -107,6 +107,20 @@ class SDKOptions:
             background factory builds it from the fingerprint-checked public weights: one-time, about 20-30 min of
             CPU at 7B on 4 cores, then cached) or ``"provider"`` (opt-in; the provider computes the expensive part
             and the client verifies it with a >= 40-bit check; streams about 44 GB at 7B).
+        factory_weights: Where the background factory's check material comes from [``PGW_FACTORY_WEIGHTS``].
+            ``"pack"`` (default): the int8 weights (the factory pack: 6.5 / 31 / 70 GB at 7B / 32B / 72B) stay in the
+            cache. ``"stream"`` (opt-in; ``mask_scheme="pks-v3"``): no int8 weights at rest. Each refill pass streams
+            them from ``factory_weights_source``, checks every tensor against the pinned fingerprint, pre-draws the
+            check material of the next ``check_stock_segments`` segments (plus private self-check sets) into a
+            KEK-encrypted single-use stock and drops them: about 1 % more network than pks-v3 itself at 64
+            segments per pass, a stock of 0.6 / 1.9 / 3.1 GB, and the factory pauses (requests wait, then fail
+            closed) when the stock is empty and no source is reachable (``docs/sdk/scaling.md``).
+        factory_weights_source: ``"provider"`` (default: the provider's provisioning endpoint) or ``"hf"`` (the
+            pinned public checkpoint, packed per pass: needs its size in temporary disk)
+            [``PGW_FACTORY_WEIGHTS_SOURCE``].
+            Both are untrusted and checked in full.
+        check_stock_segments: Segments of check material a pass pre-draws with ``factory_weights="stream"``
+            (default 64; the next pass starts at a quarter) [``PGW_CHECK_STOCK_SEGMENTS``].
         model_fingerprints: Extra or replacement pack fingerprint pins ``{model: fingerprint}``. The library pins
             every supported model (``pgw.sdk.provisioning.PINNED_MODELS``) and refuses a provider serving another
             pack; set this only for a custom pack you have checked yourself.
@@ -158,6 +172,9 @@ class SDKOptions:
     masked_head: Literal["auto", "on", "off"] = "auto"
     prefix_cache: bool | Literal["auto"] = "auto"
     hint: Literal["local", "provider"] = "local"
+    factory_weights: Literal["pack", "stream"] = "pack"
+    factory_weights_source: Literal["provider", "hf"] = "provider"
+    check_stock_segments: int = 64
     model_fingerprints: dict[str, str] = field(default_factory=dict)
     usage_reports: bool = True
     max_concurrent: int = 8
@@ -186,6 +203,15 @@ class SDKOptions:
         hint = os.environ.get("PGW_HINT", "").strip()
         if hint:
             base["hint"] = hint
+        fw = os.environ.get("PGW_FACTORY_WEIGHTS", "").strip()
+        if fw:
+            base["factory_weights"] = fw
+        fws = os.environ.get("PGW_FACTORY_WEIGHTS_SOURCE", "").strip()
+        if fws:
+            base["factory_weights_source"] = fws
+        cs = _env_int("PGW_CHECK_STOCK_SEGMENTS", None)
+        if cs is not None:
+            base["check_stock_segments"] = cs
         adm = os.environ.get("PGW_MASK_ADMISSION", "").strip()
         if adm:
             base["mask_admission"] = adm
@@ -215,6 +241,15 @@ class SDKOptions:
                              "with the gateway's own LM head only)")
         if self.hint not in ("local", "provider"):
             raise ValueError("hint must be 'local' or 'provider'")
+        if self.factory_weights not in ("pack", "stream"):
+            raise ValueError("factory_weights must be 'pack' or 'stream'")
+        if self.factory_weights_source not in ("provider", "hf"):
+            raise ValueError("factory_weights_source must be 'provider' or 'hf'")
+        if self.factory_weights == "stream" and self.mask_scheme != "pks-v3":
+            raise ValueError("factory_weights='stream' needs mask_scheme='pks-v3' (the masks themselves need the "
+                             "int8 weights otherwise)")
+        if not 2 <= int(self.check_stock_segments) <= 4096:
+            raise ValueError("check_stock_segments must be between 2 and 4096")
         for m, fp in (self.model_fingerprints or {}).items():
             if not isinstance(fp, str) or not re.fullmatch(r"[0-9a-f]{64}", fp.lower()):
                 raise ValueError(f"model_fingerprints[{m!r}] must be 64 hex digits")

@@ -64,8 +64,15 @@ def open_packs(settings: FactorySettings) -> list[Any]:
     packs = []
     # fused2 folds the norm gains into its weights: it needs the pack's plain tensors too
     comps = None if getattr(settings, "schedule", "standard") == "fused2" else ("linears",)
+    stream = getattr(settings, "factory_weights", "pack") == "stream"
     for p in settings.all_pack_paths:
-        pack: Any = ModelPack.open(p, verify="full", components=comps)
+        if stream:  # the weight-free gateway pack: every byte checked against the pin; W8 comes per pass
+            from pgw.provision.pack import GatewayPack
+
+            pack: Any = GatewayPack.open_gateway(p, verify="full", expected_fingerprint=settings.pack_fingerprint)
+        else:
+            pack = ModelPack.open(p, verify="full", components=comps,
+                                  expected_fingerprint=getattr(settings, "pack_fingerprint", None))
         if getattr(settings, "masked_head", False):
             from pgw.engine.masked_head import MaskedHeadPack
 
@@ -93,13 +100,17 @@ def build_generators(settings: FactorySettings, packs: list[Any], throttle: Thro
         for ring in settings.ring_names:
             remote = (build_he_backend(settings, pack, ring, worker_index=worker_index, workers=workers)
                       if settings.he_urls else None)
+            stream = getattr(settings, "factory_weights", "pack") == "stream"
             g = MaskGenerator(pack, ring, device=settings.device, backend=settings.backend, throttle=throttle,
                               pipeline=settings.pipeline, memory_fraction=settings.gpu_memory_fraction,
                               self_check_rows=settings.self_check_rows, remote=remote,
                               gpu_prng=None if settings.gpu_prng == "auto" else bool(settings.gpu_prng),
                               skip_kinds=settings.skip_kinds,
                               check_field=None if settings.effective_check_field == "ring"
-                              else settings.effective_check_field)
+                              else settings.effective_check_field,
+                              weights="stream" if stream else "pack")
+            if stream:
+                g.attach_check_source(build_check_stock(settings, pack, g))
             if g.key in gens:
                 raise ConfigError(f"duplicate pack/ring {pack.name}/{ring}")
             gens[g.key] = g
@@ -108,6 +119,70 @@ def build_generators(settings: FactorySettings, packs: list[Any], throttle: Thro
 
         prepare_mask_service(settings, gens)
     return gens
+
+
+def check_stock_root(settings: FactorySettings) -> Path:
+    """The weight-free factory's stock directory (``check_stock_dir``, else
+    ``<state_dir or store root>/check-stock``)."""
+    if settings.check_stock_dir is not None:
+        return Path(settings.check_stock_dir)
+    if settings.state_dir is not None:
+        return Path(settings.state_dir) / "check-stock"
+    from pgw.maskstore import MaskStoreSettings
+
+    return Path(MaskStoreSettings().root) / "check-stock"
+
+
+def weight_source_factory(settings: FactorySettings, pack: Any) -> Any:
+    """``() -> StreamedWeights`` for one pass of a weight-free factory (``weights_source``; every source untrusted,
+    every tensor checked against the gateway pack's pinned manifest)."""
+    from pgw.provision.client import weight_source
+
+    gpack = getattr(pack, "base", pack)  # MaskedHeadPack -> the gateway pack (the head comes from its plain head)
+    kind = settings.weights_source
+    if kind == "dir":
+        return lambda: weight_source(gpack, full_dir=settings.weights_dir)
+    if kind == "hf":
+        work = check_stock_root(settings) / f".hf-{os.getpid()}"
+        return lambda: weight_source(gpack, hf_repo=settings.weights_hf_repo, hf_revision=settings.weights_hf_revision,
+                                     work_dir=work)
+    from pgw.provision.session import ProvisionSession
+
+    url = settings.he_urls[0]
+    tok = Path(settings.he_token_file).read_text().strip() if settings.he_token_file is not None else None
+
+    def open_provider() -> Any:
+        ps = ProvisionSession(base_url=url, token=tok, ca_file=settings.he_ca_file,
+                              client_cert_file=settings.he_client_cert_file,
+                              client_key_file=settings.he_client_key_file, timeout_s=settings.he_timeout_s)
+        src = weight_source(gpack, session=ps)
+        src._on_close = ps.close  # the session belongs to this pass
+        return src
+
+    return open_provider
+
+
+def build_check_stock(settings: FactorySettings, pack: Any, gen: MaskGenerator) -> Any:
+    """The :class:`pgw.factory.checkstock.CheckStock` of one weight-free generator: under the mask store's KEK
+    provider, sized by ``check_stock_*``, refilled from ``weights_source``. Starts the first pass in the background
+    when the stock is below its low-water marks."""
+    from pgw.factory.checkstock import CheckStock
+    from pgw.maskstore import MaskStoreSettings
+
+    kp = key_provider_from_settings(MaskStoreSettings())
+    checks = settings.checks if settings.checks is not None else gen.checks_for()
+    seg_lw, prv_lw = settings.stock_low_water
+    root = check_stock_root(settings) / f"{gen.fingerprint[:16]}-{gen.ring.name}"
+    stock = CheckStock(root, kp, fingerprint=gen.fingerprint, ring=gen.ring, check_field=gen.check_field,
+                       checks=checks, linears=gen.stock_linears(), source=weight_source_factory(settings, pack),
+                       target_segments=settings.check_stock_segments, low_water_segments=seg_lw,
+                       target_private=settings.check_stock_private, low_water_private=prv_lw,
+                       wait_s=settings.check_stock_wait_s)
+    c = stock.counts()
+    log.info("factory: weight-free (factory_weights=stream): check stock %s holds %d segment set(s) and %d private "
+             "set(s); W8 from %s per pass", root, c["segment"], c["private"], settings.weights_source)
+    stock.maybe_refill()
+    return stock
 
 
 def build_fused2_generators(settings: FactorySettings, packs: list[Any], *, worker_index: int = 0,
@@ -236,7 +311,15 @@ def _build_pks_backend(settings: FactorySettings, pack: Any, ring: str, clients:
             write_key_file(key_file)
             log.info("factory: created the hint key %s (keep it outside the hint directory)", key_file)
         mac_key = _read_key_file(Path(key_file))
-    store = PKSHintStore.open_or_build(hint_root, pack, only=linear_keys(pack, skip), mac_key=mac_key)
+    try:
+        store = PKSHintStore.open_or_build(hint_root, pack, only=linear_keys(pack, skip), mac_key=mac_key)
+    except ConfigError as exc:
+        if getattr(settings, "factory_weights", "pack") != "stream":
+            raise
+        # no W8 here to build a hint from: it is built at provisioning (provision(hint=...), pgw sdk prepare)
+        raise ConfigError(f"factory_weights='stream' needs a complete pks-v3 hint store under {hint_root}, built at "
+                          "provisioning from the streamed weights (the factory keeps no W8 to build it); "
+                          f"re-provision the model ({exc.message})") from exc
     out = {s.id.key: s.out_features for s in pack.linear_specs()}
     remote = RemotePKS.http(clients[0], pack.fingerprint, out, store.a_seed, timeout_s=settings.he_timeout_s)
     log.info("factory: encrypted mask generation for %s via %s (scheme pks-v3, compact hint %.2f GB)",

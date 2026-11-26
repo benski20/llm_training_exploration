@@ -63,6 +63,15 @@ class FactoryPlan:
     client_key_file: Path | None = None
     hint_dir: Path | None = None
     hint_key_file: Path | None = None
+    #: ``"stream"``: ``pack_path`` is the weight-free gateway pack; check material comes from a stock refilled by
+    #: fingerprint-checked weight passes from ``weights_source`` (:mod:`pgw.factory.checkstock`)
+    factory_weights: str = "pack"
+    weights_source: str = "provider"
+    pack_fingerprint: str | None = None
+    hf_repo: str | None = None
+    hf_revision: str | None = None
+    check_stock_segments: int = 64
+    check_stock_private: int = 8
 
 
 #: pks-v3 encrypts in groups of 256 slots and amortises the upload's public NTTs over the groups of one request:
@@ -127,6 +136,17 @@ def factory_env(plan: FactoryPlan) -> dict[str, str]:
             env["PGW_FACTORY_HE_PKS_ACK"] = PKS_V3_ACK
             if plan.hint_key_file is not None:
                 env["PGW_FACTORY_HE_HINT_KEY_FILE"] = str(plan.hint_key_file)
+    if plan.pack_fingerprint is not None:
+        env["PGW_FACTORY_PACK_FINGERPRINT"] = plan.pack_fingerprint
+    if plan.factory_weights == "stream":
+        env["PGW_FACTORY_FACTORY_WEIGHTS"] = "stream"
+        env["PGW_FACTORY_WEIGHTS_SOURCE"] = plan.weights_source
+        env["PGW_FACTORY_CHECK_STOCK_SEGMENTS"] = str(plan.check_stock_segments)
+        env["PGW_FACTORY_CHECK_STOCK_PRIVATE"] = str(plan.check_stock_private)
+        if plan.weights_source == "hf":
+            env["PGW_FACTORY_WEIGHTS_HF_REPO"] = str(plan.hf_repo or "")
+            if plan.hf_revision:
+                env["PGW_FACTORY_WEIGHTS_HF_REVISION"] = plan.hf_revision
     return env
 
 
@@ -264,6 +284,7 @@ class FactoryProcess:
         out: dict[str, Any] = {"owner": self.owner, "running": self.running, "starts": self.starts,
                                "consecutive_failures": self.failures, "last_child_error": self.last_error,
                                "workers": self.plan.workers, "scheme": self.plan.scheme,
+                               "factory_weights": self.plan.factory_weights,
                                "target_slots": self.plan.target_slots, "low_water_slots": self.plan.low_water_slots}
         out.update(read_factory_state(self.plan.state_dir))
         return out
@@ -292,7 +313,27 @@ def read_factory_state(state_dir: Path) -> dict[str, Any]:
     except (OSError, ValueError):
         pass
     out["halted"] = bool(out.get("halted")) or (state_dir / "factory-halted.json").exists()
+    stock = check_stock_state(state_dir)
+    if stock:
+        out["check_stock"] = stock
     return out
+
+
+def check_stock_state(state_dir: Path) -> dict[str, Any] | None:
+    """The weight-free factory's check stock (``factory_weights="stream"``): counts, passes, the last pass and its
+    error, from ``<state_dir>/check-stock/*/status.json`` (public counters; no secrets), or ``None``."""
+    from pgw.factory.checkstock import stock_status
+
+    root = state_dir / "check-stock"
+    if not root.is_dir():
+        return None
+    stocks = {d.name: stock_status(d) for d in sorted(root.iterdir()) if d.is_dir()}
+    stocks = {k: v for k, v in stocks.items() if v}
+    if not stocks:
+        return None
+    if len(stocks) == 1:
+        return next(iter(stocks.values()))
+    return {"stocks": stocks}
 
 
 def wait_for(predicate: Any, timeout_s: float, poll_s: float = 0.2) -> bool:
