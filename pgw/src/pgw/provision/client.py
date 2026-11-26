@@ -53,7 +53,7 @@ from pgw.provision.pack import (
     write_safetensors_layout,
 )
 
-__all__ = ["ProvisionedModel", "provision", "stream_weights"]
+__all__ = ["ProvisionedModel", "find_prepared_hint", "provision", "stream_weights"]
 
 log = logging.getLogger(__name__)
 
@@ -409,23 +409,46 @@ FACTORY_PACK_DIR = "factory-pack"
 
 
 def _install_factory_pack(weights: _Weights, gpack: GatewayPack, man: Manifest, mdir: Path,
-                          progress: Progress) -> Path:
+                          progress: Progress, *, on_weight: Callable[[str, np.ndarray], None] | None = None,
+                          need: Callable[[str], bool] | None = None, resume: bool = False) -> Path:
     """``mdir/factory-pack``: a full :class:`pgw.modelpack.ModelPack` with the same fingerprint as the gateway pack.
 
     The in-process gateway never reads ``W8``; the client's background mask factory does (its private check vectors
-    ``v W8`` once per process, and the pks-v3 hint when it is built locally). ``W8`` comes from ``weights`` (each
-    linear checked against the fingerprint-bound manifest), scales and biases and the plain tensors from the verified
-    gateway pack (plain-only files and the tokenizer are hard links where the file system allows). The directory is
-    built under a temporary name, verified in full against the pinned fingerprint and renamed."""
+    ``v W8`` once per process and after every rejected segment, and the pks-v3 hint when it is built locally). ``W8``
+    comes from ``weights`` (each linear checked against the fingerprint-bound manifest), scales and biases and the
+    plain tensors from the verified gateway pack (plain-only files and the tokenizer are hard links where the file
+    system allows). The directory is built under a temporary name, verified in full against the pinned fingerprint
+    and renamed.
+
+    ``on_weight(key, W8)`` sees every linear's checked ``W8`` while it is in memory (the fused hint build of
+    ``pgw sdk prepare``: one pass over the weights instead of two); ``need(key)`` says whether it still wants a linear
+    the resumed directory already holds (it is then read back and checked against the manifest's SHA-256 again).
+    ``resume``: keep ``factory-pack.partial`` across runs (``state.json`` lists the objects written and synced); the
+    final full verification hashes every byte against the manifest as for a fresh build."""
     from pgw.modelpack.loader import ModelPack
     from pgw.modelpack.st_io import read_safetensors_header
 
     part = mdir / (FACTORY_PACK_DIR + ".partial")
-    shutil.rmtree(part, ignore_errors=True)
-    part.mkdir(parents=True, mode=0o700)
+    state_p = part / _STATE
+    state: dict[str, Any] | None = None
+    if resume and state_p.is_file():
+        with contextlib.suppress(ValueError, OSError):
+            state = json.loads(state_p.read_text())
+        if not isinstance(state, dict) or state.get("fingerprint") != man.fingerprint or \
+                not isinstance(state.get("done"), list):
+            state = None
+    fresh = state is None
+    if fresh:
+        shutil.rmtree(part, ignore_errors=True)
+        part.mkdir(parents=True, mode=0o700)
+        state = {"fingerprint": man.fingerprint, "done": []}
+    assert state is not None
+    done_ids: set[str] = set(state["done"])
 
     def link_or_copy(src: Path, dst: Path) -> None:
         dst.parent.mkdir(parents=True, exist_ok=True)
+        if dst.exists():  # a resumed directory (the final verification checks every byte)
+            return
         try:
             os.link(src, dst)
         except OSError:
@@ -440,6 +463,11 @@ def _install_factory_pack(weights: _Weights, gpack: GatewayPack, man: Manifest, 
         if f not in lin_files:
             link_or_copy(gpack.root / f, part / f)
     headers: dict[str, Any] = {}
+
+    def save_state() -> None:
+        if resume:
+            state["done"] = sorted(done_ids)
+            _write_json_atomic(state_p, state)
 
     def gateway_bytes(name: str) -> bytes:
         src = man.tensors[name].file
@@ -456,22 +484,54 @@ def _install_factory_pack(weights: _Weights, gpack: GatewayPack, man: Manifest, 
     for f in sorted(lin_files):
         names = sorted(n for n, t in man.tensors.items() if t.file == f)
         objs = [_tensor_obj(man, n, f) for n in names]
-        offs = write_safetensors_layout(part / f, objs)
+        if fresh or not (part / f).is_file():
+            for o in objs:
+                done_ids.discard(o.id)
+            offs = write_safetensors_layout(part / f, objs)
+        else:  # same deterministic layout as when it was created
+            hdr, _ = read_safetensors_header(part / f)
+            offs = {o.id: (hdr[o.name].begin, hdr[o.name].begin + hdr[o.name].nbytes) for o in objs}
         fd = os.open(part / f, os.O_RDWR)
         try:
             for o in objs:
-                if o.name in weight_of:
-                    data = weights.get(weight_of[o.name]).tobytes()
+                key = weight_of.get(o.name)
+                if o.id in done_ids:
+                    if key is not None:
+                        done += o.size
+                        if on_weight is not None and (need is None or need(key)):
+                            data = os.pread(fd, o.size, offs[o.id][0])
+                            if len(data) == o.size and hashlib.sha256(data).hexdigest() == o.sha256:
+                                on_weight(key, np.frombuffer(data, dtype=np.int8).reshape(o.shape))
+                                continue
+                            done_ids.discard(o.id)  # damaged since: fetch it again below
+                            done -= o.size
+                        else:
+                            continue
+                    else:
+                        continue
+                w: np.ndarray | None = None
+                if key is not None:
+                    w = weights.get(key)
+                    data = w.tobytes()
                     done += len(data)
-                    _emit(progress, "weights", done, total, item=weight_of[o.name])
+                    _emit(progress, "weights", done, total, item=key)
                 else:
                     data = gateway_bytes(o.name)
                 if len(data) != o.size:
                     raise IntegrityError(f"{o.name}: wrong size for the factory pack")
                 os.pwrite(fd, data, offs[o.id][0])
+                if resume and key is not None:
+                    os.fsync(fd)
+                    done_ids.add(o.id)
+                    save_state()
+                if w is not None and on_weight is not None:
+                    on_weight(key, w)  # type: ignore[arg-type]
             os.fsync(fd)
+            done_ids.update(o.id for o in objs)
+            save_state()
         finally:
             os.close(fd)
+    state_p.unlink(missing_ok=True)
     try:
         ModelPack.open(part, verify="full", expected_fingerprint=man.fingerprint).close()
     except Exception:
@@ -516,23 +576,30 @@ def _hint_specs(man: Manifest, masked_head: bool) -> dict[str, tuple[int, int]]:
 
 def _local_items(specs: dict[str, tuple[int, int]], weights: _Weights, a_seed: bytes, progress: Progress
                  ) -> Iterator[Any]:
-    from pgw.hemask import pks
-    from pgw.hemask.lwe import matmul_mod64
-    from pgw.hemask.pks_backend import HintLinear, row_norm
-
-    m56 = np.uint64((1 << 56) - 1)
     for idx, (key, (m, n)) in enumerate(specs.items()):
         _emit(progress, "hint", idx, len(specs), "linears", key)
         w = weights.get(key)
         if w.shape != (m, n):
             raise ConfigError(f"{key}: weight shape {w.shape} != ({m}, {n})")
-        a = pks.a_mlwe_rows(pks.public_ring_rows(a_seed, n, key))
+        yield _local_linear(key, w, a_seed)
 
-        def blocks(w: np.ndarray = w, a: np.ndarray = a) -> Iterator[tuple[int, np.ndarray]]:
-            for r0 in range(0, w.shape[0], 1024):
-                yield r0, matmul_mod64(np.ascontiguousarray(w[r0:r0 + 1024]), a) & m56
 
-        yield HintLinear(key, m, n, row_norm(w), blocks())
+def _local_linear(key: str, w: np.ndarray, a_seed: bytes) -> Any:
+    """One linear of a local build: ``H = W8 A mod 2^56`` in 1024-row blocks (``A``'s byte planes once)."""
+    from pgw.hemask.hint_gemm import HintGemm
+    from pgw.hemask.pks_backend import HintLinear, row_norm
+
+    m, n = w.shape
+
+    def blocks() -> Iterator[tuple[int, np.ndarray]]:
+        gemm = HintGemm(a_seed, n, key)
+        try:
+            for r0 in range(0, m, 1024):
+                yield r0, gemm(w[r0:r0 + 1024])
+        finally:
+            gemm.close()
+
+    return HintLinear(key, m, n, row_norm(w), blocks())
 
 
 class _ProviderH:
@@ -628,6 +695,38 @@ def _open_store(hint_root: Path, ffp: str, mac_key: bytes, keys: set[str]) -> An
         raise
 
 
+def find_prepared_hint(cache_dir: str | Path, fingerprint: str, *, masked_head: bool) -> tuple[Path, Path] | None:
+    """``(hint_root, hint_key_file)`` of a complete hint store that :func:`provision` built under ``cache_dir`` for
+    ``fingerprint`` (e.g. by ``pgw sdk prepare``, here or on another host whose cache was copied), else ``None``.
+
+    The store's ``meta.json`` must verify under the cache's hint key (HMAC-SHA256) and cover every linear the masked
+    gateway uses; without the key file nothing is trusted (``None``: the factory then builds its own hint). A store
+    whose MAC does not verify under the key raises :class:`IntegrityError` (never used, never silently replaced).
+    The per-file SHA-256 digests are checked by the factory when it opens the store."""
+    from pgw.hemask.pks_backend import PKSHintStore
+    from pgw.maskstore.keys import _read_key_file
+    from pgw.modelpack.masked_head import head_fingerprint
+
+    cache = Path(cache_dir).expanduser()
+    key_file = cache / "keys" / "pks-hint.key"
+    mdir = cache / "models" / fingerprint[:16]
+    hint_root = mdir / "hints"
+    if not key_file.is_file() or not hint_root.is_dir() or not (mdir / "pack" / MANIFEST_FILE).is_file():
+        return None
+    man = Manifest.from_file(mdir / "pack" / MANIFEST_FILE)
+    man.verify_fingerprint(fingerprint)
+    ffp = head_fingerprint(fingerprint) if masked_head else fingerprint
+    st = PKSHintStore.open(hint_root, ffp, verify=False, mac_key=_read_key_file(key_file))
+    if st is None:
+        return None
+    try:
+        if "mac" not in st.meta or not set(_hint_specs(man, masked_head)) <= set(st.meta["row_norms"]):
+            return None
+    finally:
+        st.close()
+    return hint_root, key_file
+
+
 def _build_store(kind: str, hint_root: Path, ffp: str, mac_key: bytes, specs: dict[str, tuple[int, int]],
                  weights: _Weights, session: Any, fp: str, masked_head: bool, progress: Progress,
                  stats: dict[str, float]) -> Any:
@@ -664,6 +763,69 @@ def _build_store(kind: str, hint_root: Path, ffp: str, mac_key: bytes, specs: di
     except BaseException:
         os.close(fd)
         raise
+
+
+class _LocalHint:
+    """A local hint build that takes ``W8`` linear by linear as it arrives (fused with the factory-pack download:
+    one pass over the weights) under the store's exclusive lock; ``resume``: a resumable
+    :class:`pgw.hemask.pks_backend.HintBuild` (HMAC-authenticated partial state under the hint key)."""
+
+    def __init__(self, hint_root: Path, ffp: str, mac_key: bytes, specs: dict[str, tuple[int, int]], *,
+                 resume: bool, progress: Progress):
+        from pgw.hemask.pks_backend import HintBuild, PKSHintStore
+
+        hint_root.mkdir(parents=True, exist_ok=True, mode=0o700)
+        self.fd = os.open(PKSHintStore.lock_path(hint_root, ffp), os.O_RDWR | os.O_CREAT, 0o600)
+        try:
+            fcntl.flock(self.fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            os.close(self.fd)
+            raise ConfigError(f"pks-v3 hint store under {hint_root} is in use by another process; stop it first") \
+                from None
+        try:
+            self.hb = HintBuild(hint_root, ffp, mac_key=mac_key, resumable=resume)
+        except BaseException:
+            os.close(self.fd)
+            raise
+        self.specs, self.progress = specs, progress
+        self.built = 0
+        self.seconds = 0.0
+
+    def need(self, key: str) -> bool:
+        return key in self.specs and not self.hb.done(key)
+
+    def on_weight(self, key: str, w: np.ndarray) -> None:
+        if not self.need(key):
+            return
+        m, n = self.specs[key]
+        if w.shape != (m, n):
+            raise ConfigError(f"{key}: weight shape {w.shape} != ({m}, {n})")
+        t0 = time.perf_counter()
+        self.hb.add(_local_linear(key, w, self.hb.a_seed))
+        self.seconds += time.perf_counter() - t0
+        self.built += 1
+        _emit(self.progress, "hint", sum(self.hb.done(k) for k in self.specs), len(self.specs), "linears", key)
+
+    def finish(self, weights: _Weights) -> Any:
+        """The linears not seen yet (the masked head, or all of them when the factory pack already existed), then
+        ``meta.json`` and the rename; the store keeps a shared lock."""
+        try:
+            for key in self.specs:
+                if self.need(key):
+                    self.on_weight(key, weights.get(key))
+            st = self.hb.finish(keys=list(self.specs), extra_meta={"source": "local"})
+            fcntl.flock(self.fd, fcntl.LOCK_SH)
+            st._lock_fd = self.fd
+            return st
+        except BaseException:
+            self.abort()
+            raise
+
+    def abort(self) -> None:
+        fd, self.fd = self.fd, -1
+        if fd >= 0:
+            self.hb.abort()
+            os.close(fd)
 
 
 # ------------------------------------------------------------------------------------------------
@@ -706,12 +868,16 @@ def provision(model: str, *, session: Any = None, cache_dir: str | Path, progres
               hint: HintMode = "provider", expected_fingerprint: str | None = None, masked_head: bool = True,
               source: Literal["provider", "hf"] = "provider", hf_repo: str | None = None,
               hf_revision: str | None = None, hf_name: str | None = None, hf_plain_dtype: str | None = None,
-              keep_full_pack: bool = False, factory_pack: bool = False) -> ProvisionedModel:
+              keep_full_pack: bool = False, factory_pack: bool = False, resume: bool = False) -> ProvisionedModel:
     """Provision ``model`` (name or fingerprint) under ``cache_dir`` (see the module docstring).
 
     ``factory_pack=True`` also keeps a full pack with the int8 weights (``factory_pack_dir``) for the client's
     background mask factory: built from the provider's fingerprint-checked ``W8`` (or kept from ``source="hf"``),
-    once; the hint check and a local hint build then read ``W8`` from it instead of streaming it again."""
+    once; the hint check and a local hint build then read ``W8`` from it instead of streaming it again. With
+    ``hint="local"`` the hint of each linear is built while its ``W8`` is in memory for the factory pack (one pass
+    over the weights; same files as a separate build). ``resume=True`` keeps a partial factory pack and a partial
+    hint build (HMAC-authenticated state) across interruptions, so a long one-time setup continues where it stopped
+    (``pgw sdk prepare``)."""
     if hint not in ("provider", "local", "none"):
         raise ConfigError(f"hint must be 'provider', 'local' or 'none', not {hint!r}")
     if source not in ("provider", "hf"):
@@ -805,6 +971,17 @@ def provision(model: str, *, session: Any = None, cache_dir: str | Path, progres
         # ---- factory pack (full pack for the client's background mask factory)
         fpack_dir: Path | None = None
         streamed_w = 0
+        local_hint: _LocalHint | None = None
+        key_file: Path | None = None
+        hint_root: Path | None = None
+        store: Any = None
+        specs: dict[str, tuple[int, int]] = {}
+        mac_key = b""
+        if hint != "none":
+            key_file, mac_key = _hint_key(cache)
+            hint_root = mdir / "hints"
+            specs = _hint_specs(man, masked_head)
+            store = _open_store(hint_root, ffp, mac_key, set(specs)) if hint_root.is_dir() else None
         if factory_pack:
             t2 = time.perf_counter()
             fpk = _open_factory_pack(mdir, fp)
@@ -817,7 +994,17 @@ def provision(model: str, *, session: Any = None, cache_dir: str | Path, progres
                     full = None
                 else:
                     wsrc = wsrc or weights()
-                    _install_factory_pack(wsrc, gpack, man, mdir, progress)
+                    if hint == "local" and store is None:  # fused: each linear's hint while its W8 is in memory
+                        assert hint_root is not None
+                        local_hint = _LocalHint(hint_root, ffp, mac_key, specs, resume=resume, progress=progress)
+                    try:
+                        _install_factory_pack(wsrc, gpack, man, mdir, progress, resume=resume,
+                                              on_weight=local_hint.on_weight if local_hint is not None else None,
+                                              need=local_hint.need if local_hint is not None else None)
+                    except BaseException:
+                        if local_hint is not None:
+                            local_hint.abort()
+                        raise
                 fpk = _open_factory_pack(mdir, fp)
                 if fpk is None:
                     raise IntegrityError("the factory pack could not be built")
@@ -829,21 +1016,21 @@ def provision(model: str, *, session: Any = None, cache_dir: str | Path, progres
 
         # ---- hint
         t1 = time.perf_counter()
-        store: Any = None
-        key_file: Path | None = None
-        hint_root: Path | None = None
         hint_source: str | None = None
         if hint != "none":
-            key_file, mac_key = _hint_key(cache)
-            hint_root = mdir / "hints"
-            specs = _hint_specs(man, masked_head)
-            store = _open_store(hint_root, ffp, mac_key, set(specs)) if hint_root.is_dir() else None
+            assert hint_root is not None
             if store is None:
                 wsrc = wsrc or weights()
-                store = _build_store(hint, hint_root, ffp, mac_key, specs, wsrc, session, fp, masked_head,
-                                     progress, stats)
+                if local_hint is None and hint == "local" and resume:
+                    local_hint = _LocalHint(hint_root, ffp, mac_key, specs, resume=True, progress=progress)
+                if local_hint is not None:
+                    store = local_hint.finish(wsrc)
+                    timings["hint_fused"] = local_hint.seconds
+                else:
+                    store = _build_store(hint, hint_root, ffp, mac_key, specs, wsrc, session, fp, masked_head,
+                                         progress, stats)
             hint_source = str(store.meta.get("source", "local"))
-        timings["hint"] = time.perf_counter() - t1
+        timings["hint"] = time.perf_counter() - t1 + timings.get("hint_fused", 0.0)
         timings["verify"] = stats["verify_s"]
         if any(e.row_norm_sq_max is None for e in man.linears):  # older packs: norms from the checked weights
             wsrc = wsrc or weights()

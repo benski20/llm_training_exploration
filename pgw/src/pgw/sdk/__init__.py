@@ -52,6 +52,7 @@ __all__ = [
     "SdkKey",
     "UnsupportedModelError",
     "parse_key",
+    "prepare",
 ]
 
 _ERRORS = ("APIConnectionError", "APIError", "APITimeoutError", "AuthenticationError", "BadRequestError",
@@ -65,6 +66,7 @@ _LAZY: dict[str, str] = {
     "SdkKey": "pgw.sdk.keys",
     "parse_key": "pgw.sdk.keys",
     "LocalPackProvisioner": "pgw.sdk.provisioning",
+    "prepare": "pgw.sdk.prepare",
     **dict.fromkeys(_ERRORS, "pgw.sdk.errors"),
 }
 

@@ -228,3 +228,61 @@ def doctor_cmd(cache_dir: Path | None, state_dir: Path | None, online: bool, as_
         click.echo("ok" if rep["ok"] else "problems found")
     if not rep["ok"]:
         sys.exit(1)
+
+
+# ---- prepare -------------------------------------------------------------------------------------------
+@sdk_group.command("prepare")
+@click.option("--model", "models", multiple=True, required=True, help="Model to prepare (repeatable)")
+@click.option("--cache-dir", type=click.Path(path_type=Path), default=None,
+              help="Default: PGW_CACHE_DIR or ~/.cache/pgw")
+@click.option("--state-dir", type=click.Path(path_type=Path), default=None, help="Default: PGW_STATE_DIR")
+@click.option("--no-hint", is_flag=True, help="Artifacts and weights only (the factory builds the hint on first use)")
+@click.option("--threads", type=int, default=0, help="CPU threads for the hint build (default: every core)")
+@click.option("--masked-head", type=click.Choice(["auto", "on", "off"]), default=None,
+              help="As the client's masked_head option (default auto); use the clients' setting")
+@click.option("--pin", "pins", multiple=True, metavar="MODEL=FINGERPRINT",
+              help="Extra fingerprint pin, as the client's model_fingerprints (repeatable)")
+@click.option("--json", "as_json", is_flag=True, help="Machine-readable summary")
+def prepare_cmd(models: tuple[str, ...], cache_dir: Path | None, state_dir: Path | None, no_hint: bool, threads: int,
+                masked_head: str | None, pins: tuple[str, ...], as_json: bool) -> None:
+    """One-time setup of a model ahead of the first request: artifacts, weights and the pks-v3 hint, on every core,
+    resumable (run it again after an interruption). The API key comes from PGW_API_KEY and is never printed.
+
+    To set up on a big host once and copy: run this there, then copy <cache>/models/<fingerprint[:16]> and
+    <cache>/keys/pks-hint.key to the same places on the application hosts (details: pgw.sdk.prepare)."""
+    from pgw.sdk.options import SDKOptions
+    from pgw.sdk.prepare import prepare
+
+    if threads > 0:
+        os.environ["PGW_PKS_THREADS"] = str(threads)
+        import torch
+
+        torch.set_num_threads(threads)
+    fps: dict[str, str] = {}
+    for p in pins:
+        name, sep, fp = p.partition("=")
+        if not sep or not name.strip() or not fp.strip():
+            raise click.BadParameter(f"--pin expects MODEL=FINGERPRINT, not {p!r}")
+        fps[name.strip().lower()] = fp.strip().lower()
+    opts = SDKOptions.from_env(cache_dir=cache_dir, state_dir=state_dir, masked_head=masked_head,
+                               model_fingerprints=fps or None)
+    last: dict[str, Any] = {"t": 0.0, "stage": ""}
+
+    def say(line: str) -> None:
+        now, stage = time.monotonic(), line.split(":")[0]
+        if stage != last["stage"] or now - float(last["t"]) > 2.0:
+            last.update(t=now, stage=stage)
+            click.echo(f"  {line}", err=True)
+
+    out = []
+    for m in models:
+        click.echo(f"preparing {m} ...", err=True)
+        r = prepare(m, options=opts, progress=say, build_hint=False if no_hint else None)
+        out.append(r)
+        if not as_json:
+            click.echo(f"{r['model']}: fingerprint {r['fingerprint'][:12]}, masked head {r['masked_head']}, hint "
+                       f"{'ready' if r['hint_dir'] else 'not built (the factory builds it on first use)'}, "
+                       f"{r['seconds']:.0f} s; pack {r.get('pack_bytes', 0) / 1e9:.2f} GB, factory pack "
+                       f"{r.get('factory_pack_bytes', 0) / 1e9:.2f} GB, hint {r.get('hint_dir_bytes', 0) / 1e9:.2f} GB")
+    if as_json:
+        click.echo(json.dumps(out, indent=2))
