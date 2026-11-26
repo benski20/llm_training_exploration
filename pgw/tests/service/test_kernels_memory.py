@@ -29,6 +29,33 @@ def test_maskgen_blocks_to_host_equals_whole(ylo: int, yhi: int) -> None:
         assert got.shape == (m, cols, yhi - ylo) and np.array_equal(got, whole), step
 
 
+@pytest.mark.gpu
+@pytest.mark.parametrize("m,n", [(96, 160), (100, 150)])
+def test_cuda_kernel_upload_peak_is_one_padded_copy(m: int, n: int) -> None:  # pragma: no cover - GPU only
+    """Loading a host weight allocates the padded device copy once (no unpadded copy next to it), aligned or not;
+    a weight already on the device is cloned once (the kernel never aliases the caller's tensor)."""
+    from pgw.core.ring import RingParams
+    from pgw.core.ringmm import padded_shape
+
+    mp, np_ = padded_shape(m, n)
+    w = torch.randint(-128, 128, (m, n), dtype=torch.int8)
+    torch.cuda.synchronize()
+    before = torch.cuda.memory_allocated()
+    torch.cuda.reset_peak_memory_stats()
+    k = K.ComputeKernel(LinearSpec(LinearId(0, LinearKind.O), m, n), w, device="cuda", backend="cuda_int8",
+                        cuda_graphs=False, triton_gemv=False)
+    torch.cuda.synchronize()
+    assert torch.cuda.max_memory_allocated() - before <= mp * np_ + 4096
+    wd = w.cuda()
+    k2 = K.ComputeKernel(LinearSpec(LinearId(0, LinearKind.O), m, n), wd, device="cuda", backend="cuda_int8",
+                         cuda_graphs=False, triton_gemv=False)
+    assert k2._pw is not None and k2._pw._w_dev is not None
+    assert k2._pw._w_dev.untyped_storage().data_ptr() != wd.untyped_storage().data_ptr()
+    ring = RingParams(32, 12)
+    x = torch.randint(0, 1 << 32, (3, n), dtype=torch.int64)
+    assert torch.equal(k.run(x, ring), k2.run(x, ring))
+
+
 @needs_int8
 def test_maskgen_const_uses_chunked_rowsum(monkeypatch: pytest.MonkeyPatch) -> None:
     """The CPU maskgen constant equals 128 * rowsum * sum 2^(8d) + rnd mod 2^64 and comes from weight_rowsum."""
