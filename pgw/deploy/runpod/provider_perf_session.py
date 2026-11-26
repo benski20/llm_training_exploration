@@ -35,7 +35,7 @@ Phases (``--phases``, default all, in this order):
                  reports the lane's fixed cost per trip over the real NIC and throughput at 1-64 connections.
 
 Order and budget: ``env`` 1 min, ``memory`` ~20 min (72B: ~67 GB of random weights), ``device_time`` ~12 min,
-``gemv_table`` ~6 min, ``lane_local`` ~10 min, ``maskgen`` ~25 min, ``lane_nic`` 2 x ``--nic-minutes``. About 90 min
+``gemv_table`` ~6 min, ``lane_local`` ~10 min, ``maskgen`` ~30 min, ``lane_nic`` 2 x ``--nic-minutes``. About 95 min
 of one H100 (~$3 at ~$2.5/h Secure Cloud) plus the client CPU pod. The decisions each number feeds are in
 ``STATUS.md`` (2026-11-26 provider performance audit).
 
@@ -319,6 +319,22 @@ PKS_LINEARS = {
 }
 
 
+#: Settings of the device item's fused kernels (``pgw.service.pks_gpu``) the maskgen phase compares: ``auto`` (every
+#: kernel after its self-test), ``prev`` (the fused NTTs only) and ``torch`` (every kernel plain).
+PKS_ENV = ("PGW_SERVICE_PKS_GPU_NTT", "PGW_SERVICE_PKS_GPU_FWD4", "PGW_SERVICE_PKS_GPU_SWITCH",
+           "PGW_SERVICE_PKS_GPU_RING", "PGW_SERVICE_PKS_PINNED", "PGW_SERVICE_PKS_HOST_THREADS",
+           "PGW_SERVICE_PKS_GPU_WIRE")
+_PKS_PLAIN = {"PGW_SERVICE_PKS_GPU_FWD4": "torch", "PGW_SERVICE_PKS_GPU_SWITCH": "torch",
+              "PGW_SERVICE_PKS_GPU_RING": "torch", "PGW_SERVICE_PKS_GPU_WIRE": "torch",
+              "PGW_SERVICE_PKS_PINNED": "0", "PGW_SERVICE_PKS_HOST_THREADS": "1"}
+PKS_CONFIGS = {
+    "auto": {},
+    "fwd4": {"PGW_SERVICE_PKS_GPU_FWD4": "auto"},  # the 4-prime forward NTT (off by default: slower on the T4)
+    "prev": _PKS_PLAIN,
+    "torch": {**_PKS_PLAIN, "PGW_SERVICE_PKS_GPU_NTT": "torch"},
+}
+
+
 def phase_pks_items(models: list[str], cpu: bool, cols: int = 1024, work_mbs: tuple[int, ...] = (512, 1024, 2048)
                     ) -> dict[str, Any]:
     """Seconds and peak device memory of one pks-v3 item per path on the largest linears (random int8 weights through
@@ -370,12 +386,17 @@ def phase_pks_items(models: list[str], cpu: bool, cols: int = 1024, work_mbs: tu
                 res[path] = {"s": round(time.perf_counter() - t0, 3),
                              "peak_delta_gib": round((mem.peak() - b0) / 2**30, 3)}
             del cache
-            # the device path with the key switch's NTTs as chosen by PGW_SERVICE_PKS_GPU_NTT=auto (the fused Triton
-            # kernels on CUDA after their self-test) at every work budget, and with the eager torch NTTs at the first
-            runs = [(wmb, "auto") for wmb in (work_mbs if not cpu else (512,))] + [(work_mbs[0], "torch")]
-            for wmb, ntt in runs:
+            # the device path with every fused kernel as chosen by ``auto`` (the fused NTTs, 4-prime forward, hint
+            # switch + recombination, device ring rows and pinned overlapped copies on CUDA after their self-tests)
+            # at every work budget; at the first budget also ``fwd4`` (with the 4-prime forward NTT), ``prev`` (the
+            # fused NTTs only: the previous state) and ``torch`` (every kernel plain)
+            runs = [(wmb, "auto") for wmb in (work_mbs if not cpu else (512,))] + [
+                (work_mbs[0], c) for c in ("fwd4", "prev", "torch")]
+            for wmb, cfg in runs:
+                for k in PKS_ENV:
+                    os.environ.pop(k, None)
+                os.environ.update(PKS_CONFIGS[cfg])
                 os.environ["PGW_SERVICE_PKS_GPU_WORK_MB"] = str(wmb)
-                os.environ["PGW_SERVICE_PKS_GPU_NTT"] = ntt
                 pv = PKSProvider(mode="device")
                 pv.use_device("fp", kern, key)  # self-test outside the timing
                 bytes(pv.run_item("fp", kern, item, seed))  # warm-up: Triton compilation, allocator
@@ -383,19 +404,21 @@ def phase_pks_items(models: list[str], cpu: bool, cols: int = 1024, work_mbs: tu
                 t0 = time.perf_counter()
                 y = bytes(pv.run_item("fp", kern, item, seed))
                 dt = time.perf_counter() - t0
-                tag = f"device_{wmb}mb" + ("" if ntt == "auto" else f"_{ntt}")
+                tag = f"device_{wmb}mb" + ("" if cfg == "auto" else f"_{cfg}")
                 res[tag] = {"s": round(dt, 3), "peak_delta_gib": round((mem.peak() - b0) / 2**30, 3),
                             "us_per_row": round(dt / m * 1e6, 2), "device_items": pv.device_items,
                             "rows_per_block": pks_gpu.item_rows(m, kern.in_features, cols, groups),
-                            "ntt": pks_gpu.ntt_impl(dev)}
+                            "kernels": pks_gpu.fused_status(dev)}
                 replies[tag] = y
-            os.environ.pop("PGW_SERVICE_PKS_GPU_WORK_MB", None)
-            os.environ.pop("PGW_SERVICE_PKS_GPU_NTT", None)
+            for k in (*PKS_ENV, "PGW_SERVICE_PKS_GPU_WORK_MB"):
+                os.environ.pop(k, None)
             res["identical"] = len(set(replies.values())) == 1
             res["model_estimate_s"] = {p: round(sum(memplan.pks_item_seconds(m, n, cols, p).values()), 3)
                                        for p in ("miss", "hit", "device")}
             res["model_estimate_s"]["device_fused"] = round(
                 sum(memplan.pks_item_seconds(m, n, cols, "device", ntt="fused").values()), 3)
+            res["model_estimate_s"]["device_prev"] = round(
+                sum(memplan.pks_item_seconds(m, n, cols, "device", ntt="fused", kernels="ntt").values()), 3)
             out[f"{model}:{key}"] = res
             del kern
             if dev.type == "cuda":

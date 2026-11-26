@@ -280,19 +280,21 @@ class PKSProvider:
                 self._item_ok[key] = ok
         return ok
 
-    def _run_device(self, kern: Any, it: Any, a_seed: bytes, b: np.ndarray, ops: np.ndarray) -> np.ndarray | None:
+    def _run_device(self, kern: Any, it: Any, a_seed: bytes, b: Any, ops: np.ndarray) -> bytes | bytearray | None:
         from pgw.service import pks_gpu
 
         parts = _device_operands(kern)
         assert parts is not None
         n, m = int(kern.in_features), int(kern.out_features)
-        out = np.empty((ops.shape[0], m // PACK, pks.NR), dtype=np.uint64)
+        # the reply's wire bytes, filled by every shard's row blocks (packed on the device where it may)
+        out: Any = pks_gpu.PackedReply(ops.shape[0], m // PACK) if pks_gpu.wire_layout_ok() else \
+            np.empty((ops.shape[0], m // PACK, pks.NR), dtype=np.uint64)
 
         def one(part: tuple[Any, Any, int, int, Any]) -> None:
             w, const, r0, r1, dev = part
             if getattr(dev, "type", "cpu") != "cuda":
-                ring = pks_gpu.ring_rows(a_seed, n, it.linear, dev)
-                out[:, r0 // PACK:r1 // PACK] = pks_gpu.item(w, const, r1 - r0, n, ring, b, ops)
+                ring = pks_gpu.ring_rows_async(a_seed, n, it.linear, dev)
+                pks_gpu.item(w, const, r1 - r0, n, ring, b, ops, out=out, out_b0=r0 // PACK)
                 return
             import torch  # pragma: no cover - GPU only: each concurrent item on its own stream (as mulmod64)
 
@@ -301,8 +303,8 @@ class PKSProvider:
             stream = _borrow_stream(dev)
             try:
                 with torch.cuda.device(dev), torch.cuda.stream(stream):
-                    ring = pks_gpu.ring_rows(a_seed, n, it.linear, dev)
-                    out[:, r0 // PACK:r1 // PACK] = pks_gpu.item(w, const, r1 - r0, n, ring, b, ops)
+                    ring = pks_gpu.ring_rows_async(a_seed, n, it.linear, dev)
+                    pks_gpu.item(w, const, r1 - r0, n, ring, b, ops, out=out, out_b0=r0 // PACK)
                     stream.synchronize()
             finally:
                 _return_stream(dev, stream)
@@ -323,7 +325,7 @@ class PKSProvider:
                 self._item_ok[str(p[4])] = False
             return None
         self.device_items += 1
-        return out
+        return out.buf if isinstance(out, pks_gpu.PackedReply) else pack_bits(out.reshape(-1), V3_Y_BITS)
 
     def run_item(self, fp: str, kern: Any, it: Any, a_seed: bytes, dims: Mapping[str, Any] | None = None
                  ) -> bytes | bytearray:
@@ -333,14 +335,19 @@ class PKSProvider:
             raise ProtocolError(f"maskgen v3: {it.linear} ({m} x {n}) is not a pks-v3 shape")
         groups = cols // D
         ops = unpack_ksk(it.ksk, groups)
+        if self.use_device(fp, kern, it.linear, dims):
+            from pgw.service import pks_gpu
+
+            # the upload stays in its wire form: the device unpacks it where it may (``PGW_SERVICE_PKS_GPU_WIRE``)
+            bw: Any = pks_gpu.PackedUpload(it.b, n, cols) if int(it.b_bits) == 56 and pks_gpu.wire_layout_ok() \
+                else unpack_bits(it.b, n * cols, it.b_bits).reshape(n, cols)
+            res = self._run_device(kern, it, a_seed, bw, ops)
+            if res is not None:
+                self.items += 1
+                return res
         b = unpack_bits(it.b, n * cols, it.b_bits).reshape(n, cols)
         if int(b.max(initial=0)) >= 1 << 56:  # pragma: no cover - unpack_bits gives < 2^56
             raise ProtocolError("maskgen v3: upload value out of range")
-        if self.use_device(fp, kern, it.linear, dims):
-            res = self._run_device(kern, it, a_seed, b, ops)
-            if res is not None:
-                self.items += 1
-                return pack_bits(res.reshape(-1), V3_Y_BITS)
         y = np.asarray(kern.mulmod64(b, 7), dtype=np.uint64) & _M56
         del b
         hs = self.switched_hint(fp, kern, it.linear, a_seed)

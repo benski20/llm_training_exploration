@@ -14,10 +14,20 @@ The key switch's NTTs run either as eager torch operators or as the fused Triton
 (:func:`ntt_mode`): ``auto`` (default) uses the fused kernels on CUDA devices once :func:`fused_self_test` matched the
 torch path bit for bit there, and falls back to torch for good on any mismatch or error; ``torch`` and ``fused``
 force one.
+
+The device item's other fused kernels follow the same rule (:class:`FusedChoice`, each with its own start-up
+self-test and permanent fallback): ``PGW_SERVICE_PKS_GPU_FWD4`` (the forward NTTs of all four primes in one launch
+with a coalesced gather, :func:`pgw.service.pks_ntt.forward4`), ``PGW_SERVICE_PKS_GPU_SWITCH`` (the 7-plane
+recombination mod ``2^56`` and the hint switch in one pass, :func:`pgw.service.pks_fused.combine`) and
+``PGW_SERVICE_PKS_GPU_RING`` (the public ring rows expanded by the device, ChaCha20,
+:func:`pgw.service.pks_fused.ring_rows`; the fallback runs the host stream on a thread pool, off the GIL, overlapped
+with the item's uploads). ``PGW_SERVICE_PKS_PINNED`` (default on) stages the uploads and reply copies in pinned
+memory and overlaps them with device work (a side stream for the uploads, double-buffered reply copies).
 """
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import os
 import threading
@@ -30,8 +40,26 @@ import torch
 from pgw.hemask import pks
 from pgw.hemask.pks import NR, NU, PACK, RANK, D, PKSParams
 
-__all__ = ["fused_self_test", "item", "item_bytes", "item_rows", "item_self_test", "keyswitch", "ntt_impl", "ntt_mode",
-           "ring_rows", "self_test"]
+__all__ = [
+    "FWD4",
+    "RING",
+    "SWITCH",
+    "FusedChoice",
+    "fused_self_test",
+    "fused_status",
+    "gemm_into",
+    "host_ring_rows",
+    "item",
+    "item_bytes",
+    "item_rows",
+    "item_self_test",
+    "keyswitch",
+    "ntt_impl",
+    "ntt_mode",
+    "ring_rows",
+    "ring_rows_async",
+    "self_test",
+]
 
 _PAR = PKSParams()
 log = logging.getLogger(__name__)
@@ -251,6 +279,150 @@ def _ntt_fallback(dev: Any, err: BaseException) -> None:
         _ntt_choice[key] = "torch"
 
 
+class FusedChoice:
+    """``auto`` / ``torch`` / ``fused`` selection of one fused kernel of the device item, as the NTT's
+    (:func:`ntt_impl`): under ``auto`` (default) the kernel is used on a CUDA device only after ``test(dev)`` passed
+    there, and any error of the self-test or of a later call falls back to the plain path on that device for good
+    (same bits); ``fused`` forces it (errors propagate), ``torch`` disables it. ``choice``: per device ``"fused"`` or
+    ``"torch"`` once decided."""
+
+    def __init__(self, name: str, env: str, test: Any, default: str = "auto"):
+        self.name, self.env, self.test, self.default = name, env, test, default
+        self.choice: dict[str, str] = {}
+        self._lock = threading.Lock()
+
+    def mode(self) -> str:
+        raw = os.environ.get(self.env, "").strip().lower()
+        if raw == "":
+            return self.default
+        if raw == "auto":
+            return "auto"
+        if raw in ("torch", "host", "0", "off", "false", "no"):
+            return "torch"
+        if raw in ("fused", "triton", "device", "1", "on", "true", "yes"):
+            return "fused"
+        raise ValueError(f"{self.env}={raw!r}: use auto, torch or fused")
+
+    def impl(self, dev: Any) -> str:
+        mode = self.mode()
+        if mode != "auto":
+            return mode
+        dev = torch.device(dev)
+        key = str(dev)
+        with self._lock:
+            got = self.choice.get(key)
+            if got is None:
+                got = "torch"
+                if dev.type == "cuda":
+                    try:
+                        self.test(dev)
+                        got = "fused"
+                    except Exception as e:
+                        log.warning("pks-v3 fused %s unavailable on %s, using the plain path: %r", self.name, key, e)
+                self.choice[key] = got
+            return got
+
+    def fallback(self, dev: Any, err: BaseException) -> None:
+        key = str(torch.device(dev))
+        log.warning("pks-v3 fused %s failed on %s, using the plain path from now on: %r", self.name, key, err)
+        with self._lock:
+            self.choice[key] = "torch"
+
+    def run(self, dev: Any, fused: Any, plain: Any) -> Any:
+        """``fused()`` when this kernel is chosen on ``dev`` (falling back to ``plain()`` for good on an error under
+        ``auto``), else ``plain()``."""
+        if self.impl(dev) == "fused":
+            try:
+                return fused()
+            except Exception as e:
+                if self.mode() == "fused":
+                    raise
+                self.fallback(dev, e)
+        return plain()
+
+
+def _fwd4_self_test(dev: Any, seed: int = 13) -> None:
+    """Raise unless :func:`pgw.service.pks_ntt.forward4` equals the per-prime :func:`pgw.service.pks_ntt.forward`
+    (itself self-tested against torch, :func:`fused_self_test`) on edge-case hint rows: 3 reply ciphertexts (one at
+    the centring boundary, one at ``q1 - 1``) and 1."""
+    from pgw.service import pks_ntt
+
+    rng = np.random.default_rng(seed)
+    hs = _edge_hint_rows(rng, 3 * PACK)
+    hs[PACK:2 * PACK] = (_PAR.q1 + 1) // 2
+    hs[-PACK:] = _PAR.q1 - 1
+    hs_t = torch.from_numpy(hs.view(np.int64)).to(dev)
+    for rows in (hs_t, hs_t[PACK:2 * PACK]):
+        got = pks_ntt.forward4(rows)
+        for k, p in enumerate(pks.QP):
+            if not torch.equal(got[k], pks_ntt.forward(rows, p)):
+                raise RuntimeError("pks-v3 fused 4-prime forward NTT does not match the per-prime kernel")
+
+
+def _switch_self_test(dev: Any, seed: int = 17) -> None:
+    """Raise unless :func:`pgw.service.pks_fused.combine` equals the torch recombination (and switch) bit for bit:
+    int32 partials at ``+-(2^31 - 1)``, ``-2^31`` and random, constants at ``0``, ``-1``, ``+-2^63`` and random, shapes
+    not multiples of the kernel's blocks, one row, and a strided output view."""
+    from pgw.service import pks_fused
+    from pgw.service.kernels import _combine_planes
+
+    dev = torch.device(dev)
+    rng = np.random.default_rng(seed)
+    for r, c in ((40, 300), (32, 256), (1, 512)):
+        part = rng.integers(-(1 << 31), 1 << 31, (r, PLANES * c), dtype=np.int64)
+        part[0, :c] = (1 << 31) - 1
+        if r > 2:
+            part[1] = -(1 << 31)
+            part[2, ::3] = 0
+        const = rng.integers(-(1 << 63), (1 << 63) - 1, (r, 1), dtype=np.int64)
+        const[0] = -1
+        if r > 3:
+            const[1], const[2], const[3] = 0, -(1 << 63), (1 << 63) - 1
+        p_t = torch.from_numpy(part.astype(np.int32)).to(dev)
+        c_t = torch.from_numpy(const).to(dev)
+        want = _combine_planes([p_t[:, d * c:(d + 1) * c] for d in range(PLANES)], c_t).bitwise_and_(_M56)
+        for switch in (False, True):
+            buf = torch.full((r, c + 9), -7, dtype=torch.int64, device=dev)
+            got = pks_fused.combine(p_t, c_t, buf[:, 4:4 + c], switch)
+            ref = _round_mul_shift(want, _PAR.q1, 56) % _PAR.q1 if switch else want
+            kept = bool((buf[:, :4] == -7).all()) and bool((buf[:, 4 + c:] == -7).all())
+            if not torch.equal(got, ref) or not kept:
+                raise RuntimeError("pks-v3 fused recombination / hint switch does not match the torch path")
+
+
+def _ring_self_test(dev: Any) -> None:
+    """Raise unless :func:`pgw.service.pks_fused.ring_rows` equals :func:`pgw.hemask.pks.public_ring_rows` (the host
+    ChaCha20 stream) bit for bit for two public seeds and linears, 1 and 3 ring rows (a partial last program)."""
+    from pgw.service import pks_fused
+
+    for seed, n, linear in ((bytes(range(32)), RANK, "self-test"), (b"\xff" * 32, 3 * RANK, "0.down")):
+        got = pks_fused.ring_rows(seed, n, linear, dev).cpu().numpy().view(np.uint64)
+        if not np.array_equal(got, pks.public_ring_rows(seed, n, linear)):
+            raise RuntimeError("pks-v3 device ring rows do not match the host stream")
+
+
+#: ``PGW_SERVICE_PKS_GPU_FWD4``: the key switch's forward NTTs of all four primes in one launch, coalesced gather
+#: (:func:`pgw.service.pks_ntt.forward4`); used only while the fused NTTs are (:func:`ntt_impl`). Off unless set
+#: (``auto`` or ``fused``): exact on the Kaggle T4 but slower there (3.14 against 2.50 us per output row for 4 groups;
+#: the transforms are bound by the SMs, and the per-prime kernel's strided gather costs less than four on-chip
+#: transposes of the tile); the RunPod session measures both on an H100.
+FWD4 = FusedChoice("4-prime forward NTT", "PGW_SERVICE_PKS_GPU_FWD4", _fwd4_self_test, default="torch")
+#: ``PGW_SERVICE_PKS_GPU_SWITCH``: the device item's plane recombination and hint switch in one pass
+#: (:func:`pgw.service.pks_fused.combine`).
+SWITCH = FusedChoice("hint switch + recombination", "PGW_SERVICE_PKS_GPU_SWITCH", _switch_self_test)
+#: ``PGW_SERVICE_PKS_GPU_RING``: the customer's public ring rows expanded by the device (ChaCha20,
+#: :func:`pgw.service.pks_fused.ring_rows`) instead of on the host.
+RING = FusedChoice("ring-row stream", "PGW_SERVICE_PKS_GPU_RING", _ring_self_test)
+
+
+def fused_status(dev: Any) -> dict[str, str]:
+    """What the device item uses on ``dev`` now (runs pending ``auto`` self-tests): NTT, 4-prime forward, switch,
+    ring rows, each ``"fused"`` or ``"torch"``."""
+    ntt = ntt_impl(dev)
+    return {"ntt": ntt, "fwd4": FWD4.impl(dev) if ntt == "fused" else "torch", "switch": SWITCH.impl(dev),
+            "ring": RING.impl(dev), "wire": WIRE.impl(dev)}
+
+
 class _Keys:
     """An item's reply keys on the device: ``t`` ``(G, 4, 16, 8192)`` int64 and, made on first use by the fused
     kernels, their ``(4, G, 16, 8192)`` uint32 per-prime copy."""
@@ -283,7 +455,9 @@ def _keyswitch_t(hs_t: torch.Tensor, ops_t: _Keys | torch.Tensor, y_t: torch.Ten
         try:
             from pgw.service import pks_ntt
 
-            return pks_ntt.keyswitch(hs_t, keys.u32(), y_t)
+            u32 = keys.u32()
+            return FWD4.run(dev, lambda: pks_ntt.keyswitch(hs_t, u32, y_t, fwd4=True),
+                            lambda: pks_ntt.keyswitch(hs_t, u32, y_t))  # type: ignore[no-any-return]
         except Exception as e:
             if ntt_mode() == "fused":
                 raise
@@ -347,9 +521,109 @@ def _kl_index() -> np.ndarray:
 
 def ring_rows(a_seed: bytes, n: int, linear: str, dev: Any) -> torch.Tensor:
     """The customer's public ring rows ``a_C`` of one linear (``(n/16, 4096)`` int64 below ``2^56``) on ``dev``
-    (:func:`pgw.hemask.pks.public_ring_rows`: the same public stream the host path expands)."""
-    ring = pks.public_ring_rows(bytes(a_seed), int(n), linear)
-    return torch.from_numpy(np.ascontiguousarray(ring).view(np.int64)).to(dev)
+    (:func:`pgw.hemask.pks.public_ring_rows`: the same public stream the host path expands). Generated by the device
+    (ChaCha20, :func:`pgw.service.pks_fused.ring_rows`) when :data:`RING` says so, else on the host in parallel
+    threads (:func:`host_ring_rows`, off the GIL) and uploaded."""
+    dev = torch.device(dev)
+
+    def fused() -> torch.Tensor:
+        from pgw.service import pks_fused
+
+        return pks_fused.ring_rows(bytes(a_seed), int(n), linear, dev)
+
+    return RING.run(dev, fused, lambda: _upload(host_ring_rows(a_seed, n, linear), dev))  # type: ignore[no-any-return]
+
+
+class _HostRing:
+    """The host ring-row stream of one item running in the background (:func:`ring_rows_async`); ``result()`` waits
+    for it and uploads it on the caller's current stream."""
+
+    def __init__(self, fut: Any, dev: torch.device):
+        self.fut, self.dev = fut, dev
+
+    def result(self) -> torch.Tensor:
+        return _upload(self.fut.result(), self.dev)
+
+
+_outer_pool_obj: Any = None
+
+
+def ring_rows_async(a_seed: bytes, n: int, linear: str, dev: Any) -> torch.Tensor | _HostRing:
+    """:func:`ring_rows` for :func:`item`, overlapped: the device kernel is asynchronous already; the host fallback
+    starts in the background (off the GIL) and :func:`item` waits for it only after queuing the upload of ``b``."""
+    global _outer_pool_obj
+    dev = torch.device(dev)
+    if RING.impl(dev) == "fused":
+        return ring_rows(a_seed, n, linear, dev)
+    with _host_pool_lock:
+        if _outer_pool_obj is None:
+            from concurrent.futures import ThreadPoolExecutor
+
+            _outer_pool_obj = ThreadPoolExecutor(4, thread_name_prefix="pgw-pks-ring-item")
+    return _HostRing(_outer_pool_obj.submit(host_ring_rows, bytes(a_seed), int(n), linear), dev)
+
+
+_RING_ROWS_PER_TASK = 64  # ring rows (512 KiB of keystream each 64) per host task
+
+
+def _host_threads() -> int:
+    raw = (os.environ.get("PGW_SERVICE_PKS_HOST_THREADS") or "").strip()
+    return max(1, int(raw)) if raw else max(1, min(8, os.cpu_count() or 1))
+
+
+_host_pool_obj: Any = None
+_host_pool_lock = threading.Lock()
+
+
+def _host_pool() -> Any:
+    global _host_pool_obj
+    with _host_pool_lock:
+        if _host_pool_obj is None:
+            from concurrent.futures import ThreadPoolExecutor
+
+            _host_pool_obj = ThreadPoolExecutor(_host_threads(), thread_name_prefix="pgw-pks-ring")
+        return _host_pool_obj
+
+
+def host_ring_rows(a_seed: bytes, n: int, linear: str) -> np.ndarray:
+    """:func:`pgw.hemask.pks.public_ring_rows` (``(n/16, 4096)`` int64 view) computed in parallel: the stream is cut at
+    ring-row boundaries (ChaCha20 block-counter seeks, :func:`pgw.core.prng._ring_stream_into`) and the pieces run on
+    a thread pool (OpenSSL's ChaCha20 runs without the GIL). The same bytes as the one-shot stream."""
+    from pgw.core.prng import _ring_stream_into
+    from pgw.service.pks_fused import chacha_key
+
+    if n % RANK:
+        raise ValueError(f"in_features {n} is not a multiple of {RANK}")
+    rows = int(n) // RANK
+    key = chacha_key(a_seed, linear)
+    out = np.empty((rows, NU), dtype=np.int64)
+    step = _RING_ROWS_PER_TASK
+    if rows <= step or _host_threads() == 1:
+        _ring_stream_into(key, 0, out, 56)
+        return out
+    futs = [_host_pool().submit(_ring_stream_into, key, 8 * NU * r0, out[r0:r0 + step], 56)
+            for r0 in range(0, rows, step)]
+    for f in futs:
+        f.result()
+    return out
+
+
+def _upload(a: np.ndarray, dev: torch.device) -> torch.Tensor:
+    """``a`` on ``dev`` (uint64 as int64 bits): through a pinned staging buffer and a non-blocking copy on the current
+    stream on CUDA (PyTorch's caching host allocator keeps the buffer until the copy finished), plain elsewhere."""
+    a = np.ascontiguousarray(a)
+    src = torch.from_numpy(a.view(np.int64) if a.dtype == np.uint64 else a)
+    if dev.type != "cuda" or not _pinned_ok():
+        return src.to(dev)
+    pin = torch.empty(src.shape, dtype=src.dtype, pin_memory=True)
+    pin.copy_(src)
+    return pin.to(dev, non_blocking=True)
+
+
+def _pinned_ok() -> bool:
+    """``PGW_SERVICE_PKS_PINNED`` (default on): pinned, overlapped uploads and reply copies of the device item."""
+    raw = (os.environ.get("PGW_SERVICE_PKS_PINNED") or "").strip().lower()
+    return raw not in ("0", "off", "false", "no")
 
 
 def _a_source(ring_t: torch.Tensor) -> torch.Tensor:
@@ -395,6 +669,28 @@ def gemm_mod56(w: torch.Tensor, planes: torch.Tensor, const: torch.Tensor) -> to
     return y.bitwise_and_(_M56)
 
 
+def gemm_into(w: torch.Tensor, planes: torch.Tensor, const: torch.Tensor, out: torch.Tensor, switch: bool) -> None:
+    """``out = gemm_mod56(w, planes, const)``, switched to ``round(. q1 / 2^56) mod q1`` when ``switch`` (``out``: an
+    ``(R, c)`` int64 view). The recombination (and switch) runs as one fused kernel when :data:`SWITCH` says so
+    (:func:`pgw.service.pks_fused.combine`: the int32 partials read once, one int64 written), else as eager torch
+    operators; the same bits."""
+    nb, c, np_ = planes.shape
+    part = torch._int_mm(w, planes.view(torch.int8).view(nb * c, np_).t())  # (R, 7 c): plane-major columns
+
+    def fused() -> None:
+        from pgw.service import pks_fused
+
+        pks_fused.combine(part, const, out, switch)
+
+    def plain() -> None:
+        from pgw.service.kernels import _combine_planes
+
+        h = _combine_planes([part[:, d * c:(d + 1) * c] for d in range(nb)], const).bitwise_and_(_M56)
+        out.copy_(_round_mul_shift(h, _PAR.q1, 56) % _PAR.q1 if switch else h)
+
+    SWITCH.run(w.device, fused, plain)
+
+
 def _row_bytes(n_pad: int, cols: int, groups: int) -> int:
     """Device bytes per output row of one row block of :func:`item`: the switched hint row (4096 int64), the row of
     ``y`` (``cols`` int64), the per-block GEMM partials and switch temporaries (``COL_BLOCK`` wide, int32 partials
@@ -418,55 +714,282 @@ def item_bytes(m: int, n: int, n_pad: int, cols: int, groups: int, work_bytes: i
     rows = item_rows(m, n_pad, cols, groups, work_bytes)
     held = PLANES * (NU + cols) * n_pad + 8 * (n // RANK) * NU
     build = 2 * 8 * (n // RANK) * 2 * NU + 2 * 8 * n * COL_BLOCK  # cat(a, X a) + roll, one column block (+ copy)
-    return held + max(build, rows * _row_bytes(n_pad, cols, groups))
+    # on CUDA the upload's planes are built on a side stream at the same time: its wire bytes and one column block
+    upload = 7 * n * cols + 8 * n * COL_BLOCK
+    return held + max(build + upload, rows * _row_bytes(n_pad, cols, groups))
 
 
-def item(w: torch.Tensor, const: torch.Tensor, m: int, n: int, ring_t: torch.Tensor, b: np.ndarray, ops: np.ndarray,
-         *, work_bytes: int | None = None) -> np.ndarray:
+def item(w: torch.Tensor, const: torch.Tensor, m: int, n: int, ring_t: Any, b: np.ndarray | PackedUpload,
+         ops: np.ndarray, *, work_bytes: int | None = None, out: np.ndarray | PackedReply | None = None,
+         out_b0: int = 0) -> np.ndarray | PackedReply:
     """The reply ``(G, m/32, 8192)`` uint64 of one pks-v3 item, computed on ``w``'s device.
 
     ``w``: the kernel's int8 weight (``(>= m, n_pad)``, rows and inputs beyond ``(m, n)`` zero), ``const``: its
     ``(>= m, 1)`` maskgen constant for 7 byte planes (:meth:`ComputeKernel._maskgen_const`), ``ring_t``:
-    :func:`ring_rows`, ``b``: the item's ``(n, 256 G)`` upload below ``2^56``, ``ops``: ``(G, 4, 16, 8192)`` reply
+    :func:`ring_rows` (or :func:`ring_rows_async`), ``b``: the item's ``(n, 256 G)`` upload below ``2^56``, ``ops``:
+    ``(G, 4, 16, 8192)`` reply
     keys. Equal bit for bit to ``keyswitch(switch_hint(W8 A mod 2^56), ops, W8 b mod 2^56)`` (the host path of
     :class:`pgw.service.pks_provider.PKSProvider`): the same GEMM arithmetic (:func:`gemm_mod56`), the same
     exact 14-bit-digit switch (:func:`_round_mul_shift`) and the same key switch (:func:`_keyswitch_t`, whose
-    reply ciphertexts depend only on their own 32 rows)."""
+    reply ciphertexts depend only on their own 32 rows).
+
+    ``b`` may be the upload's wire bytes (:class:`PackedUpload`, unpacked on the device when :data:`WIRE` says so,
+    else on the host); ``out`` an array or :class:`PackedReply` to write the reply rows into at reply ciphertext
+    ``out_b0`` (tensor-parallel shards), returned."""
     dev = w.device
     np_ = int(w.shape[1])
     groups, cols = int(ops.shape[0]), int(b.shape[1])
     if m % PACK or n % RANK or b.shape[0] != n or cols != D * groups or w.shape[0] < m or np_ < n:
         raise ValueError("pks-v3 device item: bad shapes")
-    q1 = _PAR.q1
-    ops_t = _Keys(torch.from_numpy(np.ascontiguousarray(ops).astype(np.int64)).to(dev))
-    src = _a_source(ring_t)
-    step = COL_BLOCK // D
-    aplanes = [planes_of(a_columns(src, l0, l0 + step), np_) for l0 in range(0, RANK, step)]
-    del src
-    bplanes = []
-    for c0 in range(0, cols, COL_BLOCK):
-        bt = torch.from_numpy(np.ascontiguousarray(b[:, c0:c0 + COL_BLOCK]).view(np.int64)).to(dev)
-        bplanes.append(planes_of(bt, np_))
-        del bt
+    if isinstance(b, PackedUpload) and WIRE.impl(dev) != "fused":
+        b = b.host()
+    side = _side_stream(dev) if dev.type == "cuda" and _pinned_ok() else None
+    aplanes = _a_planes(ring_t, np_) if isinstance(ring_t, torch.Tensor) else None  # queued first
+    if aplanes is not None:
+        del ring_t
+    # the uploads (reply keys, ``b`` and its planes) on a side stream: their host copies into pinned buffers and the
+    # transfers overlap the ring rows, the hint operand's planes and the first row block's hint GEMMs (or, with the
+    # host ring-row stream still running, that stream)
+    with torch.cuda.stream(side) if side is not None else contextlib.nullcontext():
+        # the keys go up as uint32 (half the bytes) and widen on the device (residues below 2^30: exact)
+        ops_t = _Keys(_upload(np.ascontiguousarray(ops, dtype=np.uint32).view(np.int32), dev).to(torch.int64))
+        bplanes = []
+        raw = _upload_bytes(b.data, dev) if isinstance(b, PackedUpload) else None
+        for c0 in range(0, cols, COL_BLOCK):
+            if raw is not None:
+                bt = _unpack56_cols(raw, n, cols, c0, min(cols, c0 + COL_BLOCK))
+            else:
+                bt = _upload(b[:, c0:c0 + COL_BLOCK], dev)  # type: ignore[index]
+            bplanes.append(planes_of(bt, np_))
+            del bt
+        del raw
+    if aplanes is None:
+        aplanes = _a_planes(ring_t.result(), np_)
+        del ring_t
+    waited = side is None
     rows = item_rows(m, np_, cols, groups, work_bytes)
-    out = np.empty((groups, m // PACK, NR), dtype=np.uint64)
+    if out is None:
+        out = np.empty((groups, m // PACK, NR), dtype=np.uint64)
+    copies = _ReplyCopies(out, dev, out_b0)
     for r0 in range(0, m, rows):
         r1 = min(m, r0 + rows)
         wr, cr = w[r0:r1], const[r0:r1]
         hs = torch.empty((r1 - r0, NU), dtype=torch.int64, device=dev)
         for j, pl in enumerate(aplanes):
-            h = gemm_mod56(wr, pl, cr)
-            hs[:, j * COL_BLOCK:(j + 1) * COL_BLOCK] = _round_mul_shift(h, q1, 56) % q1
-            del h
+            gemm_into(wr, pl, cr, hs[:, j * COL_BLOCK:(j + 1) * COL_BLOCK], True)
+        if not waited:
+            cur = torch.cuda.current_stream(dev)
+            cur.wait_stream(side)  # type: ignore[arg-type]
+            for t in (ops_t.t, *bplanes):  # allocated on the side stream, used (and freed) on this one
+                t.record_stream(cur)
+            waited = True
         y = torch.empty((r1 - r0, cols), dtype=torch.int64, device=dev)
         for j, pl in enumerate(bplanes):
             c0 = j * COL_BLOCK
-            y[:, c0:c0 + pl.shape[1]] = gemm_mod56(wr, pl, cr)
+            gemm_into(wr, pl, cr, y[:, c0:c0 + pl.shape[1]], False)
         res = _keyswitch_t(hs, ops_t, y)
         del hs, y
-        out[:, r0 // PACK:r1 // PACK] = res.cpu().numpy().view(np.uint64)
+        copies.put(res, r0 // PACK, r1 // PACK)
         del res
+    copies.finish()
     return out
+
+
+def _a_planes(ring_t: torch.Tensor, np_: int) -> list[torch.Tensor]:
+    """The hint GEMM's operand: :func:`planes_of` of ``A = a_mlwe_rows(ring)``, column block by column block."""
+    src = _a_source(ring_t)
+    step = COL_BLOCK // D
+    return [planes_of(a_columns(src, l0, l0 + step), np_) for l0 in range(0, RANK, step)]
+
+
+_side = threading.local()
+
+
+def _side_stream(dev: torch.device) -> Any:
+    """This thread's upload stream on ``dev`` (one per thread and device: concurrent items run in their own threads
+    on their own streams)."""
+    cache = getattr(_side, "streams", None)
+    if cache is None:
+        cache = _side.streams = {}
+    key = str(dev)
+    if key not in cache:
+        cache[key] = torch.cuda.Stream(dev)  # type: ignore[no-untyped-call]
+    return cache[key]
+
+
+class _ReplyCopies:
+    """The reply rows of :func:`item`'s row blocks back to the host, into an array or a :class:`PackedReply` (the wire
+    bytes; packed on the device when :data:`WIRE` says so: 4.5 instead of 8 bytes per value cross PCIe and the host
+    only copies, else packed on the host block by block). On CUDA (``PGW_SERVICE_PKS_PINNED``, default on) each
+    block goes into pinned buffers by non-blocking copies on the current stream, and the host copies the previous
+    block out while the device computes the next one; elsewhere plain copies."""
+
+    def __init__(self, out: np.ndarray | PackedReply, dev: torch.device, b_off: int = 0):
+        self.out, self.b_off = out, b_off
+        self.overlap = dev.type == "cuda" and _pinned_ok()
+        self.dev_pack = isinstance(out, PackedReply) and WIRE.impl(dev) == "fused"
+        self.pending: tuple[Any, tuple[torch.Tensor, ...], int, int] | None = None
+
+    def put(self, res: torch.Tensor, b0: int, b1: int) -> None:
+        b0, b1 = b0 + self.b_off, b1 + self.b_off
+        parts = _pack36_dev(res) if self.dev_pack else (res,)
+        if not self.overlap:
+            self._store(tuple(p.cpu() for p in parts), b0, b1)
+            return
+        host = []
+        for p in parts:
+            h = torch.empty(p.shape, dtype=p.dtype, pin_memory=True)
+            h.copy_(p, non_blocking=True)
+            host.append(h)
+        ev = torch.cuda.Event()  # type: ignore[no-untyped-call]
+        ev.record()
+        self._drain()
+        self.pending = (ev, tuple(host), b0, b1)
+
+    def _store(self, parts: tuple[torch.Tensor, ...], b0: int, b1: int) -> None:
+        if isinstance(self.out, PackedReply):
+            if len(parts) == 2:
+                self.out.low[:, b0:b1] = parts[0].numpy().view(np.uint32)
+                self.out.tail[:, b0:b1] = parts[1].numpy()
+            else:
+                self.out.put_host(parts[0].numpy().view(np.uint64), b0, b1)
+        else:
+            self.out[:, b0:b1] = parts[0].numpy().view(np.uint64)
+
+    def _drain(self) -> None:
+        if self.pending is not None:
+            ev, host, b0, b1 = self.pending
+            ev.synchronize()
+            self._store(host, b0, b1)
+            self.pending = None
+
+    def finish(self) -> None:
+        self._drain()
+
+
+# ---- the wire forms on the device (PGW_SERVICE_PKS_GPU_WIRE) ------------------------------------------------
+#
+# ``run_item`` used to unpack the upload ``b`` (56-bit wire fields) and pack the reply (36-bit fields) with numpy on
+# one host thread: ~8 and ~20 ns per value on the development box, i.e. ~37 + ~147 s per 1024-slot cycle at 72B
+# (4.4e9 upload and 7.2e9 reply values), far above the device work. Both formats are plain bit fields
+# (:func:`pgw.hemask.wire.pack_bits`): the upload as 32 + 16 + 8-bit little-endian arrays, the reply as one 32-bit
+# array and a 4-bit tail stream (two values per byte, the first in the low nibble). So the raw upload bytes go up
+# (7 instead of 8 bytes per value) and are unpacked by the device, and the reply is packed by the device row block
+# by row block (4.5 instead of 8 bytes per value come back) straight into the reply's wire buffer. Integer bit
+# operations only: the same bytes (self-tested against ``pack_bits`` / ``unpack_bits`` before first use).
+
+_M32 = (1 << 32) - 1
+
+
+def wire_layout_ok() -> bool:
+    """True when the v3 wire fields are the ones the device pack / unpack assume (56-bit upload: 32 + 16 + 8 bits;
+    36-bit reply: 32 bits + a 4-bit tail)."""
+    from pgw.hemask.wire import V3_Y_BITS, bit_fields
+
+    return V3_Y_BITS == 36 and bit_fields(36) == ([(0, 32)], 4) and \
+        bit_fields(56) == ([(0, 32), (32, 16), (48, 8)], 0)
+
+
+class PackedUpload:
+    """An item's upload ``b`` (``(n, cols)`` values below ``2^56``) in its wire form (``pack_bits(b, 56)``)."""
+
+    def __init__(self, data: bytes | bytearray | memoryview, n: int, cols: int):
+        if len(data) != n * cols * 7:
+            raise ValueError("pks-v3 upload: wrong size")
+        self.data, self.n, self.cols = data, int(n), int(cols)
+        self.shape = (self.n, self.cols)
+        self._host: np.ndarray | None = None
+
+    def host(self) -> np.ndarray:
+        """``unpack_bits`` on the host (cached): the fallback and the cache path."""
+        if self._host is None:
+            from pgw.hemask.wire import unpack_bits
+
+            self._host = unpack_bits(self.data, self.n * self.cols, 56).reshape(self.n, self.cols)
+        return self._host
+
+
+class PackedReply:
+    """The reply's wire bytes ``pack_bits(reply.reshape(-1), 36)`` (``reply``: ``(G, nb, 8192)``), filled row block
+    by row block: ``low`` ``(G, nb, 8192)`` uint32 and ``tail`` ``(G, nb, 4096)`` uint8 views of ``buf``."""
+
+    def __init__(self, groups: int, nb: int):
+        count = groups * nb * NR
+        self.buf = bytearray(count * 36 // 8)
+        self.low = np.frombuffer(self.buf, dtype=np.uint32, count=count).reshape(groups, nb, NR)
+        self.tail = np.frombuffer(self.buf, dtype=np.uint8, count=count // 2, offset=4 * count).reshape(groups, nb,
+                                                                                                         NR // 2)
+
+    def put_host(self, vals: np.ndarray, b0: int, b1: int) -> None:
+        """Pack ``(G, b1 - b0, 8192)`` uint64 reply values below ``2^36`` on the host."""
+        np.copyto(self.low[:, b0:b1], vals & np.uint64(_M32), casting="unsafe")
+        t = ((vals >> np.uint64(32)) & np.uint64(15)).astype(np.uint8)
+        self.tail[:, b0:b1] = t[..., 0::2] | (t[..., 1::2] << np.uint8(4))
+
+
+def _pack36_dev(res: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    """``(low, tail)`` of reply values ``res`` (int64 below ``2^36``) on their device: the low 32 bits as int32 (the
+    same bits as uint32) and the 4-bit tails two per byte (uint8, the first value in the low nibble)."""
+    low = res & _M32
+    low = torch.where(low > (1 << 31) - 1, low - (1 << 32), low).to(torch.int32)
+    t = (res >> 32) & 15
+    tail = (t[..., 0::2] | (t[..., 1::2] << 4)).to(torch.uint8)
+    return low, tail
+
+
+def _upload_bytes(data: bytes | bytearray | memoryview, dev: torch.device) -> torch.Tensor:
+    """Raw bytes as a uint8 tensor on ``dev`` (pinned and non-blocking on CUDA, as :func:`_upload`)."""
+    arr = np.frombuffer(data, dtype=np.uint8)
+    if dev.type != "cuda" or not _pinned_ok():
+        return torch.from_numpy(arr.copy()).to(dev)
+    pin = torch.empty(arr.shape, dtype=torch.uint8, pin_memory=True)
+    pin.numpy()[:] = arr
+    return pin.to(dev, non_blocking=True)
+
+
+def _unpack56_cols(raw: torch.Tensor, n: int, cols: int, c0: int, c1: int) -> torch.Tensor:
+    """Columns ``c0 .. c1 - 1`` of the ``(n, cols)`` upload from its wire bytes ``raw`` (uint8 on the device):
+    ``low32 | mid16 << 32 | hi8 << 48`` (int64, below ``2^56``)."""
+    cnt = n * cols
+    low = raw[:4 * cnt].view(torch.int32).view(n, cols)[:, c0:c1].to(torch.int64) & _M32
+    mid = raw[4 * cnt:6 * cnt].view(torch.int16).view(n, cols)[:, c0:c1].to(torch.int64) & 0xFFFF
+    hi = raw[6 * cnt:7 * cnt].view(n, cols)[:, c0:c1].to(torch.int64)
+    return low | (mid << 32) | (hi << 48)
+
+
+def _wire_self_test(dev: Any, seed: int = 19) -> None:
+    """Raise unless the device pack of a reply equals ``pack_bits(., 36)`` and the device unpack of an upload equals
+    ``unpack_bits(., 56)``, on edge values (``0``, ``2^31 - 1``, ``2^31``, ``2^32 - 1``, ``2^32``, ``2^36 - 1``;
+    ``2^56 - 1`` and the field boundaries of the upload)."""
+    from pgw.hemask.wire import pack_bits
+
+    if not wire_layout_ok():
+        raise RuntimeError("pks-v3 wire fields changed: device pack / unpack disabled")
+    dev = torch.device(dev)
+    rng = np.random.default_rng(seed)
+    groups, nb = 2, 3
+    vals = rng.integers(0, 1 << 36, (groups, nb, NR), dtype=np.uint64)
+    vals[0, 0, :8] = [0, (1 << 31) - 1, 1 << 31, (1 << 32) - 1, 1 << 32, (1 << 36) - 1, 1, (1 << 35)]
+    vals[1, 2] = (1 << 36) - 1
+    pr = PackedReply(groups, nb)
+    low, tail = _pack36_dev(torch.from_numpy(vals.view(np.int64)).to(dev)[:, 1:])
+    pr.low[:, 1:] = low.cpu().numpy().view(np.uint32)
+    pr.tail[:, 1:] = tail.cpu().numpy()
+    pr.put_host(vals[:, :1], 0, 1)
+    if bytes(pr.buf) != bytes(pack_bits(vals.reshape(-1), 36)):
+        raise RuntimeError("pks-v3 device reply pack does not match pack_bits")
+    n, cols = 48, 1024 + 256
+    b = rng.integers(0, 1 << 56, (n, cols), dtype=np.uint64)
+    b[0, :10] = [0, (1 << 56) - 1, (1 << 32) - 1, 1 << 32, (1 << 48) - 1, 1 << 48, (1 << 31), (1 << 47), 1 << 55, 1]
+    raw = _upload_bytes(pack_bits(b.reshape(-1), 56), dev)
+    got = torch.cat([_unpack56_cols(raw, n, cols, c0, min(cols, c0 + COL_BLOCK)) for c0 in range(0, cols, COL_BLOCK)],
+                    dim=1)
+    if not np.array_equal(got.cpu().numpy().view(np.uint64), b):
+        raise RuntimeError("pks-v3 device upload unpack does not match unpack_bits")
+
+
+#: ``PGW_SERVICE_PKS_GPU_WIRE``: the upload unpacked and the reply packed on the device (the wire's bit fields).
+WIRE = FusedChoice("wire pack / unpack", "PGW_SERVICE_PKS_GPU_WIRE", _wire_self_test)
 
 
 def item_self_test(dev: Any, seed: int = 5) -> None:
@@ -495,6 +1018,14 @@ def item_self_test(dev: Any, seed: int = 5) -> None:
     want = cpu(hs, ops, matmul_mod64(w8, b) & np.uint64(_M56))
     if not np.array_equal(got, want):
         raise RuntimeError("pks-v3 device item does not match the host path")
+    if wire_layout_ok():  # the wire forms: the upload's bytes in, the reply's bytes out (as PKSProvider)
+        from pgw.hemask.wire import V3_Y_BITS, pack_bits
+
+        pr = item(wpad.to(dev), const.to(dev), m, n, ring_rows(a_seed, n, "self-test", dev),
+                  PackedUpload(pack_bits(b.reshape(-1), 56), n, b.shape[1]), ops,
+                  out=PackedReply(ops.shape[0], m // PACK))
+        if not isinstance(pr, PackedReply) or bytes(pr.buf) != bytes(pack_bits(want.reshape(-1), V3_Y_BITS)):
+            raise RuntimeError("pks-v3 device item (wire forms) does not match the host path")
 
 
 def self_test(dev: Any, seed: int = 7) -> None:

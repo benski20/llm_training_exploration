@@ -43,7 +43,7 @@ import triton.language as tl
 from pgw.hemask import pks
 from pgw.hemask.pks import NR, PACK, RANK, D
 
-__all__ = ["Tables", "forward", "mac_inverse", "tables"]
+__all__ = ["Tables", "Tables4", "forward", "forward4", "mac_inverse", "tables"]
 
 LOG_NR = NR.bit_length() - 1  # 13
 _M32 = (1 << 32) - 1
@@ -143,6 +143,39 @@ def _fwd_kernel(HS, AH, Z, ZS, p, half, qp, c24, c24s, N: tl.constexpr, LOGN: tl
 
 
 @triton.jit
+def _fwd4_kernel(HS, AH, Z, ZS, PC, half, N: tl.constexpr, LOGN: tl.constexpr, PK: tl.constexpr, RK: tl.constexpr,
+                 DD: tl.constexpr, NP: tl.constexpr):
+    """Program ``(b, l)``: ``AH[k, b, l] = fwd_k(A~[b, l] mod p_k)`` for all ``NP`` primes from one read of the hint
+    rows. The gather is coalesced: the ``(32, 256)`` tile ``HS[32 b + j, 256 l + u]`` is loaded row-contiguous and
+    transposed on chip (``A~[32 u + j] = tile[j, u]``). ``Z``, ``ZS``: ``(NP, N)`` twiddles; ``PC``: ``(NP, 4)``
+    int64 ``p, q1 mod p, 2^24 mod p, Shoup(2^24 mod p)``."""
+    pid = tl.program_id(0)
+    b = pid // RK
+    li = pid % RK
+    j = tl.arange(0, PK)
+    u = tl.arange(0, DD)
+    off = (b * PK + j).to(tl.int64)[:, None] * (RK * DD) + li * DD + u[None, :]
+    h = tl.load(HS + off)  # (PK, DD), contiguous along u
+    hi = (h >> 24).to(tl.uint32)  # < 2^24 < 2p
+    lo = (h & 0xFFFFFF).to(tl.uint32)
+    neg = h >= half
+    i = tl.arange(0, N)
+    for k in tl.static_range(NP):
+        pu = tl.load(PC + 4 * k).to(tl.uint32)
+        qu = tl.load(PC + 4 * k + 1).to(tl.uint32)
+        c24 = tl.load(PC + 4 * k + 2).to(tl.uint32)
+        c24s = tl.load(PC + 4 * k + 3).to(tl.uint32)
+        a = tl.where(hi >= pu, hi - pu, hi)
+        c = tl.where(lo >= pu, lo - pu, lo)
+        r = _shoup(a, c24, c24s, pu) + c
+        r = tl.where(r >= pu, r - pu, r)
+        r = tl.where(neg, tl.where(r >= qu, r - qu, r + pu - qu), r)
+        x = tl.reshape(tl.trans(r), (N,))  # x[32 u + j] = r[j, u]
+        x = _fwd_stages(x, Z + k * N, ZS + k * N, pu, N, LOGN)
+        tl.store(AH + (k * tl.num_programs(0) + pid).to(tl.int64) * N + i, x)
+
+
+@triton.jit
 def _mac_inv_kernel(AH, OPS, OUT, ZI, ZIS, p, pinv, scale, scales, N: tl.constexpr, LOGN: tl.constexpr,
                     RK: tl.constexpr):
     """Program ``(b, g)``: ``OUT[g, b] = inv(sum_l AH[b, l] OPS[g, l])`` (``OPS``: ``(G, 16, N)`` uint32 key
@@ -219,6 +252,37 @@ def forward(hs_t: torch.Tensor, p: int) -> torch.Tensor:
     out = torch.empty((nb, RANK, NR), dtype=torch.uint32, device=hs.device)
     _fwd_kernel[(nb * RANK,)](hs, out, t.z, t.zs, p, t.half, t.qp, t.c24, t.c24s, N=NR, LOGN=LOG_NR, PK=PACK,
                               RK=RANK, DD=D, num_warps=_warps())
+    return out
+
+
+class Tables4:
+    """The twiddles of all primes of :data:`pgw.hemask.pks.QP` stacked for :func:`forward4`."""
+
+    def __init__(self, dev: Any):
+        ts = [tables(p, dev) for p in pks.QP]
+        self.z = torch.stack([t.z for t in ts]).contiguous()
+        self.zs = torch.stack([t.zs for t in ts]).contiguous()
+        self.pc = torch.tensor([[t.p, t.qp, t.c24, t.c24s] for t in ts], dtype=torch.int64, device=dev)
+        self.half = ts[0].half
+
+
+@cache
+def _tables4_cached(dev: str) -> Tables4:
+    return Tables4(torch.device(dev))
+
+
+def forward4(hs_t: torch.Tensor) -> torch.Tensor:
+    """``(4, nb, 16, 8192)`` uint32: :func:`forward` for every prime of ``QP`` in one launch (one coalesced read of
+    the hint rows per reply ciphertext and slot instead of four strided ones)."""
+    m = int(hs_t.shape[0])
+    if m % PACK or hs_t.shape[1] != RANK * D or hs_t.dtype != torch.int64:
+        raise ValueError("fused NTT: bad hint rows")
+    nb = m // PACK
+    hs = hs_t.contiguous()
+    t = _tables4_cached(str(hs.device))
+    out = torch.empty((len(pks.QP), nb, RANK, NR), dtype=torch.uint32, device=hs.device)
+    _fwd4_kernel[(nb * RANK,)](hs, out, t.z, t.zs, t.pc, t.half, N=NR, LOGN=LOG_NR, PK=PACK, RK=RANK, DD=D,
+                               NP=len(pks.QP), num_warps=_warps())
     return out
 
 
@@ -309,10 +373,11 @@ def _tail_kernel(RES, Y, OUT, P0: tl.constexpr, P1: tl.constexpr, P2: tl.constex
 _TAIL_BLOCK = 1024
 
 
-def keyswitch(hs_t: torch.Tensor, ops_u: torch.Tensor, y_t: torch.Tensor) -> torch.Tensor:
+def keyswitch(hs_t: torch.Tensor, ops_u: torch.Tensor, y_t: torch.Tensor, fwd4: bool = False) -> torch.Tensor:
     """The key switch of :func:`pgw.service.pks_gpu._keyswitch_t` with the fused kernels: ``hs_t`` ``(R, 4096)``
     int64 in ``[0, q1)``, ``ops_u`` ``(4, G, 16, 8192)`` uint32 (:func:`ops_u32`), ``y_t`` ``(R, 256 G)`` int64 below
-    ``2^56``; returns ``(G, R/32, 8192)`` int64, equal bit for bit."""
+    ``2^56``; returns ``(G, R/32, 8192)`` int64, equal bit for bit. ``fwd4``: the forward transforms of all four
+    primes in one launch (:func:`forward4`, ``PGW_SERVICE_PKS_GPU_FWD4``) instead of one per prime."""
     from pgw.hemask.pks import PKSParams
 
     par = PKSParams()
@@ -322,10 +387,16 @@ def keyswitch(hs_t: torch.Tensor, ops_u: torch.Tensor, y_t: torch.Tensor) -> tor
         raise ValueError("fused key switch: bad shapes")
     dev = hs_t.device
     res = torch.empty((len(pks.QP), groups, nb, NR), dtype=torch.uint32, device=dev)
-    for k, p in enumerate(pks.QP):
-        ah = forward(hs_t, p)
-        mac_inverse(ah, ops_u[k], p, out=res[k])
-        del ah
+    if fwd4:
+        ah4 = forward4(hs_t)
+        for k, p in enumerate(pks.QP):
+            mac_inverse(ah4[k], ops_u[k], p, out=res[k])
+        del ah4
+    else:
+        for k, p in enumerate(pks.QP):
+            ah = forward(hs_t, p)
+            mac_inverse(ah, ops_u[k], p, out=res[k])
+            del ah
     out = torch.empty((groups, nb, NR), dtype=torch.int64, device=dev)
     p0, p1, p2, p3 = pks.QP
     pm = par.pmod
@@ -341,7 +412,7 @@ def ops_u32(ops_t: torch.Tensor) -> torch.Tensor:
     return ops_t.transpose(0, 1).to(torch.int32).view(torch.uint32).contiguous()
 
 
-def compile_for(arch: int, num_warps: int = 8) -> dict[str, int]:
+def compile_for(arch: int, num_warps: int = 8, shared: dict[str, int] | None = None) -> dict[str, int]:
     """Compile the three kernels for CUDA compute capability ``arch`` (e.g. 75: T4, 90: H100) with their launch
     signatures, without a GPU (Triton's bundled ptxas; not under ``TRITON_INTERPRET=1``). Returns the cubin bytes
     per kernel. Catches what the interpreter cannot: Triton's front end and lowering."""
@@ -359,6 +430,8 @@ def compile_for(arch: int, num_warps: int = 8) -> dict[str, int]:
         "fwd": (_fwd_kernel, {"HS": "*i64", "AH": "*u32", "Z": "*u32", "ZS": "*u32", "p": "i32", "half": "i64",
                               "qp": "i32", "c24": "i32", "c24s": "i32"},
                 dict(N=NR, LOGN=LOG_NR, PK=PACK, RK=RANK, DD=D)),
+        "fwd4": (_fwd4_kernel, {"HS": "*i64", "AH": "*u32", "Z": "*u32", "ZS": "*u32", "PC": "*i64", "half": "i64"},
+                 dict(N=NR, LOGN=LOG_NR, PK=PACK, RK=RANK, DD=D, NP=len(pks.QP))),
         "mac_inv": (_mac_inv_kernel, {"AH": "*u32", "OPS": "*u32", "OUT": "*u32", "ZI": "*u32", "ZIS": "*u32",
                                       "p": "i32", "pinv": "i64", "scale": "i32", "scales": "i32"},
                     dict(N=NR, LOGN=LOG_NR, RK=RANK)),
@@ -369,4 +442,6 @@ def compile_for(arch: int, num_warps: int = 8) -> dict[str, int]:
         src = ASTSource(fn=fn, signature={**sig, **{k: "constexpr" for k in cx}}, constexprs=cx)
         k = triton.compile(src, target=GPUTarget("cuda", arch, 32), options={"num_warps": num_warps})
         out[name] = len(k.asm["cubin"])
+        if shared is not None:
+            shared[name] = int(k.metadata.shared)
     return out

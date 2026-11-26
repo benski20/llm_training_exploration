@@ -930,28 +930,34 @@ JOBS["pgw-sdk-e2e-3b"] = _sdk_e2e_job("qwen2.5-3b-instruct", 2 * 3600)
 JOBS["pgw-sdk-e2e-15b"] = _sdk_e2e_job("qwen2.5-1.5b-instruct", 2 * 3600)
 
 
-# pks-v3 provider key switch with the fused Triton NTTs (pgw.service.pks_ntt) on a T4: the kernels against
-# pks.Ntt, the torch key switch and the CPU key switch (tests/service/test_pks_ntt.py on CUDA, then the bench's
-# exactness section), microseconds per NTT at 4 / 8 / 16 warps, the key switch per output row, and whole items of
-# the largest 7B / 32B / 72B linears with PGW_SERVICE_PKS_GPU_NTT=torch vs fused (byte-identical replies). No native
-# build (the CPU references are the numpy ones). Under 1 h: the bench stops starting items after --budget-s.
+# pks-v3 provider device item with the fused Triton kernels (pgw.service.pks_ntt, pgw.service.pks_fused) on a T4: the
+# NTTs against pks.Ntt, the torch key switch and the CPU key switch (one group included: the path the first run could
+# not compile), the fused recombination + hint switch against torch and pks.switch_hint, the device ChaCha20 ring
+# rows against pks.public_ring_rows, the 4-prime forward NTT, every self-test (tests/service/test_pks_ntt.py and
+# test_pks_fused.py on CUDA, then the bench's exactness sections); microseconds per kernel, the item's stages before
+# and after, and whole items of the largest 7B / 32B / 72B linears through PKSProvider with every kernel plain, with
+# the fused NTTs only (the previous state) and with every kernel under auto (byte-identical replies). No native build
+# (the CPU references are the numpy ones). One kernel of at most 45 min: the bench stops starting items after
+# --budget-s and saves its JSON per section and per item.
 _PKS_NTT_KEEP_TESTS = {"service", "__init__.py", "conftest.py"}
 _PKS_NTT_KEEP_SRC = {"core", "hemask", "observability", "service", "wire"}  # the import closure of the bench + test
-JOBS["pgw-pks-ntt-t4"] = {"machine_shape": "NvidiaTeslaT4", "exclude": [
+_PKS_NTT_TESTS = ("__init__.py", "test_pks_ntt.py", "test_pks_fused.py")
+JOBS["pgw-pks-ntt-t4"] = {"machine_shape": "NvidiaTeslaT4", "session_timeout_s": 45 * 60, "exclude": [
     "scripts", "examples", "rust", "SPEC.md", "INTERFACE_NOTES.md", "STATUS.md",
     *sorted(f"src/pgw/{p.name}" for p in (PGW / "src" / "pgw").iterdir()
             if p.is_dir() and p.name not in _PKS_NTT_KEEP_SRC),
     *sorted(f"tests/{p.name}" for p in (PGW / "tests").iterdir() if p.name not in _PKS_NTT_KEEP_TESTS),
     *sorted(f"tests/service/{p.name}" for p in (PGW / "tests" / "service").iterdir()
-            if p.name not in ("__init__.py", "test_pks_ntt.py")),
+            if p.name not in _PKS_NTT_TESTS),
     *sorted(f"benchmarks/{p.name}" for p in HERE.parent.iterdir() if p.name != "pks_ntt_bench.py")], "steps": [
     {"kind": "shell", "name": "gpu_info", "cmd": "nproc; free -g; nvidia-smi; python -c 'import triton; "
      "print(triton.__version__)'", "timeout": 120},
-    {"kind": "pytest", "name": "pytest_pks_ntt_cuda", "args": ["tests/service/test_pks_ntt.py", "-q", "-rs",
-                                                               "--timeout", "900"], "timeout": 1000},
+    {"kind": "pytest", "name": "pytest_pks_cuda", "args": ["tests/service/test_pks_ntt.py",
+                                                           "tests/service/test_pks_fused.py", "-q", "-rs",
+                                                           "--timeout", "600"], "timeout": 660},
     {"kind": "shell", "name": "pks_ntt_bench",
-     "cmd": "python benchmarks/pks_ntt_bench.py --json /kaggle/working/pks_ntt.json --budget-s 1300",
-     "timeout": 2100},
+     "cmd": "python benchmarks/pks_ntt_bench.py --json /kaggle/working/pks_ntt.json --budget-s 1150",
+     "timeout": 1750},
 ]}
 
 

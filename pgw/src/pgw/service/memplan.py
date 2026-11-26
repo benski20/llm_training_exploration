@@ -171,6 +171,11 @@ class MemConfig:
     #: the key switch's NTTs (``PGW_SERVICE_PKS_GPU_NTT``): ``fused`` Triton kernels (what ``auto`` picks on CUDA after
     #: its self-test) or eager ``torch`` operators
     pks_ntt: Literal["torch", "fused"] = "fused"
+    #: the device item's other fused kernels (``PGW_SERVICE_PKS_GPU_FWD4`` / ``_SWITCH`` / ``_RING`` /
+    #: ``PGW_SERVICE_PKS_PINNED``): ``all`` (what ``auto`` picks on CUDA after their self-tests: the 4-prime forward
+    #: NTT, the fused recombination + hint switch, the device ChaCha20 ring rows, pinned overlapped copies) or
+    #: ``ntt`` (the fused NTTs only: the state before 2026-11-26's second round)
+    pks_kernels: Literal["all", "ntt"] = "all"
     context_bytes: int = 512 * MIB  #: CUDA context, cuBLAS/cuBLASLt handles, Triton modules
     cublas_workspace_bytes: int = 32 * MIB  #: per stream that runs GEMMs
     fragmentation: float = 0.03  #: caching-allocator slack on non-weight memory
@@ -364,16 +369,51 @@ ITEM_OPS_PER_BLOCK = 871 + 8 * (28 + 13) + 2 * 13
 #: kernel gathers the int64 hint row, 32 KiB per row, and writes 16 uint32 transforms per 32 rows, 16 KiB per row;
 #: per group and prime the MAC + inverse kernel reads those transforms, 16 KiB per row, the keys stay in L2, and
 #: writes 1 KiB; the tail reads 4 KiB of residues and 2 KiB of ``y`` and writes 2 KiB per group), and
-#: ``FUSED_KS_ROW_OPS`` "SM work" in 32-bit-instruction equivalents, CALIBRATED on a Kaggle T4
-#: (``results/kaggle/pks-ntt-t4``: 1.066 us per forward transform incl. the gather, 2.53 us per MAC + inverse,
-#: 3.59 us per output row for 4 groups, at 8 warps; times :data:`T4_INT32_OPS_S`). The T4 ran at about 40 % of
-#: its memory bandwidth there, so the kernels are bound by the SMs (shuffles, shared-memory layout changes), not by
-#: HBM: other GPUs scale with SM count x clock. 9 launches per row block.
+#: ``FUSED_KS_ROW_OPS`` "SM work" in 32-bit-instruction equivalents, CALIBRATED on a Kaggle T4 (times
+#: :data:`T4_INT32_OPS_S`): the first run (``results/kaggle/pks-ntt-t4``) measured 3.59 us per output row for 4
+#: groups, the second (``results/kaggle/pks-ntt-t4-r2``, another T4 instance, the same kernels) 2.50 us for 4 groups
+#: and 1.93 us for 1 group (medians of 5, 2048 rows), which :data:`T4_R2_S` uses. The T4 ran at about 40 % of its
+#: memory bandwidth, so the kernels are bound by the SMs (shuffles, shared-memory layout changes), not by HBM: other
+#: GPUs scale with SM count x clock. 9 launches per row block.
 FUSED_KS_ROW_BYTES = (4 * (32 + 16) * 1024, (4 * (16 + 1) + 8) * 1024)
 T4_INT32_OPS_S = 0.6 * 40 * 64 * 1.59e9  #: the T4's rate in the same convention as ``PksRates.int32_ops_s``
-FUSED_KS_ROW_OPS = (1.066e-6 * 16 * 4 / 32 * T4_INT32_OPS_S,
-                    (2.53e-6 * 4 / 32 + (3.59e-6 - 1.066e-6 * 16 * 4 / 32 - 4 * 2.53e-6 * 4 / 32) / 4) * T4_INT32_OPS_S)
 FUSED_KS_LAUNCHES = 9
+#: The second round's kernels, CALIBRATED on a Kaggle T4 (``results/kaggle/pks-ntt-t4-r2``, ``keyswitch`` and
+#: ``stages``: medians of 5 at 72B's gate_up shape, 2048-row blocks; seconds per unit). Each kernel's time is
+#: modelled as the larger of its memory traffic (counted from its loads and stores) and its "SM work" (the T4 time
+#: times :data:`T4_INT32_OPS_S`, the convention of :data:`FUSED_KS_ROW_OPS`): an upper bound where the T4 was bound
+#: by memory (the fused switch moved 36 B per value at ~72 % of the T4's 320 GB/s).
+T4_R2_S = {
+    "ks_row_g1": 1.931e-6,  # fused key switch (per-prime forward), per output row, 1 group
+    "ks_row_g4": 2.504e-6,  # ... 4 groups (the first T4 run measured 3.59 on another T4 instance; this run is used)
+    "ks_row_g1_fwd4": 2.460e-6,  # with the 4-prime forward NTT (PGW_SERVICE_PKS_GPU_FWD4, off by default)
+    "ks_row_g4_fwd4": 3.140e-6,
+    "switch_value_fused": 0.6371e-6 / 4096,  # recombination + hint switch, per hint value (torch: 12.53 us per row)
+    "combine_value_fused": 0.1771e-6 / 1024,  # recombination of y, per value (torch: 0.987 us per 1024-value row)
+    "ring_feature_device": 3.481e-8,  # device ChaCha20 ring rows, per input feature (host, one thread: 1.445e-6)
+}
+
+
+def _ks_ops(g1: float, g4: float) -> tuple[float, float]:
+    per_group = (g4 - g1) / 3
+    return ((g1 - per_group) * T4_INT32_OPS_S, per_group * T4_INT32_OPS_S)
+
+
+FUSED_KS_ROW_OPS = _ks_ops(T4_R2_S["ks_row_g1"], T4_R2_S["ks_row_g4"])
+#: per output row: the 4-prime forward reads the int64 hint row once (32 KiB) and writes 4 x 16 KiB of transforms;
+#: per group as :data:`FUSED_KS_ROW_BYTES`
+FUSED4_KS_ROW_BYTES = ((32 + 4 * 16) * 1024, (4 * (16 + 1) + 8) * 1024)
+FUSED4_KS_ROW_OPS = _ks_ops(T4_R2_S["ks_row_g1_fwd4"], T4_R2_S["ks_row_g4_fwd4"])
+FUSED4_KS_LAUNCHES = 6
+FUSED_COMBINE_VALUE_BYTES = 7 * 4 + 8  #: the fused recombination (+ switch): 7 int32 partials read, one int64 written
+FUSED_SWITCH_VALUE_OPS = T4_R2_S["switch_value_fused"] * T4_INT32_OPS_S
+FUSED_COMBINE_VALUE_OPS = T4_R2_S["combine_value_fused"] * T4_INT32_OPS_S
+RING_FEATURE_BYTES = 256 * 8  #: the device ring rows write 256 int64 per input feature
+RING_FEATURE_OPS = T4_R2_S["ring_feature_device"] * T4_INT32_OPS_S
+#: the wire forms on the device (``PGW_SERVICE_PKS_GPU_WIRE``): the upload's unpack reads 7 and writes 8 bytes per
+#: value, the reply's pack reads 8 and writes 4.5
+WIRE_UNPACK_VALUE_BYTES = 15
+WIRE_PACK_VALUE_BYTES = 12.5
 
 
 @dataclass(frozen=True)
@@ -393,12 +433,26 @@ class PksRates:
     host_native_switch_row_s: float = 0.115 / 4096  #: ``pgw_pks.switch_hint``, 4 threads (measured)
     host_amlwe_feature_s: float = 0.46 / 8192  #: ``pks.a_mlwe_rows`` numpy per input feature (measured)
     host_stream_bytes_s: float = 1.0e9  #: ``public_ring_rows`` ChaCha20, GIL held (measured)
+    host_copy_bytes_s: float = 10e9  #: numpy -> pinned staging buffer (one thread)
+    #: the wire forms on the host, one thread (measured on the development box): ``unpack_bits(b, 56)`` per value,
+    #: ``pack_bits(reply, 36)`` per value, ``unpack_ksk`` per key residue
+    host_unpack_value_s: float = 8.4e-9
+    host_pack_value_s: float = 20.5e-9
+    host_ksk_value_s: float = 4.4e-9
     #: SM rate of the fused NTT kernels (32-bit-instruction equivalents per second): 60 % of 132 SMs x 64 lanes x
     #: 1.83 GHz, the convention :data:`FUSED_KS_ROW_OPS` was calibrated in on a T4 (:data:`T4_INT32_OPS_S`)
     int32_ops_s: float = 0.6 * 132 * 64 * 1.83e9
 
 
 H100_RATES = PksRates()
+#: The Kaggle T4 of ``results/kaggle/pks-ntt-t4-r2`` (``stages``): int8 GEMM 35.7 TOPS (the hint GEMM at 72B's
+#: gate_up shape), pageable upload 2.85 GB/s, pinned upload incl. the host staging copy 3.6 GB/s, reply copy 3.25
+#: GB/s, host ChaCha20 1.42 GB/s; HBM 70 % of 320 GB/s. With these rates the model reproduces the run's whole items
+#: (``items``: 7 linears of 7B / 32B / 72B, before and after) within about 25 % (``test_pks_fused.py``).
+T4_RATES = PksRates(name="Kaggle T4 (measured)", int8_ops_s=35.7e12, hbm_bytes_s=0.7 * 320e9,
+                    int32_ops_s=T4_INT32_OPS_S, h2d_pageable_s=2.85e9, h2d_pinned_s=7.2e9, host_copy_bytes_s=7.2e9,
+                    d2h_s=3.25e9, host_stream_bytes_s=1.42e9)
+PKS_RATES = {"h100": H100_RATES, "t4": T4_RATES}
 
 
 def fused_keyswitch_row_seconds(groups: int, rates: PksRates = H100_RATES) -> float:
@@ -408,8 +462,15 @@ def fused_keyswitch_row_seconds(groups: int, rates: PksRates = H100_RATES) -> fl
                (FUSED_KS_ROW_OPS[0] + FUSED_KS_ROW_OPS[1] * groups) / rates.int32_ops_s)
 
 
+def fused4_keyswitch_row_seconds(groups: int, rates: PksRates = H100_RATES) -> float:
+    """ESTIMATED seconds per output row of the fused key switch with the 4-prime forward NTT."""
+    return max((FUSED4_KS_ROW_BYTES[0] + FUSED4_KS_ROW_BYTES[1] * groups) / rates.hbm_bytes_s,
+               (FUSED4_KS_ROW_OPS[0] + FUSED4_KS_ROW_OPS[1] * groups) / rates.int32_ops_s)
+
+
 def pks_item_seconds(m: int, n: int, cols: int, path: str, rates: PksRates = H100_RATES,
-                     work_bytes: int = 512 * MIB, ntt: str = "torch") -> dict[str, float]:
+                     work_bytes: int = 512 * MIB, ntt: str = "torch", kernels: str = "ntt", fwd4: bool = False
+                     ) -> dict[str, float]:
     """ESTIMATED seconds of one pks-v3 item (``cols`` columns of one ``m x n`` linear) by stage, for ``path``:
 
     * ``"miss"``: the cache path when the hint is not cached (every item at 32B+ before 2026-11-26, and at 7B with
@@ -420,8 +481,17 @@ def pks_item_seconds(m: int, n: int, cols: int, path: str, rates: PksRates = H10
 
     Every path also does the item's GEMM and the device key switch (the same code), whose NTTs are ``ntt``: eager
     ``"torch"`` operators or the ``"fused"`` kernels (:func:`fused_keyswitch_row_seconds`). Element-wise device work
-    is ``max(bytes / hbm, operators x launch_s)``."""
-    from pgw.hemask.pks import NU, PACK
+    is ``max(bytes / hbm, operators x launch_s)``. Every path includes the host's wire work (``wire_host``: the
+    upload's unpack and the reply's pack, ``keys_host``: the reply keys' unpack).
+
+    ``kernels="all"`` (the device path with ``ntt="fused"``): the second round's kernels too: the fused
+    recombination + switch, the ring rows generated on the device, the wire forms on the device (``wire_host``
+    disappears), and pinned copies overlapped with device work (the upload exposed only beyond the ring rows, the
+    planes and the first row block's hint, the packed reply only for the last row block). ``fwd4``: the key switch
+    with the 4-prime forward NTT (:func:`fused4_keyswitch_row_seconds`; off by default, slower on the T4)."""
+    if kernels not in ("ntt", "all"):
+        raise ValueError(f"unknown kernels {kernels!r}")
+    from pgw.hemask.pks import NR, NU, PACK
     from pgw.service.pks_gpu import _block_bytes, item_rows
 
     r = rates
@@ -443,21 +513,54 @@ def pks_item_seconds(m: int, n: int, cols: int, path: str, rates: PksRates = H10
             return max(m * fused_keyswitch_row_seconds(groups, r), FUSED_KS_LAUNCHES * blocks * r.launch_s)
         return elementwise(m * (KS_ROW_BYTES[0] + KS_ROW_BYTES[1] * groups), 871 * blocks)
 
+    keys = groups * 4 * 16 * NR * 8  # the item's reply keys (int64 on the device)
     t: dict[str, float] = {}
     t["y_gemm"] = gemm(cols) + m * cols * COMBINE_VALUE_BYTES / r.hbm_bytes_s
     t["key_switch"] = key_switch(ks_blocks)
     t["reply_d2h"] = groups * m * D_REPLY * 8 / r.d2h_s
+    if path == "device" and kernels == "all" and ntt == "fused":
+        rows = item_rows(m, np_, cols, groups, work_bytes)
+        blocks = -(-m // rows)
+        reply_vals = groups * m * D_REPLY
+
+        def fused(nbytes: float, ops: float, launches: float) -> float:
+            return max(nbytes / r.hbm_bytes_s, ops / r.int32_ops_s, launches * r.launch_s)
+
+        t["keys_host"] = keys // 8 * r.host_ksk_value_s
+        t["ring_rows_device"] = fused(n * RING_FEATURE_BYTES, n * RING_FEATURE_OPS, 1)
+        t["planes"] = (n * A_PLANES_FEATURE_BYTES + n * cols * (B_PLANES_VALUE_BYTES + WIRE_UNPACK_VALUE_BYTES)) \
+            / r.hbm_bytes_s
+        t["y_gemm"] = gemm(cols) + fused(m * cols * FUSED_COMBINE_VALUE_BYTES, m * cols * FUSED_COMBINE_VALUE_OPS,
+                                         blocks * cols // 512)
+        hint = gemm(NU) + fused(m * NU * FUSED_COMBINE_VALUE_BYTES, m * NU * FUSED_SWITCH_VALUE_OPS, blocks * 8)
+        t["hint_gemm_switch"] = hint
+        t["key_switch"] = max(m * (fused4_keyswitch_row_seconds(groups, r) if fwd4 else
+                                   fused_keyswitch_row_seconds(groups, r)),
+                              (FUSED4_KS_LAUNCHES if fwd4 else FUSED_KS_LAUNCHES) * blocks * r.launch_s)
+        t["reply_pack_device"] = reply_vals * WIRE_PACK_VALUE_BYTES / r.hbm_bytes_s
+        # the upload's wire bytes (7 per value) and the keys (uint32) through pinned memory on a side stream: exposed
+        # only beyond the ring rows, the planes and the first row block's hint
+        upload = (n * cols * 7 + keys // 2) * (1 / r.h2d_pinned_s + 1 / r.host_copy_bytes_s)
+        t["upload_h2d"] = max(0.0, upload - (t["ring_rows_device"] + t["planes"] + hint * min(1.0, rows / m)))
+        # the packed reply (4.5 bytes per value) back and into the wire buffer: every row block's copy but the last
+        # overlaps the next block
+        t["reply_d2h"] = reply_vals * 4.5 * (1 / r.d2h_s + 1 / r.host_copy_bytes_s) * min(1.0, rows / m)
+        return t
+    # the wire forms on the host (every path but the device one with ``kernels="all"``): the upload's unpack, the
+    # reply's pack, the keys' unpack (``PKSProvider.run_item``; not modelled before this round)
+    t["wire_host"] = n * cols * r.host_unpack_value_s + groups * m * D_REPLY * r.host_pack_value_s
+    t["keys_host"] = keys // 8 * r.host_ksk_value_s
     if path == "device":
         blocks = -(-m // item_rows(m, np_, cols, groups, work_bytes))
         t["ring_rows_host"] = n * 2048 / r.host_stream_bytes_s
-        t["upload_h2d"] = (n * 2048 + n * cols * 8) / r.h2d_pageable_s
+        t["upload_h2d"] = (n * 2048 + n * cols * 8 + keys) / r.h2d_pageable_s
         t["planes"] = (n * A_PLANES_FEATURE_BYTES + n * cols * B_PLANES_VALUE_BYTES) / r.hbm_bytes_s
         t["hint_gemm_switch"] = gemm(NU) + elementwise(m * NU * (COMBINE_VALUE_BYTES + SWITCH_VALUE_BYTES),
                                                        blocks * (ITEM_OPS_PER_BLOCK - 871))
         t["key_switch"] = key_switch(blocks)
         return t
     t["y_roundtrip"] = m * cols * 8 / r.d2h_s + m * cols * 8 / r.h2d_pageable_s
-    t["hint_h2d"] = m * NU * 8 / r.h2d_pageable_s
+    t["hint_h2d"] = m * NU * 8 / r.h2d_pageable_s + keys / r.h2d_pageable_s  # + the reply keys
     if path == "hit":
         return t
     if path not in ("miss", "miss_native"):
@@ -482,10 +585,11 @@ def pks_throughput(model: str, path: str, cfg: MemConfig | None = None, rates: P
     total = 0.0
     stages: dict[str, float] = {}
     for _, m, n in lins:
-        for k, v in pks_item_seconds(m, n, cfg.maskgen_cols, path, rates, cfg.pks_work_bytes, cfg.pks_ntt).items():
+        for k, v in pks_item_seconds(m, n, cfg.maskgen_cols, path, rates, cfg.pks_work_bytes, cfg.pks_ntt,
+                                     cfg.pks_kernels).items():
             stages[k] = stages.get(k, 0.0) + v
             total += v
-    return {"model": model, "path": path, "ntt": cfg.pks_ntt, "cycle_s": round(total, 1),
+    return {"model": model, "path": path, "ntt": cfg.pks_ntt, "kernels": cfg.pks_kernels, "cycle_s": round(total, 1),
             "slots_per_s": round(cfg.maskgen_cols / total, 2),
             "hint_gb_per_seed": round(pks_model_hint_bytes(lins) / 1e9, 1),
             "stages_s": {k: round(v, 2) for k, v in sorted(stages.items(), key=lambda kv: -kv[1])}}
@@ -493,8 +597,8 @@ def pks_throughput(model: str, path: str, cfg: MemConfig | None = None, rates: P
 
 def pks_throughput_table(models: Sequence[str], cfg: MemConfig | None = None, rates: PksRates = H100_RATES) -> str:
     cfg = cfg or MemConfig()
-    rows = [f"ESTIMATES ({rates.name}; device rates from datasheets, host rates measured on a loaded 4-vCPU box; "
-            f"key-switch NTTs: {cfg.pks_ntt})",
+    rows = [f"ESTIMATES ({rates.name}; host rates measured on a loaded 4-vCPU box; "
+            f"key-switch NTTs: {cfg.pks_ntt}; device-item kernels: {cfg.pks_kernels})",
             "| model | hint GB / seed | path | s per cycle | slots/s | largest stages (s per cycle) |",
             "|---|---|---|---|---|---|"]
     for model in models:
@@ -701,6 +805,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     ap.add_argument("--pks-work-mb", type=int, default=512)
     ap.add_argument("--pks-ntt", default="fused", choices=["torch", "fused"],
                     help="pks-v3 key-switch NTTs: fused Triton kernels (auto on CUDA after the self-test) or torch")
+    ap.add_argument("--pks-kernels", default="all", choices=["all", "ntt"],
+                    help="pks-v3 device item: every fused kernel (auto on CUDA after the self-tests) or the NTTs only")
+    ap.add_argument("--pks-gpu", default="h100", choices=sorted(PKS_RATES),
+                    help="--pks-throughput rates: h100 (datasheet estimates) or t4 (the Kaggle T4 measurements)")
     ap.add_argument("--pks-throughput", action="store_true",
                     help="ESTIMATED pks-v3 mask slots/s per GPU by hint path (H100 rates) instead of the memory plan")
     ap.add_argument("--json", action="store_true", help="one JSON object per (model, GPU, TP) with the breakdown")
@@ -709,7 +817,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                     max_batch_rows=a.max_batch_rows, eager_work_bytes=a.eager_work_mb << 20,
                     maskgen_concurrency=a.maskgen_concurrency, maskgen_cols=a.maskgen_cols, rev=a.rev,
                     maskgen_wire=a.maskgen_wire, pks_hint=a.pks_hint, pks_cache_bytes=int(a.pks_cache_gb * 1e9),
-                    pks_work_bytes=a.pks_work_mb << 20, pks_ntt=a.pks_ntt, pipeline=a.pipeline)
+                    pks_work_bytes=a.pks_work_mb << 20, pks_ntt=a.pks_ntt, pks_kernels=a.pks_kernels,
+                    pipeline=a.pipeline)
     models = a.model or list(MODELS)
     gpus = a.gpu or list(GPUS)
     tps = [int(t) for t in a.tp.split(",")]
@@ -720,9 +829,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         if a.json:
             for model in models:
                 for path in ("miss", "miss_native", "hit", "device"):
-                    print(json.dumps(pks_throughput(model, path, cfg)))
+                    print(json.dumps(pks_throughput(model, path, cfg, PKS_RATES[a.pks_gpu])))
         else:
-            print(pks_throughput_table(models, cfg))
+            print(pks_throughput_table(models, cfg, PKS_RATES[a.pks_gpu]))
         return 0
     if a.json:
         for model in models:

@@ -1,0 +1,150 @@
+.........................................F..F.s.                         [100%]
+=================================== FAILURES ===================================
+________________________ test_self_tests_detect_one_bit ________________________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x79476f7c5400>
+
+    def test_self_tests_detect_one_bit(monkeypatch: pytest.MonkeyPatch) -> None:
+        real_c, real_r = pks_fused.combine, pks_fused.ring_rows
+    
+        def bad_combine(part: torch.Tensor, const: torch.Tensor, out: torch.Tensor, switch: bool) -> torch.Tensor:
+            real_c(part, const, out, switch)
+            out[0, 0] ^= 1
+            return out
+    
+        def bad_ring(*a: object) -> torch.Tensor:
+            t = real_r(*a)  # type: ignore[arg-type]
+            t[-1, -1] ^= 1 << 40
+            return t
+    
+        monkeypatch.setattr(pks_fused, "combine", bad_combine)
+        with pytest.raises(RuntimeError, match="does not match"):
+            pks_gpu._switch_self_test(DEV)
+        monkeypatch.setattr(pks_fused, "ring_rows", bad_ring)
+        with pytest.raises(RuntimeError, match="do not match"):
+            pks_gpu._ring_self_test(DEV)
+        real_f = pks_ntt.forward4
+        memo: dict[tuple[int, int], torch.Tensor] = {}
+    
+        def good(hs: torch.Tensor) -> torch.Tensor:  # one interpreted launch per operand (the per-prime kernel's values)
+            key = (hs.data_ptr(), int(hs.shape[0]))
+            if key not in memo:
+                memo[key] = real_f(hs)
+            return memo[key]
+    
+        def bad_fwd4(hs: torch.Tensor) -> torch.Tensor:
+            t = good(hs).clone()
+            t[2, 0, 0, 0] ^= 1
+            return t
+    
+        monkeypatch.setattr(pks_ntt, "forward4", bad_fwd4)
+        monkeypatch.setattr(pks_ntt, "forward", lambda hs, p: good(hs)[pks.QP.index(p)])
+        with pytest.raises(RuntimeError, match="does not match"):
+>           pks_gpu._fwd4_self_test(DEV)
+
+tests/service/test_pks_fused.py:233: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+src/pgw/service/pks_gpu.py:354: in _fwd4_self_test
+    got = pks_ntt.forward4(rows)
+          ^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+hs = tensor([[              0,               1, 277904818487296,  ...,
+         253068443204794, 148227532020449, 237381544... 277904818487296, 277904818487296,  ...,
+         277904818487296, 277904818487296, 277904818487296]], device='cuda:0')
+
+    def bad_fwd4(hs: torch.Tensor) -> torch.Tensor:
+        t = good(hs).clone()
+>       t[2, 0, 0, 0] ^= 1
+E       NotImplementedError: "bitwise_xor_cuda" not implemented for 'UInt32'
+
+tests/service/test_pks_fused.py:227: NotImplementedError
+
+During handling of the above exception, another exception occurred:
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x79476f7c5400>
+
+    def test_self_tests_detect_one_bit(monkeypatch: pytest.MonkeyPatch) -> None:
+        real_c, real_r = pks_fused.combine, pks_fused.ring_rows
+    
+        def bad_combine(part: torch.Tensor, const: torch.Tensor, out: torch.Tensor, switch: bool) -> torch.Tensor:
+            real_c(part, const, out, switch)
+            out[0, 0] ^= 1
+            return out
+    
+        def bad_ring(*a: object) -> torch.Tensor:
+            t = real_r(*a)  # type: ignore[arg-type]
+            t[-1, -1] ^= 1 << 40
+            return t
+    
+        monkeypatch.setattr(pks_fused, "combine", bad_combine)
+        with pytest.raises(RuntimeError, match="does not match"):
+            pks_gpu._switch_self_test(DEV)
+        monkeypatch.setattr(pks_fused, "ring_rows", bad_ring)
+        with pytest.raises(RuntimeError, match="do not match"):
+            pks_gpu._ring_self_test(DEV)
+        real_f = pks_ntt.forward4
+        memo: dict[tuple[int, int], torch.Tensor] = {}
+    
+        def good(hs: torch.Tensor) -> torch.Tensor:  # one interpreted launch per operand (the per-prime kernel's values)
+            key = (hs.data_ptr(), int(hs.shape[0]))
+            if key not in memo:
+                memo[key] = real_f(hs)
+            return memo[key]
+    
+        def bad_fwd4(hs: torch.Tensor) -> torch.Tensor:
+            t = good(hs).clone()
+            t[2, 0, 0, 0] ^= 1
+            return t
+    
+        monkeypatch.setattr(pks_ntt, "forward4", bad_fwd4)
+        monkeypatch.setattr(pks_ntt, "forward", lambda hs, p: good(hs)[pks.QP.index(p)])
+>       with pytest.raises(RuntimeError, match="does not match"):
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       AssertionError: Regex pattern did not match.
+E        Regex: 'does not match'
+E        Input: '"bitwise_xor_cuda" not implemented for \'UInt32\''
+
+tests/service/test_pks_fused.py:232: AssertionError
+_____________________ test_switch_fallback_keeps_the_bits ______________________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x79476f9b3770>
+
+    def test_switch_fallback_keeps_the_bits(monkeypatch: pytest.MonkeyPatch) -> None:
+        """``gemm_into`` under ``auto`` with the fused combine chosen: an error falls back to torch for good."""
+        from pgw.service.pks_gpu import SWITCH
+    
+        monkeypatch.delenv("PGW_SERVICE_PKS_GPU_SWITCH", raising=False)
+        monkeypatch.setattr(SWITCH, "choice", {str(DEV): "fused"})
+        rng = np.random.default_rng(5)
+        n, rows = 64, 32
+        w = torch.from_numpy(rng.integers(-128, 128, (rows, n), dtype=np.int64).astype(np.int8)).to(DEV)
+        pl = pks_gpu.planes_of(torch.from_numpy(rng.integers(0, 1 << 56, (n, 256), dtype=np.int64)).to(DEV), n)
+        const = torch.from_numpy(rng.integers(-(1 << 62), 1 << 62, (rows, 1), dtype=np.int64)).to(DEV)
+        want = pks_gpu._round_mul_shift(pks_gpu.gemm_mod56(w, pl, const), PAR.q1, 56) % PAR.q1
+        out = torch.empty((rows, 256), dtype=torch.int64, device=DEV)
+        pks_gpu.gemm_into(w, pl, const, out, True)
+        assert torch.equal(out, want)
+    
+        def boom(*a: object) -> None:
+            raise RuntimeError("launch failed")
+    
+        monkeypatch.setattr(pks_fused, "combine", boom)
+        out.zero_()
+        pks_gpu.gemm_into(w, pl, const, out, True)
+>       assert torch.equal(out, want) and SWITCH.choice[str(DEV)] == "torch"
+E       AssertionError: assert (True and 'fused' == 'torch'
+E        +  where True = <built-in method equal of type object at 0x7947c1bf1000>(tensor([[181925973633963,  37035869764802,  69510347790661,  ...,\n          85244808555220,  45361837099725,  39243688... 210838423371544, 267128875551743,  ...,\n         240686295086187, 133344426476610,  48596466917306]], device='cuda:0'), tensor([[181925973633963,  37035869764802,  69510347790661,  ...,\n          85244808555220,  45361837099725,  39243688... 210838423371544, 267128875551743,  ...,\n         240686295086187, 133344426476610,  48596466917306]], device='cuda:0'))
+E        +    where <built-in method equal of type object at 0x7947c1bf1000> = torch.equal
+E         
+E         - torch
+E         + fused)
+
+tests/service/test_pks_fused.py:299: AssertionError
+------------------------------ Captured log call -------------------------------
+WARNING  pgw.service.pks_gpu:pks_gpu.py:325 pks-v3 fused hint switch + recombination failed on cuda:0, using the plain path from now on: RuntimeError('launch failed')
+=========================== short test summary info ============================
+SKIPPED [1] tests/service/test_pks_fused.py:354: CPU kernels only
+2 failed, 45 passed, 1 skipped in 117.75s (0:01:57)
+
+---stderr---
