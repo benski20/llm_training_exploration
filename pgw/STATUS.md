@@ -15,6 +15,59 @@ SLA pilot. Three reasons:
 2. The HSM, KMS and TPM integrations have never run against real hardware or cloud services.
 3. There has been no external security audit.
 
+## Current state (2026-11-26)
+
+How to read this file: the verdict above is the v0.1.0 release view (2026-11-17). Workstreams append dated
+sections. The 2026-11-25 sections follow this summary. The 2026-11-19 to 2026-11-23 updates come next, then the
+release report's numbered sections (1-6). The **2026-11-26 sections are at the end**, ending with the integration
+sweep. A note in *italics* marks a statement that a later section superseded.
+
+**What the product is now.** The client library (`pip install pgw-sdk`, `from pgw import OpenAI`) runs the gateway
+in the application's process against our provider service. Defaults:
+* pks-v3 masks with the hint built locally (`pgw sdk prepare` does it ahead of time);
+* the masked LM head on the provider;
+* the native TCP+TLS trip lane, with lane format 2: several answers of one step in one call;
+* the p31 check on every trip;
+* cross-process mask admission (`SharedLedger`);
+* stall detection of the mask factory (`factory_stall_s`).
+
+Opt-in:
+* strict speculation (`speculation="lookup" | "draft_head"`);
+* `mask_admission="overcommit"`;
+* the weight-free factory (`factory_weights="stream"`).
+
+Pack format 2 (bf16 plain tensors, exact) is the default. Fingerprints for 0.5B, 1.5B, 3B and 7B are baked in
+(`PINNED_MODELS`).
+
+On the provider, the pks-v3 hint is recomputed per item on the device. This runs as fused Triton kernels after
+bit-exact self-tests, with the 4-prime forward NTT off by default. The mask store uses AES-256-GCM on AWS-LC
+(same format). The security review's findings S1-S15 and S20 are fixed or closed.
+
+**Verified:**
+* CPU end to end at 0.5B, every answer bit-identical to the gateway path;
+* the SDK at 7B against a Kaggle T4 provider: all checks pass; a correctness run, not a speed run;
+* the pks-v3 device item and the fused kernels on a T4: bit-identical; memplan calibrated on two T4 runs;
+* soak: 31 min with injected faults, 0 errors.
+
+**Not yet measured on target hardware.** The H100 numbers below are modelled or estimated, not measured:
+* provider memory at 7B/32B/72B;
+* per-trip device time;
+* the lane's fixed cost over a real NIC;
+* pks-v3 maskgen throughput;
+* the SDK's TTFT, tok/s and trips per token against a remote GPU provider;
+* 32B and 72B at all.
+
+`deploy/runpod/RUNBOOK.md` measures all of these in four sessions under $60 (`deploy/runpod/jobs.py`).
+
+**Open:**
+* the external cryptographic review of pks-v3 and the external audit of the Rust `unsafe` code;
+* 32B/72B pins, which need the shard-wise public-check packer (in progress);
+* a trained 7B draft head (in progress);
+* provider images rebuilt and pushed with torch 2.15.0;
+* HSM/KMS/TPM never run on real services;
+* the per-token latency target. The model gives 7B at about 17 tok/s at RTT 0.2 ms without speculation; to be
+  confirmed by the RunPod sessions.
+
 ## 2026-11-25 — Client library integrated: one product, proven end to end on CPU (real Qwen2.5-0.5B-Instruct)
 
 The five parts of the client library (SDK, provisioning, provider accounts, console, packaging) were built against
@@ -56,6 +109,8 @@ stubs of each other; they now run as one product (`docs/sdk/CONTRACT.md`, append
   but the **CPU provider's pks-v3 maskgen peaked at ~10 GB and was OOM-killed** on this 15 GB box, so that check is
   opt-in (`PGW_SDK_E2E_PKS=1`). Open: provider memory of CPU pks-v3 maskgen; 3B/7B fingerprints not yet baked in;
   images not rebuilt with torch 2.15.0; mypy baseline errors moved with the fused2 code are unchanged.
+  *(Since then: 3B/7B pins baked in, pack format 2; the provider hint is recomputed per item on the device instead
+  of cached on the host. See the 2026-11-26 sections at the end.)*
 
 
 ## 2026-11-25 — Hosted provider: SDK keys, usage metering, provider image, RunPod tooling (not run on RunPod)
@@ -1907,7 +1962,7 @@ change.
   - S7: a cached session's CA is re-checked against the key's pin.
   - S8: per-key report rate limit (`accounts_report_records_per_s`, 429; the client keeps the batch).
   - S9: client-side error-code allow-list.
-- **Open:**
+- **Open** *(all closed since: "security review follow-up (S10 to S15, S20)" below)*:
   - S10: provisioning ignores key scope and quotas.
   - S11 (decision): persist the SDK integrity breaker.
   - S12 (decision): stop reporting requests that never reached the provider.
@@ -2095,7 +2150,8 @@ CPU by thread, lane counters), `benchmarks/sdk_scale_sizing.py` (cores / RAM / d
   per uncached prompt token, 25 / 80 / 121 ms of client CPU per slot at 7B / 32B / 72B, no batching gain: 16 streams
   at 7B need ~20 factory cores; (2) mask stock admission: a request starts only when the stock covers every running
   request's prompt + max_tokens: the default `mask_store_gb = 8` admits about one 500 + 512-token request at a time
-  at 7B (6.2 MB per slot) and none at 32B/72B (19 / 28 MB per slot); (3) the trip lane serves one item per call:
+  at 7B (6.2 MB per slot) and none at 32B/72B (19 / 28 MB per slot); (3) the trip lane serves one item per call
+  (*fixed since: lane format 2 multi calls, "concurrent answers on the native trip lane" below*):
   with two answers in one step every decode trip falls back to the WebSocket stream channel (tiny: 280/312 lane
   trips at N=1, 1/345 at N=4; per trip 0.22 vs 0.35 ms idle, 0.28 vs 2.2 ms with busy Python threads; not changed
   here: hot-path / lane owners); (4) the gateway's plaintext thread (GIL, one core per process): ~4-5 streams per
@@ -2379,7 +2435,8 @@ each has regression tests. No scheme, parameter or output change: answers are bi
   - `tests/gateway/test_qwen05b.py`, the real 0.5B model, was killed for lack of memory on the shared host,
     twice. The gateway was run in two halves for the same reason.
   - tests/docs still has failures from before this change (`PGW_SPECULATION` is not a settings field, and
-    test_numbers). None are in files this change touched.
+    test_numbers). None are in files this change touched. *(Fixed in the integration sweep; test_numbers needs the
+    gitignored `results/kaggle` logs of the main checkout.)*
 
 
 ## 2026-11-26: client per-token hot path (library path, 0.5B on CPU, exact)
@@ -2925,7 +2982,7 @@ Timings on the T4:
 Fixed or found on the way:
 - Run 1's start-up CUDA OOM is fixed by `bfee514`.
 - Attempt A (`bfee514`): the provider died 66 min in. Host RAM was exhausted by the old pks-v3 host hint cache (`m x 4096` uint64 per seed and linear, 50.5 GB per seed at 7B; host RAM fell to 3.9 GB). `3e347e1` (hint recomputed per item on the device) fixes it; after that, provider RSS stayed <= 2.6 GB and GPU use <= 9.1 GB.
-- Open (client reliability): after the provider died, the client's request waited out its whole timeout. The factory's `ConnectError` was not counted as a failure, and the request was not failed.
+- Open (client reliability): after the provider died, the client's request waited out its whole timeout. The factory's `ConnectError` was not counted as a failure, and the request was not failed. *(Fixed since: "client mask factory stalls" below, `factory_stall_s`.)*
 - Attempt B: on a T4 the factory is the bottleneck. A request beyond the stock is correctly refused with `mask_exhausted` after the default 120 s. The harness now waits for the next segment and sends the request again (recorded; options unchanged).
 - Harness: provider-exit watchdog and wall budget (kernel under 3 h), per-process RSS, and `provider.log` kept even when the run is cut short.
 
@@ -3218,3 +3275,86 @@ Detection takes `factory_stall_s` plus up to one probe interval (`min(10 s, stal
 - The nudge is a child restart: at 7B it re-verifies the hint digests (seconds).
 - The wait extension uses the last segment's rate (the first 64-slot segment is slower per slot than later ones).
 - A real 7B rerun of attempt A's failure was not done (no cloud spend).
+
+
+## 2026-11-26: integration sweep after the day's merges; RunPod runbook
+
+Scope: every merge of 2026-11-26 together (SDK integration, round trips and speculation, client setup
+scaling, security review and follow-ups, provider memory/memplan, the device hint path, the fused NTT and the
+round-2 fused kernels, multi-user scaling, mask cost, AES-GCM on AWS-LC, the multi-item lane, reliability, stall
+detection, pack format 2, streamed weights, the 7B Kaggle validation). Fixed what was broken; no features. No
+cloud spend, no RunPod call.
+
+**Build.**
+* `cargo build --release` of pgw-fast, pgw-ntt and pgw-pks, with the `.so` files copied to `src/` as `*.abi3.so`.
+* `cargo test --release`: pgw-fast 83 (2 ignored), pgw-ntt 9, pgw-pks 12, pgw-core-rs 36 + 6 (vectors),
+  pgw-lane 46. All pass.
+
+**Tests**, one directory at a time, absolute `PYTHONPATH=<worktree>/pgw/src:<worktree>/pgw`, xdist `-n 2`
+except sdk, docs, packaging and e2e (serial):
+
+| directory | before | after | notes |
+|---|---|---|---|
+| docs | 21 failed / 109 passed | 130 passed | 3 real drift fixes (below); 18 `test_numbers` failures are environment-only: they need the gitignored `results/kaggle` logs of the main checkout (copied in for the "after" run) |
+| deploy | 128 / 1 skip | 141 / 1 skip | +13 new (`test_runpod_jobs.py`) |
+| benchmarks | 1 failed / 43 | 44 | environment-only: `AF_UNIX path too long` under a long `TMPDIR`; passes with a short one |
+| engine | 1 failed / 1159 / 15 skip | passes alone | `test_scheduling_pingpong` overlap assertion is timing-dependent under load (another parameter failed on a second loaded run; 8/8 alone) |
+| gateway | 1 failed / 283 | passes alone | `test_qwen05b_masked_bit_identical_across_formats`: xdist worker OOM-killed (real 0.5B on the shared 15 GB box) |
+| sdk (serial) | 178 / 1 skip | same | |
+| service | 558 / 77 skip (CUDA) | same | |
+| core 582 / 28 skip; hemask 439 / 20; factory 485 / 9; maskstore 247; native 357; wire 334; cli 209 / 3; modelpack 110 / 1; provision 52 / 1; console 96; observability 71; e2e 34; platform 32; packaging 11; enroll 9; moe 9; vectors 3 / 2; test_skeleton 18 | all pass | | `tests/integration` holds no tests |
+
+**Fixed.**
+* Doc drift:
+  * `docs/README.md` now indexes `sdk/scaling.md`;
+  * the env table in `docs/sdk/configuration.md` lists `PGW_MASK_ADMISSION` and `PGW_FACTORY_STALL_S`;
+  * the docs consistency test knows the SDK and factory env switches that are not settings fields
+    (`PGW_SPECULATION`, `PGW_MASK_ADMISSION`, `PGW_FACTORY_STALL_S`, `PGW_SDK_FACTORY_HANG_S`, `PGW_PKS_COMPACT`,
+    `PGW_VECMAT_NATIVE`, `PGW_WRITER_THREADS`);
+  * reliability.md's example URL uses a reserved name;
+  * models.md and concepts.md count the masked head's trip: 4L + 1 = 97 / 113 / 145 / 113 per token;
+  * pilot-handoff's first-run estimate (11 GB download; ~10 CPU-minutes of setup with AMX; `pgw sdk prepare`).
+  * Checked and consistent: option names and defaults against `SDKOptions`, the pins in models.md against
+    `PINNED_MODELS`, and pilot-handoff's commands and doctor output against the CLI.
+* `setup.py` imported setuptools-rust unconditionally. The provider Dockerfiles'
+  `pip install --no-build-isolation .` runs against hash-locked requirements without it, so the image build
+  failed at that step. It now installs pure-Python there; the images build `pgw_fast` separately, as before.
+  `PGW_REQUIRE_NATIVE=1` still fails without it.
+* `provider_perf_session.py --dry-run` created `/workspace/pgw/perf-*` on the launching machine. A dry run now
+  writes only into an existing `--out`. One stale `/workspace/pgw/perf-20261126-0701/` from this sweep is still
+  on the integration box (removal needs a person: the sandbox refuses `rm` of `/workspace`).
+* ruff: the SDK and its tests are clean again (four lint items; no behaviour change).
+* STATUS: this file's current-state summary at the top; italic notes where a later section superseded a
+  statement (open security items, the one-item lane, the 7B T4 run's client wait, the 2026-11-25 open pins,
+  the tests/docs failures).
+
+**Release check.** `scripts/release_check.sh --tests --fallback` passed: sdist, a manylinux_2_28 abi3 wheel with
+all three extensions, a fresh-venv install with CPU torch (1.3 GB site-packages, 5.0 MB wheel), the smoke test
+native and `PGW_NATIVE=0`, native bit-identity tests against the install (413 passed, 5 skipped), and a
+pure-Python wheel without Rust. 5 min.
+
+**mypy** (`src/pgw/sdk` + `src/pgw/service` and what they import, strict): 147 errors at `7b5b3c5` (end of
+2026-11-25), 170 now. The 23 new ones are typing-only:
+* `**dict` arguments to dataclass constructors: `memplan.py:782`, `wire/service_lane.py:285-286`;
+* numpy and torch overloads: `pks_gpu.py`, `factory/kernels.py`, `wire/lane.py`;
+* a `Path | None` narrowed through `getattr`: `sdk/engine.py:1008`.
+
+The old baseline was not chased.
+
+**RunPod.** `deploy/runpod/RUNBOOK.md` and `deploy/runpod/jobs.py` (+ `pod_job.py`, `job_setup.sh`,
+`sdk_remote_bench.py`):
+* sessions driven only through RunPod's API and its HTTPS pod proxy (the session proxy allows no raw TCP, no SSH
+  and no pinned TLS to a pod's mapped port);
+* public digest-pinned base images;
+* a code bundle pinned by SHA-256;
+* TTL self-stop, watchdog, `--max-usd`, a $60 `--budget-usd` over all sessions, Secure Cloud only;
+* four sessions in priority order: H100 perf + lane over a real NIC; SDK at 7B with speculation and N = 1/4/16;
+  32B on one H100; 72B on 2 x H100 or an H200. $38.82 at full TTL with table prices.
+
+Validated without RunPod:
+* every dry run;
+* the job pod's control server (tokens, pinned bundle, `data`-filter extraction, peer channel);
+* a whole two-pod `lane_nic` session on loopback;
+* the client SDK bench's CPU smoke.
+
+The unverified RunPod API details are listed in the runbook.
