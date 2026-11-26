@@ -29,6 +29,18 @@ client machine as the number of concurrent streams grows, how to size it, and ho
    checks, sampling over 152k logits) grows with the streams: one process tops out at about 4-5 streams at 7B-72B
    decode speeds. Above that, run several worker processes (below); they share one mask store and one factory
    (measured, tiny model, 64 streams on 4 vCPUs: 211 tokens/s in one process, 296 in four).
+   Since 2026-11-26 the library cuts this per-stream cost, exactly (same tokens, logprobs and provider-visible
+   trips): a decode step of several answers runs as one synchronous pass on the plaintext thread when one lane multi
+   call serves it (no event-loop hand-offs per trip, `PGW_SYNC_MULTI`); its trips take one native lease per answer,
+   prepared and finished in one GIL-free native call each, spread over the native pool for large trips
+   (`PGW_TRIP_NATIVE_MULTI`); the answers of a step sample on a thread pool (`PGW_SAMPLE_THREADS`, each answer has its
+   own generator); and `torch.multinomial` is replaced by an exact native draw (same index and generator state,
+   3.9 -> 1.6 ms at a 152k vocabulary; 5.5-6.1 -> 3.1-3.3 ms CPU per sampled token with logprobs). Measured on this
+   box (before / after): tiny 16 streams 215-223 / 279-282 tokens/s at 3.2 / 2.0 ms client CPU per token, 4 streams
+   117-119 / 128-130; 0.5B 16 streams 7.3-8.1 / 9.3-10.1 tokens/s, 4 streams 5.5-5.7 / 6.2-6.3 (CPU provider
+   saturated). What remains per answer and trip on the plaintext thread: lease creation (a `W r` chunk decrypt every
+   16 rows per linear) and the Python loop around the batched native calls; per answer and token: the inline noise
+   statistics (5 % of trips) and the top-p sort.
 4. **The fast trip lane: all answers of a step in one call** (lane format 2, on in the SDK). When several answers
    share a decode step (or a prompt has more rows than one lane call serves), the batched trip goes over the
    TCP+TLS lane as one `multi` call: the same items, order, bytes and request id as the WebSocket channel's
@@ -274,6 +286,10 @@ client = OpenAI(
   `prefix_cache=True`; for single-turn traffic keep the default. Reuse is per conversation key (API key, OpenAI
   `user`, `extra_body={"conversation_id": ...}`): never across users or conversations.
 * KV memory: the prefix cache keeps at most 1 GiB of conversations (least recently used are wiped first).
+* Client CPU per stream (on by default in the library; environment variables, `0` turns each off, nothing else
+  changes): `PGW_SYNC_MULTI` (several-answer decode steps as one synchronous pass), `PGW_TRIP_NATIVE_MULTI` (one native
+  lease per answer, batched native prepare / finish), `PGW_SAMPLE_THREADS` (`auto`: sampling threads, at most 8),
+  `PGW_NATIVE_MULTINOMIAL` (the exact native draw for `temperature > 0`, checked against torch at first use).
 
 ## When the stock runs short (bursts)
 
@@ -366,3 +382,15 @@ At 0.5B on this box the CPU provider saturates (its kernels, two workers); the c
 busy. Client CPU per token includes the prompt pass (about 30 prompt rows per 16 generated tokens). Burst with a
 stock of 512 slots and 64 tiny streams (factory running): every stream served, bit-identical, TTFT p95 14.3 s with
 the default admission and 11.6 s with `overcommit` (129 vs 142 tokens/s).
+
+The table above predates lane format 2 and the client CPU changes of 2026-11-26. With both (same box, two
+interleaved pairs, ranges; 64 tokens per tiny answer, 24 per 0.5B answer):
+
+| model | N | tokens/s total | rows per trip | lane trips | client CPU ms/token | plaintext thread ms/token |
+|---|---|---|---|---|---|---|
+| tiny | 1 | 45 | 1.6 | 600 of 600 | 3.9-4.2 | 2.7-2.8 |
+| tiny | 4 | 128-130 | 5.9 | 633 of 633 | 2.7-2.8 | 2.2 |
+| tiny | 16 | 279-282 | 22 | 666 of 666 | 1.9-2.1 | 1.4-1.6 |
+| 0.5B | 1 | 2.9 | 2.2 | 2616 of 2616 | 69-70 | 46-47 |
+| 0.5B | 4 | 6.2-6.3 | 7.5 | 3001 of 3001 | 68-72 | 43-46 |
+| 0.5B | 16 | 9.3-10.1 | 30 | 3001 of 3001 | 55-59 | 32-35 |

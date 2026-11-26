@@ -2409,7 +2409,7 @@ class Generator:
         if not st.drafts:
             if self.spec_tokens:
                 st.ctx.extend(pending)
-            return [self._consume(st, logits, pre)]
+            return [self._consume(st, logits) if pre is None else self._consume(st, logits, pre)]
         drafts = st.drafts
         base = st.cache.length - n_in
         events: list[TokenEvent] = []
