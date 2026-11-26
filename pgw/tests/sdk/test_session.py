@@ -23,11 +23,17 @@ MODELS = [{"name": "qwen2.5-7b-instruct", "fingerprint": "a" * 64, "ring": "K32A
 
 
 class FakeProvider:
-    def __init__(self, ca_pem: str, *, status: int = 200, cert: bool = True, lane: Any = None):
+    """Enrollment endpoints. With ``signer`` (client-issuing CA cert and key files) the client certificate is really
+    signed for the CSR, ``validity_days`` long; else a placeholder (the session's TLS material does not load)."""
+
+    def __init__(self, ca_pem: str, *, status: int = 200, cert: bool = True, lane: Any = None,
+                 signer: tuple[Path, Path] | None = None, validity_days: float = 30.0):
         self.ca_pem = ca_pem
         self.status = status
         self.cert = cert
         self.lane = lane
+        self.signer = signer
+        self.validity_days = validity_days
         self.enrolls: list[dict[str, Any]] = []
         self.auth: list[str] = []
         self._mu = threading.Lock()
@@ -44,7 +50,12 @@ class FakeProvider:
                 return httpx.Response(self.status, json={"error": {"code": "x", "message": "refused"}})
             out: dict[str, Any] = {"tenant": "acme", "service_token": f"tok-{len(self.enrolls)}", "models": MODELS,
                                    "lane": self.lane}
-            if self.cert:
+            if self.cert and self.signer is not None:
+                from pgw.enroll.service import sign_client_csr
+
+                out["client_cert_pem"] = sign_client_csr(body["csr_pem"], self.signer[0], self.signer[1], "host",
+                                                         self.validity_days)[0]
+            elif self.cert:
                 out["client_cert_pem"] = "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n"
             return httpx.Response(200, json=out)
         return httpx.Response(404)
@@ -59,10 +70,16 @@ def ca(pki: dict[str, Any]) -> tuple[str, bytes]:
     return Path(pki["ca.pem"]).read_text(), pki["ca_sha256"]
 
 
-def test_enroll_writes_private_files_and_is_reused(tmp_path: Path, ca: tuple[str, bytes]) -> None:
+@pytest.fixture
+def signer(pki: dict[str, Any]) -> tuple[Path, Path]:
+    return Path(pki["client-ca.pem"]), Path(pki["client-ca.key"])
+
+
+def test_enroll_writes_private_files_and_is_reused(tmp_path: Path, ca: tuple[str, bytes],
+                                                  signer: tuple[Path, Path]) -> None:
     pem, fp = ca
     key = SdkKey.new("live", URL, fp)
-    prov = FakeProvider(pem, lane={"transport": "tcp", "port": 8444})
+    prov = FakeProvider(pem, lane={"transport": "tcp", "port": 8444}, signer=signer)
     lay = CacheLayout(tmp_path / "c", tmp_path / "s")
     s = ensure_session(key, lay, transport=prov.transport, client_name="host-1")
     assert prov.auth == [key.bearer()]
@@ -85,10 +102,10 @@ def test_enroll_writes_private_files_and_is_reused(tmp_path: Path, ca: tuple[str
     assert load_session(other, lay) is None  # another key never reads this session
 
 
-def test_concurrent_first_use_enrolls_once(tmp_path: Path, ca: tuple[str, bytes]) -> None:
+def test_concurrent_first_use_enrolls_once(tmp_path: Path, ca: tuple[str, bytes], signer: tuple[Path, Path]) -> None:
     pem, fp = ca
     key = SdkKey.new("live", URL, fp)
-    prov = FakeProvider(pem)
+    prov = FakeProvider(pem, signer=signer)
     lay = CacheLayout(tmp_path / "c", tmp_path / "s")
     out: list[Any] = []
     ts = [threading.Thread(target=lambda: out.append(ensure_session(key, lay, transport=prov.transport)))
@@ -144,3 +161,60 @@ def test_unreachable_provider(tmp_path: Path) -> None:
     key = SdkKey.new("live", URL, b"\x02" * 32)
     with pytest.raises(E.APIConnectionError):
         ensure_session(key, CacheLayout(tmp_path / "c", tmp_path / "s"), transport=httpx.MockTransport(handler))
+
+
+# ---- reliability: a damaged or expired cached session is enrolled again ---------------------------------------
+@pytest.mark.parametrize("damage", ["client.crt", "secrets/client.key", "service-ca.pem", "enrollment.json",
+                                    "secrets/service_token"])
+def test_damaged_session_files_are_enrolled_again(tmp_path: Path, ca: tuple[str, bytes], signer: tuple[Path, Path],
+                                                  damage: str) -> None:
+    """A half-written or corrupted session file (full disk, crash, partial copy) never makes the cache unusable: the
+    TLS material is checked when the session is loaded and a damaged session is enrolled again."""
+    pem, fp = ca
+    key = SdkKey.new("live", URL, fp)
+    prov = FakeProvider(pem, signer=signer)
+    lay = CacheLayout(tmp_path / "c", tmp_path / "s")
+    s = ensure_session(key, lay, transport=prov.transport)
+    assert load_session(key, lay) is not None and len(prov.enrolls) == 1
+    target = s.dir / damage
+    if damage.endswith("service_token"):
+        target.unlink()
+    else:
+        target.write_bytes(target.read_bytes()[: len(target.read_bytes()) // 2])
+    assert load_session(key, lay) is None
+    s2 = ensure_session(key, lay, transport=prov.transport)
+    assert len(prov.enrolls) == 2 and load_session(key, lay) is not None
+    assert s2.client_cert_file is not None and s2.ca_file is not None and s2.ca_file.read_text() == pem
+
+
+def test_a_substituted_ca_file_is_never_trusted(tmp_path: Path, ca: tuple[str, bytes], signer: tuple[Path, Path],
+                                                pki: dict[str, Any]) -> None:
+    """A CA file replaced on disk by another valid certificate does not match the key's pin: the session is not used
+    (enrollment then fetches the CA again and checks it against the pin)."""
+    pem, fp = ca
+    key = SdkKey.new("live", URL, fp)
+    lay = CacheLayout(tmp_path / "c", tmp_path / "s")
+    s = ensure_session(key, lay, transport=FakeProvider(pem, signer=signer).transport)
+    assert s.ca_file is not None
+    s.ca_file.write_text(Path(pki["client-ca.pem"]).read_text())  # a real certificate, not the pinned one
+    assert load_session(key, lay) is None
+
+
+def test_an_expired_client_certificate_is_enrolled_again(tmp_path: Path, ca: tuple[str, bytes],
+                                                         signer: tuple[Path, Path]) -> None:
+    """An idle cache whose client certificate expired (the provider never renews an expired certificate) enrolls
+    again on the next start instead of failing every TLS handshake."""
+    pem, fp = ca
+    key = SdkKey.new("live", URL, fp)
+    lay = CacheLayout(tmp_path / "c", tmp_path / "s")
+    short = FakeProvider(pem, signer=signer, validity_days=30 / 86400)  # 30 s (backdated 3 s for clock skew)
+    s = ensure_session(key, lay, transport=short.transport)
+    assert s.client_cert_file is not None
+    from pgw.sdk import session as S
+
+    assert S._cert_expired(s)  # within the 60 s margin
+    prov = FakeProvider(pem, signer=signer)
+    s2 = ensure_session(key, lay, transport=prov.transport)
+    assert len(prov.enrolls) == 1 and not S._cert_expired(s2)
+    again = ensure_session(key, lay, transport=prov.transport)
+    assert len(prov.enrolls) == 1 and again.token().get_secret_value() == s2.token().get_secret_value()

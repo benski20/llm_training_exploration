@@ -135,7 +135,9 @@ def test_publish_refused_while_writable_and_sealed_after(fake_pack: FakePack) ->
 
 _CHILD = textwrap.dedent('''
     import os, sys
-    sys.path[:0] = sys.argv[1].split(os.pathsep)
+    _tests, *_rest = sys.argv[1].split(os.pathsep)
+    sys.path[:0] = _rest
+    sys.path.append(_tests)  # last: tests/platform must not shadow the standard library's platform
     from pathlib import Path
     from factory.conftest import FakePack
     from pgw.factory import MaskGenerator

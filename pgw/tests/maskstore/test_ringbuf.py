@@ -573,7 +573,9 @@ def test_swap_status_parsing(tmp_path: Path) -> None:
 # ---- crash ----------------------------------------------------------------------------------------
 _CRASH_CHILD = textwrap.dedent('''
     import os, sys, time
-    sys.path[:0] = sys.argv[3].split(os.pathsep)
+    _tests, *_rest = sys.argv[3].split(os.pathsep)
+    sys.path[:0] = _rest
+    sys.path.append(_tests)  # last: tests/platform must not shadow the standard library's platform
     from maskstore.conftest import make_model, write_segment
     from pgw.core import RING_K40_A12
     from pgw.factory.sinks import RingSink, StoreSink

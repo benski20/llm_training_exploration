@@ -83,8 +83,36 @@ def prov(product_pack: dict[str, Any], pki: dict[str, Any], tmp_path_factory: py
 
 
 @pytest.fixture(scope="module")
-def st(tmp_path_factory: pytest.TempPathFactory) -> dict[str, Any]:
-    return {"root": tmp_path_factory.mktemp("product-client")}
+def st(prov: Provider, tmp_path_factory: pytest.TempPathFactory) -> dict[str, Any]:
+    """The operator's set-up (organisation, console token, SDK key), done once per provider. Every test that needs
+    it takes this fixture, so the module's tests do not depend on running in order on one pytest-xdist worker."""
+    out: dict[str, Any] = {"root": tmp_path_factory.mktemp("product-client")}
+    db = prov.root / "secrets" / "accounts.db"
+    out["org"] = _cli("orgs", "create", "product", "--name", "Product Inc", db=db)
+    out["console_token"] = _cli("admin-token", "create", "--name", "console", "--org", "product", db=db)["token"]
+    prov.org = "product"
+    out["key"] = prov.new_key("backend", models=[MODEL])
+    return out
+
+
+@pytest.fixture(scope="module")
+def first_use(prov: Provider, st: dict[str, Any], product_pack: dict[str, Any]) -> dict[str, Any]:
+    """The first use on an empty cache (enroll, provision, connect, a greedy and a streamed sampled request) and the
+    gateway-path references, run once per provider; the tests below assert on it."""
+    root = st["root"]
+    out: dict[str, Any] = {"empty_cache": not (root / "cache").exists()}
+    c = _client(prov, st, product_pack)
+    try:
+        t0 = time.monotonic()
+        out["greedy"] = c.chat.completions.create(model=MODEL, messages=PROMPT, **GREEDY)
+        out["first_s"] = time.monotonic() - t0
+        out["chunks"] = list(c.chat.completions.create(model=MODEL, messages=PROMPT, stream=True,
+                                                       stream_options={"include_usage": True}, **SAMPLED))
+        out["status"] = c.status()["models"][MODEL]
+    finally:
+        c.close()
+    out["calls"] = [out["greedy"].usage, out["chunks"][-1].usage]
+    return out
 
 
 def _client(prov: Provider, st: dict[str, Any], pack: dict[str, Any], **kw: Any) -> Any:
@@ -125,59 +153,42 @@ def test_pin_matches_the_release(product_pack: dict[str, Any]) -> None:
 
 
 def test_operator_creates_org_console_token_and_key(prov: Provider, st: dict[str, Any]) -> None:
-    db = prov.root / "secrets" / "accounts.db"
-    org = _cli("orgs", "create", "product", "--name", "Product Inc", db=db)
-    assert org["org_id"] == "product"
-    tok = _cli("admin-token", "create", "--name", "console", "--org", "product", db=db)
-    st["console_token"] = tok["token"]
-    prov.org = "product"
-    st["key"] = prov.new_key("backend", models=[MODEL])
+    assert st["org"]["org_id"] == "product"
     assert st["key"].startswith("pgw_test_")
     keys = prov.admin("GET", "/orgs/product/keys")["keys"]
-    assert [k["models"] for k in keys] == [[MODEL]] and st["key"] not in json.dumps(keys)  # shown once
+    assert [k["models"] for k in keys if k["name"] == "backend"] == [[MODEL]]
+    assert st["key"] not in json.dumps(keys)  # shown once
 
 
-def test_first_use_enroll_provision_chat_bit_identical(prov: Provider, st: dict[str, Any],
+def test_first_use_enroll_provision_chat_bit_identical(first_use: dict[str, Any],
                                                        product_pack: dict[str, Any]) -> None:
-    root = st["root"]
-    assert not (root / "cache").exists()  # a fresh, empty cache
-    c = _client(prov, st, product_pack)
-    st["calls"] = []
-    try:
-        t0 = time.monotonic()
-        r = c.chat.completions.create(model=MODEL, messages=PROMPT, **GREEDY)
-        st["first_s"] = time.monotonic() - t0
-        st["calls"].append(r.usage)
-        ref = _reference(product_pack["dir"], GREEDY)
-        assert r.choices[0].message.content == ref["choices"][0]["message"]["content"]
-        assert r.to_dict()["choices"][0]["logprobs"]["content"] == ref["choices"][0]["logprobs"]["content"]
-        chunks = list(c.chat.completions.create(model=MODEL, messages=PROMPT, stream=True,
-                                                stream_options={"include_usage": True}, **SAMPLED))
-        sref = _reference(product_pack["dir"], SAMPLED)
-        text = "".join(ch.choices[0].delta.content or "" for ch in chunks if ch.choices)
-        assert text == sref["choices"][0]["message"]["content"]
-        lps = [t for ch in chunks if ch.choices and ch.choices[0].logprobs
-               for t in ch.to_dict()["choices"][0]["logprobs"]["content"]]
-        assert lps == sref["choices"][0]["logprobs"]["content"]  # bit for bit
-        st["calls"].append(chunks[-1].usage)
-        m = c.status()["models"][MODEL]
-        assert m["state"] == "ready" and m["masked_head"] is True and m["lane"] == "open", m
-        assert m["integrity_failures"] == 0 and m["verified_requests"] == 2
-        p = m["provisioned"]
-        assert p["fingerprint"] == product_pack["fp"] and p["source"] == "provider"
-        pack = Path(p["pack_path"])
-        assert (pack / "linear-meta.safetensors").is_file() and not list(pack.glob("linears-*"))  # weight-free
-        fpk = pack.parent / "factory-pack"
-        assert list(fpk.glob("linears-*")), "the factory pack holds the checked int8 weights"
-    finally:
-        c.close()
-    print(f"\nfirst request on an empty cache (enroll + provision + connect + first masks) {st['first_s']:.1f}s"
+    assert first_use["empty_cache"]  # a fresh, empty cache
+    r, chunks = first_use["greedy"], first_use["chunks"]
+    ref = _reference(product_pack["dir"], GREEDY)
+    assert r.choices[0].message.content == ref["choices"][0]["message"]["content"]
+    assert r.to_dict()["choices"][0]["logprobs"]["content"] == ref["choices"][0]["logprobs"]["content"]
+    sref = _reference(product_pack["dir"], SAMPLED)
+    text = "".join(ch.choices[0].delta.content or "" for ch in chunks if ch.choices)
+    assert text == sref["choices"][0]["message"]["content"]
+    lps = [t for ch in chunks if ch.choices and ch.choices[0].logprobs
+           for t in ch.to_dict()["choices"][0]["logprobs"]["content"]]
+    assert lps == sref["choices"][0]["logprobs"]["content"]  # bit for bit
+    m = first_use["status"]
+    assert m["state"] == "ready" and m["masked_head"] is True and m["lane"] == "open", m
+    assert m["integrity_failures"] == 0 and m["verified_requests"] == 2
+    p = m["provisioned"]
+    assert p["fingerprint"] == product_pack["fp"] and p["source"] == "provider"
+    pack = Path(p["pack_path"])
+    assert (pack / "linear-meta.safetensors").is_file() and not list(pack.glob("linears-*"))  # weight-free
+    fpk = pack.parent / "factory-pack"
+    assert list(fpk.glob("linears-*")), "the factory pack holds the checked int8 weights"
+    print(f"\nfirst request on an empty cache (enroll + provision + connect + first masks) {first_use['first_s']:.1f}s"
           f" ({'Qwen2.5-0.5B-Instruct' if product_pack['real'] else 'tiny model'})")
 
 
-def test_usage_and_request_log_without_content(prov: Provider, st: dict[str, Any]) -> None:
-    prompt_tokens = sum(u.prompt_tokens for u in st["calls"])
-    completion_tokens = sum(u.completion_tokens for u in st["calls"])
+def test_usage_and_request_log_without_content(prov: Provider, st: dict[str, Any], first_use: dict[str, Any]) -> None:
+    prompt_tokens = sum(u.prompt_tokens for u in first_use["calls"])
+    completion_tokens = sum(u.completion_tokens for u in first_use["calls"])
     deadline = time.monotonic() + 60
     rows: list[dict[str, Any]] = []
     while time.monotonic() < deadline:
@@ -248,23 +259,29 @@ def test_default_scheme_pks_v3_with_local_hint(prov: Provider, st: dict[str, Any
 
 def test_revoked_key_is_refused(prov: Provider, st: dict[str, Any], product_pack: dict[str, Any]) -> None:
     from pgw.sdk import AuthenticationError, PGWAPIError
+    from pgw.sdk.keys import parse_key
 
-    c = _client(prov, st, product_pack)
+    # its own organisation, key and cache (the usage test counts every request of the "product" organisation)
+    prov.admin("POST", "/orgs", json={"org_id": "revoke-org", "name": "Revoke Inc"})
+    key = str(prov.admin("POST", "/orgs/revoke-org/keys", json={"name": "revoke-me", "env": "test",
+                                                                "models": [MODEL]})["key"])
+    own = {**st, "root": st["root"] / "revoke", "key": key}
+    c = _client(prov, own, product_pack)
     try:
-        r = c.chat.completions.create(model=MODEL, messages=PROMPT, **GREEDY)  # cached session and packs
+        r = c.chat.completions.create(model=MODEL, messages=PROMPT, **GREEDY)  # session and packs cached
         assert r.choices[0].finish_reason == "length"
-        prov.revoke(st["key"])
+        prov.admin("POST", f"/orgs/revoke-org/keys/{parse_key(key).key_id_str}/revoke")
         time.sleep(1.5)  # > accounts_refresh_s (the revoking process refuses at once; this covers the others)
         with pytest.raises(PGWAPIError) as ei:
             c.chat.completions.create(model=MODEL, messages=PROMPT, **GREEDY)
         assert ei.value.code in ("unauthenticated", "permission_denied"), ei.value
     finally:
         c.close()
-    fresh = _client(prov, {**st, "root": st["root"] / "fresh"}, product_pack)
+    fresh = _client(prov, {**own, "root": st["root"] / "fresh"}, product_pack)
     try:
         with pytest.raises(AuthenticationError):
             fresh.chat.completions.create(model=MODEL, messages=PROMPT, **GREEDY)
     finally:
         fresh.close()
-    events = [e["event"] for e in prov.admin("GET", "/orgs/product/audit")["events"]]
+    events = [e["event"] for e in prov.admin("GET", "/orgs/revoke-org/audit")["events"]]
     assert "key.revoked" in events and "sdk.enroll.failed" in events

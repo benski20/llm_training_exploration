@@ -79,6 +79,15 @@ def state(provider: Provider, tmp_path_factory: pytest.TempPathFactory) -> Itera
         st["client"].close()
 
 
+def _greedy(state: dict[str, Any]) -> Any:
+    """The client's greedy answer to PROMPT (the module's first request). Computed here when the test that makes
+    it ran elsewhere (pytest-xdist spreads a module's tests over workers, each with its own provider and cache):
+    every test that depends on it is self-sufficient."""
+    if "greedy" not in state:
+        state["greedy"] = state["client"].chat.completions.create(model=MODEL, messages=PROMPT, **GREEDY)
+    return state["greedy"]
+
+
 def _lp(choice: Any) -> list[tuple[str, float, list[tuple[str, float]]]]:
     return [(c.token, c.logprob, [(t.token, t.logprob) for t in c.top_logprobs]) for c in choice.logprobs.content]
 
@@ -164,8 +173,8 @@ def test_async_client(state: dict[str, Any], provider: Provider) -> None:
             return r, chunks
 
     r, chunks = asyncio.run(run())
-    assert r.to_dict()["choices"][0] == state["greedy"].to_dict()["choices"][0]
-    assert "".join(ch.choices[0].delta.content or "" for ch in chunks) == state["greedy"].choices[0].message.content
+    assert r.to_dict()["choices"][0] == _greedy(state).to_dict()["choices"][0]
+    assert "".join(ch.choices[0].delta.content or "" for ch in chunks) == _greedy(state).choices[0].message.content
 
 
 def test_concurrent_requests_from_threads(state: dict[str, Any]) -> None:
@@ -174,13 +183,14 @@ def test_concurrent_requests_from_threads(state: dict[str, Any]) -> None:
     c = state["client"]
     with ThreadPoolExecutor(4) as ex:
         outs = list(ex.map(lambda _: c.chat.completions.create(model=MODEL, messages=PROMPT, **GREEDY), range(4)))
-    want = state["greedy"].to_dict()["choices"][0]
+    want = _greedy(state).to_dict()["choices"][0]
     assert all(o.to_dict()["choices"][0] == want for o in outs)
 
 
 def test_status_cli_shows_the_session(state: dict[str, Any]) -> None:
     from pgw.sdk.cli import status_report
 
+    _greedy(state)
     rep = status_report(state["root"] / "cache", state["root"] / "state")
     (s,) = rep["sessions"]
     m = s["status"]["models"][MODEL]
@@ -195,6 +205,7 @@ def test_status_cli_shows_the_session(state: dict[str, Any]) -> None:
 
 def test_restart_reuses_the_cache(state: dict[str, Any], provider: Provider) -> None:
     root = state["root"]
+    want = _greedy(state).to_dict()["choices"][0]
     state["client"].close()
     sess = next((root / "cache" / "sessions").iterdir())
     meta0 = json.loads((sess / "enrollment.json").read_text())
@@ -204,7 +215,7 @@ def test_restart_reuses_the_cache(state: dict[str, Any], provider: Provider) -> 
     t0 = time.monotonic()
     r = c.chat.completions.create(model=MODEL, messages=PROMPT, **GREEDY)
     restart_s = time.monotonic() - t0
-    assert r.to_dict()["choices"][0] == state["greedy"].to_dict()["choices"][0]
+    assert r.to_dict()["choices"][0] == want
     meta1 = json.loads((sess / "enrollment.json").read_text())
     assert meta1["enrolled_at"] == meta0["enrolled_at"]  # no second enrollment
     assert (sess / "secrets" / "service_token").read_text() == tokens0

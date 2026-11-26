@@ -148,6 +148,10 @@ def load_session(key: SdkKey, layout: CacheLayout) -> Session | None:
                     "again", key.key_id_hex)
         return None
     has_cert = bool(meta.get("client_cert")) and p["client_cert"].is_file() and p["client_key"].is_file()
+    if not _tls_material_ok(p["ca"] if p["ca"].is_file() else None, key,
+                            (p["client_cert"], p["client_key"]) if has_cert else None):
+        log.warning("the cached session files of SDK key %s are damaged; enrolling again", key.key_id_hex)
+        return None
     return Session(
         key_id=key.key_id_hex, service_url=key.service_url, tenant=str(meta.get("tenant", "")), dir=d,
         token_file=p["token"], ca_file=p["ca"] if p["ca"].is_file() else None,
@@ -169,6 +173,24 @@ def _ca_file_matches(path: Path, pin: bytes) -> bool:
     return hmac.compare_digest(fp, pin)
 
 
+def _tls_material_ok(ca: Path | None, key: SdkKey, pair: tuple[Path, Path] | None) -> bool:
+    """The cached CA still matches the key's pin and the client certificate loads with its key (a damaged or
+    half-written file, e.g. after a full disk or a crash, makes the session unusable: it is enrolled again)."""
+    import ssl
+
+    try:
+        if key.service_url.startswith("https://"):
+            if ca is None:
+                return False
+            if key.pinned and not _ca_file_matches(ca, bytes.fromhex(key.ca_fingerprint_hex)):
+                return False
+        if pair is not None:
+            ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT).load_cert_chain(str(pair[0]), str(pair[1]))
+    except (OSError, ValueError, ssl.SSLError, ConfigError):
+        return False
+    return True
+
+
 def ensure_session(key: SdkKey, layout: CacheLayout, *, force: bool = False, transport: Any = None,
                    timeout_s: float = 30.0, client_name: str | None = None) -> Session:
     """The enrolled session of ``key``: from the cache, or enrolled now (once per host, under a lock).
@@ -188,9 +210,34 @@ def ensure_session(key: SdkKey, layout: CacheLayout, *, force: bool = False, tra
     with file_lock(d / ".enroll.lock"):
         if not force:
             s = load_session(key, layout)
-            if s is not None:
+            if s is not None and not _cert_expired(s):
                 return s
-        return _enroll(key, d, transport=transport, timeout_s=timeout_s, client_name=client_name)
+            if s is not None:  # an idle cache: the provider no longer accepts the certificate; enroll again
+                log.warning("the client certificate of SDK key %s has expired; enrolling again", key.key_id_hex)
+        s = _enroll(key, d, transport=transport, timeout_s=timeout_s, client_name=client_name)
+        if _cert_expired(s, margin_s=0.0) or _cert_not_yet_valid(s):
+            log.error("the client certificate the provider just issued is not valid by this machine's clock: the "
+                      "clock is wrong (check it, e.g. 'date -u', and enable NTP time sync)")
+        return s
+
+
+def _cert_window(s: Session) -> tuple[float, float] | None:
+    if s.client_cert_file is None:
+        return None
+    from pgw.wire.client import client_cert_validity
+
+    return client_cert_validity(s.client_cert_file)
+
+
+def _cert_expired(s: Session, margin_s: float = 60.0) -> bool:
+    """The session's client certificate has expired (or expires within ``margin_s``) by this machine's clock."""
+    w = _cert_window(s)
+    return w is not None and time.time() >= w[1] - margin_s
+
+
+def _cert_not_yet_valid(s: Session) -> bool:
+    w = _cert_window(s)
+    return w is not None and time.time() < w[0]
 
 
 def _enroll(key: SdkKey, d: Path, *, transport: Any, timeout_s: float, client_name: str | None) -> Session:

@@ -138,10 +138,13 @@ class Provider:
     admin_token: str
     root: Path
     org: str = "acme"
+    env: dict[str, str] | None = None
+    port: int = 0
 
     def admin(self, method: str, path: str, **kw: Any) -> Any:
         """One admin API call (``/pgw/v1/admin``) with the bootstrap admin token; returns the JSON reply."""
-        r = httpx.request(method, f"{self.url}/pgw/v1/admin{path}", verify=str(self.ca_file), timeout=30.0,
+        base = f"https://127.0.0.1:{self.port}" if self.port else self.url  # direct, never through a test proxy
+        r = httpx.request(method, f"{base}/pgw/v1/admin{path}", verify=str(self.ca_file), timeout=30.0,
                           trust_env=False, headers={"Authorization": f"Bearer {self.admin_token}"}, **kw)
         assert r.status_code == 200, (r.status_code, r.text)
         return r.json()
@@ -170,11 +173,14 @@ class Provider:
 
 
 def start_provider(root: Path, pack_dir: Path, pki: dict[str, Any], *, extra_env: dict[str, str] | None = None,
-                   ready_timeout_s: float = 300.0) -> Provider:
+                   ready_timeout_s: float = 300.0, port: int | None = None, lane_port: int | None = None,
+                   public_port: int | None = None, public_lane_port: int | None = None) -> Provider:
+    """Start the provider. Every port is free unless given; ``public_port`` / ``public_lane_port`` are what the
+    provider tells clients (its SDK keys' URL, the lane tickets), e.g. a fault-injection proxy in front of it."""
     import secrets as _secrets
 
-    port, lane_port = free_port(), free_port()
-    url = f"https://127.0.0.1:{port}"
+    port, lane_port = port or free_port(), lane_port or free_port()
+    url = f"https://127.0.0.1:{public_port or port}"
     secrets = root / "secrets"
     secrets.mkdir(mode=0o700, exist_ok=True)
     tamper = root / "tamper.flag"
@@ -205,29 +211,49 @@ def start_provider(root: Path, pack_dir: Path, pki: dict[str, Any], *, extra_env
         "PGW_SERVICE_PROVISION": "true", "PGW_PLATFORM_ENABLED": "1",
         "PGW_TEST_TAMPER_FILE": str(tamper),
     })
+    if public_lane_port:
+        env["PGW_SERVICE_LANE_ADVERTISED_PORT"] = str(public_lane_port)
     (secrets / "tokens").touch(mode=0o600)
     (secrets / "mtls_tenants").touch(mode=0o600)
     env.update(extra_env or {})
-    log = root / "provider.log"
-    fh = log.open("ab")
-    proc = subprocess.Popen([sys.executable, "-m", "tests.sdk.provider_main"], env=env, cwd=str(ROOT),
-                            stdout=fh, stderr=subprocess.STDOUT)
+    prov = Provider(url, None, root / "provider.log", tamper, pki["ca_sha256"], lane_port, pack_dir,  # type: ignore[arg-type]
+                    pki["ca.pem"], admin_token, root, env=env, port=port)
+    _launch(prov, ready_timeout_s)
+    prov.admin("POST", "/orgs", json={"org_id": prov.org, "name": "Acme"})
+    return prov
+
+
+def _launch(prov: Provider, ready_timeout_s: float = 300.0) -> None:
+    fh = prov.log.open("ab")
+    prov.proc = subprocess.Popen([sys.executable, "-m", "tests.sdk.provider_main"], env=prov.env, cwd=str(ROOT),
+                                 stdout=fh, stderr=subprocess.STDOUT)
     fh.close()
-    prov = Provider(url, proc, log, tamper, pki["ca_sha256"], lane_port, pack_dir, pki["ca.pem"], admin_token, root)
+    direct = f"https://127.0.0.1:{prov.port}"
     t0 = time.monotonic()
     while time.monotonic() - t0 < ready_timeout_s:
-        if proc.poll() is not None:
-            raise AssertionError(f"provider exited {proc.returncode}:\n{prov.tail()}")
+        if prov.proc.poll() is not None:
+            raise AssertionError(f"provider exited {prov.proc.returncode}:\n{prov.tail()}")
         try:
-            r = httpx.get(f"{url}/readyz", verify=str(pki["ca.pem"]), timeout=5.0, trust_env=False)
+            r = httpx.get(f"{direct}/readyz", verify=str(prov.ca_file), timeout=5.0, trust_env=False)
             if r.status_code == 200:
-                prov.admin("POST", "/orgs", json={"org_id": prov.org, "name": "Acme"})
-                return prov
+                return
         except httpx.HTTPError:
             pass
         time.sleep(0.3)
-    proc.kill()
+    prov.proc.kill()
     raise AssertionError(f"provider not ready:\n{prov.tail()}")
+
+
+def restart_provider(p: Provider, *, kill: bool = True, ready_timeout_s: float = 300.0) -> None:
+    """Stop the provider (SIGKILL: a crash; else SIGTERM) and start it again on the same ports and state (accounts,
+    tokens, client-certificate mappings survive; lane tickets and open connections do not)."""
+    if p.proc.poll() is None:
+        if kill:
+            p.proc.kill()
+        else:
+            p.proc.terminate()
+        p.proc.wait(timeout=60)
+    _launch(p, ready_timeout_s)
 
 
 def stop_provider(p: Provider) -> None:

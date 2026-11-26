@@ -26,9 +26,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from pgw.sdk._factory_child import HEARTBEAT_FILE
 from pgw.sdk.cache import HeldLock, ensure_private_dir
 
-__all__ = ["FactoryPlan", "FactoryProcess", "factory_env"]
+__all__ = ["FactoryPlan", "FactoryProcess", "factory_env", "write_demand"]
 
 log = logging.getLogger(__name__)
 
@@ -63,6 +64,8 @@ class FactoryPlan:
     client_key_file: Path | None = None
     hint_dir: Path | None = None
     hint_key_file: Path | None = None
+    #: written by the engine while a request waits for more masks than are in stock (see FactorySettings)
+    demand_file: Path | None = None
 
 
 #: pks-v3 encrypts in groups of 256 slots and amortises the upload's public NTTs over the groups of one request:
@@ -107,6 +110,8 @@ def factory_env(plan: FactoryPlan) -> dict[str, str]:
         "PGW_MASKSTORE_TARGET_SLOTS": str(plan.target_slots),
         "PGW_MASKSTORE_LOW_WATER_SLOTS": str(plan.low_water_slots),
     }
+    if plan.demand_file is not None:
+        env["PGW_FACTORY_DEMAND_FILE"] = str(plan.demand_file)
     if plan.scheme in ("pks-v3", "mlwe"):
         assert plan.service_url is not None
         env["PGW_FACTORY_HE_SERVICE_URL"] = plan.service_url
@@ -136,6 +141,9 @@ def _child_env(plan: FactoryPlan) -> dict[str, str]:
     keep = ("PATH", "HOME", "LANG", "LC_ALL", "TMPDIR", "PYTHONPATH", "VIRTUAL_ENV", "HTTPS_PROXY", "https_proxy",
             "NO_PROXY", "no_proxy", "SSL_CERT_FILE", "SSL_CERT_DIR", "LD_LIBRARY_PATH")
     env = {k: v for k, v in os.environ.items() if k in keep}
+    for k in ("PGW_FACTORY_MIN_FREE_BYTES", "PGW_MASKSTORE_MIN_FREE_BYTES"):  # disk reserves (2 GiB, 1 GiB)
+        if os.environ.get(k, "").strip():
+            env[k] = os.environ[k].strip()
     env.update(factory_env(plan))
     env["PGW_SDK_PARENT_PID"] = str(os.getpid())
     env["OMP_NUM_THREADS"] = str(max(1, plan.threads))
@@ -151,9 +159,14 @@ class FactoryProcess:
         poll_s: How often a non-owner retries the owner lock and the owner checks the child.
     """
 
-    def __init__(self, plan: FactoryPlan, *, poll_s: float = 3.0):
+    #: the child's command line (tests substitute a stand-in)
+    command: tuple[str, ...] = (sys.executable, "-m", "pgw.sdk._factory_child")
+
+    def __init__(self, plan: FactoryPlan, *, poll_s: float = 3.0, hang_s: float | None = None):
         self.plan = plan
         self.poll_s = poll_s
+        #: a running child whose heartbeat is older than this is killed and restarted (``PGW_SDK_FACTORY_HANG_S``)
+        self.hang_s = float(hang_s if hang_s is not None else os.environ.get("PGW_SDK_FACTORY_HANG_S", "") or 300.0)
         ensure_private_dir(plan.state_dir)
         self._lock = HeldLock(plan.state_dir / "owner.lock")
         self._proc: subprocess.Popen[bytes] | None = None
@@ -167,6 +180,9 @@ class FactoryProcess:
         self.failures = 0
         self._started_at = 0.0
         self._next_start = 0.0
+        self._log_offset = 0
+        #: the delay before the latest restart (exponential in the consecutive failures)
+        self.backoff_s = 0.0
 
     @property
     def log_file(self) -> Path:
@@ -207,16 +223,25 @@ class FactoryProcess:
             if not self._lock.try_acquire():
                 return  # another process on this host runs this model's factory
             p = self._proc
+            hung = None
             if p is not None and p.poll() is None:
-                if time.monotonic() - self._started_at > 120:
-                    self.failures = 0  # has been running for a while: healthy
-                return
+                hung = self._hung()
+                if hung is None:
+                    if time.monotonic() - self._started_at > 120:
+                        self.failures = 0  # has been running for a while: healthy
+                    return
+                with contextlib.suppress(OSError):
+                    p.kill()  # stopped or stuck: its fleet workers follow it (they exit with their parent)
+                with contextlib.suppress(subprocess.TimeoutExpired):
+                    p.wait(timeout=10)
             if p is not None:
                 self._proc = None
                 self.last_exit = p.returncode
-                self.last_error = _last_error_line(self.log_file) or f"exit code {p.returncode}"
+                self.last_error = hung or _exit_reason(p.returncode, _last_error_line(self.log_file,
+                                                                                         self._log_offset))
                 self.failures += 1
                 delay = min(300.0, self.poll_s * 2 ** min(self.failures - 1, 8))
+                self.backoff_s = delay
                 self._next_start = time.monotonic() + delay
                 log.warning("mask factory for %s exited with code %s (%s); restarting in %.0fs", self.plan.model,
                             p.returncode, self.last_error, delay)
@@ -224,15 +249,32 @@ class FactoryProcess:
                 return
             self._spawn()
 
+    def _hung(self) -> str | None:
+        """Why the running child counts as hung (heartbeat older than ``hang_s``), else ``None``."""
+        if self._started_at <= 0 or time.monotonic() - self._started_at < self.hang_s:
+            return None
+        try:
+            age = time.time() - (self.plan.state_dir / HEARTBEAT_FILE).stat().st_mtime
+        except OSError:
+            age = time.monotonic() - self._started_at  # never beat since it started
+        if age < self.hang_s:
+            return None
+        log.error("mask factory for %s stopped responding (no heartbeat for %.0fs); restarting it", self.plan.model,
+                  age)
+        return f"the mask factory stopped responding (no heartbeat for {age:.0f}s) and was restarted"
+
     def _spawn(self) -> None:
         lf = self.log_file
         with contextlib.suppress(OSError):
             if lf.exists() and lf.stat().st_size > _LOG_MAX_BYTES:
                 lf.unlink()
         fd = os.open(lf, os.O_WRONLY | os.O_CREAT | os.O_APPEND | getattr(os, "O_CLOEXEC", 0), 0o600)
+        self._log_offset = os.fstat(fd).st_size
+        with contextlib.suppress(OSError):  # a heartbeat of an earlier child must not count for this one
+            (self.plan.state_dir / HEARTBEAT_FILE).unlink()
         try:
             self._proc = subprocess.Popen(
-                [sys.executable, "-m", "pgw.sdk._factory_child"], env=_child_env(self.plan),
+                list(self.command), env=_child_env(self.plan),
                 stdin=subprocess.DEVNULL, stdout=fd, stderr=fd, close_fds=True, cwd=str(self.plan.state_dir))
         finally:
             os.close(fd)
@@ -269,11 +311,37 @@ class FactoryProcess:
         return out
 
 
-def _last_error_line(log_file: Path) -> str | None:
-    """The last ``error [...]`` line the factory CLI printed (its error messages carry no secrets)."""
+def write_demand(path: Path, slots: int, ttl_s: float = 30.0) -> None:
+    """Tell the factory a request waits for ``slots`` masks (it refills up to its target now, whatever its
+    low-water mark). Best effort: a failed write (full disk) only means the factory refills on its own schedule."""
+    from pgw.core.fileio import atomic_write_text
+
+    with contextlib.suppress(Exception):
+        atomic_write_text(path, json.dumps({"slots": int(slots), "until": time.time() + ttl_s}) + "\n", mode=0o600)
+
+
+def _exit_reason(code: int | None, last_error: str | None) -> str:
+    """The child's error line, or what its exit code says (a signal: SIGKILL is most often the out-of-memory
+    killer)."""
+    if last_error:
+        return last_error
+    if code is not None and code < 0:
+        try:
+            name = signal.Signals(-code).name
+        except ValueError:
+            name = f"signal {-code}"
+        hint = " (often the out-of-memory killer: lower mask_workers or give the process more memory)" if (
+            -code == signal.SIGKILL) else ""
+        return f"killed by {name}{hint}"
+    return f"exit code {code}"
+
+
+def _last_error_line(log_file: Path, since: int = 0) -> str | None:
+    """The last ``error [...]`` line the factory CLI printed after byte ``since`` of its log (this child's own
+    output; its error messages carry no secrets)."""
     try:
         with log_file.open("rb") as fh:
-            fh.seek(max(0, log_file.stat().st_size - 8192))
+            fh.seek(max(since, log_file.stat().st_size - 8192))
             tail = fh.read().decode("utf-8", "replace")
     except OSError:
         return None
@@ -286,7 +354,8 @@ def read_factory_state(state_dir: Path) -> dict[str, Any]:
     out: dict[str, Any] = {}
     try:
         st = json.loads((state_dir / "factory-state.json").read_text(encoding="utf-8"))
-        for k in ("totals", "provider_integrity_failures", "last_run_at", "last_error", "halted", "throughput"):
+        for k in ("totals", "provider_integrity_failures", "last_run_at", "last_error", "halted", "throughput",
+                  "disk_limited"):
             if k in st:
                 out[k] = st[k]
     except (OSError, ValueError):

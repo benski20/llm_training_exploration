@@ -2488,3 +2488,65 @@ method and the levers not taken: `docs/sdk/scaling.md` ("Mask cost per slot, by 
   the factory tests compare canonical values), Rust `cargo test -p pgw-pks vecmat`. tests/factory 463 passed /
   9 skipped; tests/hemask 439 passed / 20 skipped; tests/sdk 115 passed / 1 opt-in skip (the factory subset rerun after the last
   kernel-selection change: 96 passed).
+
+
+## 2026-11-26: client library reliability (failure audit, fixes, soak)
+
+Scope: `from pgw import OpenAI` (src/pgw/sdk) and what it drives, CPU only. Fault injection against a real
+`pgw service` on loopback: a TCP proxy that resets / blackholes / refuses connections (`tests/sdk/chaos.py`), SIGKILL
+and restart of the provider on the same ports and state (`restart_provider`), SIGKILL / SIGSTOP of the factory, a
+tmpfs as the cache (disk full), corrupted cache files, 45-second client certificates. The guarantee for each failure
+is in `docs/sdk/reliability.md`; troubleshooting, configuration and the changelog are updated.
+
+Found and fixed (severity order; each has a regression test):
+- **close() with a request in flight hung its caller forever** (the loop was stopped under it; "Task was destroyed
+  but it is pending"). Requests are tracked and cancelled; callers get `APIConnectionError`; close is bounded.
+- **Dropped or cancelled streams kept generating to max_tokens** (sync and async: the engine-side pump referenced
+  the stream, so it was never collected; a cancelled async consumer, e.g. an SSE client disconnect, did not stop it).
+- **HTTP fallback broken across event loops**: the runtime shared one httpx pool between the engine loop and the
+  compute client's private sync loop ("bound to a different event loop"); a key revoked mid-stream surfaced as a
+  retryable 503 `compute request failed: RuntimeError`. `PerLoopTransport` (gateway/egress.py): one pool per loop.
+- **Mask starvation**: the factory refills only below low water, so a request needing more than the stock (but
+  within the target) waited mask_wait_s and failed; one needing more than the target could never run (at 7B with
+  defaults, ~1,300 slots: a prompt of ~760 tokens + 512). A demand file (factory `demand_file`) refills at once;
+  beyond the target the request fails at once (`payload_too_large`, 400, naming mask_store_gb).
+- **Orphaned fleet workers** after a SIGKILLed factory (OOM) kept running. `exit_with_parent` (PDEATHSIG + parent
+  watch + hard exit) in the factory child and fleet workers; a hung child (no heartbeat for 300 s) is restarted;
+  SIGKILL exits are reported as "killed by SIGKILL (often the out-of-memory killer ...)".
+- **An expired mTLS client certificate was a permanent outage** after any reconnect (30-day certificates, no renewal
+  in the library). Renewed at 2/3 of the lifetime (live contexts reloaded; other processes pick it up); an expired
+  one (idle cache) enrolls again; clock skew is logged as such.
+- **Refused credentials never recovered** (provider lost its token store, truncated service token): the next request
+  reconnects and enrolls again (at most once a minute); a revoked key still fails clearly.
+- **A damaged cache was permanent**: half-written session files, a damaged or truncated cached gateway pack. Session
+  TLS material is checked when loaded (the CA against the key's pin); a damaged cached pack is deleted and
+  provisioned again once (same pin check). Mask-store damage (database, KEK, rollback counter) stays fatal, never
+  repaired automatically; the error names what to delete.
+- **Misleading errors**: ENOSPC reported as "connection failed (OSError)"; "one-time mask setup still running" when
+  the factory had stopped on its disk reserve or was failing. Now disk-full messages with the path, and the factory's
+  disk limit or last error in the request's error; `PGW_FACTORY_MIN_FREE_BYTES` / `PGW_MASKSTORE_MIN_FREE_BYTES`
+  reach the factory.
+- Flaky tests: the sdk e2e modules depended on test order within a module (xdist spreads them): self-sufficient now;
+  `test_lane_coalesces_tenants_without_mixing` raced the lane's own 0.5 s metrics drain (2 of 4 failed under load,
+  6 of 6 pass now); `test_head_item_on_the_wire_and_strict_speculation` read `svc.received` twice while a dummy pass
+  landed (1 in 3 under load); two maskstore crash tests imported tests/platform as the stdlib `platform`.
+
+Verified, no change needed: a connection reset mid-answer is recovered by sending the same masked trip again (same
+bytes; answer bit-identical); a provider SIGKILL mid-answer fails at once with a retryable error and the same client
+serves again after the restart; a blackholed path is bounded by the request timeout; a damaged mask segment is never
+used (AEAD); factory crash back-off and the "factory failing" fail-fast; integrity failures stay fatal, never retried.
+
+Soak (`benchmarks/sdk_soak.py`, 31 min, tiny model, pks-v3, every connection cut every 5 min): 5,170 answers + 517
+dropped + 517 cancelled streams + 517 AsyncOpenAI open/close, 0 errors, 0 mismatches; client RSS 422 MB at 10 min,
+420 MB at 31 min (the drift is capped soundness caches), FDs 26-48 without trend (15 after close), threads 45-47;
+factory RSS 387-490 MB, FDs 25-26, threads 5-7, no restart; close 0.44 s, no child left. An earlier 33-minute run:
+5,160 answers, 0 errors, client RSS 405 -> 438 MB.
+
+Tests: tests/sdk 138 passed + 1 skip (xdist -n 3; new: test_reliability.py 14 end-to-end, test_reliability_unit.py
+14, test_session.py +7); gateway + wire + factory + enroll + maskstore 1264 passed (the 2 maskstore failures then
+fixed). Open: a stream interrupted after its first token is not resumed (the application retries); a reconnect after
+refused credentials stops requests still running on that runtime; a damaged factory pack is refused by the factory
+(the error says so) but not downloaded again automatically; the mask store's state database grows ~2 KB per request
+until its 30-day audit retention; hang detection is per process (a stalled scheduler that still beats is not
+detected); other lane tests read drain_metrics() once and share the drain race in principle; 0.5B not soaked (disk);
+no real-NIC packet-loss test; macOS has the parent watch but no PDEATHSIG.

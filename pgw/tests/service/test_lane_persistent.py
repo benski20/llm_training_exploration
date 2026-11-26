@@ -240,6 +240,17 @@ async def test_lane_coalesces_tenants_without_mixing(tiny_pack_dir: Path, sock_d
     monkeypatch.setenv("PGW_SERVICE_COALESCE", "1")
     async with running_app(_settings(tiny_pack_dir, sock_dir, tokens_file, tp_devices=["cpu", "cpu"])) as app:
         mgr: LaneManager = app.state.pgw.lane
+        # the lane's own drain loop (every DRAIN_INTERVAL_S) also drains the counters: keep every drain, so the
+        # accounting check below sees all rows whatever the timing (it failed when the box was busy)
+        drained: list[dict[str, Any]] = []
+        first_drain = mgr.drain_metrics
+
+        def recording_drain() -> dict[str, Any]:
+            d = first_drain()
+            drained.append(d)
+            return d
+
+        monkeypatch.setattr(mgr, "drain_metrics", recording_drain)
         rep = await asyncio.to_thread(start_lane_persistent, mgr, emulate=True, rows_list=[1, 2])
         assert rep.disabled is None
         lanes = [(await _lane(app, pack_fp, tok))[0] for tok in (TOKEN_A, TOKEN_B, TOKEN_A, TOKEN_B)]
@@ -277,8 +288,11 @@ async def test_lane_coalesces_tenants_without_mixing(tiny_pack_dir: Path, sock_d
         st = mgr.svc.coalesce_stats()
         assert st["merged_batches"] >= 1 and 2 <= st["max_rows"] <= 8, st
         assert st["merged_calls"] + st["alone"] - st0["alone"] + st["retried"] >= len(lanes) * calls_per_lane
-        d = mgr.drain_metrics()
-        rows = {(t, k): r for t, k, r in d["rows"]}
+        mgr.drain_metrics()
+        rows: dict[tuple[str, str], int] = {}
+        for d in drained:
+            for t, k, r in d.get("rows", ()):
+                rows[(t, k)] = rows.get((t, k), 0) + int(r)
         kind = name.split(".", 1)[1]
         assert rows[("tenant-a", kind)] == 1 + 2 * calls_per_lane  # per-tenant accounting per call, unchanged
         assert rows[("tenant-b", kind)] == 2 * calls_per_lane

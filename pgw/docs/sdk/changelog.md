@@ -11,6 +11,20 @@ major version is 0, minor versions may change interfaces, and such changes are l
 * `mask_admission="overcommit"` (opt-in, `PGW_MASK_ADMISSION`).
 * New page: [Scaling](scaling.md) (sizing per model and concurrency, worker processes, fairness).
 
+## Unreleased: reliability
+
+What happens on each failure is now written down in [Reliability](reliability.md), with a test for each.
+
+* `close()` stops requests still running (their callers get `APIConnectionError` instead of waiting forever); a
+  stream that is dropped, or whose consuming task is cancelled (an SSE client that disconnected), stops generating.
+* The client certificate is renewed while the client runs; an expired one, damaged session files and a damaged
+  cached model pack are replaced by themselves; a refused session enrolls again on the next request.
+* The mask factory's processes never outlive the application (also after SIGKILL); a hung factory is restarted;
+  a request waiting for masks makes the factory refill at once; a request that can never fit the mask stock fails
+  at once (`payload_too_large`, 400).
+* A key revoked mid-answer is reported as `AuthenticationError` (was a retryable 503); a full disk is reported as
+  such (was a connection error).
+
 ## 0.1.0 (2026-11-25): pilot release
 
 First release of the client library for pilot customers.
