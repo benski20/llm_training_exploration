@@ -297,7 +297,83 @@ mod chan {
 
     enum Conn {
         Uds(UnixStream),
-        Tls(Box<rustls::StreamOwned<rustls::ClientConnection, TcpStream>>),
+        Tls(Box<TlsConn>),
+    }
+
+    /// Bytes of one batched `recv` of TLS records (a reply of the widest 72B linear is ~240 KB).
+    const TLS_RAW_BYTES: usize = 256 << 10;
+
+    /// The TLS client end with batched reads: one `recv` takes everything the socket holds (up to
+    /// [`TLS_RAW_BYTES`]) and the records are handed to rustls from memory, instead of rustls' own
+    /// reads of at most 4 KiB each (a 150-240 KB reply took 37-60 `recv` calls). The bytes rustls sees,
+    /// their order and every check are unchanged; only ciphertext sits in `raw`.
+    struct TlsConn {
+        conn: rustls::ClientConnection,
+        sock: TcpStream,
+        raw: Vec<u8>,
+        /// `raw[lo..hi]`: received, not yet given to rustls.
+        lo: usize,
+        hi: usize,
+    }
+
+    impl TlsConn {
+        fn new(s: rustls::StreamOwned<rustls::ClientConnection, TcpStream>) -> Self {
+            let (conn, sock) = s.into_parts();
+            TlsConn { conn, sock, raw: vec![0u8; TLS_RAW_BYTES], lo: 0, hi: 0 }
+        }
+
+        /// Plaintext into `buf` (at least one byte, or `Ok(0)` at a clean close). `dontwait`: one
+        /// non-blocking `recv` (`MSG_DONTWAIT`; the socket stays in blocking mode), `WouldBlock` if the
+        /// socket has nothing; else a blocking `recv` bounded by the socket's read timeout.
+        fn read_plain(&mut self, buf: &mut [u8], dontwait: bool) -> io::Result<usize> {
+            if buf.is_empty() {
+                return Ok(0);
+            }
+            // as rustls' own stream: anything rustls has to send (e.g. a key update answer) goes first
+            while self.conn.wants_write() {
+                match self.conn.write_tls(&mut self.sock) {
+                    Ok(_) => {}
+                    Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
+                    Err(e) => return Err(e),
+                }
+            }
+            loop {
+                match self.conn.reader().read(buf) {
+                    Ok(n) => return Ok(n),
+                    Err(e) if e.kind() == io::ErrorKind::WouldBlock => {}
+                    Err(e) => return Err(e),
+                }
+                if self.lo < self.hi {
+                    let mut rd = &self.raw[self.lo..self.hi];
+                    let n = self.conn.read_tls(&mut rd)?;
+                    self.lo += n;
+                    self.conn.process_new_packets().map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+                    continue;
+                }
+                self.lo = 0;
+                self.hi = 0;
+                let flags = if dontwait { libc::MSG_DONTWAIT } else { 0 };
+                // SAFETY: valid socket, writable buffer of `raw.len()` bytes.
+                let n = unsafe {
+                    libc::recv(self.sock.as_raw_fd(), self.raw.as_mut_ptr().cast(), self.raw.len(), flags)
+                };
+                if n < 0 {
+                    return Err(io::Error::last_os_error());
+                }
+                if n == 0 {
+                    // end of stream: rustls decides (Ok(0) after close_notify, else UnexpectedEof)
+                    self.conn.read_tls(&mut &[][..])?;
+                    self.conn.process_new_packets().map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+                    return match self.conn.reader().read(buf) {
+                        Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
+                            Err(io::Error::from(io::ErrorKind::UnexpectedEof))
+                        }
+                        r => r,
+                    };
+                }
+                self.hi = n as usize;
+            }
+        }
     }
 
     impl Conn {
@@ -354,7 +430,7 @@ mod chan {
         fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
             match self {
                 Conn::Uds(s) => s.read(buf),
-                Conn::Tls(s) => s.read(buf),
+                Conn::Tls(t) => t.read_plain(buf, false),
             }
         }
     }
@@ -533,6 +609,11 @@ mod chan {
             }
             match self.est.iter().find(|e| e.linear == linear && e.rows == rows) {
                 None => self.spin_auto.max(self.spin),
+                // A reply expected after the cap (a slow provider: a CPU GEMM, a far link) is not spun
+                // for: a spin to the cap would almost never hit and only takes a core from the rest of
+                // the process (measured: 400 us of CPU per trip, no hit, against a CPU provider). The
+                // estimate keeps learning from blocked waits, so the spin returns when replies speed up.
+                Some(e) if e.ns > self.spin_auto.as_nanos() as u64 => Duration::ZERO,
                 Some(e) => {
                     let want = Duration::from_nanos(e.ns + e.ns / 4 + 20_000);
                     want.clamp(self.spin.min(self.spin_auto), self.spin_auto.max(self.spin))
@@ -772,7 +853,7 @@ mod chan {
                 Some(p) if p == ALPN => {}
                 Some(_) => return Err(LaneError::Protocol("the server selected another ALPN protocol".into())),
             }
-            let mut ch = Channel::new(Conn::Tls(Box::new(stream)), spin);
+            let mut ch = Channel::new(Conn::Tls(Box::new(TlsConn::new(stream))), spin);
             ch.framing = framing;
             ch.max_rows = max_rows;
             ch.read_to = Some(timeout);
@@ -888,14 +969,12 @@ mod chan {
             let mut blocked = false;
             while pos < buf.len() {
                 if let Some(until) = spin {
-                    let uds = matches!(self.conn, Some(Conn::Uds(_)));
-                    if !uds {
-                        self.set_nb(true)?;
-                    }
+                    // non-blocking polls without switching the socket's mode (no fcntl per trip)
+                    self.set_nb(false)?;
                     let conn = self.conn.as_mut().ok_or(LaneError::Closed)?;
                     let got = match conn {
                         Conn::Uds(s) => recv_dontwait(s, &mut buf[pos..]),
-                        c => c.read(&mut buf[pos..]),
+                        Conn::Tls(t) => t.read_plain(&mut buf[pos..], true),
                     };
                     match got {
                         Ok(0) => return Err(io::Error::from(io::ErrorKind::UnexpectedEof).into()),
@@ -1459,6 +1538,40 @@ mod chan {
         s.set_read_timeout(Some(timeout))?;
         s.set_write_timeout(Some(timeout))?;
         Ok(s)
+    }
+
+    #[cfg(test)]
+    mod spin_tests {
+        use super::*;
+
+        #[test]
+        fn adaptive_spin_skips_replies_beyond_the_cap() {
+            let (a, _b) = UnixStream::pair().unwrap();
+            let mut ch = Channel::new(Conn::Uds(a), Duration::from_micros(50));
+            ch.set_spin_auto(Duration::from_micros(400));
+            // unknown key: the cap
+            assert_eq!(ch.spin_for(1, 1), Duration::from_micros(400));
+            // a fast reply: 1.25 x + 20 us, at least the fixed spin
+            ch.learn(1, 1, Duration::from_micros(100));
+            assert_eq!(ch.spin_for(1, 1), Duration::from_micros(145));
+            ch.est[0].ns = 10_000;
+            assert_eq!(ch.spin_for(1, 1), Duration::from_micros(50));
+            // expected just inside the cap: spun up to the cap, as before
+            ch.est[0].ns = 380_000;
+            assert_eq!(ch.spin_for(1, 1), Duration::from_micros(400));
+            // expected after the cap: no spin (blocking wait at once)
+            ch.est[0].ns = 401_000;
+            assert_eq!(ch.spin_for(1, 1), Duration::ZERO);
+            // blocked waits keep teaching the estimate: faster replies bring the spin back
+            for _ in 0..16 {
+                ch.learn(1, 1, Duration::from_micros(150));
+            }
+            assert!(ch.spin_for(1, 1) > Duration::ZERO);
+            // other keys are independent; the fixed spin (no auto) is unchanged
+            assert_eq!(ch.spin_for(2, 1), Duration::from_micros(400));
+            ch.set_spin_auto(Duration::ZERO);
+            assert_eq!(ch.spin_for(1, 1), Duration::from_micros(50));
+        }
     }
 }
 

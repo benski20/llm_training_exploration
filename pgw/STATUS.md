@@ -2380,3 +2380,66 @@ each has regression tests. No scheme, parameter or output change: answers are bi
     twice. The gateway was run in two halves for the same reason.
   - tests/docs still has failures from before this change (`PGW_SPECULATION` is not a settings field, and
     test_numbers). None are in files this change touched.
+
+
+## 2026-11-26: client per-token hot path (library path, 0.5B on CPU, exact)
+
+Scope: what `pgw.OpenAI` does per decoded token outside the GPU. Measured with `benchmarks/sdk_trip_profile.py` (now
+also reports client CPU per token, the driver's phase counters and the lane's split of a trip) plus per-thread
+timers on the hot functions, the CPU provider on the same 4-vCPU box (load 5-26 from other jobs: walls are noisy,
+CPU times and counts are not). A/B: the previous branch head's `pgw_fast` vs this one, interleaved, 2 x 2 runs of 48
+tokens; every run gave the same tokens and logprobs (same hash), the same 97 trips per token, the same rows and bytes.
+
+| per decoded token, 0.5B, 97 trips | before | after | how |
+|---|---|---|---|
+| lane reply spin (400 us cap, no hit against a CPU provider) | 38.8 ms CPU | 0 | spin skipped when the learned reply time exceeds the cap |
+| lane, per trip beyond the provider's compute: wait / send + read | 102-150 / 131-133 us | 25-32 / 85-93 us | the spin gave the provider's CPU back; batched TLS reads |
+| TLS `recv` calls per trip (7B shapes, strace) | 8.0 | 1.16 | one `recv` of everything the socket holds, records fed to rustls from memory |
+| W r chunk decrypts on the token's path | 100 | 38 | a part reserved ahead decrypts every linear's first lease at once |
+| lease creation + lookup (Python, incl. those decrypts) | 13-16 ms wall, 5.7-6.6 ms CPU | 4.8-4.9 ms wall, 3.3-3.5 ms CPU | same |
+| noise-sampled trips handed back to Python (send + finish) | 4.9 | 0 | held in the driver, sent on the native lane after the inline statistics |
+| client CPU, whole process | 87-89 ms | 45-46 ms | |
+| native gateway work (prepare + finish + float ops per trip) | 74-128 us | unchanged | qkv/o/gate_up/down prepare ~33/33/33/85 us, finish 16/16/42/16, float 24/2/16/2 |
+| inline noise statistics (5 sampled trips) | 2.0 ms CPU | unchanged | 93 / 160 / 225 / 746 us at n = 896 / 4864 / 8192 / 29568 (one core, min) |
+| sampling: greedy + logprobs / temperature > 0 / top_p < 1 | 0.35 / +3.9 / +14 ms | 0.35 / +3.9 / +4.4 ms | top-p filter sorts with numpy (bit-identical); `multinomial`'s 152k exponential draws stay |
+
+Changes (each exact: same bytes, request ids, rows, checks, draws; tests added):
+- **Adaptive spin** (`rust/pgw-fast/src/lane.rs`): a reply expected after the cap is not spun for; the estimate keeps
+  learning from blocking waits, so the spin comes back when replies speed up (a GPU provider under the cap: as before).
+- **Batched TLS reads** (same file): the lane client's TLS reader does one `recv` (up to 256 KiB) and hands the
+  records to rustls from memory (rustls reads at most 4 KiB per call: 37-60 `recv` per 150-240 KB reply); spin polls
+  use `MSG_DONTWAIT`, so the socket's mode no longer toggles per trip. Test: replies up to 1.9 MB arrive intact.
+- **Held sampled trips** (`decode.rs`, `decode_native.py`): with inline noise statistics the driver keeps the
+  prepared sampled trip (ticket, id, payload), Python runs the statistics before anything of it leaves (an alarm
+  stops it, abort zeroes it), the next driver call sends exactly those bytes on the native lane and finishes it there.
+  `PGW_DECODE_NATIVE_HOLD=0` restores the hand-back. Tests: bytes, logits and statistics identical across no driver,
+  hand-back and hold; no hand-back with the hold; the existing alarm tests pass on the lane.
+- **First-lease decrypt-ahead** (`pgw/gateway/masks.py`, with `PGW_TRIP_DECRYPT_AHEAD`, which the library sets): in
+  incremental mode (8-slot parts) the leases of a part were created before the next part existed, so the first lease
+  of every linear in every part decrypted its chunks inline. Nothing handed out; zeroed unless a lease takes it.
+- **Top-p** (`pgw/engine/sampling.py`): numpy's argsort gives the same sorted value sequence; where the mask boundary
+  splits equal values, or with NaN, `torch.sort` runs. 15.8 -> 5.5 ms per call on one core (71 ms for `torch.sort`
+  alone with four busy intra-op threads here).
+
+Not changed (measured, reasons): the in-process SDK path has no HTTP/JSON/SSE (chunk objects cost ~4 us each); the
+noise statistics stay in Python (security code; 6.1 ms per token at 72B widths, now a model term); `multinomial`
+(3.9 ms per sampled token on one core, ~10x with busy intra-op threads) is bound to torch's RNG stream; the trip split
+over cores does not pay on this 4-vCPU box (STATUS 2026-11-23); lease creation keeps ~90 us of Python per lease
+(17 per token at 0.5B, ~40 at 72B with 8-slot parts).
+
+Model (`benchmarks/round_trip_model.py --sdk`): one new measured term, the inline noise statistics (5% of trips,
+cost per sampled trip fitted to the numbers above): 1.4 / 4.1 / 6.1 ms per token at 7B / 32B / 72B. 72B at RTT 0.2 ms:
+201.2 ms per token (was 195.1). The lane (0.13 ms per trip) and gateway terms are left as they were: the lane gains
+here are on loopback next to a CPU provider, not over a NIC to a GPU.
+
+Needs a GPU / same-data-center run: the lane's fixed cost per trip over a real NIC with the spin, batched reads and
+held trips (spin hits, `recv` per trip at 72B reply sizes); the gateway's per-trip work at 72B widths on a gateway
+with its own cores (trip split); sampling cost per token on the client's CPU with its thread settings.
+Tests (one directory at a time; the box was shared and short of memory): tests/engine 1150 passed + 2 that failed
+under xdist (an OOM-killed worker, a timing assertion) and pass alone; tests/wire 334; tests/native 343;
+tests/service lane TLS + lane server 23; tests/gateway 277 + 3 that failed under xdist (an OOM-killed worker, a
+dummy-pass count, a factory child start) and pass alone; tests/sdk 103 passed, 1 opt-in skip (serial);
+tests/benchmarks and tests/observability pass; `cargo test -p pgw-fast --lib` 75 passed. Failing, in code this
+change does not touch: tests/docs (`PGW_SPECULATION` in docs/sdk/configuration.md, from c9a0e82, is not a setting;
+results/kaggle logs missing from the checkout) and two tests/maskstore child-process crash tests (the child's stdlib
+`platform` import resolves to another module here).

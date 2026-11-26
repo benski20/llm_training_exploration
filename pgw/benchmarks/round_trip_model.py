@@ -67,6 +67,11 @@ SDK_LANE_MS = 0.09 + 0.04
 #: caller's thread): 1.2-1.4 ms measured at 0.5B (same vocabulary) on the dev box, rounded up (no HTTP / SSE; the
 #: gateway's HTTP path measured 9.2 ms in the 7B run).
 SDK_SERVE_MS = 2.0
+#: inline noise statistics of one sampled trip (``OutboundNoiseMonitor.inspect_planned``, before the trip's payload
+#: leaves), us = fixed + per inspected value: measured here (one core, min of 30) at n = 896 / 4864 / 8192 / 29568
+#: values: 93 / 160 / 225 / 746 us, fitted. The monitor samples ``SDK_NOISE_RATE`` of the trips (its default).
+SDK_NOISE_US = (75.0, 0.0227)
+SDK_NOISE_RATE = 0.05
 #: tokens per verify pass (strict, chain): measured here on Qwen2.5-0.5B with prompt lookup (sdk_trip_profile.py,
 #: 64 tokens): open chat 1.14 (R=2) / 1.15 (R=3), a code edit 1.66 (R=2) / 2.10-2.14 (R=3) / 2.52 (R=4); draft head:
 #: alpha 0.46 is the 7B float head's measured top-1 (export bug pending), 0.8 an EAGLE-class head (not trained)
@@ -90,6 +95,10 @@ def _sm() -> Any:
     return scaling_model
 
 
+def _noise_us(values: int) -> float:
+    return SDK_NOISE_US[0] + SDK_NOISE_US[1] * values
+
+
 def sdk_ms_per_token(model: str, rtt_ms: float, rows: int = 1, tau: float = 1.0, nic_gbit: float = 25.0,
                      tp: int | None = None, lane_ms: float | None = None, gw_scale: float = 1.0) -> dict[str, float]:
     """ms per decoded token by component on the library's path (see the constants above)."""
@@ -108,7 +117,9 @@ def sdk_ms_per_token(model: str, rtt_ms: float, rows: int = 1, tau: float = 1.0,
     out = {"trips": float(trips), "network": trips * rtt_ms, "lane": trips * lane, "device": device,
            "wire": rows * (shape.sum_n() + shape.sum_m()) * 4 * 8 / (nic_gbit * 1e9) * 1e3,
            "gateway": (4 * shape.layers * SDK_GW_TRIP_MS[model] + SDK_GW_HEAD_MS) * rowf * gw_scale,
-           "serve": SDK_SERVE_MS * (1 + 0.1 * (rows - 1))}
+           "serve": SDK_SERVE_MS * (1 + 0.1 * (rows - 1)),
+           "noise": SDK_NOISE_RATE * (shape.layers * sum(_noise_us(rows * n) for _, n, _ in shape.linears())
+                                      + _noise_us(rows * shape.hidden)) / 1e3}
     per_pass = sum(v for k, v in out.items() if k != "trips")
     out["pass_ms"] = per_pass
     out["ms_per_token"] = per_pass / tau
