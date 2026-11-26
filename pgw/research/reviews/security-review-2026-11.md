@@ -31,17 +31,17 @@ The pks-v3 scheme, its parameters and the model outputs are unchanged.
 | S7 | low | A cached SDK session whose `service-ca.pem` is missing falls back to the system trust store. The cached CA is not re-checked against the key's pin | **fixed** |
 | S8 | low | `/pgw/v1/sdk/report` has no rate limit (256 records per call). One installation can grow the request log and usage rows without bound | **fixed** |
 | S9 | low | Report `error_code` is not allow-listed on the client (the server's regex is the only guard) | **fixed** |
-| S10 | low | Provisioning routes (`/pgw/v1/provision/...`) ignore SDK key model scope and quotas. Artifacts are public, but hint jobs cost provider GPU/CPU | open |
-| S11 | low | The SDK's integrity breaker and failure counter are in memory: a process restart resets them | open (decision) |
-| S12 | low | Requests that fail before reaching the provider (for example, context length) are still reported, with their error class | open (decision) |
-| S13 | low | Customer-side gateway routes (`gateway/setup.py`, `gateway/app.py`, `console/routes.py`) also buffer bodies without a bound | open |
-| S14 | low | Provider images fetch the rustup installer over TLS with no hash (the toolchain version is pinned) | open |
-| S15 | info | Rust: about 490 `unsafe` uses across five crates. I spot-checked the network-facing copies only | recommend audit |
+| S10 | low | Provisioning routes (`/pgw/v1/provision/...`) ignore SDK key model scope and quotas. Artifacts are public, but hint jobs cost provider GPU/CPU | **fixed** |
+| S11 | low | The SDK's integrity breaker and failure counter are in memory: a process restart resets them | **fixed** (persisted) |
+| S12 | low | Requests that fail before reaching the provider (for example, context length) are still reported, with their error class | **fixed** (not reported) |
+| S13 | low | Customer-side gateway routes (`gateway/setup.py`, `gateway/app.py`, `console/routes.py`) also buffer bodies without a bound | **fixed** |
+| S14 | low | Provider images fetch the rustup installer over TLS with no hash (the toolchain version is pinned) | **fixed** |
+| S15 | info | Rust: about 490 `unsafe` uses across five crates. I spot-checked the network-facing copies only | recommend audit (scope in section 4) |
 | S16 | info | Smaller observations: unauthenticated `/admin/attest`, `pack_path` in enrollment replies, load error text in `/readyz` | no change |
 | S17 | info | Supply chain: hash-pinned lockfiles, digest-pinned base images, no pickle, `torch.load(weights_only=True)`, no eval/exec | no issue |
 | S18 | info | Crypto hygiene: CSPRNG, constant-time comparisons, nonces, HMAC domains | no issue |
 | S19 | info | Selective failure and retries: integrity failures are fatal, never retried and data-independent (p31 check) | no issue |
-| S20 | info | Strict speculation: whether real and dummy passes can be told apart by inter-pass timing has not been measured | open (measure) |
+| S20 | info | Strict speculation: whether real and dummy passes can be told apart by inter-pass timing has not been measured | measured; **fixed** (end-of-answer status write moved after the dummy passes); residual in section 2 |
 
 PoC scripts (run against `HEAD` and against the fix):
 
@@ -54,20 +54,20 @@ PoC scripts (run against `HEAD` and against the fix):
 | observable | depends on | verdict |
 |---|---|---|
 | rows per trip, trips per request | prompt length (prefill rows), answer length L (decode passes) | inherent, documented (SPEC) |
-| strict speculation | fixed `spec_rows` per pass, pass count = L (dummy passes after the answer) | holds on the wire; the report leaked the real pass count (**S4**, fixed); inter-pass timing not measured (**S20**) |
+| strict speculation | fixed `spec_rows` per pass, pass count = L (dummy passes after the answer) | holds on the wire; the report leaked the real pass count (**S4**, fixed); inter-pass timing measured: a status write at the end of the answer marked the boundary (**S20**, fixed) |
 | prefix cache (`prefix_cache="auto"`, default without masked head) | prefill rows = new tokens only | wire view fine; the report leaked the reused length (**S3**, fixed) |
 | masked LM head | one more masked linear per token; logits stay masked, sampling is local | no data-dependent observable found |
 | message sizes | row counts × fixed widths | same as rows |
 | errors / retries | only `unavailable` / `backend_unavailable` / `deadline_exceeded` before the first token are retried; integrity failures never | the provider chooses when to fail, so nothing data-dependent |
 | mask demand | public schedule (prompt + chunk; `spec_mask_rows` public charge) | no issue (pks-v3 review) |
-| content-free report | ts, model, status, error code, token counts, latency, ttft, stream, checks_ok | now limited to wire-observable values (S3, S4, S9); pre-flight errors still reported (**S12**) |
+| content-free report | ts, model, status, error code, token counts, latency, ttft, stream, checks_ok | now limited to wire-observable values (S3, S4, S9); requests that never reached the provider are not reported (**S12**, fixed) |
 | `/readyz` | other tenants' load | other-tenant channel (**S5**, fixed) |
 
 The report is content-free: the client sends allow-listed fields, the server parses them by allow-list again, and no
 text field remains (`model` matches `_MODEL_RE`, `error_code` is a public code). After S3, S4 and S9 it also
-carries nothing the masked traffic does not already show. The exceptions are the end-to-end latency without
-speculation (the same as the time from the first to the last trip, plus client CPU) and the reports of requests that
-never reached the provider (S12).
+carries nothing the masked traffic does not already show. The exception is the end-to-end latency without
+speculation (the same as the time from the first to the last trip, plus client CPU). Requests that never reached the
+provider are no longer reported (S12).
 
 ## 2. Findings
 
@@ -215,7 +215,7 @@ regex `[a-z0-9_.-]{1,64}` bounded it.
 
 Test: `test_report_error_codes_are_public_codes_only`.
 
-### S10 (low, open): provisioning ignores SDK key scope and quotas
+### S10 (low, fixed): provisioning ignored SDK key scope and quotas
 
 `service/provision.py` authenticates like compute but never calls `Accounts.admit`. A key scoped to model A can:
 
@@ -225,7 +225,21 @@ Test: `test_report_error_codes_are_public_codes_only`.
 Suggested fix: check the key's model scope in `fp_of` (`Accounts._model(fp).name in st.allowed`), and count hint
 work against the row bucket.
 
-### S11 (low, open, decision): integrity breaker not persisted
+**Fix (follow-up, same day).** `service/provision.py` applies `Accounts.admit` to every provisioning route, with the
+model named by the base fingerprint's catalog entry (provisioning addresses base packs, which the compute registry
+may not list):
+
+* `/models` lists only the key's models; `manifest`, `object` and `hint` creation of another model are refused
+  (403, `permission_denied`);
+* a revoked or expired key, and a key or organisation over its daily token quota, are refused (401 / 429);
+* each H chunk (256 weight rows) is charged to the key's row bucket. Over it the reply is 429 with `Retry-After`;
+  `pgw.provision.session.ProvisionSession` waits that out (up to 60 s per reply, without spending a retry). A
+  daily quota's `Retry-After` (until midnight) is not waited out.
+
+Tests: `tests/service/test_security_review.py::test_provisioning_enforces_the_sdk_key_scope_quota_and_row_rate`,
+`::test_provisioning_client_waits_out_the_row_rate_but_not_a_daily_quota`.
+
+### S11 (low, fixed): integrity breaker not persisted
 
 The SDK's in-process gateway opens its breaker on an integrity failure until `reset_integrity_breaker()`. The state
 and `integrity_failures` live in memory and in `status.json`, which is written but not read back, so a restart clears
@@ -237,7 +251,29 @@ restarts: about 2^-31 escape probability per attempt with the p31 check. The fac
 
 Decision: persist the breaker per key and model, mirroring `factory clear-halt`, or document a restart as a reset.
 
-### S12 (low, open, decision): reports of requests that never reached the provider
+**Fix (decision: persist).** `pgw.sdk.halt`:
+
+* One record per (key, model): `<state dir>/sessions/<key id>/integrity/<model>.json`, 0600, written atomically.
+  It holds `halted`, the failure count, timestamps and a short event log (no secrets, no content).
+* HMAC-SHA256 under `<state dir>/sessions/<key id>/integrity.key` (32 random bytes, 0600) with its own domain
+  label `pgw-sdk-integrity-halt-v1\0`, over the canonical JSON of the record, the key id and the model.
+* Fail closed: a record with a missing or wrong MAC, unknown fields, another key's or model's name, invalid JSON,
+  or whose MAC key is gone reads as halted, and the request's `IntegrityError` says the record cannot be verified.
+  No record means no failure was ever recorded.
+* Every integrity failure the breaker sees (`ModelRuntime.safety_listeners`, so failed checks of background
+  strict-mode dummy passes count too) is persisted before the breaker's listener returns. A new runtime trips its
+  breaker from the record before it starts, and every request re-reads the record (cached by mtime, size and
+  inode), so a halt reaches the other processes of the same key and state directory on their next request.
+* Clearing is explicit: `pgw sdk clear-halt --model M [--key-id K] --yes [--note ...]` prints a warning (an honest
+  provider never fails a check; running processes stay blocked until they restart) and keeps a `cleared` event,
+  or `OpenAI.reset_integrity_breaker(model)` in code. Documented in `docs/sdk/troubleshooting.md`.
+
+Tests: `tests/sdk/test_security_review.py::test_integrity_halt_is_persisted_private_and_mac_protected`,
+`::test_engine_trips_the_breaker_from_the_persisted_halt`, `::test_sdk_clear_halt_cli`, and end to end against the
+real provider `tests/sdk/test_e2e_cpu.py::test_integrity_failure_raises_and_blocks` (restart stays blocked, the CLI
+clears, `reset_integrity_breaker` clears; now self-contained: its own key, cache and baseline answer).
+
+### S12 (low, fixed): reports of requests that never reached the provider
 
 A request refused locally still produces a record with status `error` and its code. Examples are a context-length
 error (prompt + `max_tokens` too long) and a mask shortage. The record tells the provider that a request happened
@@ -246,17 +282,41 @@ and, for the context case, that the prompt was long, although it never saw the r
 Decision: either do not report requests that opened no session, or keep them for the console's error view and
 document it.
 
-### S13 (low, open): customer-side unbounded bodies
+**Fix (decision: do not report).** `Engine.chat_events` reports a request only once its mask session opened
+(`meta["opened"]`, set after `_open`; its trips follow at once). A request that failed before that is counted by
+error code in `client.status()["local_errors"]` (and per model in `status.json`) and logged at INFO without content.
+Documented in `docs/sdk/CONTRACT.md` A3b and `docs/sdk/configuration.md` (`usage_reports`).
+
+Test: `tests/sdk/test_security_review.py::test_requests_that_never_reached_the_provider_are_not_reported`.
+
+### S13 (low, fixed): customer-side unbounded bodies
 
 `gateway/setup.py:783`, `gateway/app.py:882/943` and `console/routes.py:285/412` use `request.body()` /
 `request.json()` without a bound. They are the customer gateway's local surfaces, usually loopback or behind the
 customer's own auth, so the exposure is lower. The same `read_limited` helper applies.
 
-### S14 (low, open): rustup installer without a hash
+**Fix.** `read_limited` on every one of them:
+
+* the setup wizard's `_json` (64 KiB; its sign-in takes no credential, so this was the exposed one);
+* the gateway's `POST /admin/keys` and `/admin/models/{name}/reset` (64 KiB; the app-wide `_BodyLimit` middleware
+  allowed 4 MiB);
+* the console's sign-in (16 KiB) and playground (`max_body_bytes`).
+
+Tests: `tests/gateway/test_security_review.py` (2).
+
+### S14 (low, fixed): rustup installer without a hash
 
 `deploy/docker/provider*.Dockerfile` run `curl https://sh.rustup.rs | sh` (into a file, then `sh`). TLS protects it,
 but its hash is not checked. The toolchain version is pinned, and `cargo fetch --locked` honours `Cargo.lock`.
 Suggested fix: a digest-pinned `rust:<ver>` build stage, or the checksum of `rustup-init`.
+
+**Fix.** Both provider Dockerfiles download `rustup-init` 1.28.2 from
+`static.rust-lang.org/rustup/archive/<version>/<triple>/rustup-init` and check it with `sha256sum -c` before
+running it. The sums (`RUSTUP_INIT_SHA256_X86_64`, `RUSTUP_INIT_SHA256_AARCH64`) were taken from the published
+`rustup-init.sha256` files and match the downloaded binaries. Another architecture fails the build. rustup then
+checks every toolchain component against the channel manifest's sha256. The images were not rebuilt here (no
+change to anything after the installer). Test: `tests/deploy/test_provider_image.py` (pinned version, sums per
+architecture, check before run, no `sh.rustup.rs`).
 
 ### S15 (info): Rust `unsafe`
 
@@ -270,7 +330,7 @@ I checked the paths that copy peer-controlled bytes:
 * Customer side, `pgw-pks` `decrypt_item`: lengths are re-checked (review F17).
 
 This is not an audit. An external review of `pgw-fast`, which parses provider replies on the client, is
-recommended before general availability.
+recommended before general availability. Section 4 lists the scope.
 
 ### S16 (info): smaller observations, no change
 
@@ -325,15 +385,106 @@ recommended before general availability.
 
 I found no path where whether a failure happens depends on the data.
 
-### S20 (open, measure): timing of strict-mode dummy passes
+### S20 (measured, fixed): timing of strict-mode dummy passes
 
 The row count and the pass count of dummy passes match real ones, and with `spec_mask_rows` the gateway's work per
 call depends only on the row count. Real passes also run sampling and, with `draft_head`, a draft step; dummy passes
 run `_dummy_samples`. If their client CPU differs, the inter-pass gap may separate the answer's passes from the
 dummy tail, and so reveal the real pass count again.
 
-Suggested follow-up: measure the gap distributions of real and dummy passes on the reference client (CPU only, no
-cloud). Pad the dummy passes' client work if they differ.
+**Method.** `benchmarks/sdk_dummy_pass_timing.py`:
+
+* The client library runs with `speculation="lookup"` (`spec_rows=3`) against the real `pgw service` of the SDK
+  tests (TLS, TCP+TLS trip lane, masked LM head).
+* A TCP relay in front of the lane records what the provider's network sees: when each request arrives, its size,
+  and when the reply leaves. Only these numbers are used as the provider's features.
+* In the client, each pass is tagged real, dummy or prefill (`Generator._plan_fixed`). The tags are used only to
+  label the passes.
+* Per decode pass, the features are:
+  * the gap from the last reply of the previous pass to the first request of this one;
+  * the mean gap between the trips of the pass;
+  * the provider's time per trip;
+  * the pass duration;
+  * request and reply bytes.
+* For each feature the script reports:
+  * the Kolmogorov-Smirnov distance D, real vs dummy, with its 5 % critical value;
+  * the balanced accuracy of the best single-threshold classifier (0.5 means indistinguishable);
+  * the same for the first dummy pass of each request, the boundary;
+  * an attack on the S4 quantity, which takes the request's largest gap as the boundary. Chance is about 1/24.
+* As a control, D between the early and the late half of each kind's passes. Time and position effects, such as
+  load from other processes on the host, show up there too.
+* Setup: tiny model, CPU, 4 vCPUs shared with other jobs (load average 14 to 20). 48 requests of 32 tokens over
+  four prompts (repeat, summarise, poem, list), non-streaming and streaming. The library's real pass counts were
+  8 to 12 of 32.
+
+**Result before the fix: distinguishable at the boundary.**
+
+| | non-stream | stream |
+|---|---|---|
+| steady-state gap, real / dummy median | 2.54 / 2.54 ms | 2.55 / 2.44 ms |
+| steady-state gap, D (critical) / accuracy | 0.089 (0.083) / 0.544 | 0.091 (0.083) / 0.545 |
+| intra-pass gap D, provider time D, duration D | 0.030, 0.038, 0.054 | 0.047, 0.049, 0.040 |
+| **first dummy gap**, median / p90 (real: 2.5 / 4.9 ms) | **4.47 / 22.5 ms** | **6.36 / 23.6 ms** |
+| first dummy vs real gap, D (critical) / accuracy | **0.452 (0.207) / 0.726** | **0.479 (0.207) / 0.739** |
+| largest gap = the real/dummy boundary | **13/48** | **15/48** |
+
+Earlier runs of the same configuration found the boundary in 11/40, 11/40, 9/40 and 12/40 requests. Request and
+reply sizes are equal per trip, and they come in the same order in real and dummy passes.
+
+**Cause.** At the end of the answer, `Engine._chat_events` wrote `status.json` on the client's event loop: JSON,
+a file lock and `fsync`, at most every 2 s. The write fell between the last real pass and the first dummy pass. A
+diagnosis run without the write found the boundary in 2/40 requests. A smaller residual remained: the application
+thread wakes up with its answer and finishes it (GIL), and the generator's consumer runs its end-of-request work.
+
+**Fix.**
+
+1. With strict speculation, the status write at the end of a request waits until the generator is idle
+   (`Engine._status_after_passes`). It does not poll the loop: a periodic wake-up during the dummy passes would
+   be a difference of its own. Its time then depends only on the public pass count.
+2. A pass-gap floor `spec_pass_gap_ms`, 8 ms by default with speculation, 0 to turn it off
+   (`Engine._pace_strict_passes`). A forward pass starts no earlier than the floor after the previous pass ended,
+   so client work shorter than the floor is not visible. Rows, trips and outputs are unchanged.
+
+**Result after the fix.**
+
+| | after 1 only, non-stream / stream | after 1 + 2 (default), non-stream / stream |
+|---|---|---|
+| largest gap = boundary | 2/48 / 1/48 | **1/48 / 1/48** |
+| first dummy vs real gap, D (critical) / accuracy | 0.249 (0.207) / 0.625; 0.238 / 0.619 | **0.162 (0.207) / 0.581; 0.133 / 0.567** |
+| steady-state gap, real vs dummy D / accuracy | 0.168 / 0.584; 0.145 / 0.572 | 0.119 / 0.560; 0.133 / 0.567 |
+| control D, dummy early vs late (critical 0.103) | 0.138; 0.109 | 0.132; 0.086 |
+| pass period, median | 24.7 / 23.6 ms | 31.5 / 32.0 ms |
+
+With the floor:
+
+* The boundary attack is at chance.
+* The first dummy pass is within the 5 % critical value in these two runs. Across four earlier floor runs, D was
+  0.176, 0.161, 0.222 and 0.357, so one of the four was above the critical value.
+* The remaining real-vs-dummy D of the steady-state gap (about 0.12) is the same size as the control between
+  early and late dummy passes. On this loaded host, that is the size of time and position effects.
+
+Cost: the floor minus the usual gap, per pass. On the tiny model that is about 8 ms on about 24 ms (+34 %). On real
+models, a pass of `4 x layers + 1` round trips takes about 100 to 300 ms or more, so the cost is 3 to 8 %.
+
+Limits:
+
+* Only the tiny model was measured. A plain-mask run of Qwen2.5-0.5B needs 1.8 MB per slot, about 10 GB of mask
+  stock for a useful run, and the shared disk had 2 GB free. The client work that scales with the model, such as
+  sampling 3 rows over the vocabulary, is the same for real and dummy passes (`_dummy_samples`). The effects
+  found here (a file write, the application waking up) do not depend on the model.
+* An application that does heavy CPU work right after an answer still delays the next pass by more than the
+  floor in the same Python process. A larger `spec_pass_gap_ms` covers more of it.
+* Observation, not caused by real or dummy passes: in about 1 pass in 15, the head call spans two mask extents.
+  It then goes as a 2-item request over HTTPS instead of the lane, so the lane shows 8 trips instead of 9. These
+  passes fall at fixed pass indices of a request, every 3 passes from index 20 here. Those indices depend on the
+  prompt length and the mask reservation's chunking, not on the drafts. Follow-up: carry 2-extent calls on the
+  lane.
+
+Tests:
+
+* `tests/sdk/test_security_review.py::test_strict_passes_start_no_earlier_than_the_gap_floor`;
+* the strict-speculation e2e tests (`tests/sdk/test_speculation.py`) run with the floor. Answers stay bit-identical
+  and the provider-metered trips and rows stay equal.
 
 ## 3. Files changed
 
@@ -359,3 +510,45 @@ cloud). Pad the dummy passes' client work if they differ.
 * Tests: `tests/sdk/test_security_review.py` (7), `tests/service/test_security_review.py` (5).
 
 Outputs are bit-identical: no model, mask, scheme or check path was touched.
+
+Follow-up (S10 to S14, S20), same rules:
+
+* `src/pgw/sdk/halt.py` (new), `src/pgw/sdk/options.py` (`spec_pass_gap_ms`), `src/pgw/sdk/engine.py`
+  (persisted halt, `local_errors`, no report before a session, status write after the dummy passes, pass-gap
+  floor), `src/pgw/sdk/cli.py` (`pgw sdk clear-halt`, halts in `status`);
+* `src/pgw/service/provision.py`, `src/pgw/service/accounts.py` (`admit(model_name=)`, `allowed_models`),
+  `src/pgw/provision/session.py` (waits out a short 429);
+* `src/pgw/gateway/setup.py`, `src/pgw/gateway/app.py`, `src/pgw/console/routes.py` (bounded bodies);
+* `deploy/docker/provider.Dockerfile`, `deploy/docker/provider-cpu.Dockerfile` (verified rustup-init);
+* `benchmarks/sdk_dummy_pass_timing.py` (new; S20 measurement);
+* docs: `docs/sdk/troubleshooting.md`, `docs/sdk/CONTRACT.md` A3b, `docs/sdk/configuration.md`;
+* tests: `tests/sdk/test_security_review.py` (+5), `tests/service/test_security_review.py` (+2),
+  `tests/gateway/test_security_review.py` (new, 2), `tests/deploy/test_provider_image.py`,
+  `tests/sdk/test_e2e_cpu.py` (integrity test self-contained), `tests/console/test_console_build.py` (wheel name
+  `pgw_sdk-*.whl`), `tests/sdk/test_unit.py` (a fake in-flight request marks its session open).
+
+## 4. External audit scope (S15)
+
+Priority order for an external review of the Rust `unsafe` code. Counts are lines containing `unsafe` (blocks,
+`unsafe fn`, `unsafe impl` and a few comments), from `grep -rw unsafe` on this branch.
+
+1. **`rust/pgw-fast`** (273; client side, parses and unmasks provider replies, so a malicious provider controls
+   the input):
+   * reply path first: `src/trip.rs` 17, `src/trip/split.rs` 14, `src/tripnative.rs` 25, `src/lane.rs` 4
+     (lane client framing, `from_le_bytes` length fields), `src/finish.rs` 29 (unmask, range and Freivalds checks),
+     `src/prime.rs` 8 (p31 check), `src/p61.rs` 2, `src/decode_f2.rs` 6, `src/bitpack.rs` 10 (maskgen wire
+     unpacking), `src/hemask.rs` 11, `src/store.rs` 14 (decrypted mask rows), `src/lane_service.rs` 2;
+   * local compute, lower priority (inputs are the client's own): `src/lmhead.rs` 49, `src/attn.rs` 31,
+     `src/localgpu.rs` 21, `src/prepare.rs` 12, `src/local.rs` 7, `src/writer.rs` 6, `src/layer.rs` 2,
+     `src/trip/tests.rs` 3 (tests).
+2. **`rust/pgw-lane`** (75; provider side, parses gateway requests from tenants): `src/shm.rs` 31 (shared-memory
+   transport between users), `src/cuda.rs` 25 (driver FFI, `copy_nonoverlapping` of request bodies),
+   `src/persistent.rs` 8, `src/server.rs` 6 (framing, tickets), `src/coalesce.rs` 3, `src/lib.rs` 2.
+3. Then `rust/pgw-pks` (101; customer-side pks-v3 decryption, F17 re-checks lengths) and `rust/pgw-ntt` (35).
+   `rust/pgw-core-rs` has none.
+
+For each: every raw-pointer copy and slice construction must be bounded by a length checked against the buffer it
+reads, after any peer-supplied length field is parsed; FFI and shared-memory regions must be validated before
+use; `unsafe impl Send/Sync` must be justified. Fuzz targets for the lane framing (`pgw-fast/src/lane.rs`,
+`pgw-lane/src/server.rs`, `src/shm.rs`) and the reply decoders (`trip.rs`, `finish.rs`, `bitpack.rs`) are the most
+useful single addition.
