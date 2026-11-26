@@ -2320,3 +2320,63 @@ time, which is exact, so storing the bf16 bytes and widening at load gives the s
     main checkout's pgw, which reads format 1 only.
   - The setup wizard's pack job and the enrollment metadata now default a missing `plain_dtype` to `"source"` (they
     used `"float32"`, which would rebuild format 1 and miss a format-2 service fingerprint).
+
+## 2026-11-26: security review follow-up (S10 to S15, S20)
+
+The open items of `research/reviews/security-review-2026-11.md` are closed. Every one tightens security, and
+each has regression tests. No scheme, parameter or output change: answers are bit-identical.
+
+- **S11, persisted integrity halt** (`pgw.sdk.halt`):
+  - Halts are kept per (key, model) in the state directory: 0600, and HMAC'd under their own domain label with a
+    0600 key file.
+  - A restart does not reset them, and other processes of the key pick them up on their next request.
+  - A tampered record, a missing MAC or a missing MAC key reads as halted (fail closed), and the message says so.
+  - Cleared only by `pgw sdk clear-halt --model M --yes`, which prints a warning, or by
+    `reset_integrity_breaker()`. Documented in `docs/sdk/troubleshooting.md`.
+- **S12:** requests that failed before their mask session opened are no longer reported. They are counted in
+  `status()["local_errors"]` and logged locally (CONTRACT A3b, configuration).
+- **S20, measured on CPU** (`benchmarks/sdk_dummy_pass_timing.py`): a TCP relay records the provider's view of the
+  trip lane.
+  - Steady-state real and dummy passes were already alike. The gap median was 2.5 ms for both, with KS 0.09
+    and classifier accuracy 0.54. Trip sizes, the provider's time and the intra-pass gaps also matched.
+  - The boundary was distinguishable. A `status.json` write (with fsync) at the end of the answer made the first
+    dummy pass's gap 4.5 ms median and 22 ms p90, against 4.9 ms p90 for real passes. "Largest gap = boundary"
+    found the real pass count in 13/48 and 15/48 requests, where chance is 2/48.
+  - Fix: the write waits until the generator is idle. Also added: a strict-mode pass-gap floor
+    `spec_pass_gap_ms`, 8 ms by default.
+  - After the fix the boundary attack is at chance (1/48), and the first dummy gap is within the 5 % KS critical
+    value: 0.16 and 0.13, against a critical value of 0.21.
+  - Cost: about 8 ms per pass (+34 % on the tiny model, 3 to 8 % on real models).
+  - Qwen2.5-0.5B was not run: its plain mask stock needs about 10 GB of disk.
+- **S10:** provisioning routes apply the SDK key's model scope (403), its revocation, its daily quotas (429) and
+  its row bucket (each H chunk costs 256 rows; the client waits out a short `Retry-After`). `/provision/models`
+  lists only the key's models.
+- **S13:** the customer gateway's own JSON routes use `read_limited`: the setup wizard (unauthenticated sign-in),
+  `/admin/keys`, `/admin/models/*/reset`, and the console sign-in and playground.
+- **S14:** the provider images download `rustup-init` 1.28.2, pinned and checked with `sha256sum -c` per
+  architecture, instead of piping `sh.rustup.rs`.
+- **S15:** no code change. The review doc has an "External audit scope" section: `pgw-fast` first (273 unsafe,
+  reply path first), then `pgw-lane` (75), with per-file counts.
+- Test hygiene:
+  - `test_integrity_failure_raises_and_blocks` is self-contained (its own key, cache and baseline). It now also
+    covers restart, `clear-halt` and reset.
+  - `test_wheel_contains_the_console` globs `pgw_sdk-*.whl`.
+- Tests: the new tests are listed in the review doc (sdk +5, service +2, gateway 2 new, deploy). Each directory
+  was run on its own with `PYTHONPATH=src:.`, and nothing failed:
+
+  | directory | passed | skipped |
+  |---|---|---|
+  | sdk (e2e and speculation included) | 115 | 1 |
+  | service | 447 | 75 |
+  | gateway | 281 | 0 |
+  | console | 96 | 0 |
+  | provision | 43 | 1 |
+  | deploy | 127 | 1 |
+  | enroll | 9 | 0 |
+  | platform | 32 | 0 |
+  | cli | 209 | 3 |
+
+  - `tests/gateway/test_qwen05b.py`, the real 0.5B model, was killed for lack of memory on the shared host,
+    twice. The gateway was run in two halves for the same reason.
+  - tests/docs still has failures from before this change (`PGW_SPECULATION` is not a settings field, and
+    test_numbers). None are in files this change touched.

@@ -58,14 +58,25 @@ class ProvisionSession:
         import httpx
 
         last: BaseException | None = None
-        for attempt in range(self.retries + 1):
+        attempt = paced = 0
+        while attempt <= self.retries:
             try:
                 r = self.client().request(method, PREFIX + path, params=params, json=json)
             except httpx.TransportError as exc:
                 last = exc
                 time.sleep(min(8.0, 0.25 * 2 ** attempt))
+                attempt += 1
                 continue
-            if r.status_code == 503 and attempt < self.retries:
+            if r.status_code == 429 and paced < _MAX_PACED:
+                # the SDK key's row rate also paces hint work (provider review S10): wait as asked, without
+                # spending a retry. A daily quota (Retry-After until midnight) is not waited out.
+                wait = _retry_after(r)
+                if wait is not None and wait <= _MAX_PACE_S:
+                    paced += 1
+                    time.sleep(max(0.05, wait))
+                    continue
+            attempt += 1
+            if r.status_code == 503 and attempt <= self.retries:
                 last = ServiceUnavailableError(f"provider unavailable ({_message(r)})")
                 time.sleep(min(8.0, 0.25 * 2 ** attempt))
                 continue
@@ -82,6 +93,17 @@ class ProvisionSession:
 
     def get_bytes(self, path: str, **params: Any) -> bytes:
         return bytes(self.request("GET", path, params=params or None).content)
+
+
+_MAX_PACED = 100_000
+_MAX_PACE_S = 60.0
+
+
+def _retry_after(r: Any) -> float | None:
+    try:
+        return float(r.headers.get("Retry-After"))
+    except (TypeError, ValueError):
+        return None
 
 
 def _message(r: Any) -> str:

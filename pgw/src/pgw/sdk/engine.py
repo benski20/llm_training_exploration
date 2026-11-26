@@ -55,6 +55,7 @@ from pgw.sdk.errors import (
     from_pgw_error,
 )
 from pgw.sdk.factory import FactoryPlan, FactoryProcess, read_factory_state
+from pgw.sdk.halt import HaltRecord, HaltStore
 from pgw.sdk.keys import SdkKey
 from pgw.sdk.options import SDKOptions, canonical_model
 from pgw.sdk.provisioning import Provisioned, Provisioner, adapt, default_provisioner
@@ -139,6 +140,10 @@ class ModelHandle:
     started_at: float | None = None
     #: requests waiting for masks, in arrival order (the head polls the stock; see ``Engine._open``)
     mask_waiters: list[asyncio.Event] = field(default_factory=list)
+    #: requests that failed before reaching the provider, by error code (status only; never reported, S12)
+    local_errors: dict[str, int] = field(default_factory=dict)
+    #: the persisted integrity halt of this (key, model) (:mod:`pgw.sdk.halt`), as last read
+    halt: HaltRecord | None = None
 
     def public(self) -> dict[str, Any]:
         """Status view (no secrets, no content)."""
@@ -149,6 +154,10 @@ class ModelHandle:
                                "requests_waiting_for_masks": len(self.mask_waiters),
                                "last_integrity_check_ok_at": self.last_verified_at,
                                "last_integrity_failure_at": self.last_integrity_failure_at}
+        if self.local_errors:
+            out["local_errors"] = dict(self.local_errors)
+        if self.halt is not None:
+            out["integrity_halt"] = self.halt.public()
         p = self.provisioned
         if p is not None:
             out["provisioned"] = {"fingerprint": p.fingerprint, "source": p.source, "pack_path": str(p.pack_path),
@@ -204,8 +213,13 @@ class Engine:
         self._session_lock: asyncio.Lock | None = None
         self._settings: Any = None
         self._status_lock = threading.Lock()
+        self._status_task: asyncio.Task[None] | None = None
         self._gc_stop = threading.Event()
         self._gc_thread: threading.Thread | None = None
+        #: requests that failed before reaching the provider, by error code (never reported, S12)
+        self.local_errors: dict[str, int] = {}
+        #: persisted integrity halts of this key (S11): a restart does not re-open a halted model
+        self.halts = HaltStore(self.layout.session_state_dir(key.key_id_hex), key.key_id_hex)
         #: content-free request reports for the provider's console (``usage_reports``)
         self.reporter: Any = None
         if options.usage_reports:
@@ -445,6 +459,7 @@ class Engine:
         h.state = "connecting"
         for attempt in (0, 1):
             rt = ModelRuntime(cfg, self._settings, mask_store=self.store, metrics=GatewayMetrics(enabled=False))
+            self._bind_halt(h, rt)
             try:
                 await rt.start()
             except AuthError:
@@ -472,6 +487,7 @@ class Engine:
             h.state, h.error = "failed", rt.last_error
 
     def _on_ready(self, h: ModelHandle) -> None:
+        self._pace_strict_passes(h.runtime)
         h.state = "ready"
         h.error = None
         h.ready_event.set()
@@ -481,6 +497,34 @@ class Engine:
             except Exception as exc:  # the stock still serves; status shows it
                 log.error("mask factory for %s not started: %s", h.name, getattr(exc, "message", type(exc).__name__))
         self._write_status()
+
+    def _pace_strict_passes(self, rt: Any) -> None:
+        """Strict speculation: start a pass no earlier than ``spec_pass_gap_ms`` after the previous pass ended.
+
+        The provider sees the gap between the last reply of one pass and the first request of the next. It holds the
+        client's work between passes, which differs a little between the answer's passes and the dummy passes after
+        it, most of all at the boundary, where the application wakes up with its answer (measured in the security
+        review 2026-11, S20: ``benchmarks/sdk_dummy_pass_timing.py``). With the floor every gap below it looks the
+        same. Rows, trips and outputs are unchanged; only the start of each forward pass waits."""
+        floor = float(self.options.spec_pass_gap_ms) / 1e3
+        gen = getattr(rt, "generator", None)
+        model = getattr(gen, "model", None)
+        if self.options.speculation == "off" or floor <= 0 or model is None or getattr(model, "_pgw_paced", False):
+            return
+        inner = model.aforward_batch
+        last = [0.0]
+
+        async def paced(seqs: Any) -> Any:
+            wait = last[0] + floor - time.monotonic()
+            if wait > 0:
+                await asyncio.sleep(wait)
+            try:
+                return await inner(seqs)
+            finally:
+                last[0] = time.monotonic()
+
+        model.aforward_batch = paced
+        model._pgw_paced = True
 
     @staticmethod
     def _pick_ring(entry: dict[str, Any]) -> str:
@@ -622,10 +666,51 @@ class Engine:
         return h, h.runtime
 
     async def reset_breaker(self, model: str) -> None:
-        """Re-open a model blocked after an integrity failure (an operator decision, after investigating)."""
-        h = self.models.get(canonical_model(model))
-        if h is not None and h.runtime is not None:
-            h.runtime.reset_safety(breaker=True, noise=True)
+        """Re-open a model blocked after an integrity failure (an operator decision, after investigating): the
+        in-process breaker and the persisted halt of this key (as ``pgw sdk clear-halt``)."""
+        name = canonical_model(model)
+        old = await asyncio.to_thread(self.halts.clear, name, "reset_integrity_breaker()")
+        if old.halted or old.tampered:
+            log.warning("integrity halt of %s cleared by reset_integrity_breaker() (%d failure(s) recorded)",
+                        name, old.failures)
+        h = self.models.get(name)
+        if h is not None:
+            h.halt = self.halts.load(name)
+            if h.runtime is not None:
+                h.runtime.reset_safety(breaker=True, noise=True)
+        self._write_status()
+
+    # ---- persisted integrity halt (S11) ---------------------------------------------------------------
+    def _bind_halt(self, h: ModelHandle, rt: Any) -> None:
+        """Apply the persisted halt to a new runtime and persist its integrity failures from now on."""
+        def on_safety(event: str, _model: str, reason: str) -> None:
+            if event == "safety.integrity_failure":
+                self._persist_failure(h, reason)
+
+        rt.safety_listeners.append(on_safety)
+        self._apply_halt(h, rt)
+
+    def _apply_halt(self, h: ModelHandle, rt: Any) -> None:
+        """Trip ``rt``'s breaker when the persisted record says halted (or cannot be verified). Cheap: the record
+        is re-read only when its file changed, so another process's halt reaches this one on its next request."""
+        try:
+            rec = self.halts.load(h.name)
+        except Exception as exc:  # fail closed
+            rec = HaltRecord(h.name, halted=True, tampered=f"unreadable: {type(exc).__name__}")
+        h.halt = rec
+        if rec.failures > h.integrity_failures:
+            h.integrity_failures = rec.failures
+        if rec.last_failure_at and (h.last_integrity_failure_at or 0) < rec.last_failure_at:
+            h.last_integrity_failure_at = rec.last_failure_at
+        if (rec.halted or rec.tampered) and not rt.breaker.is_open:
+            log.critical("model %s halted: %s", h.name, rec.reason)
+            rt.breaker.trip(reason="persisted_halt" if not rec.tampered else "halt_record_unverifiable")
+
+    def _persist_failure(self, h: ModelHandle, reason: str) -> None:
+        try:
+            h.halt = self.halts.record_failure(h.name, reason)
+        except Exception:  # the in-memory breaker is open anyway; never break the data path
+            log.exception("could not persist the integrity halt of %s", h.name)
 
     async def _open(self, h: ModelHandle, rt: Any, ids: list[int], params: Any, rid: str, prefix_key: str | None,
                     deadline: float, setup_deadline: float | None = None, conversation: str | None = None) -> Any:
@@ -657,6 +742,7 @@ class Engine:
                     ticket.clear()
                     continue
                 try:
+                    self._apply_halt(h, rt)
                     sess = (await rt.open_sessions([ids], params, request_id=rid, prefix_key=prefix_key,
                                                    conversation=conversation))[0]
                     h.masks_seen = True
@@ -678,9 +764,10 @@ class Engine:
                         raise NotReadyError(f"no masks in stock for model {h.name!r} after waiting{why}",
                                             code=str(exc.code), request_id=rid) from exc
                 except BreakerOpenError as exc:  # blocked after an integrity failure: hard error, never waited out
+                    why = (h.halt.reason if h.halt is not None else None) or exc.message
                     raise IntegrityError(f"model {h.name!r} is blocked after an integrity failure of the provider "
-                                         f"({exc.message}); call reset_integrity_breaker() after investigating",
-                                         request_id=rid) from exc
+                                         f"({why}); after investigating, clear it with 'pgw sdk clear-halt --model "
+                                         f"{h.name}' or reset_integrity_breaker()", request_id=rid) from exc
                 except ServiceUnavailableError as exc:
                     retry = exc.details.get("retry_after_s") is not None or rt.state == "connecting"
                     if not retry or time.monotonic() + delay > deadline:
@@ -756,7 +843,11 @@ class Engine:
         finally:
             if code == "cancelled" and time.monotonic() - t0 >= 0.98 * self._budget(timeout_s):
                 code = "deadline_exceeded"  # the request's budget ran out (asyncio.timeout cancels the generator)
-            if self.reporter is not None and "model" in meta:
+            if not meta.get("opened"):
+                # never reached the provider (context length, no masks, model blocked or not ready, ...): kept in
+                # the local log and status only, never reported (security review 2026-11, S12)
+                self._local_error(meta.get("model"), code or "internal")
+            elif self.reporter is not None and "model" in meta:
                 from pgw.sdk.reports import build_record
 
                 self.reporter.add(build_record(
@@ -811,6 +902,7 @@ class Engine:
                                         None if timeout_s is not None else deadline + self.options.ready_timeout_s,
                                         conversation=strict)
                 h.requests += 1
+                meta["opened"] = True  # a session is open: its trips reach the provider (reported, S12)
                 meta["prompt_tokens"] = len(sess.prompt_ids)
                 meta["cached_tokens"] = int(sess.prefix_reused)
                 async for ev in sess.stream():
@@ -819,11 +911,13 @@ class Engine:
                     yield h, ev
                 h.verified_requests += 1
                 h.last_verified_at = time.time()
-                self._write_status_soon()
+                self._status_after_passes(rt)
                 return
             except (CoreIntegrityError, IntegrityError) as exc:
                 h.integrity_failures += 1
                 h.last_integrity_failure_at = time.time()
+                if isinstance(exc, CoreIntegrityError) and not (h.halt is not None and h.halt.halted):
+                    self._persist_failure(h, "integrity_check_failed")  # (normally done by the breaker's listener)
                 self._write_status()
                 if isinstance(exc, IntegrityError):
                     raise
@@ -922,6 +1016,17 @@ class Engine:
                 usage["prompt_tokens_details"] = {"cached_tokens": int(meta.get("cached_tokens", 0))}
             yield chunk([], usage=usage)
 
+    def _local_error(self, model: str | None, code: str) -> None:
+        """Count a request that failed before any of its trips reached the provider (status and log only)."""
+        code = str(code)[:64]
+        with self._status_lock:
+            self.local_errors[code] = self.local_errors.get(code, 0) + 1
+        h = self.models.get(model) if model else None
+        if h is not None:
+            h.local_errors[code] = h.local_errors.get(code, 0) + 1
+        log.info("request failed locally before reaching the provider: %s (model %s; not reported)", code,
+                 model or "-")
+
     # ---- status ------------------------------------------------------------------------------------
     def status(self) -> dict[str, Any]:
         """Public status: session, models (state, lane, native stack, masks, factory, integrity), cache paths."""
@@ -929,11 +1034,36 @@ class Engine:
                                "cache_dir": str(self.layout.root), "state_dir": str(self.layout.state),
                                "mask_scheme": self.options.mask_scheme, "pid": self.pid,
                                "session": self.session.public() if self.session else None,
-                               "models": {n: h.public() for n, h in list(self.models.items())}}
+                               "models": {n: h.public() for n, h in list(self.models.items())},
+                               "local_errors": dict(self.local_errors)}
         return out
 
     def _status_path(self) -> Path:
         return self.layout.session_dir(self.key.key_id_hex) / "status.json"
+
+    def _status_after_passes(self, rt: Any) -> None:
+        """The status write at the end of a request. With strict speculation it waits until the generator has run
+        every dummy pass that is due: a file write (and fsync) on the event loop between the answer's last pass
+        and the first dummy pass was a gap the provider could see, marking the end of the real passes (security
+        review 2026-11, S20). After the dummy passes its timing depends on the public pass count only."""
+        gen = getattr(rt, "generator", None)
+        if self.options.speculation == "off" or gen is None:
+            self._write_status_soon()
+            return
+        if self._status_task is not None and not self._status_task.done():
+            return
+
+        async def later() -> None:
+            # wait for the generator to go idle without polling the loop (a periodic wake-up during the dummy
+            # passes only would itself be a timing difference); a busy generator gets the write after 30 s
+            with contextlib.suppress(Exception):
+                busy = {t for t in (getattr(gen, "_task", None), getattr(gen, "_lane_task", None))
+                        if t is not None and not t.done()} | set(getattr(gen, "_draining", ()) or ())
+                if busy:
+                    await asyncio.wait(busy, timeout=30.0)
+            self._write_status_soon()
+
+        self._status_task = asyncio.get_running_loop().create_task(later())
 
     def _write_status_soon(self) -> None:
         now = time.monotonic()
@@ -1033,6 +1163,11 @@ def read_status(layout: CacheLayout) -> dict[str, Any]:
             entry["enrollment"]["models"] = [m.get("name") for m in meta.get("models") or []]
         with contextlib.suppress(OSError, ValueError):
             entry["status"] = json.loads((d / "status.json").read_text(encoding="utf-8"))
+        halts = HaltStore(layout.session_state_dir(d.name), d.name)
+        with contextlib.suppress(OSError, ValueError):
+            recs = {m: halts.load(m).public() for m in halts.models()}
+            if recs:
+                entry["integrity_halts"] = recs
         fdir = d / "factory"
         if fdir.is_dir():
             entry["factories"] = {f.name: read_factory_state(f) for f in sorted(fdir.iterdir()) if f.is_dir()}

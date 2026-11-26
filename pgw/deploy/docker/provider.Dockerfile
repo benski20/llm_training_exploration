@@ -8,7 +8,7 @@
 #
 # Reproducible: the base image is pinned by digest, every Python dependency (torch 2.15.0+cu132, the measured stack's version, and triton included)
 # by version and sha256 in requirements/provider-cuda.txt (scripts/lock-requirements.sh), the Rust toolchain of the
-# native extension by version. Behind a TLS-inspecting proxy add `--secret id=build_ca,src=<CA bundle>` (optional).
+# native extension by version (rustup-init by sha256). Behind a TLS-inspecting proxy add `--secret id=build_ca,src=<CA bundle>` (optional).
 #
 # Stages: `build` (compilers, Rust, headers: builds pgw and the native extension pgw_fast into /opt/pgw) and
 # `runtime` (the venv, Python, gcc for Triton's kernel launcher stubs, no Rust, no build caches). The service runs
@@ -19,6 +19,12 @@ ARG CUDA_IMAGE=nvidia/cuda:13.2.1-base-ubuntu24.04@sha256:7be56e69d8ae7c3648b8fc
 # ---------------------------------------------------------------------------------------------------- build
 FROM ${CUDA_IMAGE} AS build
 ARG RUST_TOOLCHAIN=1.89.0
+# rustup-init pinned by version and sha256 (static.rust-lang.org/rustup/archive/<version>/<triple>/rustup-init[.sha256];
+# security review 2026-11, S14): a changed installer fails the build. rustup then checks every toolchain component
+# against the channel manifest's sha256.
+ARG RUSTUP_VERSION=1.28.2
+ARG RUSTUP_INIT_SHA256_X86_64=20a06e644b0d9bd2fbdbfd52d42540bdde820ea7df86e92e533c073da0cdd43c
+ARG RUSTUP_INIT_SHA256_AARCH64=e3853c5a252fca15252d07cb23a1bdd9377a8c6f3efa01531109281ae47f841c
 ARG TORCH_INDEX_URL=https://download.pytorch.org/whl/cu132
 ARG REQUIREMENTS=requirements/provider-cuda.txt
 ENV DEBIAN_FRONTEND=noninteractive \
@@ -49,11 +55,19 @@ COPY rust ./rust
 RUN --mount=type=secret,id=build_ca,required=false \
     if [ -s /run/secrets/build_ca ]; then export CURL_CA_BUNDLE=/run/secrets/build_ca \
        SSL_CERT_FILE=/run/secrets/build_ca CARGO_HTTP_CAINFO=/run/secrets/build_ca; fi; \
-    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs -o /tmp/rustup-init.sh \
-    && sh /tmp/rustup-init.sh -y --no-modify-path --profile minimal --default-toolchain "${RUST_TOOLCHAIN}" \
+    case "$(uname -m)" in \
+      x86_64) triple=x86_64-unknown-linux-gnu; sum="${RUSTUP_INIT_SHA256_X86_64}" ;; \
+      aarch64) triple=aarch64-unknown-linux-gnu; sum="${RUSTUP_INIT_SHA256_AARCH64}" ;; \
+      *) echo "no pinned rustup-init for $(uname -m)" >&2; exit 1 ;; \
+    esac; \
+    curl --proto '=https' --tlsv1.2 -sSf -o /tmp/rustup-init \
+       "https://static.rust-lang.org/rustup/archive/${RUSTUP_VERSION}/${triple}/rustup-init" \
+    && echo "${sum}  /tmp/rustup-init" | sha256sum -c - \
+    && chmod 0755 /tmp/rustup-init \
+    && /tmp/rustup-init -y --no-modify-path --profile minimal --default-toolchain "${RUST_TOOLCHAIN}" \
     && cd /src/rust && cargo fetch --locked && cd /src \
     && python rust/tools/build_fast.py --site \
-    && rm -rf /src/rust/target /opt/cargo /opt/rustup /tmp/rustup-init.sh \
+    && rm -rf /src/rust/target /opt/cargo /opt/rustup /tmp/rustup-init \
     && cd / && python -c "from pgw.core import native; assert native.fast is not None, 'pgw_fast missing'; \
 print('pgw_fast', native.fast.version())"
 

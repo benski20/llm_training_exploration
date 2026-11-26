@@ -36,6 +36,7 @@ from starlette.responses import StreamingResponse
 
 from pgw.console.sessions import COOKIE_NAME, CSRF_HEADER, ConsoleSessions, LoginRateLimiter
 from pgw.core.errors import AuthError, ErrorCode, PGWError, RateLimitedError
+from pgw.core.http_body import read_limited
 from pgw.engine import SamplingParams, TokenEvent
 from pgw.gateway.audit import AuditLog
 from pgw.gateway.auth import ANONYMOUS_KEY, ApiKey, ApiKeyStore, KeyNotFoundError, QuotaTracker, RateLimiter
@@ -217,6 +218,11 @@ def _managed_stream(
                 await on_close()
 
     return _ManagedStream(body, media_type="text/event-stream", headers=headers)
+
+
+#: Body limit of the gateway's small admin JSON routes (security review 2026-11, S13; the API itself has
+#: ``max_body_bytes`` through :class:`_BodyLimit`).
+_ADMIN_BODY_LIMIT = 64 << 10
 
 
 class _BodyLimit:
@@ -879,7 +885,7 @@ def create_app(
     async def admin_create_key(request: Request) -> Any:
         actor = require_admin(request, "admin.keys")
         try:
-            body = await request.json()
+            body = json.loads(await read_limited(request, _ADMIN_BODY_LIMIT))
         except ValueError as exc:
             raise InvalidRequestError("body must be JSON") from exc
         if not isinstance(body, dict) or not isinstance(body.get("name"), str):
@@ -940,9 +946,10 @@ def create_app(
         actor = require_admin(request, "admin.models")
         rt = runtime.get(name)
         body: Any = {}
-        if await request.body():
+        raw = await read_limited(request, _ADMIN_BODY_LIMIT)
+        if raw:
             try:
-                body = await request.json()
+                body = json.loads(raw)
             except ValueError as exc:
                 raise InvalidRequestError("body must be JSON") from exc
         if not isinstance(body, dict):
