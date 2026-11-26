@@ -105,8 +105,30 @@ vCPUs, or lower `max_tokens` for bulk jobs.
 | `deadline_exceeded` (504) | a request timed out | retry with back-off |
 | `mask_exhausted` (503) | masks not ready for `prompt + max_tokens` | retry shortly, or lower `max_tokens` |
 | `bad_shape` (400) | prompt too long for the model context | shorten the prompt |
-| `integrity_check_failed` (502) | a result from our GPU failed verification | **do not retry automatically**; report it |
+| `integrity_check_failed` (502) | a result from our GPU failed verification | **do not retry automatically**; report it. The model stays blocked, across restarts, until you clear it (below) |
 | `mask_reuse` (500) | the library stopped an attempted mask reuse | **do not retry**; report it at once |
+
+### A model stays blocked after `integrity_check_failed`
+
+After any result of the provider fails verification, the library blocks that model for your API key: every
+request raises `IntegrityError` (code `integrity_check_failed`) and nothing is sent. The block is stored in the
+state directory (`PGW_STATE_DIR`, `sessions/<key id>/integrity/<model>.json`, mode 0600, protected by an HMAC
+whose key is `sessions/<key id>/integrity.key`), so **restarting the application does not lift it**, and it
+applies to every process that uses the same key and state directory. `pgw sdk status` shows it as
+`HALTED (persisted)`. If that file was edited, or the key file next to it is missing, the library cannot verify
+it and treats the model as blocked (fail closed); the message says so.
+
+An honest provider never fails a check. Report it to us before you continue. Clear the block only after the
+cause is understood (for example, after we confirm a faulty deployment was replaced):
+
+```bash
+pgw sdk clear-halt --model qwen2.5-7b-instruct --yes --note "provider incident 2026-11-30 resolved"
+```
+
+The command prints a warning, clears the block for every key under the state directory (`--key-id` limits it to
+one key, `--state-dir` picks the directory) and keeps a record of the clear. Processes that are already running
+keep the model blocked until they restart. From code, `client.reset_integrity_breaker(model)` does the same for
+the client's key.
 
 ## Reporting an issue
 

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import shutil
 import tempfile
+import threading
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
@@ -737,6 +738,78 @@ def test_decrypt_ahead_feeds_leases_byte_identical(qwen_pack: InMemoryPack, stor
     assert b0 == b1
     assert all(torch.equal(a, b) for a, b in zip(o0, o1, strict=True))
     assert sum(used) > 0  # leases were fed from chunks decrypted ahead
+
+
+def test_decrypt_ahead_reaches_background_parts(qwen_pack: InMemoryPack, store_template: Path,
+                                                 monkeypatch: pytest.MonkeyPatch) -> None:
+    """Incremental reservations (small parts reserved ahead in the background, as the client library runs them):
+    a part the background extension adds starts decrypting every linear's first lease at once, so the first
+    lease of each linear in each part is fed from chunks decrypted ahead instead of decrypting on the token's
+    critical path. Outputs and payloads identical to inline decryption; every buffer zero after the run."""
+    from pgw.gateway import masks as masks_mod
+    from pgw.maskstore import store as store_mod
+
+    if not native.native_available("chunk_open_into"):
+        pytest.skip("pgw_fast.chunk_open_into not built")
+    _env(monkeypatch, True, True)
+    real_take = store_mod.MaskReservation._ahead_take_locked
+    real_first = masks_mod._decrypt_first_leases
+    real_open = store_mod._open_chunk
+    got = []
+    inline_opens = []
+    for ahead, kick_on in ((False, False), (True, False), (True, True)):
+        monkeypatch.setattr(store_mod, "TRIP_DECRYPT_AHEAD", ahead)
+        kicked: list[int] = []
+        bufs: list[dict[int, bytearray]] = []
+        opens: list[int] = []
+
+        def spy(self: Any, ei: int, key: str, j: int, _bufs: list[dict[int, bytearray]] = bufs) -> Any:
+            b = real_take(self, ei, key, j)
+            _bufs.append(b)
+            return b
+
+        def kick(part: Any, _k: list[int] = kicked, _on: bool = kick_on) -> None:
+            _k.append(1)
+            if _on:
+                real_first(part)
+
+        def opened(seg: Any, ref: Any, _o: list[int] = opens) -> Any:
+            if threading.current_thread() is threading.main_thread():
+                _o.append(1)  # decrypted by the lease itself, on the token's path
+            return real_open(seg, ref)
+
+        monkeypatch.setattr(store_mod.MaskReservation, "_ahead_take_locked", spy)
+        monkeypatch.setattr(masks_mod, "_decrypt_first_leases", kick)
+        monkeypatch.setattr(store_mod, "_open_chunk", opened)
+        st = _Store(store_template, qwen_pack)
+        client = LocalComputeClient(qwen_pack, record=True)
+        be = MaskedBackend(qwen_pack, None, client, DEFAULT_RING, qwen_pack.fingerprint, trip_engine=True)
+        be.freivalds_rate = 1.0
+        specs = qwen_pack.linear_specs()[:3]
+        try:
+            res = st.windowed(120, first=8, window=8, chunked=True)
+            outs = []
+            for i in range(96):
+                for spec in specs:
+                    outs.append(be.forward_many([LinearCall(spec.id, _x(spec, i % 7), res)])[0])
+                if res._ahead_thread is not None:
+                    res._ahead_thread.join()  # deterministic: a part reserved ahead exists before the next token
+            be.join_checks()
+            assert be.stats.integrity_failures == 0
+            res.close()
+        finally:
+            be.close()
+            st.close()
+        if ahead:
+            assert kicked  # parts were reserved in the background
+            assert all(not any(b) for d in bufs for b in d.values())  # zero after the run
+        inline_opens.append(len(opens))
+        got.append((outs, [x.numpy().tobytes() for _, x in client.received]))
+    (o0, b0), (o1, b1), (o2, b2) = got
+    assert b0 == b1 == b2
+    assert all(torch.equal(a, b) and torch.equal(a, c) for a, b, c in zip(o0, o1, o2, strict=True))
+    # the first lease of each linear in each background part no longer decrypts on the token's path
+    assert inline_opens[2] < inline_opens[1] // 2, inline_opens
 
 
 def test_driver_on_a_non_native_lane_uses_the_ordinary_lane_path() -> None:

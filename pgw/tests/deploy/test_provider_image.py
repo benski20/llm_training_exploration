@@ -43,6 +43,12 @@ def test_provider_dockerfile_contract(name: str) -> None:
     assert (PGW / "requirements" / f"{IMAGES[name]}.txt").is_file()
     assert "ARG RUST_TOOLCHAIN=1." in text and "build_fast.py --site" in text and "cargo fetch --locked" in text
     assert "native.fast is not None" in text  # the build fails without the native extension
+    # the Rust installer is verified (security review 2026-11, S14): pinned rustup-init, sha256 per architecture
+    assert "sh.rustup.rs" not in text and "rustup-init.sh" not in text
+    assert re.search(r"^ARG RUSTUP_VERSION=\d+\.\d+\.\d+$", text, re.M)
+    for arch in ("X86_64", "AARCH64"):
+        assert re.search(rf"^ARG RUSTUP_INIT_SHA256_{arch}=[0-9a-f]{{64}}$", text, re.M), arch
+    assert 'sha256sum -c -' in text and text.index("sha256sum -c -") < text.index("rustup-init -y")
     assert "HEALTHCHECK" in text and 'ENTRYPOINT ["/usr/bin/tini", "--", "pgw-provider-entrypoint"]' in text
     runtime = text[text.index("AS runtime"):]
     assert "rustup" not in runtime and "cargo" not in runtime  # no toolchain in the runtime image

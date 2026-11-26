@@ -8,6 +8,9 @@ e.g. ``--opt spec=lookup``). For a warm, streamed, greedy chat it reports from t
   running the same prompt with ``max_tokens = 1`` first),
 * the decode step time per token and per trip, and its split into the provider's reported compute + queue time
   and the rest (``o``: framing, TLS records, syscalls, Python and native hops on both ends, gateway masking),
+* the client's CPU per token (all threads of this process), the native driver's phase counters per trip
+  (prepare / finish / float ops per linear slot) and the lane channel's split of a trip (wait beyond the provider's
+  compute, send + reply read, spin budget),
 * the bare lane floor: the median round trip of mask-free 1-row dummy calls over the same lane (the gateway's
   start-up RTT probe), which is network + TLS + framing + provider dispatch without the GEMM.
 
@@ -100,6 +103,28 @@ def _counters(rt: Any) -> dict[str, float]:
     return out
 
 
+def _phases() -> list[int] | None:
+    from pgw.core.native import fast
+
+    f = getattr(fast, "decode_phase_ns", None) if fast is not None else None
+    return list(f()) if f is not None else None
+
+
+def _phase_summary(a: list[int] | None, b: list[int] | None) -> dict[str, float] | None:
+    """Mean us per native trip of each driver phase per linear slot (prepare / finish / float ops)."""
+    if a is None or b is None:
+        return None
+    d = [y - x for x, y in zip(a, b, strict=True)]
+    out: dict[str, float] = {}
+    for i, name in enumerate(("qkv", "o", "gate_up", "down")):
+        n = max(1, d[12 + i])
+        out[name + "_prepare"] = d[i] / n / 1e3
+        out[name + "_finish"] = d[4 + i] / n / 1e3
+        out[name + "_float"] = d[8 + i] / n / 1e3
+    out["trips"] = float(sum(d[12:16]))
+    return out
+
+
 def _delta(a: dict[str, float], b: dict[str, float]) -> dict[str, float]:
     return {k: b[k] - a.get(k, 0.0) for k in b}
 
@@ -183,7 +208,11 @@ def run(args: argparse.Namespace, key: str, pack: Path, root: Path) -> dict[str,
         a = _counters(rt)
         STEPS.clear()
         PARTS.clear()
+        ph0 = _phases()
+        cpu0 = time.process_time()
         times, lp = _chat(c, args.tokens)
+        cpu1 = time.process_time()
+        ph1 = _phases()
         steps = [s_ for s_ in STEPS if times[1] <= s_[0] and s_[1] <= times[-1] + 1e-3]  # passes of the answer
         eng.call(rt.generator.wait_drained(), timeout_s=600)  # strict speculation: the dummy passes still due
         all_passes = len(STEPS)
@@ -221,11 +250,22 @@ def run(args: argparse.Namespace, key: str, pack: Path, root: Path) -> dict[str,
                     "parts_ms_per_token": {k: (1e3 * v if not k.endswith("_n") else v) / n_dec
                                            for k, v in PARTS.items()},
                     "rows_per_trip": dec["rows"] / max(1.0, dec["backend_round_trips"]),
+                    "client_cpu_ms_per_token": 1e3 * (cpu1 - cpu0) / (n_dec + 1),
+                    # the client lane's own view per trip: reply wait beyond the provider's reported compute
+                    # (network, provider lane I/O, wake-up), send + reply read (TLS, syscalls), spin budget
+                    "lane_wait_beyond_compute_us": (dec.get("ch_wait_us", 0.0) - dec.get("ch_compute_us", 0.0)
+                                                    - dec.get("ch_queue_us", 0.0)) / max(1.0, dec.get("ch_trips", 0.0)),
+                    "lane_io_us": (dec.get("ch_trip_us", 0.0) - dec.get("ch_wait_us", 0.0))
+                    / max(1.0, dec.get("ch_trips", 0.0)),
+                    "lane_spin_us": dec.get("ch_spin_us", 0.0) / max(1.0, dec.get("ch_trips", 0.0)),
+                    "native_phase_us_per_trip": _phase_summary(ph0, ph1),
                     "local_calls_per_token": dec["local_calls"] / n_dec,
                     "raw": dec})
     rtt = rt._measure_rtt(trips=31) if hasattr(rt, "_measure_rtt") else None
     st = c.status()["models"][MODEL]
-    summary = {k: statistics.median(r[k] for r in res) for k in res[0] if k not in ("raw", "parts_ms_per_token")}
+    skip = ("raw", "parts_ms_per_token", "native_phase_us_per_trip")
+    summary = {k: statistics.median(r[k] for r in res) for k in res[0] if k not in skip}
+    summary["native_phase_us_per_trip"] = res[-1]["native_phase_us_per_trip"]
     summary["parts_ms_per_token"] = res[-1]["parts_ms_per_token"]
     summary["ms_per_trip_wall"] = summary["decode_ms_per_token"] / max(1e-9, summary["trips_per_token"])
     summary["lane_floor_ms"] = None if rtt is None else 1e3 * rtt

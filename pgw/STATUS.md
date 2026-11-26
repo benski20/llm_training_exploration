@@ -2263,3 +2263,228 @@ Tests:
   `tests/service/test_maskgen_budget.py` (5 tests).
 - New settings: `PGW_SERVICE_PKS_DEVICE_HINT` (default `auto`) and `PGW_SERVICE_MASKGEN_DEVICE_MB` (default off).
 - No GPU or cloud spend.
+
+## 2026-11-26: pack format 2: embeddings / LM head stored in bf16 (the checkpoints' dtype), exact upcast at load
+
+Goal: halve the f32 plain tensors of every pack (gateway pack, factory pack, provider pack) without changing one
+computed bit. The public Qwen2.5 checkpoints are bf16. Format 1 widened `embed_tokens` / `lm_head` to f32 at pack
+time, which is exact, so storing the bf16 bytes and widening at load gives the same f32 values.
+
+- **Exactness, measured on all four release checkpoints** (`scripts/pin_model_fingerprints.py --compare-format1`;
+  Kaggle CPU kernel `pgw-sdk-pins` v2, 26.6 min, `results/kaggle/sdk-pins-format2`; 0.5B / 1.5B also here, same
+  output): every checkpoint tensor checked is bf16 (0.5B/1.5B: all 290/338 tensors; 3B/7B: every plain tensor). The
+  format-1 pack re-derived each old pin exactly (same bytes as the old packer). Every plain tensor loaded from it equals
+  the format-2 pack's bf16 widened to f32, bit for bit (7B: 2 x 545 M elements). Linear tensor entries are identical.
+- **Format** (`manifest.version`, fingerprinted): `2` means `quant.plain_dtype: "source"`. Per tensor, the
+  checkpoint's dtype is kept if it is bf16 (bytes stored unconverted), else f32 is used (f16/f32 sources are never
+  narrowed). The choice is each tensor's `dtype` entry, so the fingerprint covers dtype and bytes. Norms stay f32
+  (enforced for format 2). Format 2 is the default of `pack_checkpoint`, `pgw pack` (`--plain-dtype source`), the hf
+  provisioning path and the pin script. `plain_dtype="float32"` still writes format 1 byte-identically, so the old
+  fingerprints reproduce.
+- **Compat decision: old packs still load.** A format-1 pack is internally consistent and is checked against its own
+  fingerprint exactly as before. Refusing it would only force re-downloads without adding integrity. What changes is
+  the pins. Clients now pin format-2 fingerprints, so a client cache keyed by an old fingerprint is no longer used
+  (provisioning makes a new `models/<fp16>` dir; the old one is orphaned and can be deleted to reclaim the space). A
+  provider still serving a format-1 pack is refused by the existing pin check. An unknown future version gets
+  "uses pack format version N ... re-provision (re-pack)". pgw installs from before format 2 reject format-2 manifests
+  with a schema error ("Input should be 1"), so provider and client must both upgrade.
+- **Provider:** the service and factory load plain tensors through `load_plain` (f32), or, for the int8 head, in the
+  hash-checked stored dtype (`quantize_head` widens bf16 to f64 exactly). Results are unchanged.
+  `deploy/runpod/pod_boot.ensure_pack` now rebuilds a volume's pack once when its format is not 2 (otherwise SDK
+  clients would refuse it). The Modal deploy packs were not touched (there the provider and its own gateway use one
+  volume, so their fingerprints agree).
+- **New pins** (`PINNED_MODELS`, docs/sdk): 0.5B `d773a502fb97...`, 1.5B `3d198de49e61...`, 3B `0ec0b8b24b2b...`,
+  7B `f7c6fb4f5f8f...` (full values in `src/pgw/sdk/provisioning.py`). The format-1 pins are kept in
+  `scripts/pin_model_fingerprints.py:FORMAT1_PINS`, for the reproduction check only.
+- **Disk** (`du -sb` of the cache after `provision(source="hf", hint="local", masked_head=True, factory_pack=True)`
+  at 0.5B, tied head): format 1 1.629 GB, format 2 1.357 GB. The gateway pack went from 0.558 to 0.285 GB, and its
+  plain file is hard-linked into the factory pack. Plain bytes, measured: 0.545 -> 0.272, 0.934 -> 0.467,
+  1.245 -> 0.623 and 4.361 -> 2.181 GB at 0.5B / 1.5B / 3B / 7B. Client totals (provider path, layout of review
+  section 4): 7B 13.3 -> 11.1, 32B 44.8 -> 41.7, 72B 90.9 -> 85.9 GB (32B/72B extrapolated: -3.11 / -4.98 GB).
+- **Tests:**
+  - `tests/modelpack/test_source_dtype.py`: format, the per-tensor choice (including an f32-head / bf16-embedding
+    checkpoint), bit-identical loads and masked head, fingerprint binding v1 vs v2, rejection of a dtype relabel, a
+    re-fingerprinted forgery and a flipped bf16 bit, version / plain_dtype consistency, unknown version.
+  - `tests/gateway/test_source_dtype_gateway.py`: the masked gateway, the plaintext reference and the int8-head
+    reference give identical tokens and logprobs from format-1 and format-2 packs (tiny untied bf16 model and
+    Qwen2.5-0.5B).
+  - `tests/provision/test_source_dtype_provision.py`: the provider path serves the bf16 bytes and verifies them in
+    full, tampering is rejected, the hf path re-derives the v2 pin and hard-links, and the v1 parameters still
+    reproduce the v1 pin.
+  - `tests/deploy/test_runpod.py::test_ensure_pack_rebuilds_older_format`.
+  - Runs (one dir at a time, `PYTHONPATH=src:.`): modelpack 107 passed; provision 46 passed / 1 skipped; core 560 /
+    28 skipped; cli 209 / 3 skipped; enroll 9; deploy/test_runpod 15; gateway masked / masked-head / setup /
+    setup-reuse / enroll-client / source-dtype 54 passed (0.5B case run separately: passed); console all but the
+    known `test_wheel_contains_the_console`; sdk file by file (a whole-dir run was OOM-killed on the shared box)
+    105 passed / 1 skipped. `tests/sdk` needs an absolute PYTHONPATH: otherwise its factory subprocess imports the
+    main checkout's pgw, which reads format 1 only.
+  - The setup wizard's pack job and the enrollment metadata now default a missing `plain_dtype` to `"source"` (they
+    used `"float32"`, which would rebuild format 1 and miss a format-2 service fingerprint).
+
+## 2026-11-26: security review follow-up (S10 to S15, S20)
+
+The open items of `research/reviews/security-review-2026-11.md` are closed. Every one tightens security, and
+each has regression tests. No scheme, parameter or output change: answers are bit-identical.
+
+- **S11, persisted integrity halt** (`pgw.sdk.halt`):
+  - Halts are kept per (key, model) in the state directory: 0600, and HMAC'd under their own domain label with a
+    0600 key file.
+  - A restart does not reset them, and other processes of the key pick them up on their next request.
+  - A tampered record, a missing MAC or a missing MAC key reads as halted (fail closed), and the message says so.
+  - Cleared only by `pgw sdk clear-halt --model M --yes`, which prints a warning, or by
+    `reset_integrity_breaker()`. Documented in `docs/sdk/troubleshooting.md`.
+- **S12:** requests that failed before their mask session opened are no longer reported. They are counted in
+  `status()["local_errors"]` and logged locally (CONTRACT A3b, configuration).
+- **S20, measured on CPU** (`benchmarks/sdk_dummy_pass_timing.py`): a TCP relay records the provider's view of the
+  trip lane.
+  - Steady-state real and dummy passes were already alike. The gap median was 2.5 ms for both, with KS 0.09
+    and classifier accuracy 0.54. Trip sizes, the provider's time and the intra-pass gaps also matched.
+  - The boundary was distinguishable. A `status.json` write (with fsync) at the end of the answer made the first
+    dummy pass's gap 4.5 ms median and 22 ms p90, against 4.9 ms p90 for real passes. "Largest gap = boundary"
+    found the real pass count in 13/48 and 15/48 requests, where chance is 2/48.
+  - Fix: the write waits until the generator is idle. Also added: a strict-mode pass-gap floor
+    `spec_pass_gap_ms`, 8 ms by default.
+  - After the fix the boundary attack is at chance (1/48), and the first dummy gap is within the 5 % KS critical
+    value: 0.16 and 0.13, against a critical value of 0.21.
+  - Cost: about 8 ms per pass (+34 % on the tiny model, 3 to 8 % on real models).
+  - Qwen2.5-0.5B was not run: its plain mask stock needs about 10 GB of disk.
+- **S10:** provisioning routes apply the SDK key's model scope (403), its revocation, its daily quotas (429) and
+  its row bucket (each H chunk costs 256 rows; the client waits out a short `Retry-After`). `/provision/models`
+  lists only the key's models.
+- **S13:** the customer gateway's own JSON routes use `read_limited`: the setup wizard (unauthenticated sign-in),
+  `/admin/keys`, `/admin/models/*/reset`, and the console sign-in and playground.
+- **S14:** the provider images download `rustup-init` 1.28.2, pinned and checked with `sha256sum -c` per
+  architecture, instead of piping `sh.rustup.rs`.
+- **S15:** no code change. The review doc has an "External audit scope" section: `pgw-fast` first (273 unsafe,
+  reply path first), then `pgw-lane` (75), with per-file counts.
+- Test hygiene:
+  - `test_integrity_failure_raises_and_blocks` is self-contained (its own key, cache and baseline). It now also
+    covers restart, `clear-halt` and reset.
+  - `test_wheel_contains_the_console` globs `pgw_sdk-*.whl`.
+- Tests: the new tests are listed in the review doc (sdk +5, service +2, gateway 2 new, deploy). Each directory
+  was run on its own with `PYTHONPATH=src:.`, and nothing failed:
+
+  | directory | passed | skipped |
+  |---|---|---|
+  | sdk (e2e and speculation included) | 115 | 1 |
+  | service | 447 | 75 |
+  | gateway | 281 | 0 |
+  | console | 96 | 0 |
+  | provision | 43 | 1 |
+  | deploy | 127 | 1 |
+  | enroll | 9 | 0 |
+  | platform | 32 | 0 |
+  | cli | 209 | 3 |
+
+  - `tests/gateway/test_qwen05b.py`, the real 0.5B model, was killed for lack of memory on the shared host,
+    twice. The gateway was run in two halves for the same reason.
+  - tests/docs still has failures from before this change (`PGW_SPECULATION` is not a settings field, and
+    test_numbers). None are in files this change touched.
+
+
+## 2026-11-26: client per-token hot path (library path, 0.5B on CPU, exact)
+
+Scope: what `pgw.OpenAI` does per decoded token outside the GPU. Measured with `benchmarks/sdk_trip_profile.py` (now
+also reports client CPU per token, the driver's phase counters and the lane's split of a trip) plus per-thread
+timers on the hot functions, the CPU provider on the same 4-vCPU box (load 5-26 from other jobs: walls are noisy,
+CPU times and counts are not). A/B: the previous branch head's `pgw_fast` vs this one, interleaved, 2 x 2 runs of 48
+tokens; every run gave the same tokens and logprobs (same hash), the same 97 trips per token, the same rows and bytes.
+
+| per decoded token, 0.5B, 97 trips | before | after | how |
+|---|---|---|---|
+| lane reply spin (400 us cap, no hit against a CPU provider) | 38.8 ms CPU | 0 | spin skipped when the learned reply time exceeds the cap |
+| lane, per trip beyond the provider's compute: wait / send + read | 102-150 / 131-133 us | 25-32 / 85-93 us | the spin gave the provider's CPU back; batched TLS reads |
+| TLS `recv` calls per trip (7B shapes, strace) | 8.0 | 1.16 | one `recv` of everything the socket holds, records fed to rustls from memory |
+| W r chunk decrypts on the token's path | 100 | 38 | a part reserved ahead decrypts every linear's first lease at once |
+| lease creation + lookup (Python, incl. those decrypts) | 13-16 ms wall, 5.7-6.6 ms CPU | 4.8-4.9 ms wall, 3.3-3.5 ms CPU | same |
+| noise-sampled trips handed back to Python (send + finish) | 4.9 | 0 | held in the driver, sent on the native lane after the inline statistics |
+| client CPU, whole process | 87-89 ms | 45-46 ms | |
+| native gateway work (prepare + finish + float ops per trip) | 74-128 us | unchanged | qkv/o/gate_up/down prepare ~33/33/33/85 us, finish 16/16/42/16, float 24/2/16/2 |
+| inline noise statistics (5 sampled trips) | 2.0 ms CPU | unchanged | 93 / 160 / 225 / 746 us at n = 896 / 4864 / 8192 / 29568 (one core, min) |
+| sampling: greedy + logprobs / temperature > 0 / top_p < 1 | 0.35 / +3.9 / +14 ms | 0.35 / +3.9 / +4.4 ms | top-p filter sorts with numpy (bit-identical); `multinomial`'s 152k exponential draws stay |
+
+Changes (each exact: same bytes, request ids, rows, checks, draws; tests added):
+- **Adaptive spin** (`rust/pgw-fast/src/lane.rs`): a reply expected after the cap is not spun for; the estimate keeps
+  learning from blocking waits, so the spin comes back when replies speed up (a GPU provider under the cap: as before).
+- **Batched TLS reads** (same file): the lane client's TLS reader does one `recv` (up to 256 KiB) and hands the
+  records to rustls from memory (rustls reads at most 4 KiB per call: 37-60 `recv` per 150-240 KB reply); spin polls
+  use `MSG_DONTWAIT`, so the socket's mode no longer toggles per trip. Test: replies up to 1.9 MB arrive intact.
+- **Held sampled trips** (`decode.rs`, `decode_native.py`): with inline noise statistics the driver keeps the
+  prepared sampled trip (ticket, id, payload), Python runs the statistics before anything of it leaves (an alarm
+  stops it, abort zeroes it), the next driver call sends exactly those bytes on the native lane and finishes it there.
+  `PGW_DECODE_NATIVE_HOLD=0` restores the hand-back. Tests: bytes, logits and statistics identical across no driver,
+  hand-back and hold; no hand-back with the hold; the existing alarm tests pass on the lane.
+- **First-lease decrypt-ahead** (`pgw/gateway/masks.py`, with `PGW_TRIP_DECRYPT_AHEAD`, which the library sets): in
+  incremental mode (8-slot parts) the leases of a part were created before the next part existed, so the first lease
+  of every linear in every part decrypted its chunks inline. Nothing handed out; zeroed unless a lease takes it.
+- **Top-p** (`pgw/engine/sampling.py`): numpy's argsort gives the same sorted value sequence; where the mask boundary
+  splits equal values, or with NaN, `torch.sort` runs. 15.8 -> 5.5 ms per call on one core (71 ms for `torch.sort`
+  alone with four busy intra-op threads here).
+
+Not changed (measured, reasons): the in-process SDK path has no HTTP/JSON/SSE (chunk objects cost ~4 us each); the
+noise statistics stay in Python (security code; 6.1 ms per token at 72B widths, now a model term); `multinomial`
+(3.9 ms per sampled token on one core, ~10x with busy intra-op threads) is bound to torch's RNG stream; the trip split
+over cores does not pay on this 4-vCPU box (STATUS 2026-11-23); lease creation keeps ~90 us of Python per lease
+(17 per token at 0.5B, ~40 at 72B with 8-slot parts).
+
+Model (`benchmarks/round_trip_model.py --sdk`): one new measured term, the inline noise statistics (5% of trips,
+cost per sampled trip fitted to the numbers above): 1.4 / 4.1 / 6.1 ms per token at 7B / 32B / 72B. 72B at RTT 0.2 ms:
+201.2 ms per token (was 195.1). The lane (0.13 ms per trip) and gateway terms are left as they were: the lane gains
+here are on loopback next to a CPU provider, not over a NIC to a GPU.
+
+Needs a GPU / same-data-center run: the lane's fixed cost per trip over a real NIC with the spin, batched reads and
+held trips (spin hits, `recv` per trip at 72B reply sizes); the gateway's per-trip work at 72B widths on a gateway
+with its own cores (trip split); sampling cost per token on the client's CPU with its thread settings.
+Tests (one directory at a time; the box was shared and short of memory): tests/engine 1150 passed + 2 that failed
+under xdist (an OOM-killed worker, a timing assertion) and pass alone; tests/wire 334; tests/native 343;
+tests/service lane TLS + lane server 23; tests/gateway 277 + 3 that failed under xdist (an OOM-killed worker, a
+dummy-pass count, a factory child start) and pass alone; tests/sdk 103 passed, 1 opt-in skip (serial);
+tests/benchmarks and tests/observability pass; `cargo test -p pgw-fast --lib` 75 passed. Failing, in code this
+change does not touch: tests/docs (`PGW_SPECULATION` in docs/sdk/configuration.md, from c9a0e82, is not a setting;
+results/kaggle logs missing from the checkout) and two tests/maskstore child-process crash tests (the child's stdlib
+`platform` import resolves to another module here).
+
+## 2026-11-26: mask cost per slot on the client (factory CPU, stock bytes; scheme unchanged)
+
+Goal: less client CPU and fewer stored bytes per mask slot (the scaling audit's #1 bottleneck), with single use,
+mask secrecy, check soundness, the scheme and its parameters unchanged and outputs bit-identical. Breakdown,
+method and the levers not taken: `docs/sdk/scaling.md` ("Mask cost per slot, by component"); tool:
+`benchmarks/pks_slot_breakdown.py` (every per-slot and per-segment part at the real shapes of each model).
+
+- **The earlier per-slot figure was incomplete.** 7.2 / 24.9 / 80 / 121 ms (0.5B / 7B / 32B / 72B) counted `r`, the
+  upload, the reply keys and the decryption, without the masked LM head. Counting everything the factory does per
+  slot (head, the segment's p31 check vectors `u W8`, the every-row 40-bit self-check, the int64 copy of `W r`,
+  the writer), the factory cost **14.2 / 66 / 231 / 433 ms** per slot (scaled to the earlier audit's box). The
+  largest term from 7B up was `u W8 mod p`: a float64 copy of every `W8` per segment, 5.5 ns per multiply-add
+  (38 / 172 / 383 ms per slot at 7B / 32B / 72B).
+- **Now 10.6 / 33.5 / 103 / 157 ms** per slot (-25 / -49 / -55 / -64 %); this box under load measured
+  17.3 -> 13.0 (0.5B, both measured), 90 -> 46, 347 -> 155, 652 -> 236 ms (after: measured at the real shapes;
+  before: the changed parts at measured rates). Factory cores at 16 streams: 15 / 27 / 33 / 38
+  (were 20 / 53 / 73 / 104 with everything counted; the old table said 10 / 20 / 25 / 29).
+  * `pgw_pks.vecmat_p31` / `vecmat_wrap32` (new `rust/pgw-pks/src/vecmat.rs`): `u W8 mod p` and `u W8 mod 2^32`
+    as exact 32-bit lane sums on AVX-512 (0.17 ns per multiply-add, 30x); `ring_vecmat` uses it for up to 4
+    vectors or where int8 GEMMs are not fast (the 14 private vectors stay on torch's int8 GEMM on AMX: as fast at
+    one thread).
+  * `pgw_pks.check_rows32`: the every-row self-check on 32-bit lanes, 16 rows per block, int64 or 32-bit `W r`
+    (2.5x; same flags as `verify_rows`).
+  * pks-v3 compact output (default; `PGW_PKS_COMPACT=0` off): the decryption's uint32 buffer goes to the
+    self-check and the writer as the int32 compact form every segment writer already accepts; no int64 copy
+    (2.9 / 9 / 13 ms per slot, 7B measured 23 under memory pressure), the writer packs from 4 bytes.
+  * The private self-check vectors are cached as uint32 at K <= 32: at 72B the uint64 set (1.27 GB) overflowed
+    the 1 GiB cache, so the last layers' `v W8` were redrawn for every segment (6.6 ms per slot); now 0.63 GB.
+- **Bytes per slot: unchanged, at the floor** (1.82 / 6.17 / 19.2 / 28.1 MB): uniform 32-bit masks of every output
+  feature; format overhead 0.05 % (`uW`) plus 16 bytes per ~1 MiB chunk. Storing seeds (needs a pass over all of
+  `W8` per token at use time) or the provider's reply (4.5 bytes per element, +12.5 %, decryption at use time)
+  loses on both counts. Written up, not implemented: a separate head stock for decode tokens only (the masked head
+  uses one row per prefill; 22 / 6.5 / 2 / 1.4 % of the stock and 11 / 3 / 1 / 0.7 % of the factory CPU at
+  500-token prompts; a store / gateway change), `ring`'s AES-GCM for the writer and the gateway's open (~4x on
+  9.7 ms per slot at 7B, but no key-schedule wipe), sharing `u` across segments (a SPEC 7.3 change; no longer
+  worth it). The sizing now also counts the gateway's mask open + retirement (1.25 / 3.7 / 11 / 16 ms per slot,
+  helper threads) and the stock's write bandwidth (5 GB/s at 7B, 16 streams; twice with `shred_zero_fill`, which
+  the guide now says to turn off on SSDs).
+- Tests: `tests/factory/test_vecmat_native.py` (new: kernels equal the reference paths over shapes, extremes,
+  threads, c up to 17, every `W r` form), `tests/hemask/test_pks.py` (new `test_compact_output_stores_the_same_masks`:
+  compact, int64 and local generation store the same masks and check vectors, ring and p31, one- and multi-pass;
+  the factory tests compare canonical values), Rust `cargo test -p pgw-pks vecmat`. tests/factory 463 passed /
+  9 skipped; tests/hemask 439 passed / 20 skipped; tests/sdk 115 passed / 1 opt-in skip (the factory subset rerun after the last
+  kernel-selection change: 96 passed).

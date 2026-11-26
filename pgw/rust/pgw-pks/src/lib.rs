@@ -11,6 +11,7 @@
 
 pub mod arith;
 pub mod kernel;
+pub mod vecmat;
 #[cfg(target_arch = "x86_64")]
 pub mod simd;
 #[cfg(target_arch = "x86_64")]

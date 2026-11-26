@@ -111,3 +111,206 @@ def test_reporter_keeps_records_on_429() -> None:
     assert len(rep._q) == 1 and rep.sent == 0  # kept for the next round
     rep.flush()
     assert len(rep._q) == 0 and rep.sent == 1
+
+
+# ---- S12: requests that never reached the provider are not reported --------------------------------------------
+def test_requests_that_never_reached_the_provider_are_not_reported(tmp_path: Path) -> None:
+    """A request refused locally (context length, no masks, model blocked) opened no session: the provider never
+    saw it, so the report must not tell it that a (long) request happened. It is counted in the local status."""
+    from pgw import OpenAI
+    from pgw.core.errors import ErrorCode, PGWError
+
+    key = SdkKey.new("live", "https://gpu.example.com", bytes(32 * [5])).encode()
+    c = OpenAI(api_key=key, cache_dir=tmp_path / "c", state_dir=tmp_path / "s", timeout=60)
+    eng = c._engine
+    sent: list[dict[str, Any]] = []
+    eng.reporter.add = sent.append  # nothing to send it to
+
+    async def local_refusal(req: Any, *, conversation: Any = None, meta: Any = None, timeout_s: Any = None) -> Any:
+        meta["model"] = "qwen2.5-0.5b-instruct"
+        meta["prompt_tokens"] = 40000
+        raise PGWError("no masks in stock", code=ErrorCode.MASK_EXHAUSTED)
+        yield None, None  # pragma: no cover
+
+    async def reached(req: Any, *, conversation: Any = None, meta: Any = None, timeout_s: Any = None) -> Any:
+        meta["model"] = "qwen2.5-0.5b-instruct"
+        meta["opened"] = True
+        meta["prompt_tokens"] = 12
+        raise PGWError("provider went away", code=ErrorCode.UNAVAILABLE)
+        yield None, None  # pragma: no cover
+
+    msgs = [{"role": "user", "content": "x"}]
+    try:
+        eng._chat_events = local_refusal
+        with pytest.raises(E.PGWAPIError):
+            c.chat.completions.create(model="qwen2.5-0.5b-instruct", messages=msgs)
+        assert sent == []
+        assert eng.status()["local_errors"] == {"mask_exhausted": 1}
+        eng._chat_events = reached
+        with pytest.raises(E.PGWAPIError):
+            c.chat.completions.create(model="qwen2.5-0.5b-instruct", messages=msgs)
+        (rec,) = sent
+        assert rec["status"] == "error" and rec["error_code"] == "unavailable" and rec["prompt_tokens"] == 12
+    finally:
+        c.close()
+
+
+# ---- S11: the integrity halt survives a restart -------------------------------------------------------------
+def _halt_store(tmp_path: Path) -> Any:
+    from pgw.sdk.halt import HaltStore
+
+    return HaltStore(tmp_path / "state" / "sessions" / "0123456789abcdef", "0123456789abcdef")
+
+
+def test_integrity_halt_is_persisted_private_and_mac_protected(tmp_path: Path) -> None:
+    import json
+    import stat
+
+    from pgw.sdk.halt import DOMAIN, HaltStore
+
+    m = "qwen2.5-0.5b-instruct"
+    st = _halt_store(tmp_path)
+    assert not st.load(m).halted and not st.path(m).exists()  # no record: never failed
+    st.record_failure(m, "freivalds")
+    st.record_failure(m, "range")
+    again = HaltStore(st.state_dir, st.key_id).load(m)  # a new process
+    assert again.halted and again.failures == 2 and not again.tampered
+    for p in (st.path(m), st.key_file):
+        assert stat.S_IMODE(p.stat().st_mode) == 0o600
+    assert DOMAIN == b"pgw-sdk-integrity-halt-v1\x00"
+
+    good = st.path(m).read_text()
+    data = json.loads(good)
+    for edit in ({"halted": False, "failures": 0}, {"mac": "00" * 32}, {"mac": None}, {"extra": 1}):
+        st.path(m).write_text(json.dumps({**data, **edit}))
+        r = HaltStore(st.state_dir, st.key_id).load(m)
+        assert r.halted and r.tampered and "fail closed" in (r.reason or ""), edit
+    st.path(m).write_text(json.dumps({k: v for k, v in data.items() if k != "mac"}))
+    assert HaltStore(st.state_dir, st.key_id).load(m).tampered == "no MAC"
+    st.path(m).write_text("{not json")
+    assert HaltStore(st.state_dir, st.key_id).load(m).halted
+    st.path(m).write_text(good)
+    assert HaltStore(st.state_dir, st.key_id).load(m).failures == 2
+    # the record of another key, or of another model, does not verify here
+    other = HaltStore(tmp_path / "state" / "sessions" / "fedcba9876543210", "fedcba9876543210")
+    other.dir.mkdir(parents=True)
+    other.path(m).write_text(good)
+    (other.state_dir / "integrity.key").write_bytes(st.key_file.read_bytes())
+    assert other.load(m).tampered
+    st.path("qwen2.5-7b-instruct").write_text(good)
+    assert st.load("qwen2.5-7b-instruct").tampered
+    st.path("qwen2.5-7b-instruct").unlink()
+    st.key_file.unlink()  # the MAC key is gone: unverifiable, halted
+    r = HaltStore(st.state_dir, st.key_id).load(m)
+    assert r.halted and "missing" in (r.tampered or "")
+
+
+def test_engine_trips_the_breaker_from_the_persisted_halt(tmp_path: Path) -> None:
+    """A restart must not re-open a halted model: the new runtime's breaker is tripped before any request, a failure
+    seen through the breaker's listener is persisted, and only an explicit reset clears both."""
+    from types import SimpleNamespace
+
+    from pgw.gateway.safety import BreakerOpenError, CircuitBreaker
+    from pgw.sdk.engine import Engine, ModelHandle
+    from pgw.sdk.options import SDKOptions
+
+    m = "qwen2.5-0.5b-instruct"
+    key = SdkKey.new("live", "https://gpu.example.com", bytes(32 * [6]))
+
+    def engine() -> tuple[Engine, ModelHandle, Any]:
+        eng = Engine(key, SDKOptions(cache_dir=tmp_path / "c", state_dir=tmp_path / "s", usage_reports=False))
+        h = eng.models[m] = ModelHandle(m)
+        rt = SimpleNamespace(breaker=CircuitBreaker(m, None), safety_listeners=[])
+        rt.reset_safety = lambda **kw: rt.breaker.reset()
+        eng._bind_halt(h, rt)
+        h.runtime = rt
+        return eng, h, rt
+
+    eng, h, rt = engine()
+    assert not rt.breaker.is_open
+    for fn in rt.safety_listeners:  # what ModelRuntime._on_integrity_failure does
+        fn("safety.integrity_failure", m, "freivalds")
+    assert h.halt is not None and h.halt.halted and h.halt.failures == 1
+    eng.close()
+
+    eng2, h2, rt2 = engine()  # "restart"
+    assert rt2.breaker.is_open and h2.integrity_failures == 1
+    with pytest.raises(BreakerOpenError):
+        rt2.breaker.check()
+    st = eng2.status()["models"][m]["integrity_halt"]
+    assert st["halted"] and st["failures"] == 1
+    eng2.call(eng2.reset_breaker(m), timeout_s=30)
+    assert not rt2.breaker.is_open and not eng2.halts.load(m).halted
+    eng2.close()
+    eng3, _, rt3 = engine()
+    assert not rt3.breaker.is_open
+    eng3.close()
+
+
+def test_sdk_clear_halt_cli(tmp_path: Path) -> None:
+    from click.testing import CliRunner
+
+    from pgw.cli.main import cli
+
+    m = "qwen2.5-0.5b-instruct"
+    st = _halt_store(tmp_path)
+    st.record_failure(m)
+    st.path(m).write_text(st.path(m).read_text().replace('"halted": true', '"halted": false'))
+    assert st.load(m).tampered  # an edited record stays halted ...
+    args = ["sdk", "clear-halt", "--model", m, "--state-dir", str(tmp_path / "state")]
+    runner = CliRunner()
+    r = runner.invoke(cli, args)
+    assert r.exit_code != 0 and "WARNING" in r.output and "--yes" in r.output
+    assert st.load(m).halted
+    r = runner.invoke(cli, [*args, "--yes", "--note", "provider redeployed"])
+    assert r.exit_code == 0, r.output
+    assert "cleared qwen2.5-0.5b-instruct for key 0123456789abcdef" in r.output and "unverifiable" in r.output
+    rec = st.load(m)
+    assert not rec.halted and not rec.tampered and rec.failures == 0 and rec.events[-1]["event"] == "cleared"
+    r = runner.invoke(cli, [*args, "--yes"])
+    assert r.exit_code == 0 and "no integrity halt" in r.output
+    r = runner.invoke(cli, ["sdk", "clear-halt", "--model", "gpt-4", "--yes", "--state-dir", str(tmp_path)])
+    assert r.exit_code != 0
+
+
+# ---- S20: strict-mode pass timing --------------------------------------------------------------------------------
+def test_strict_passes_start_no_earlier_than_the_gap_floor(tmp_path: Path) -> None:
+    """With strict speculation every forward pass starts at least ``spec_pass_gap_ms`` after the previous one ended,
+    so the client's work between passes (more of it at the end of the answer) is not visible below the floor."""
+    import asyncio
+    import itertools
+    import time
+    from types import SimpleNamespace
+
+    from pgw.sdk.engine import Engine
+    from pgw.sdk.options import SDKOptions
+
+    key = SdkKey.new("live", "https://gpu.example.com", bytes(32 * [7]))
+    spans: list[tuple[float, float]] = []
+
+    async def forward(seqs: Any) -> Any:
+        t0 = time.monotonic()
+        await asyncio.sleep(0.002)
+        spans.append((t0, time.monotonic()))
+        return seqs
+
+    def rt() -> Any:
+        return SimpleNamespace(generator=SimpleNamespace(model=SimpleNamespace(aforward_batch=forward)))
+
+    async def three(model: Any) -> None:
+        for _ in range(3):
+            await model.aforward_batch([1])
+
+    for spec, gap, paced in (("lookup", 30.0, True), ("lookup", 0.0, False), ("off", 30.0, False)):
+        eng = Engine(key, SDKOptions(cache_dir=tmp_path / "c", state_dir=tmp_path / "s", usage_reports=False,
+                                     speculation=spec, spec_pass_gap_ms=gap))
+        r = rt()
+        eng._pace_strict_passes(r)
+        eng._pace_strict_passes(r)  # idempotent
+        spans.clear()
+        asyncio.run(three(r.generator.model))
+        gaps = [b[0] - a[1] for a, b in itertools.pairwise(spans)]
+        assert (min(gaps) >= 0.029) == paced, (spec, gap, gaps)
+        assert len(spans) == 3
+    with pytest.raises(ValueError):
+        SDKOptions(speculation="lookup", spec_pass_gap_ms=-1).validate()

@@ -331,13 +331,13 @@ def test_provider_provisioner_pins_and_defaults(monkeypatch: pytest.MonkeyPatch,
         SDKOptions(model_fingerprints={"x": "nope"}).validate()
 
 
-#: The release's pack fingerprints (scripts/pin_model_fingerprints.py; 3B / 7B derived on a Kaggle CPU kernel,
-#: results/kaggle/sdk-7b-validation/pins, where 0.5B / 1.5B re-derived to the integration box's values).
+#: The release's pack fingerprints, pack format 2 (scripts/pin_model_fingerprints.py on a Kaggle CPU kernel,
+#: results/kaggle/sdk-pins-format2; 0.5B / 1.5B also on the integration box, identical).
 RELEASE_FINGERPRINTS = {
-    "qwen2.5-0.5b-instruct": "915e55c19364542c4fd8ab5c8f7154806e2511048755e0d10426374b5c8fe9c7",
-    "qwen2.5-1.5b-instruct": "81bb7adcea1524171297c0004c0efb1edad9f71dd0535462c9b32ab03ac99348",
-    "qwen2.5-3b-instruct": "a8e7bac934d82f6435fe9385bd1eb3cfdf1a68f4ff415829e49a3dd4f23bcd23",
-    "qwen2.5-7b-instruct": "d3db0ca858981a66dd262143d7f3d5b0120069068e0a98a806e1eea3f12653fa",
+    "qwen2.5-0.5b-instruct": "d773a502fb976d45070332cbd4222ee30bc971d14c7f9c56a317805c230c0b44",
+    "qwen2.5-1.5b-instruct": "3d198de49e61c32b43150c237c0fad0f1ec062f0a355df75d64706bbac8d70d9",
+    "qwen2.5-3b-instruct": "0ec0b8b24b2bc59632d9530e1bfd749b082c101f82c5ff819f8e8c5ff4d8d752",
+    "qwen2.5-7b-instruct": "f7c6fb4f5f8fbc5e4149972c07afdc749de8e5f9adc604d30edb7eb94b834b67",
 }
 
 
@@ -586,6 +586,7 @@ def test_create_timeout_bounds_the_request_and_reports_without_content(tmp_path:
 
     async def slow(req: Any, *, conversation: Any = None, meta: Any = None, timeout_s: Any = None) -> Any:
         meta["model"] = "qwen2.5-0.5b-instruct"
+        meta["opened"] = True  # in flight at the provider (requests that never reach it are not reported, S12)
         meta["prompt_tokens"] = 5
         await aio.sleep(30)
         yield None, None

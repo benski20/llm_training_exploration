@@ -444,7 +444,7 @@ def test_backend_in_real_factory_matches_local(tmp_path: Path) -> None:
         pytest.skip(f"minimal pack not accepted by MaskGenerator: {exc}")
     seed = bytes(range(1, 33))
     a = {(g.id.key, g.slot_start): g.wr.clone() for g in local.generate(seed, 300, checks=2, chunk_slots=300)}
-    b = {(g.id.key, g.slot_start): g.wr.clone() for g in he.generate(seed, 300, checks=2, chunk_slots=300)}
+    b = {(g.id.key, g.slot_start): _canon(g.wr) for g in he.generate(seed, 300, checks=2, chunk_slots=300)}
     assert a.keys() == b.keys() and all(torch.equal(a[k], b[k]) for k in a)
     assert he.last_stats.self_checked_rows == 300
 
@@ -517,6 +517,58 @@ class _LayerPack(_Pack):
         return SimpleNamespace(w8=torch.from_numpy(self.w[str(lid)]))
 
 
+def _canon(t: torch.Tensor) -> torch.Tensor:
+    """Canonical K32 ring elements (int64) of a ``W r`` chunk in either form (int64, or the compact int32)."""
+    return t.to(torch.int64) & 0xFFFFFFFF
+
+
+@pytest.mark.parametrize("check_field", [None, "p31"])
+@pytest.mark.parametrize("chunk_slots", [None, 300])
+def test_compact_output_stores_the_same_masks(tmp_path: Path, check_field: str | None, chunk_slots: int | None) -> None:
+    """The factory's compact ``W r`` (int32 straight from the decryption, no int64 copy; the default) puts the same
+    masks and check vectors into the store as the int64 form and as local generation, with every row checked."""
+    from pgw.core.ring import RingParams
+    from pgw.factory import MaskGenerator
+    from pgw.hemask.pks_backend import PKSHintStore, PKSMaskBackend, RemotePKS
+    from pgw.maskstore import FileKeyProvider, MaskStore
+
+    pack = _LayerPack()
+    ring = RingParams.from_name("K32A12C27")
+    hints = PKSHintStore.open_or_build(tmp_path / "hint", pack)
+    out = {k: w.shape[0] for k, w in pack.w.items()}
+    remote = RemotePKS(_LocalProvider(pack), pack.fingerprint, out, hints.a_seed)
+    be = PKSMaskBackend(pack, ring, hints, remote, groups_per_call=1)
+    assert PKSMaskBackend.compact_output is True
+    kp = FileKeyProvider(tmp_path / "kek", create=True)
+    seed = bytes(range(1, 33))
+    got: dict[str, dict[str, tuple[torch.Tensor, torch.Tensor]]] = {}
+    for mode in ("compact", "int64", "local"):
+        be.compact_output = mode == "compact"
+        gen = MaskGenerator(pack, ring, device="cpu", remote=None if mode == "local" else be, check_field=check_field)
+        ms = MaskStore.open(tmp_path / f"store-{mode}", kp)
+        try:
+            gen.generate_into_store(ms, 300, seed=seed, chunk_slots=chunk_slots)
+            if mode != "local":
+                assert gen.last_stats.self_checked_rows == 300 * 4
+            with ms.reserve(pack.fingerprint, ring, 300) as res:
+                got[mode] = {}
+                for s in pack.linear_specs():
+                    uw = torch.from_numpy(np.array(res.checks_compact(s.id)[2], dtype=np.int64))
+                    got[mode][s.id.key] = (res.take(s.id, 300)[1].clone(), uw)
+        finally:
+            ms.close()
+    for mode in ("int64", "local"):
+        assert got[mode].keys() == got["compact"].keys()
+        for key, (wr, uw) in got["compact"].items():
+            assert torch.equal(_canon(wr), _canon(got[mode][key][0])), (mode, key)
+            assert torch.equal(uw, got[mode][key][1]), (mode, key)
+    # the compact form itself: the int64 values' low 32 bits
+    r = torch.from_numpy(np.random.default_rng(2).integers(0, 1 << 32, (300, 48), dtype=np.int64))
+    be.compact_output = True
+    c = be.matmul("0.qkv", r, compact=True)
+    assert c.dtype == torch.int32 and torch.equal(_canon(c), be.matmul("0.qkv", r))
+
+
 @pytest.mark.parametrize(("shift", "caught"), [(0, False), (1 << 31, True), (1 << 35, True)])
 def test_factory_self_check_catches_provider_errors(tmp_path: Path, shift: int, caught: bool) -> None:
     """The real factory with pks-v3: an honest provider gives the local segments; a mask error of 2^27 (inside
@@ -545,7 +597,7 @@ def test_factory_self_check_catches_provider_errors(tmp_path: Path, shift: int, 
         return
     local = MaskGenerator(pack, ring, device="cpu")
     a = {(g.id.key, g.slot_start): g.wr.clone() for g in local.generate(seed, 300, checks=2, chunk_slots=300)}
-    b = {(g.id.key, g.slot_start): g.wr.clone() for g in gen.generate(seed, 300, checks=2, chunk_slots=300)}
+    b = {(g.id.key, g.slot_start): _canon(g.wr) for g in gen.generate(seed, 300, checks=2, chunk_slots=300)}
     assert a.keys() == b.keys() and all(torch.equal(a[k], b[k]) for k in a)
     assert gen.last_stats.self_checked_rows == 300 * 4
 

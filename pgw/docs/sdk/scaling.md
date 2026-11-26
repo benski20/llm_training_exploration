@@ -7,17 +7,22 @@ client machine as the number of concurrent streams grows, how to size it, and ho
 ## What limits a client, in order
 
 1. **Mask production (CPU).** Every generated token and every prompt token that is not reused from the previous
-   turn consumes one mask slot, and each slot costs client CPU in the background factory: about 7 ms at 0.5B,
-   25 ms at 7B, 80 ms at 32B and 120 ms at 72B (pks-v3, one core). At 7B, 16 streams of 17 tokens/s with
-   500-token prompts need about 800 slots/s, i.e. 20 cores of mask workers. This is the dominant cost at every
-   size: it is linear in tokens and has no batching gain. Prompt tokens cost as much as answer tokens, so
-   conversation prefix reuse (below) is the main lever.
+   turn consumes one mask slot, and each slot costs client CPU in the background factory: about 11 ms at 0.5B,
+   34 ms at 7B, 103 ms at 32B and 157 ms at 72B (pks-v3, one core, every part counted; the breakdown is
+   [below](#mask-cost-per-slot-by-component)). At 7B, 16 streams of 17 tokens/s with 500-token prompts need
+   about 800 slots/s, i.e. 27 cores of mask workers. This is the dominant cost at every size: it is linear in
+   tokens and has no batching gain. Prompt tokens cost as much as answer tokens, so conversation prefix reuse
+   (below) is the main lever.
 2. **Mask stock (disk).** The stock absorbs bursts above the factory rate. With the default admission, a request
    starts only when the stock covers the whole remaining prompt + `max_tokens` of every running request, so N
    concurrent requests need about N x (prompt + max_tokens) slots on disk. One slot is 1.8 MB at 0.5B, 6.2 MB at
-   7B, 19 MB at 32B and 28 MB at 72B. The default `mask_store_gb = 8` holds about 1,300 slots at 7B: **one** request
+   7B, 19 MB at 32B and 28 MB at 72B (`4 x sum(out_features)`: the masks are uniform 32-bit values, so this is
+   the floor; see below). The default `mask_store_gb = 8` holds about 1,300 slots at 7B: **one** request
    with a 500-token prompt and the default `max_tokens = 512` at a time. Raise `mask_store_gb` (table below) or use
-   `mask_admission="overcommit"`.
+   `mask_admission="overcommit"`. The stock's disk must also take the factory's writes: slots/s x slot bytes,
+   5 GB/s at 7B with 16 streams (column "stock writes" below), twice that while `shred_zero_fill` (the default)
+   zeroes consumed segments; on SSDs set it off (`PGW_MASKSTORE_SHRED_ZERO_FILL=false`: the crypto-erase of the
+   segment's key header is what deletes the masks; the zero-fill is useless there).
 3. **Gateway CPU, one core per process.** The masking, checks, float ops and sampling of every running answer
    run on one plaintext thread per process (the GIL). Batching amortises the per-trip part (measured: client CPU
    per token falls from 7.2 to 2.4 ms between 1 and 64 streams on the tiny model), but the per-row part (unmask,
@@ -43,35 +48,121 @@ use 0.1-0.3 of a core next to the plaintext thread.
 see the script). Assumptions: each stream decodes at the single-stream speed of an H100 provider at 0.2 ms RTT
 (0.5B 30, 7B 17, 32B 6.7, 72B 5.1 tokens/s), 500-token prompts with no prefix reuse, 256 generated tokens per
 request, `max_tokens = 512`, a stock that also absorbs 30 s of full-rate demand. "Cache" is the one-time model
-data and mask setup (not per stream). Cores are physical cores with AVX-512 VNNI or AMX for the factory.
+data and mask setup (not per stream). Cores are physical cores with AVX-512 VNNI or AMX for the factory. Mask CPU
+per slot is the complete figure of the [breakdown](#mask-cost-per-slot-by-component) (factory 10.6 / 33.5 / 103 /
+157 ms; gateway cores include 1.25 / 3.7 / 11 / 16 ms per slot of mask opening and retirement on the gateway's
+helper threads). "Stock writes" is the disk write bandwidth of the factory at that rate.
 
-| model | N | mask slots/s | factory cores | gateway processes | gateway cores | cores total | RAM GB | mask stock GB (entitled / overcommit) | cache GB |
-|---|---|---|---|---|---|---|---|---|---|
-| 0.5B | 1 | 89 | 0.6 | 1 | 0.6 | 1.3 | 1.6 | 7 / 6 | 2.2 |
-| 0.5B | 4 | 354 | 2.6 | 1 | 1.0 | 3.6 | 1.7 | 27 / 23 | 2.2 |
-| 0.5B | 16 | 1,418 | 10.2 | 4 | 4.1 | 14.3 | 6.8 | 108 / 93 | 2.2 |
-| 0.5B | 64 | 5,670 | 40.8 | 13 | 14.8 | 55.6 | 22.7 | 431 / 371 | 2.2 |
-| 7B | 1 | 50 | 1.3 | 1 | 0.5 | 1.8 | 3.4 | 16 / 12 | 13 |
-| 7B | 4 | 201 | 5.0 | 1 | 0.9 | 5.9 | 3.9 | 63 / 50 | 13 |
-| 7B | 16 | 803 | 20.0 | 3 | 3.1 | 23.1 | 12.5 | 251 / 200 | 13 |
-| 7B | 64 | 3,213 | 80.0 | 11 | 11.8 | 91.8 | 46.9 | 1,004 / 799 | 13 |
-| 32B | 1 | 20 | 1.6 | 1 | 0.5 | 2.1 | 4.9 | 31 / 21 | 45 |
-| 32B | 4 | 79 | 6.3 | 1 | 0.8 | 7.2 | 7.5 | 125 / 85 | 45 |
-| 32B | 16 | 317 | 25.3 | 3 | 2.9 | 28.2 | 25.7 | 501 / 341 | 45 |
-| 32B | 64 | 1,266 | 101.3 | 10 | 10.6 | 111.9 | 94.5 | 2,005 / 1,365 | 45 |
-| 72B | 1 | 15 | 1.8 | 1 | 0.5 | 2.3 | 7.0 | 42 / 27 | 91 |
-| 72B | 4 | 60 | 7.3 | 1 | 0.8 | 8.1 | 10.2 | 167 / 109 | 91 |
-| 72B | 16 | 241 | 29.1 | 3 | 2.9 | 32.0 | 34.8 | 668 / 434 | 91 |
-| 72B | 64 | 964 | 116.4 | 10 | 10.7 | 127.2 | 127.1 | 2,671 / 1,738 | 91 |
+| model | N | tok/s each | mask slots/s | factory cores | gateway procs | gateway cores | cores total | RAM GB | mask stock GB (entitled / overcommit) | stock writes GB/s | cache GB |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| 0.5B | 1 | 30 | 89 | 0.9 | 1 | 0.7 | 1.7 | 1.6 | 7 / 6 | 0.16 | 2.2 |
+| 0.5B | 4 | 30 | 354 | 3.8 | 1 | 1.5 | 5.2 | 1.7 | 27 / 23 | 0.65 | 2.2 |
+| 0.5B | 16 | 30 | 1,418 | 15.0 | 4 | 5.8 | 20.9 | 6.8 | 108 / 93 | 2.59 | 2.2 |
+| 0.5B | 64 | 30 | 5,670 | 60.1 | 13 | 21.9 | 82.0 | 22.7 | 431 / 371 | 10.34 | 2.2 |
+| 7B | 1 | 17 | 50 | 1.7 | 1 | 0.7 | 2.4 | 3.4 | 16 / 12 | 0.31 | 13 |
+| 7B | 4 | 17 | 201 | 6.7 | 1 | 1.6 | 8.3 | 3.9 | 63 / 50 | 1.24 | 13 |
+| 7B | 16 | 17 | 803 | 26.9 | 3 | 6.0 | 32.9 | 12.5 | 251 / 200 | 4.96 | 13 |
+| 7B | 64 | 17 | 3,213 | 107.6 | 11 | 23.7 | 131.4 | 46.9 | 1,004 / 799 | 19.83 | 13 |
+| 32B | 1 | 6.7 | 20 | 2.0 | 1 | 0.7 | 2.8 | 4.9 | 31 / 21 | 0.38 | 45 |
+| 32B | 4 | 6.7 | 79 | 8.2 | 1 | 1.7 | 9.9 | 7.5 | 125 / 85 | 1.52 | 45 |
+| 32B | 16 | 6.7 | 317 | 32.7 | 3 | 6.4 | 39.1 | 25.7 | 501 / 341 | 6.08 | 45 |
+| 32B | 64 | 6.7 | 1,266 | 130.9 | 10 | 24.6 | 155.6 | 94.5 | 2,005 / 1,365 | 24.34 | 45 |
+| 72B | 1 | 5.1 | 15 | 2.4 | 1 | 0.8 | 3.1 | 7.0 | 42 / 27 | 0.42 | 91 |
+| 72B | 4 | 5.1 | 60 | 9.4 | 1 | 1.8 | 11.2 | 10.2 | 167 / 109 | 1.69 | 91 |
+| 72B | 16 | 5.1 | 241 | 37.8 | 3 | 6.6 | 44.4 | 34.8 | 668 / 434 | 6.76 | 91 |
+| 72B | 64 | 5.1 | 964 | 151.0 | 10 | 25.8 | 176.8 | 127.1 | 2,671 / 1,738 | 27.04 | 91 |
+
+Before the 2026-11-26 factory changes, with every part counted, the factory needed 20.1 / 53.2 / 73.1 / 104.4
+cores at N = 16 (0.5B / 7B / 32B / 72B; `--mask-cpu before`), now 15.0 / 26.9 / 32.7 / 37.8. The earlier version
+of this table showed 10.2 / 20.0 / 25.3 / 29.1 (`--mask-cpu documented`): its per-slot figures left out the masked
+LM head, the segment's check vectors, the every-row self-check and the segment writer. The stock in GB is unchanged
+(bytes per slot are at their floor, below).
 
 Multi-turn chat with prefix reuse roughly halves the factory and the stock: with 80 % of each prompt reused, 16
-streams need 9.4 / 11.9 / 13.7 factory cores and 133 / 282 / 381 GB of stock (entitled) at 7B / 32B / 72B
+streams need 12.7 / 15.4 / 17.8 factory cores and 133 / 282 / 381 GB of stock (entitled) at 7B / 32B / 72B
 (`--cached-frac 0.8`). The factory may run on other cores than the gateway (it runs at low priority); disk is
 local SSD next to the cache (never a network filesystem: the store refuses one).
 
 RAM per process is dominated by the float32 LM head (0.6 / 2.2 / 3.1 / 5 GB) plus about 1 GB of runtime; per
 stream, the KV cache (float32: 25 KB per token at 0.5B, 115 KB at 7B, 524 KB at 32B, 655 KB at 72B; a 4k-token
 conversation is 0.5 / 2.1 / 2.7 GB at 7B / 32B / 72B) and about one mask slot of decrypted masks.
+
+## Mask cost per slot, by component
+
+`benchmarks/pks_slot_breakdown.py` runs every step the factory and the store perform for one mask slot, with the
+functions the production path calls, at the real shapes of each model (one layer of each linear kind plus the
+masked LM head, times the layer count; random int8 weights, a stand-in reply of the right size), 1024-slot
+segments, p31 check vectors, one thread. Client CPU ms per slot, before -> after the 2026-11-26 changes, measured
+on a shared 4-vCPU AMX box under load (4-19):
+
+| part | 0.5B | 7B | 32B | 72B |
+|---|---|---|---|---|
+| `r` keystream (ChaCha20) | 1.40 -> 1.28 | 7.7 | 30.2 | 45.3 |
+| upload encryption + reply keys | 4.78 -> 4.93 | 16.3 | 56.9 | 84.0 |
+| reply keys' wire form | 0.38 -> 0.37 | 0.48 | 1.16 | 1.36 |
+| reply decryption | 3.14 -> 3.49 | 10.7 | 33.3 | 52.7 |
+| int64 copy of `W8 r` | 0.86 -> **0** | 2.9 -> **0** | 9.0 -> **0** | 13.2 -> **0** |
+| every-row 40-bit self-check (14 private vectors) | 1.97 -> **0.85** | 8.0 -> **3.1** | 25.4 -> **10.0** | 38.1 -> **15.4** |
+| segment check vectors `u W8 mod p` (per segment / 1024) | 2.43 -> **0.15** | 37.9 -> **1.2** | 172 -> **4.8** | 383 -> **9.6** |
+| private `v W8` redrawn per segment (cache overflow) | 0 | 0 | 0 | 6.6 -> **0** |
+| writer: pack + AES-256-GCM + pwrite + fsync | 2.38 -> 1.89 | 6.1 | 19.1 | 27.6 |
+| **factory total, this box** | **17.3 -> 13.0** | **90 -> 46** | **347 -> 155** | **652 -> 236** |
+| factory total, scaled to the earlier audit's box | 14.2 -> 10.6 | 66 -> 33.5 | 231 -> 103 | 433 -> 157 |
+| (earlier documented figure: r, upload, keys, decryption, no head) | 7.2 | 24.9 | 80 | 121 |
+| gateway: AES-GCM open + unpack of the slot's rows | 1.04 -> 1.05 | 3.6 | 11.9 | 16.5 |
+| gateway: retirement (crypto-erase, zero-fill, unlink) | 0.70 -> 0.48 | 1.5 | 4.9 | 6.9 |
+| private `v W8` at factory worker start (s, once) | 0.3 | 4.2 | 18.9 | 42.3 |
+| bytes per slot (MB) | 1.82 | 6.17 | 19.2 | 28.1 |
+
+How measured: 0.5B, before and after, every part measured. 7B / 32B / 72B after: every part measured at the real
+shapes. 7B before: the decoder layers measured (`PGW_VECMAT_NATIVE=0 PGW_PKS_COMPACT=0`), the LM head's three
+changed parts at the layers' per-element rates (its float64 product does not fit this box's free RAM), the int64
+copy at the 0.5B per-element rate (7B measured it 7.9x slower, under memory pressure). 32B / 72B before: the after
+figures plus the three changed parts at the 7B-measured rates (5.5 ns per multiply-add for the float64 `u W8`,
+3.4 ns per element for the old self-check). Parts without an arrow did not change (one figure: after; run to run
+noise is about 10-20 % on this box). "Scaled" multiplies by the ratio of the earlier audit's HE parts
+(`pks_client_slot_bench.py`, quieter box) to the same parts measured here (0.82 / 0.73 / 0.67 / 0.66).
+
+What changed (outputs bit-identical; scheme, parameters, single use, secrecy and check soundness unchanged):
+
+* **Segment check vectors natively.** `u W8 mod p` (and `u W8 mod 2^32` for ring-check segments) was a float64
+  copy of every `W8` per segment (5.5 ns per multiply-add, the largest single term from 7B up: 38 / 172 / 383 ms
+  per slot at 7B / 32B / 72B). `pgw_pks.vecmat_p31` / `vecmat_wrap32` compute the same integers with exact 32-bit
+  lane sums on AVX-512, reading `W8` once per 16-row block (0.17 ns per multiply-add; 1.2 / 4.9 / 9.8 s per
+  segment at 7B / 32B / 72B). `u` stays per segment (SPEC 7.3).
+* **Self-check on 32-bit lanes, 16 rows at a time** (`pgw_pks.check_rows32`): every row is still checked with
+  the same 40-bit private vectors; 2.5x less CPU.
+* **No int64 copy of `W r`**: the pks-v3 backend hands the decryption's uint32 buffer on as the int32 compact
+  form that every segment writer takes for K <= 32 (`PGW_PKS_COMPACT=0` restores the copy). The writer then
+  packs from 4 bytes instead of 8 (about 20 % of its time).
+* **Private self-check vectors cached as uint32**: at 72B the uint64 set (1.27 GB) overflowed the 1 GiB cache, so
+  the last layers' `v W8` were recomputed for every segment; the uint32 set (0.63 GB) fits.
+
+Not changed, with the reason:
+
+* **Bytes per slot are at their floor.** A slot stores `W8 r mod 2^32` of every output feature, uniform 32-bit
+  values (that is what hides `W8 x`), so no narrower or compressed form exists; the format adds 16 bytes per
+  ~1 MiB chunk and the segment's `uW` (`4 x sum(in_features)` per segment: 3.3 KB per slot at 7B, 0.05 %).
+* **Store seeds or ciphertexts and expand at use time:** a seed alone needs `W8 r` at use time, a pass over all
+  of `W8` (6.5 GB at 7B) per token on the gateway's critical path: not viable. The provider's reply is larger
+  than the masks (36-bit packed words: 4.5 bytes per element, +12.5 %) and moves the decryption onto the gateway.
+  Both lose on bytes and on use-time CPU.
+* **Share check vectors across segments:** they are already shared by every slot of a segment; across segments
+  `u` derives from each segment's own fresh seed (SPEC 7.3), so sharing it would be a scheme change. Not needed
+  any more: the term is now 3 / 3 / 4 % of the factory total at 7B / 32B / 72B.
+* **Masked-head rows of prompt slots** ("lazy prefill masks"): the masked head uses one row per prefill (the last
+  token's), yet every prompt slot carries head masks that are produced, stored and burned unused. A separate
+  head stock (the generator can already produce body-only segments, `skip_kinds`) consumed only by decode tokens
+  would save, at 500-token prompts and 256 generated tokens, 22 / 6.5 / 2 / 1.4 % of the stock's bytes and
+  11 / 3 / 1 / 0.7 % of the factory CPU (0.5B / 7B / 32B / 72B). Single use and secrecy are unaffected (separate segments, same derivation),
+  but it changes the store's reservations and the gateway: a decision, not done here.
+* **AES-GCM speed:** the native writer and reader use RustCrypto AES-GCM (VAES AES, 128-bit PCLMUL GHASH):
+  about 1.2 GB/s here against 7.4 GB/s for OpenSSL on the same core. `ring`'s VAES/VPCLMUL path would cut the
+  writer and the gateway's open about 4x (7B: 9.7 -> ~2.5 ms per slot), but it does not wipe its key schedule
+  on drop, which the writer guarantees today: a decision.
+* The HE kernels themselves (upload, reply keys, decryption: hand-written AVX-512 IFMA, earlier audit) and the
+  `r` keystream (normative SPEC 7.3 derivation, 8 keystream bytes per element) are unchanged; they are now 70-80 %
+  of the total.
 
 ## Settings for many streams
 
@@ -95,8 +186,8 @@ client = OpenAI(
   service does not serve the masked head). With the masked head (the default where served) every turn
   recomputes the whole conversation and pays masks for it. `prefix_cache=True` turns the masked head off: the
   output layer then runs on the client CPU (about 47 ms per generated token at 7B, float32), while every reused
-  token saves a mask slot (25 ms at 7B) and its prompt pass. A turn that reuses 2,000 tokens and generates 256
-  saves about 50 CPU-seconds of masks for about 12 of head work: for long multi-turn chats, prefer
+  token saves a mask slot (about 32 ms at 7B without the head's masks) and its prompt pass. A turn that reuses
+  2,000 tokens and generates 256 saves about 64 CPU-seconds of masks for about 12 of head work: for long multi-turn chats, prefer
   `prefix_cache=True`; for single-turn traffic keep the default. Reuse is per conversation key (API key, OpenAI
   `user`, `extra_body={"conversation_id": ...}`): never across users or conversations.
 * KV memory: the prefix cache keeps at most 1 GiB of conversations (least recently used are wiped first).

@@ -1,4 +1,4 @@
-"""Sampler fast paths (numpy argmax, native strict top-k) are bit-identical to the torch path.
+"""Sampler fast paths (numpy argmax, native strict top-k, numpy-sorted top-p) are bit-identical to the torch path.
 
 ``fast_argmax`` replaces ``int(torch.argmax(x))`` and ``fast_topk`` replaces ``torch.topk`` in
 :class:`pgw.engine.sampling.Sampler`. Both must give exactly the old answers (token ids, logprob
@@ -102,6 +102,8 @@ PARAMS = [
     SamplingParams(temperature=1.0, top_k=1, logprobs=1),
     SamplingParams(temperature=0.7, top_k=40, top_p=0.9, seed=11, logprobs=3, frequency_penalty=0.4),
     SamplingParams(temperature=1.3, min_p=0.05, seed=5, logprobs=2),
+    SamplingParams(temperature=0.9, top_p=0.95, seed=7, logprobs=2),
+    SamplingParams(temperature=1.0, top_p=0.5, seed=8),
 ]
 
 
@@ -132,7 +134,35 @@ def test_sampler_matches_the_torch_path(params: SamplingParams, monkeypatch: pyt
     fast, fast_state = run()
     monkeypatch.setattr(sampling, "fast_argmax", lambda x: int(torch.argmax(x)))
     monkeypatch.setattr(sampling, "fast_topk", _torch_topk)
+    monkeypatch.setattr(sampling, "top_p_filter", sampling._top_p_reference)
     ref, ref_state = run()
     assert fast == ref
     if params.seed is not None:  # unseeded samplers draw a fresh seed each
         assert torch.equal(fast_state, ref_state)
+
+
+def _bits(x: torch.Tensor) -> bytes:
+    return x.contiguous().view(torch.int32).numpy().tobytes()
+
+
+@pytest.mark.parametrize("top_p", [1e-6, 0.1, 0.5, 0.9, 0.95, 0.999999])
+def test_top_p_filter_equals_torch_sort(top_p: float) -> None:
+    """The numpy-sorted nucleus filter gives the torch.sort reference bit for bit (ties, signed zeros, infinities,
+    NaN, a top-k mask of -inf before it); where the boundary splits equal values it runs the reference."""
+    fast = 0
+    cases = _cases(seed=int(top_p * 1000))
+    g = torch.Generator().manual_seed(5)
+    for n in (5000, 152064):
+        base = torch.randn(n, generator=g) * 3.0
+        kth = torch.topk(base, 40).values[-1]
+        cases.append(base.masked_fill(base < kth, float("-inf")))  # after a top-k filter
+        cases.append((base * 8).round() / 8)  # many ties
+    for x in cases:
+        for t in (x, x / 0.7):
+            want = sampling._top_p_reference(t, top_p)
+            got = sampling.top_p_filter(t, top_p)
+            assert _bits(got) == _bits(want)
+            fast += 1
+    assert fast > 0
+    d = torch.randn(10).double()
+    assert torch.equal(sampling.top_p_filter(d, 0.9), sampling._top_p_reference(d, 0.9))  # other dtypes: reference

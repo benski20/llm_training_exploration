@@ -277,6 +277,35 @@ def test_models_table_matches_modal() -> None:
     assert set(pod_boot.SDK_MODELS) <= set(pod_boot.MODELS)
 
 
+def test_ensure_pack_rebuilds_older_format(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A pack of pack format 1 on the volume (float32 embeddings) is rebuilt once as the current format, whose
+    fingerprints the client library pins; a current-format pack is reused as is."""
+    from pgw.modelpack import PACK_VERSION
+
+    assert pod_boot.PACK_FORMAT_VERSION == PACK_VERSION
+    runs: list[list[str]] = []
+
+    def fake_run(cmd: list[str], **kw: Any) -> None:
+        runs.append(cmd)
+        out = Path(cmd[cmd.index("pack") + 2])
+        out.mkdir(parents=True)
+        (out / "manifest.json").write_text(json.dumps({"format": "pgw-modelpack", "version": PACK_VERSION}))
+
+    monkeypatch.setattr(pod_boot.subprocess, "run", fake_run)
+    model = pod_boot.SDK_MODELS[0]
+    packs = tmp_path / "packs"
+    old = packs / model
+    old.mkdir(parents=True)
+    (old / "manifest.json").write_text(json.dumps({"format": "pgw-modelpack", "version": 1}))
+    (old / "plain.safetensors").write_bytes(b"x")
+    dst = pod_boot.ensure_pack(model, packs, tmp_path / "hf")
+    assert dst == old and len(runs) == 1
+    assert json.loads((dst / "manifest.json").read_text())["version"] == PACK_VERSION
+    assert not (dst / "plain.safetensors").exists() and not (packs / f".{model}.old").exists()
+    pod_boot.ensure_pack(model, packs, tmp_path / "hf")
+    assert len(runs) == 1  # current format: reused
+
+
 def test_service_env_tuning_and_isolation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from pgw.service import ServiceSettings
 

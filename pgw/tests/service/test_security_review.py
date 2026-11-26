@@ -138,3 +138,74 @@ def test_colliding_client_certificate_name_is_refused(tmp_path: Path) -> None:
     assert ei.value.code == ErrorCode.PERMISSION_DENIED
     assert (tmp_path / "tokens").read_text() == ""  # refused before any credential was issued
     assert auth.tenant_for_subject("pgw-gw.a.b.c") == "a"
+
+
+async def test_provisioning_enforces_the_sdk_key_scope_quota_and_row_rate(
+        tmp_path: Path, tiny_pack_dir: Path, pack_fp: str) -> None:
+    """S10: provisioning authenticated like compute but never applied the key's policy: a key scoped to another model
+    could fetch this model's artifacts and start hint jobs (provider CPU/GPU) past its quota and row rate."""
+    s = _settings(tmp_path, tiny_pack_dir, provision=True, provision_chunk_mb=1)
+    other, orec = _new_key(s, name="other", models=["tiny-qwen2", "some-other-model"])
+    mine, _ = _new_key(s, name="mine", models=["tiny-qwen2"], daily_token_quota=10**9, rows_per_s=1.0, burst_rows=256)
+    p = "/pgw/v1/provision"
+    async with running_app(s) as app:
+        toks = {}
+        for name, key in (("other", other), ("mine", mine)):
+            r = await _post(app, key.encode(), {"installation_name": f"host-{name}"})
+            assert r.status_code == 200, r.text
+            toks[name] = r.json()["service_token"]
+        import asyncio
+        import sqlite3
+
+        with sqlite3.connect(s.accounts_db) as db:  # the key's scope narrows after enrollment
+            db.execute("UPDATE sdk_keys SET models = ? WHERE key_id = ?", (json.dumps(["some-other-model"]),
+                                                                           orec.key_hex))
+        await asyncio.sleep(1.0)  # accounts_refresh_s = 0.2
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://svc") as h:
+            def hd(name: str) -> dict[str, str]:
+                return {"authorization": f"Bearer {toks[name]}", "pgw-protocol": "1"}
+
+            seed = {"a_seed": "ab" * 32, "masked_head": False}
+            # out of scope: no catalog entry, no manifest, no objects, no hint job
+            assert (await h.get(f"{p}/models", headers=hd("other"))).json()["models"] == []
+            assert (await h.get(f"{p}/{pack_fp}/manifest", headers=hd("other"))).status_code == 403
+            r = await h.get(f"{p}/{pack_fp}/object", params={"id": "manifest", "chunk": 0}, headers=hd("other"))
+            assert r.status_code == 403
+            assert (await h.post(f"{p}/{pack_fp}/hint", json=seed, headers=hd("other"))).status_code == 403
+            # in scope
+            assert [m["name"] for m in (await h.get(f"{p}/models", headers=hd("mine"))).json()["models"]] == [
+                "tiny-qwen2"]
+            assert (await h.get(f"{p}/{pack_fp}/manifest", headers=hd("mine"))).status_code == 200
+            r = await h.post(f"{p}/{pack_fp}/hint", json=seed, headers=hd("mine"))
+            assert r.status_code == 200, r.text
+            job = r.json()
+            lin = job["linears"][0]["key"]
+            # H chunks count against the key's row bucket (burst 256 = one chunk, then 1 row/s)
+            r1 = await h.get(f"{p}/hint/{job['job']}/h", params={"linear": lin, "chunk": 0}, headers=hd("mine"))
+            r2 = await h.get(f"{p}/hint/{job['job']}/h", params={"linear": lin, "chunk": 0}, headers=hd("mine"))
+            assert r1.status_code == 200 and r2.status_code == 429 and int(r2.headers["retry-after"]) >= 1
+            # the daily quota applies too
+            app.state.pgw.accounts.over_quota = lambda tenant: "key"
+            r = await h.get(f"{p}/{pack_fp}/manifest", headers=hd("mine"))
+            assert r.status_code == 429 and r.json()["code"] == str(ErrorCode.RATE_LIMITED)
+
+
+def test_provisioning_client_waits_out_the_row_rate_but_not_a_daily_quota(monkeypatch: pytest.MonkeyPatch) -> None:
+    from pgw.provision import session as ps
+
+    sleeps: list[float] = []
+    monkeypatch.setattr(ps.time, "sleep", sleeps.append)
+    replies = iter([(429, "2"), (429, "1"), (200, None)])
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        code, ra = next(replies)
+        return httpx.Response(code, json={"code": "rate_limited", "message": "slow down"},
+                              headers={"Retry-After": ra} if ra else {})
+
+    sess = ps.ProvisionSession("http://svc", transport=httpx.MockTransport(handler), retries=0)
+    assert sess.request("GET", "/x").status_code == 200 and sleeps == [2.0, 1.0]
+    quota = ps.ProvisionSession("http://svc", retries=3, transport=httpx.MockTransport(
+        lambda r: httpx.Response(429, json={"code": "rate_limited", "message": "quota"}, headers={"Retry-After": "40000"})))
+    with pytest.raises(PGWError) as ei:
+        quota.request("GET", "/x")
+    assert ei.value.code == ErrorCode.RATE_LIMITED

@@ -116,7 +116,7 @@ def test_wheel_contains_the_console(tmp_path: Path) -> None:
     if r.returncode != 0 and "No module named pip" in r.stderr:  # pragma: no cover
         pytest.skip("pip is not available")
     assert r.returncode == 0, r.stderr[-3000:]
-    (wheel,) = out.glob("pgw-*.whl")
+    (wheel,) = out.glob("pgw_sdk-*.whl")  # the distribution is pgw-sdk (wheel names normalise "-" to "_")
     names = set(zipfile.ZipFile(wheel).namelist())
     for f in STATIC.rglob("*"):
         if f.is_file():

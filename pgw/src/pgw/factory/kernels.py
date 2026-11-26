@@ -39,7 +39,7 @@ import logging
 import math
 import sys
 from dataclasses import dataclass, field
-from typing import Literal
+from typing import Any, Literal
 
 import torch
 
@@ -61,6 +61,7 @@ __all__ = [
     "RingKernel",
     "combine_digit_planes",
     "cpu_int8_available",
+    "prime_vecmat",
     "resolve_backend",
     "resolve_device",
     "ring_digit_planes",
@@ -362,7 +363,11 @@ def ring_vecmat(
     Returns:
         int64 ``(c, n)`` in ``[0, 2^K)`` on the CPU.
 
-    On CPUs with an exact ``torch._int_mm`` this uses int8 digit GEMMs. Otherwise it splits ``u``
+    On a CPU with ``K <= 32`` and ``pgw_pks`` built, ``auto`` runs the native kernel (``vecmat_wrap32``: wrapping
+    32-bit sums, the weight read once per 16-row block) for ``c <= 4`` vectors, or for any ``c`` where the int8
+    GEMMs are not fast: at one thread on AMX it is 1.5-4.5x the int8 digit GEMMs at ``c = 1-2`` and about even at
+    ``c = 8-14``; on hosts without fast int8 GEMMs it replaces the float64 path. Else,
+    on CPUs with an exact ``torch._int_mm`` this uses int8 digit GEMMs. Otherwise it splits ``u``
     into wide balanced digits and multiplying row chunks of ``W8`` in
     float64 so every partial sum is an integer below ``2^53`` (exact on any BLAS); only one chunk
     (at most 128 MiB) of float weight exists at a time.
@@ -394,6 +399,24 @@ def ring_vecmat(
             del wt
     if method == "kernel":
         raise ConfigError(f"kernel vecmat needs K a multiple of 8 in [8, 56], got {k}")
+    # the native kernel for few vectors (the segment's check vectors), or wherever the int8 GEMMs are not fast;
+    # many vectors (the 14 private self-check vectors) on AMX: torch's int8 GEMM is as fast at one thread
+    native_ok = c <= 4 or not cpu_int8_fast()
+    if method == "auto" and dev.type == "cpu" and k <= 32 and w8.dtype == torch.int8 and native_ok:
+        nat = _native_vecmat()
+        if nat is not None:
+            # u W8 mod 2^32 in wrapping 32-bit lanes (pgw_pks.vecmat_wrap32), then mod 2^K (2^K divides 2^32):
+            # the same canonical integers as the paths below (tests/factory/test_vecmat_native.py)
+            import numpy as np
+
+            u32 = np.ascontiguousarray((u.to(torch.int64) & 0xFFFFFFFF).numpy().astype(np.uint32))
+            try:
+                out32 = nat.vecmat_wrap32(u32, np.ascontiguousarray(w8.numpy()), _vecmat_threads())
+            finally:
+                u32.fill(0)
+            res = torch.from_numpy(out32.astype(np.int64) & mask)
+            out32.fill(0)
+            return res
     if method == "int8" and not (dev.type == "cpu" and cpu_int8_available()):
         raise BackendUnavailableError("int8 vecmat needs a CPU with an exact torch._int_mm")
     if method == "int8" or (method == "auto" and dev.type == "cpu" and cpu_int8_fast()):
@@ -412,3 +435,50 @@ def ring_vecmat(
             acc = (acc + _shift_mod(y, bits * i, k)) & mask
         del wf
     return acc.cpu()
+
+
+def _native_vecmat() -> Any:
+    """``pgw_pks`` with the factory's check-vector kernels (``vecmat_wrap32``, ``vecmat_p31``), or ``None``
+    (not built, or ``PGW_NATIVE=0`` / ``PGW_VECMAT_NATIVE=0``)."""
+    import os
+
+    for var in ("PGW_NATIVE", "PGW_VECMAT_NATIVE"):
+        if os.environ.get(var, "1").strip().lower() in ("0", "false", "no", "off"):
+            return None
+    try:
+        import pgw_pks  # type: ignore[import-not-found,unused-ignore]
+    except ImportError:
+        return None
+    if not (hasattr(pgw_pks, "vecmat_wrap32") and hasattr(pgw_pks, "vecmat_p31")):
+        return None
+    return pgw_pks
+
+
+def _vecmat_threads() -> int:
+    """Threads of the native check-vector kernels: torch's intra-op threads (the factory caps them)."""
+    return max(1, int(torch.get_num_threads()))
+
+
+def prime_vecmat(u: torch.Tensor, w8: torch.Tensor) -> torch.Tensor:
+    """:func:`pgw.core.freivalds.prime_precompute` (``u W8 mod p``, ``p = 2^31 - 1``, int64 ``(c, n)``): natively
+    (``pgw_pks.vecmat_p31``: exact integer sums, no float copy of ``W8``) on a CPU weight, else the float64
+    reference. Same integers (``tests/factory/test_vecmat_native.py``)."""
+    from pgw.core.freivalds import P31, prime_precompute
+
+    nat = _native_vecmat()
+    if nat is None or w8.device.type != "cpu" or w8.dtype != torch.int8 or u.ndim != 2 or w8.ndim != 2:
+        return prime_precompute(u, w8)
+    if u.shape[1] != w8.shape[0]:
+        raise ShapeError(f"check vectors must be (c, {w8.shape[0]}), got {tuple(u.shape)}")
+    import numpy as np
+
+    uu = np.ascontiguousarray(u.to(torch.int64).numpy().astype(np.uint64))
+    try:
+        if uu.size and int(uu.max()) >= P31:
+            raise ShapeError("prime-field check vectors must be in [0, 2^31 - 1)")
+        out = nat.vecmat_p31(uu, np.ascontiguousarray(w8.numpy()), _vecmat_threads())
+    finally:
+        uu.fill(0)
+    res = torch.from_numpy(out.astype(np.int64))
+    out.fill(0)
+    return res

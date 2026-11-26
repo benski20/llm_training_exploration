@@ -107,6 +107,10 @@ def _print_status(rep: dict[str, Any]) -> None:
                            " see the factory line)")
             if m.get("error"):
                 click.echo(f"    error: {m['error']}")
+        for name, hrec in sorted((s.get("integrity_halts") or {}).items()):
+            if hrec.get("halted"):
+                click.echo(f"  {name}: HALTED (persisted): {hrec.get('reason')}; "
+                           f"clear with: pgw sdk clear-halt --model {name}")
         for fp, f in sorted((s.get("factories") or {}).items()):
             click.echo(f"  factory {fp}: halted={f.get('halted')}  provider_integrity_failures="
                        f"{f.get('provider_integrity_failures', 0)}  last run {_age(f.get('last_run_at'))}"
@@ -228,6 +232,52 @@ def doctor_cmd(cache_dir: Path | None, state_dir: Path | None, online: bool, as_
         click.echo("ok" if rep["ok"] else "problems found")
     if not rep["ok"]:
         sys.exit(1)
+
+
+# ---- clear-halt ----------------------------------------------------------------------------------------
+_CLEAR_WARNING = (
+    "WARNING: this re-opens masked traffic to a provider whose answers FAILED the integrity checks.\n"
+    "An honest provider never fails them: a failure means wrong or tampered results. Clear the halt only after\n"
+    "investigating (provider incident report, service logs, a changed provider deployment). Processes that are\n"
+    "already running keep the model blocked until they restart or call reset_integrity_breaker().")
+
+
+@sdk_group.command("clear-halt")
+@click.option("--model", "model", required=True, help="Model whose integrity halt to clear")
+@click.option("--key-id", default=None, help="Only this SDK key (16 hex digits, see pgw sdk status); default: every "
+              "key with a halt of the model")
+@click.option("--state-dir", type=click.Path(path_type=Path), default=None,
+              help="Default: PGW_STATE_DIR, else $XDG_STATE_HOME/pgw or ~/.local/state/pgw")
+@click.option("--note", default="", help="Why the halt is cleared (kept in the halt record's event log)")
+@click.option("--yes", is_flag=True, help="Confirm that the provider was investigated")
+def clear_halt_cmd(model: str, key_id: str | None, state_dir: Path | None, note: str, yes: bool) -> None:
+    """Clear the persisted integrity halt of a model (operator action, after investigating the provider).
+
+    After an integrity failure of the provider the client library blocks the model for this API key, and the block
+    survives restarts (it is stored, MAC-protected, in the state directory). A halt record that was modified or
+    whose MAC key is missing also blocks the model (fail closed) and is cleared the same way."""
+    import re
+
+    from pgw.sdk.halt import clear_halt
+    from pgw.sdk.options import canonical_model
+
+    try:
+        name = canonical_model(model)
+    except Exception as exc:
+        raise click.BadParameter(getattr(exc, "message", str(exc)), param_hint="--model") from None
+    if key_id is not None and not re.fullmatch(r"[0-9a-f]{16}", key_id):
+        raise click.BadParameter("expected 16 lowercase hex digits", param_hint="--key-id")
+    click.echo(_CLEAR_WARNING, err=True)
+    if not yes:
+        raise click.UsageError("investigate the compute provider first, then pass --yes")
+    lay = _layout(None, state_dir)
+    cleared = clear_halt(lay.state, name, key_id=key_id, note=note)
+    if not cleared:
+        click.echo(f"no integrity halt of {name} recorded under {lay.state}")
+        return
+    for c in cleared:
+        extra = f" (record was unverifiable: {c['tampered']})" if c.get("tampered") else ""
+        click.echo(f"cleared {name} for key {c['key_id']}: {c['failures']} integrity failure(s) recorded{extra}")
 
 
 # ---- prepare -------------------------------------------------------------------------------------------

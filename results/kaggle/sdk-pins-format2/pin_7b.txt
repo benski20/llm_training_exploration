@@ -1,0 +1,18 @@
+{"qwen2.5-7b-instruct": {"hf_repo": "Qwen/Qwen2.5-7B-Instruct", "revision": "a09a35458c702b33eeacc393d103063234e8bc28", "format": 2, "format1_fingerprint": "d3db0ca858981a66dd262143d7f3d5b0120069068e0a98a806e1eea3f12653fa", "format1_matches_old_pin": true, "exactness": {"source_dtypes": ["bfloat16"], "plain": {"embed_tokens": {"source": "bfloat16", "format1": "float32", "format2": "bfloat16", "elements": 544997376, "bit_identical_f32": true}, "lm_head": {"source": "bfloat16", "format1": "float32", "format2": "bfloat16", "elements": 544997376, "bit_identical_f32": true}}, "norms": {"count": 57, "source": ["bfloat16"], "stored": ["float32"]}, "all_plain_bit_identical_f32": true, "linear_entries_identical": true, "plain_bytes": {"format1": 4360796160, "format2": 2180806656}}, "fingerprint": "f7c6fb4f5f8fbc5e4149972c07afdc749de8e5f9adc604d30edb7eb94b834b67", "baked": "d3db0ca858981a66dd262143d7f3d5b0120069068e0a98a806e1eea3f12653fa", "matches": false}}
+
+---stderr---
+
+Fetching 11 files:   0%|          | 0/11 [00:00<?, ?it/s]Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+
+Fetching 11 files:  18%|█▊        | 2/11 [00:00<00:00, 13.47it/s]
+Fetching 11 files:  55%|█████▍    | 6/11 [00:00<00:00, 20.64it/s]
+Fetching 11 files:  64%|██████▎   | 7/11 [00:20<00:00, 20.64it/s]
+Fetching 11 files:  73%|███████▎  | 8/11 [00:49<00:25,  8.56s/it]
+Fetching 11 files:  82%|████████▏ | 9/11 [01:15<00:23, 11.99s/it]
+Fetching 11 files: 100%|██████████| 11/11 [01:15<00:00,  6.86s/it]
+
+Fetching 11 files:   0%|          | 0/11 [00:00<?, ?it/s]
+Fetching 11 files: 100%|██████████| 11/11 [00:00<00:00, 813.54it/s]
+
+Fetching 11 files:   0%|          | 0/11 [00:00<?, ?it/s]
+Fetching 11 files: 100%|██████████| 11/11 [00:00<00:00, 592.51it/s]

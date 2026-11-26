@@ -175,6 +175,54 @@ async def test_tls_lane_is_bit_identical_to_the_stream_path(tiny_pack_dir: Path,
             ch.close()
 
 
+@pytest.mark.parametrize("spin_us", [0, 2000])
+def test_tls_lane_large_replies_arrive_intact(pki: dict[str, Any], spin_us: int) -> None:
+    """Replies of many TLS records (up to ~1.9 MB: several batched ``recv`` calls of the client, records split
+    across them) arrive byte for byte, in order, back to back on one connection, with the spin poll and with the
+    blocking wait; the bytes after a reply (none here) never leak into the next one."""
+    import hashlib
+
+    widths = [(64, 59136), (64, 896), (64, 12288)]  # (n, m): a 72B gate_up reply, a small one, a medium one
+
+    def reply(linear: int, rows: int, body: bytes) -> bytes:
+        m = widths[linear][1]
+        seed = hashlib.sha256(bytes([linear, rows]) + body).digest()
+        out = bytearray()
+        i = 0
+        while len(out) < rows * m * 4:
+            out += hashlib.sha256(seed + i.to_bytes(4, "little")).digest()
+            i += 1
+        return bytes(out[: rows * m * 4])
+
+    def execute(_model: int, linear: int, _ring: int, rows: int, body: bytes, _tenant: str, _left: float) -> bytes:
+        return reply(linear, rows, bytes(body))
+
+    svc = fast.LaneService("", max_rows=8, executor=execute, tls_addr="127.0.0.1:0",
+                           tls_cert_pem=pki["server_pem"], tls_key_pem=pki["server_key"])
+    try:
+        svc.set_model(0, [(n, m, kind) for (n, m), kind in zip(widths, ("gate_up", "o", "qkv"), strict=True)],
+                      [("K32A12C27", 4)])
+        ticket = secrets.token_bytes(32)
+        svc.add_ticket(ticket, "t", 0, 60.0, None)
+        ch = fast.TripChannel.connect_service_tls("127.0.0.1", int(svc.port), "127.0.0.1", pki["ca_pem"], ticket,
+                                                  10.0, 8, spin_us, None, None)
+        try:
+            seen = 0
+            for k, (li, rows) in enumerate([(0, 1), (1, 1), (0, 8), (2, 3), (0, 5), (1, 8), (2, 8), (0, 2)]):
+                n, m = widths[li]
+                body = secrets.token_bytes(rows * n * 4)
+                out = bytearray(rows * m * 4)
+                st, _cu = ch.trip(0, li, rows, secrets.token_bytes(16), 0, body, out, 10.0)
+                assert st == 0, k
+                assert bytes(out) == reply(li, rows, body), k
+                seen = max(seen, len(out))
+            assert seen > 1_500_000
+        finally:
+            ch.close()
+    finally:
+        svc.stop(2.0)
+
+
 async def test_tls_lane_verifies_the_server_and_has_no_plaintext(tiny_pack_dir: Path, pki: dict[str, Any],
                                                                 pack_fp: str) -> None:
     async with running_app(_settings(tiny_pack_dir, pki)) as app:

@@ -28,7 +28,7 @@ rt = _load()
 def test_trips_are_four_per_layer_plus_the_masked_head(model: str, trips: int) -> None:
     b = rt.sdk_ms_per_token(model, 0.2)
     assert b["trips"] == trips and b["critical_trips_per_token"] == trips
-    parts = sum(v for k, v in b.items() if k in ("network", "lane", "device", "wire", "gateway", "serve"))
+    parts = sum(v for k, v in b.items() if k in ("network", "lane", "device", "wire", "gateway", "serve", "noise"))
     assert b["pass_ms"] == pytest.approx(parts) and b["network"] == pytest.approx(0.2 * trips)
 
 

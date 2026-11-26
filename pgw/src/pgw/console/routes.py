@@ -10,6 +10,7 @@ import asyncio
 import concurrent.futures
 import hmac
 import html
+import json
 import time
 from collections.abc import Awaitable, Callable
 from pathlib import Path
@@ -25,6 +26,7 @@ from pgw.console.oidc import BINDING_COOKIE, BINDING_COOKIE_PATH, OIDCClient, OI
 from pgw.console.sessions import COOKIE_NAME, CSRF_HEADER, ConsoleSessions, cookie_secure
 from pgw.console.usage import WINDOWS, AuditReader, parse_ts_ms
 from pgw.core.errors import AuthError, ErrorCode, PGWError
+from pgw.core.http_body import read_limited
 from pgw.gateway.auth import ApiKey
 from pgw.gateway.openai_schemas import ChatCompletionRequest
 from pgw.gateway.runtime import InvalidRequestError
@@ -282,7 +284,7 @@ def install_console(
         # only failed sign-ins count; attempts in flight count until settled (atomic admission)
         with state.login_limiter.attempt(client) as att:
             try:
-                body = await request.json()
+                body = json.loads(await read_limited(request, 16 << 10, what="sign-in body"))
             except ValueError as exc:
                 raise InvalidRequestError("body must be JSON: {\"token\": \"...\"}") from exc
             token = body.get("token") if isinstance(body, dict) else None
@@ -409,7 +411,7 @@ def install_console(
             raise PGWError("the playground needs an admin console session or the admin token",
                            code=ErrorCode.PERMISSION_DENIED)
         try:
-            body = await request.json()
+            body = json.loads(await read_limited(request, int(settings.max_body_bytes), what="playground body"))
         except ValueError as exc:
             raise InvalidRequestError("body must be JSON") from exc
         try:
