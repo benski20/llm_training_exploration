@@ -33,6 +33,8 @@ in the application's process against our provider service. Defaults:
   finishing mask generation (`maskgen_stall_s`, 30 s; `ProviderStalledError`; see the last 2026-11-26 section).
 
 Opt-in:
+* the client KV prefix cache with the masked LM head (`prefix_cache=True`; cached prompt prefixes take no trips
+  rows and no masks, bit-identical; the provider can tell a hit: see the last 2026-11-26 section);
 * strict speculation (`speculation="lookup" | "draft_head"`);
 * `mask_admission="overcommit"`;
 * the weight-free factory (`factory_weights="stream"`).
@@ -3633,3 +3635,70 @@ New setting: `PGW_SERVICE_PKS_GPU_KEYS` (default `auto`). Bench: `benchmarks/pks
 `--configs`, `--item-reps`, the `round3` section and the `r2` item configuration; RunPod `maskgen` phase gained `r2`.
 
 Cloud spend: one Kaggle T4 kernel (~10 min with set-up). No other compute.
+
+## 2026-11-26: client KV prefix cache (exact with the masked LM head; opt-in)
+
+Repeated prompt prefixes (a conversation's earlier turns, a shared system prompt, a regenerated answer) are no
+longer recomputed when `prefix_cache=True`: the cached positions take no rows on the prompt pass's `4L + 1` trips
+and no masks. Design and privacy analysis: `research/reviews/prefix-cache.md`.
+
+* **What changed.** The existing conversation cache (SPEC 9.4b) was refused with the masked LM head, which is the
+  SDK default wherever the provider serves it, so the product never reused anything. The masked head is row-exact
+  (each logit row is its own row normed alone, quantized per row, an exact integer product): `MaskedHead.rows_exact`
+  and `Generator.prefix_reuse_supported` now accept it, and `prefix_cache=True` keeps the masked head (it used to
+  turn it off). The SDK's runtime gets a new cache, `pgw.sdk.prefix_cache.ClientPrefixCache` (via
+  `ModelRuntime.prefix_cache_factory`): several entries per scope (OpenAI `user`, or the whole client with
+  `prefix_cache_scope="client"`), the longest exact token prefix wins, a whole entry is moved and part of one is
+  copied, an entry taken by a request that never started (waiting for masks, cancelled) goes back (the gateway's
+  cache lost it), entries the new one subsumes are dropped (including the previous turn, whose answer the chat
+  template re-tokenizes in its last tokens: 115 of 119 cached positions matched at 0.5B), and a new conversation
+  waits up to 0.25 s for a just-finished one of its scope to store the shared system prompt. RAM only (no files),
+  `prefix_cache_mb` (1024) LRU budget, `prefix_cache_ttl_s` (600), wiped on integrity failure, noise alarm,
+  reload and close; stored only after a clean end with the deferred checks joined. Multi-process sharing: no
+  (plaintext KV would need shared memory or disk); route conversations to one worker.
+* **Privacy verdict: it leaks something new**, so it stays opt-in with the masked head. The wire changes only in
+  the prompt pass carrying `P - m` rows instead of `P`; every row is still masked once. But a short prompt pass
+  followed by decode passes over a long context tells the provider *that* a request continued a cached prefix
+  (a per-request hit bit, and roughly the context length), which links turns more surely than today's row-count
+  arithmetic. Padding the prompt trips to hide hits was analysed and not built: padding rows take no masks, so
+  the factory's mask demand (which the provider performs) still shows the aggregate hit volume unless the masks
+  are burned (which removes the saving), the client's per-trip time still shrinks, and trips, bandwidth and
+  provider work would be unchanged. `"auto"` is unchanged (on only without the masked head, as before); making it
+  mean off is recommended as a product decision. `prefix_cache_scope="client"` is opt-in separately (a user could
+  time whether another user's prompt shares a prefix).
+* **Measured** (`benchmarks/sdk_prefix_cache_bench.py`; CPU provider on this 4-vCPU box, loopback TLS lane,
+  masked head, plain masks; one conversation of a system prompt and 6 user turns, then a second conversation with
+  the same system prompt and 2 turns; greedy, 16 tokens per answer at 0.5B, 8 at tiny; the mask stock full before
+  each turn; every answer's tokens and logprobs bit-identical between the two clients):
+
+  | | 0.5B off | 0.5B on | tiny off | tiny on |
+  |---|---|---|---|---|
+  | mask slots, 8 requests | 1,492 | **358** (-76 %) | 525 | **206** (-61 %) |
+  | prompt-pass rows, 8 requests | 1,372 | **238** (-83 %) | 483 | 164 |
+  | TTFT, median of turns 2-8 | 5.94 s | **1.44 s** | 0.108 s | 0.078 s |
+  | TTFT, turn 6 (270-token prompt, 251 cached) | 8.35 s | **1.81 s** | | |
+  | TTFT, 2nd conversation's 1st turn (91 of 108 cached: the system prompt) | 3.29 s | **1.43 s** | | |
+
+  At 0.5B a continued turn's prompt pass carries 16-20 rows instead of 139-270, and its TTFT stays flat as the
+  conversation grows instead of growing with it. The tiny model is trip-bound (TTFT within noise). First turns
+  (misses) cost the same (3.7-5.0 s here, noise of the shared CPU). Not measured on a GPU provider or at 7B
+  (expected: the prompt-pass share of TTFT, 3.9 s at 7B on the T4, shrinks with the cached fraction; every cached
+  token saves one mask slot, 34 ms of factory CPU at 7B).
+* **Tests.** New: `tests/engine/test_prefix_cache_masked_head.py` (6: masked head + reuse == recompute == the
+  plaintext int8-head reference, greedy and seeded; one head row per pass hit or not; masks and rows only for the
+  new positions; a system prompt shared by two conversations; strict speculation with filler rows and with
+  padded passes), `tests/sdk/test_prefix_cache.py` (10: longest match, move vs copy, give-back and epoch, claimed
+  tokens zeroed, subsumption and the re-tokenized tail, scope isolation and key aliasing, ties and `min_tokens`,
+  budget / entries / TTL, the scope wait). `tests/sdk/test_e2e_cpu.py::test_conversation_prefix_reuse_is_exact`
+  now runs with the masked head and with the gateway head (turn 2 cached, a second conversation reuses the system
+  prompt, another `user` reuses nothing; all bit-identical to the gateway path). `tests/sdk/test_factory_stall.py`
+  pins `prefix_cache=False` (it sizes requests against the stock by their whole prompt; a cached repeat needs one
+  prompt row and was admitted). Runs: `tests/sdk` 1 opt-in skip and 3 `test_lane_multi` failures (the installed
+  `pgw_fast` lacks lane-format-2 multi calls, as in the integration sweep), everything else passed;
+  `tests/engine/test_prefix_cache.py`, `test_masked_head*.py`, `tests/gateway/test_prefix_cache.py` passed;
+  `tests/docs` only the 18 environment-only `test_numbers` failures.
+* **Engine footprint** (another workstream is in the client hot loops): `generate.py` one predicate,
+  `masked_head.py` one flag, `runtime.py` a 3-line builder hook; everything else in the new module.
+
+Docs: `docs/sdk/configuration.md` (options and a "Prefix cache" section), `scaling.md`, `security.md`,
+`changelog.md`, `CONTRACT.md`, SPEC 9.4b. No external compute.

@@ -52,8 +52,11 @@ frees it. As for the live KV caches of running requests: deploy without swap or 
 * **Scope.** The OpenAI `user` of the request (`prefix_cache_scope="user"`, default) or the whole client
   (`"client"`, opt-in). Requests only see entries of their own scope. Scope strings are hashed to a fixed-length
   digest in the key, so no `user` or `conversation_id` value can alias another scope. The `conversation_id`
-  (`extra_body` or `X-PGW-Conversation-Id`) is no longer needed for hits; it narrows only the settle wait (a new
-  turn waits up to 30 s for the commit of a finished turn of the same conversation).
+  (`extra_body` or `X-PGW-Conversation-Id`) is no longer needed for hits; it narrows only the settle wait: a new
+  turn waits up to 30 s for the commit of a finished turn of the same conversation (strict speculation: its
+  dummy passes), and up to 0.25 s for a just-finished request of another conversation of its scope (its commit
+  lands within milliseconds after the deferred checks join; without this wait a new conversation started right
+  after another one ended missed the shared system prompt in the 0.5B benchmark).
 
 ### Lookup, move, copy
 
@@ -69,8 +72,13 @@ frees it. As for the live KV caches of running requests: deploy without swap or 
   engine claims it, its token array is zeroed at once.
 * **Store** only after a clean end (`stop` / `length`, not cancelled, strict-mode dummy passes done) and after the
   session's deferred integrity checks joined without a failure (unchanged from SPEC 9.4b). Entries of the same
-  scope whose tokens are a prefix of the new entry are dropped (they can never win a lookup again); a new entry
-  that is a prefix of a stored one is not stored.
+  scope whose tokens are a prefix of the new entry are dropped (they can never win a lookup again), and so is an
+  entry whose whole prompt the new entry holds and that differs from it only in the last `tail_slack` (32)
+  tokens of its answer: the next turn of a chat re-renders the previous answer as text and the tokenizer often
+  splits its last tokens differently (measured at 0.5B: 115 of the 119 cached positions of the previous turn
+  matched), so without this rule every turn would leave a near-duplicate entry behind (memory quadratic in the
+  number of turns). A new entry that is a prefix of a stored one is not stored. Two conversations that share
+  only the system prompt are both kept (neither holds the other's prompt).
 
 ### Eviction and memory budget
 
@@ -185,5 +193,13 @@ default nor much faster. Documented in `docs/sdk/configuration.md` and `docs/sdk
 
 ## Measurements
 
-See STATUS.md (2026-11-26, client KV prefix cache) for the numbers measured with
-`benchmarks/sdk_prefix_cache_bench.py` (tiny and 0.5B, CPU provider on the same 4-vCPU box, plain masks).
+`benchmarks/sdk_prefix_cache_bench.py` (CPU provider on the same 4-vCPU box, TLS lane, masked head, plain masks; a
+system prompt and 6 user turns, then a second conversation with the same system prompt and 2 turns; every
+answer bit-identical between the uncached and the cached client). Details in STATUS.md (2026-11-26).
+
+| | 0.5B off | 0.5B on | tiny off | tiny on |
+|---|---|---|---|---|
+| mask slots, 8 requests | 1,492 | 358 (-76 %) | 525 | 206 (-61 %) |
+| prompt-pass rows, 8 requests | 1,372 | 238 (-83 %) | 483 | 164 |
+| TTFT, median of turns 2-8 | 5.94 s | 1.44 s | 0.108 s | 0.078 s |
+| TTFT, turn 6 (270-token prompt, 251 cached) | 8.35 s | 1.81 s | | |

@@ -484,9 +484,11 @@ provision(model, *, session: pgw.sdk.session.Session, cache_dir: Path, progress:
   (`PGW_TRIP_FAST/NATIVE/DRIVER`, `PGW_DECODE_NATIVE`, `PGW_TRIP_DECRYPT_AHEAD`, `PGW_LANE_SPIN_AUTO_US=400`,
   `PGW_LANE_WAIT_PREFETCH=1`, set with `setdefault`), p31 checks (factory `check_field=p31`), masked LM head when
   served, `mask_reservation="incremental"`, `freivalds_rate=1.0`, noise monitor fail-closed, `pack_verify="full"`.
-* Prefix reuse (`prefix_cache="conversation"`) is proven exact only with the gateway's own LM head, so the SDK
-  default is: masked head when the provider serves it, else prefix reuse (`prefix_cache=True` forces prefix reuse
-  and turns the masked head off).
+* Prefix reuse: the SDK's runtime uses `pgw.sdk.prefix_cache.ClientPrefixCache` (multi-entry, longest exact
+  prefix per OpenAI `user`; `ModelRuntime.prefix_cache_factory`). Exact with the gateway's head and, since
+  2026-11-26, with the masked head (`MaskedHead.rows_exact`). Default (`"auto"`): masked head when the provider
+  serves it and then no prefix reuse (a cache hit is visible to the provider, `research/reviews/prefix-cache.md`),
+  else prefix reuse; `prefix_cache=True` turns reuse on with the masked head kept.
 * Mask factory: `mask_scheme="pks-v3"` (with `PKS_V3_ACK`, pending external review), one supervised child process
   per (key, model) running `pgw factory run` settings, `workers = clamp(cpu_count // 4, 1, 8)`, `nice 10`, 1 torch
   thread per worker, target = `mask_store_gb` (8 GB) / slot bytes (64..16384 slots), low water = target / 2.

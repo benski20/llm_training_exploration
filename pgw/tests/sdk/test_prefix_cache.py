@@ -163,3 +163,68 @@ def test_copy_prefix_is_independent() -> None:
     src.clear()
     k, v = dst.layer_storage(0)
     assert torch.equal(k[:2, 0, 0], torch.tensor([1.0, 2.0])) and torch.equal(v[:2, 0, 0], torch.tensor([-1.0, -2.0]))
+
+
+def _turn(store: ClientPrefixCache, key: str, prompt: list[int], answer: list[int]) -> tuple[int, KVCache]:
+    """One request as the runtime runs it: take, then the sink; the engine stores prompt + answer[:-1]."""
+    hit = store.take(key, prompt)
+    sink = store.sink(key)
+    reused = hit.length if hit is not None else 0
+    if hit is not None:
+        hit.claimed = True
+    tokens = prompt + answer[:-1]
+    c = _cache(tokens)
+    sink.commit(tokens, c)
+    return reused, c
+
+
+def test_next_turn_drops_the_previous_turn_despite_retokenization() -> None:
+    """A chat's next turn re-tokenizes the end of the previous answer: the previous turn's entry is replaced (not
+    kept as a near-duplicate), while another conversation sharing only the system prompt is kept."""
+    store = _store()
+    a1 = [*SYS, 50, 51]
+    _, c1 = _turn(store, K, a1, [60, 61, 62, 63])
+    _, other = _turn(store, scope_key("user:u", "b"), [*SYS, 70, 71], [80, 81])
+    assert len(store) == 2
+    a2 = [*a1, 60, 61, 64, 65, 90, 91]  # the answer's last tokens re-tokenized (62 -> 64, 65), then a new message
+    reused, c2 = _turn(store, K, a2, [92, 93])
+    assert reused == len(a1) + 2 and store.stats["copied"] == 2  # partial hits: copies (b's first turn: SYS)
+    assert len(store) == 2 and not c1._k.any() and c2._k.any() and other._k.any()
+    assert store.stats["subsumed"] == 1
+    # an answer that differs by more than tail_slack tokens (a regenerated long answer) keeps both branches
+    store2 = _store(tail_slack=2)
+    _turn(store2, K, a1, [60, 61, 62, 63, 66])
+    _turn(store2, K, a1, [60, 67, 68, 69])
+    assert len(store2) == 2
+
+
+def test_new_conversation_waits_briefly_for_a_finishing_one_of_its_scope() -> None:
+    import asyncio
+    import time
+
+    store = _store(scope_wait_s=0.25)
+    other = scope_key("user:u", "b")
+
+    async def run() -> tuple[float, int, float]:
+        sink = store.sink(scope_key("user:u", "a"))
+        sink.finishing()  # conversation a's answer is out; its cache is being stored
+        loop = asyncio.get_running_loop()
+        loop.call_later(0.05, lambda: sink.commit([*SYS, 1, 2], _cache([*SYS, 1, 2])))
+        t0 = time.monotonic()
+        await store.wait_settled(other, 30.0)  # another conversation of the scope: waits for the commit
+        waited = time.monotonic() - t0
+        hit = store.take(other, [*SYS, 9])
+        n = hit.length if hit is not None else 0
+        if hit is not None:
+            hit.wipe()
+        stuck = store.sink(scope_key("user:u", "c"))
+        stuck.finishing()  # never commits (say, strict-mode dummy passes): the wait is bounded
+        t1 = time.monotonic()
+        await store.wait_settled(other, 30.0)
+        await store.wait_settled(scope_key("user:v", "x"), 30.0)  # another scope: no wait
+        stuck.discard()
+        return waited, n, time.monotonic() - t1
+
+    waited, n, bounded = asyncio.run(run())
+    assert 0.03 <= waited < 0.25 and n == len(SYS)
+    assert 0.2 <= bounded < 1.0 and store.stats["scope_waits"] == 2

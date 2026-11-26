@@ -16,8 +16,9 @@ SPEC 9.4b) with these differences, everything else (sinks, settle waits, epochs,
   positions and the entry stays for others. A taken entry that the engine never started on (the request waited
   for masks, timed out or was cancelled in the queue) goes back into the cache.
 * **Subsumed entries are dropped.** Storing a request's cache drops the entries of its scope whose tokens are a
-  prefix of it (they would never win a lookup again); a cache that is itself a prefix of a stored entry is not
-  stored.
+  prefix of it, or that it continues but for at most ``tail_slack`` trailing tokens of their answer (the next turn
+  of a chat usually re-tokenizes the end of the previous answer); a cache that is itself a prefix of a stored
+  entry is not stored.
 
 Exactness is the engine's (:meth:`pgw.engine.generate.Generator.prefix_reuse_supported`: row-invariant native
 float path, row-exact backend and head). The cache is bound to one model runtime (fingerprint, ring, head and
@@ -27,9 +28,11 @@ anywhere; every eviction, expiry and wipe zeroes the tensors and the token array
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import itertools
 import logging
+import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Any
@@ -69,11 +72,21 @@ def copy_prefix(src: KVCache, length: int) -> KVCache:
 
 
 class _ScopedEntry(_Entry):
-    __slots__ = ("scope",)
+    __slots__ = ("prompt_len", "scope")
 
-    def __init__(self, tokens: np.ndarray, cache: KVCache, now: float, scope: str):
+    def __init__(self, tokens: np.ndarray, cache: KVCache, now: float, scope: str, prompt_len: int | None = None):
         super().__init__(tokens, cache, now)
         self.scope = scope
+        #: How many of ``tokens`` were the request's prompt (the rest it generated); None = unknown.
+        self.prompt_len = prompt_len
+
+
+class _ClientSink(PrefixSink):
+    """A sink that knows its request's prompt length (for :attr:`ClientPrefixCache.tail_slack`)."""
+
+    def __init__(self, owner: ConversationPrefixCache, key: str, epoch: int, prompt_len: int | None):
+        super().__init__(owner, key, epoch)
+        self.prompt_len = prompt_len
 
 
 @dataclass
@@ -109,20 +122,58 @@ class ClientPrefixCache(ConversationPrefixCache):
     Args:
         max_bytes, ttl_s, max_entries, clock, sweep_thread: as :class:`ConversationPrefixCache` (the budget
             counts stored entries; a request's own copy is its live KV cache until it ends).
+        scope_wait_s: How long a request waits for a just-finished request of another conversation of its scope
+            to store its cache (default 0.25 s; its own conversation's previous turn: ``prefix_cache_wait_s``).
         scope_of: Maps a prefix key to its lookup scope (default: the scope digest of :func:`scope_key`; a key
             not made by it is its own scope).
         min_tokens: A hit must reuse at least this many tokens.
+        tail_slack: Storing an entry also drops an entry of its scope whose whole prompt the new one holds and that
+            differs from it only in its last ``tail_slack`` tokens (default 32): a conversation's next turn usually
+            re-tokenizes the end of the previous answer, so the previous turn's entry is a prefix of the new one
+            but for a few tokens.
     """
 
     def __init__(self, *, max_bytes: int, ttl_s: float, max_entries: int = 1024, min_tokens: int = 1,
-                 scope_of: Callable[[str], str] = _scope_of, **kw: Any):
+                 tail_slack: int = 32, scope_wait_s: float = 0.25, scope_of: Callable[[str], str] = _scope_of,
+                 **kw: Any):
         super().__init__(max_bytes=max_bytes, ttl_s=ttl_s, max_entries=max_entries, **kw)
         self.min_tokens = max(1, int(min_tokens))
+        self.tail_slack = max(0, int(tail_slack))
+        self._prompt_lens: dict[str, int] = {}
         self._scope_fn = scope_of
         self._ids = itertools.count(1)
-        self.stats.update({"moved": 0, "copied": 0, "copied_tokens": 0, "given_back": 0, "subsumed": 0})
+        self.scope_wait_s = max(0.0, float(scope_wait_s))
+        self.stats.update({"moved": 0, "copied": 0, "copied_tokens": 0, "given_back": 0, "subsumed": 0,
+                           "scope_waits": 0})
 
     # ---- request side ----------------------------------------------------------------------------------
+    def scope_settling(self, key: str) -> bool:
+        """A finished request of ``key``'s scope (any conversation) is on its way into the cache."""
+        scope = self._scope_fn(key)
+        with self._lock:
+            return any(self._scope_fn(k) == scope for k in self._marks)
+
+    async def wait_settled(self, key: str, timeout_s: float) -> None:
+        """Wait (at most ``timeout_s``) for the commit of a finished turn of ``key``'s own conversation, then (at
+        most ``scope_wait_s``) for those of other conversations of its scope: a new conversation then finds the
+        system prompt a just-finished one computed (its commit lands within milliseconds once the session's
+        deferred checks are joined; the dummy passes of strict speculation are not waited for that long)."""
+        await super().wait_settled(key, timeout_s)
+        limit = min(float(timeout_s), self.scope_wait_s)
+        if limit <= 0 or not self.scope_settling(key):
+            return
+        self.stats["scope_waits"] += 1
+        deadline = time.monotonic() + limit
+        delay = 0.001
+        while self.scope_settling(key) and time.monotonic() < deadline:
+            await asyncio.sleep(delay)
+            delay = min(delay * 2, 0.02)
+
+    def sink(self, key: str) -> PrefixSink:
+        """The sink of the request whose :meth:`take` just ran for ``key`` (the runtime calls the two together)."""
+        with self._lock:
+            return _ClientSink(self, key, self._epoch, self._prompt_lens.pop(key, None))
+
     def take(self, key: str, prompt: Sequence[int]) -> PrefixHit | None:
         """The longest cached prefix of ``prompt`` in ``key``'s scope (at most ``len(prompt) - 1`` tokens: the
         prompt pass needs one new row for the logits), moved when the entry is used whole, else copied."""
@@ -130,6 +181,9 @@ class ClientPrefixCache(ConversationPrefixCache):
         limit = len(prompt) - 1
         with self._lock:
             self._sweep_locked()
+            if len(self._prompt_lens) > 4 * self.max_entries:  # keys whose sink was never asked for
+                self._prompt_lens.clear()
+            self._prompt_lens[key] = len(prompt)
             best_id, best_m = None, 0
             want = np.asarray(prompt, dtype=np.int64)
             if limit >= self.min_tokens:
@@ -174,7 +228,7 @@ class ClientPrefixCache(ConversationPrefixCache):
             return False
         cache.compact()
         arr = np.asarray(tokens[:n], dtype=np.int64).copy()
-        e = _ScopedEntry(arr, cache, self._clock(), self._scope_fn(sink.key))
+        e = _ScopedEntry(arr, cache, self._clock(), self._scope_fn(sink.key), getattr(sink, "prompt_len", None))
         return self._store(e, sink.epoch)
 
     def _store(self, e: _ScopedEntry, epoch: int, refused_stat: bool = True) -> bool:
@@ -195,16 +249,21 @@ class ClientPrefixCache(ConversationPrefixCache):
                         continue
                     k = int(old.tokens.shape[0])
                     cp = _common_prefix(old.tokens, e.tokens)
-                    if cp == k and k <= n:  # the old entry is a prefix of the new one: never the best match again
-                        del self._entries[eid]
-                        self._bytes -= old.nbytes
-                        self.stats["subsumed"] += 1
-                        wiped.append(old)
-                    elif cp == n and n < k:  # the new cache is a prefix of a stored one: keep that one
+                    if cp == n and n < k:  # the new cache is a prefix of a stored one: keep that one
                         old.t_used = e.t_used
                         self._entries.move_to_end(eid)
                         covered = True
                         break
+                    plen = old.prompt_len
+                    if (cp == k and k <= n) or (plen is not None and cp >= plen and k - cp <= self.tail_slack):
+                        # the old entry is a prefix of the new one, or the new one holds the old request's whole
+                        # prompt and the two differ only in the last tail_slack tokens of the old answer (the next
+                        # turn re-tokenizes the end of the previous answer): it would (almost) never be the better
+                        # match again
+                        del self._entries[eid]
+                        self._bytes -= old.nbytes
+                        self.stats["subsumed"] += 1
+                        wiped.append(old)
                 if covered:
                     self.stats["subsumed"] += 1
                     wiped.append(e)
