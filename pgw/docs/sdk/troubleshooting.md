@@ -98,15 +98,47 @@ vCPUs, or lower `max_tokens` for bulk jobs.
 
 ## Errors during requests
 
+What the library does by itself on each failure (reconnects, re-enrollment, factory restarts, cache repair) is in
+[Reliability](reliability.md).
+
 | error code | meaning | what to do |
 |---|---|---|
 | `rate_limited` (429) | your key's rate or quota limit | wait for the `Retry-After` time |
-| `unavailable`, `backend_unavailable` (503) | service busy or restarting | retry with exponential back-off |
+| `unavailable`, `backend_unavailable` (503) | service busy or restarting, or the connection was lost mid-answer | retry with exponential back-off; the same client reconnects |
 | `deadline_exceeded` (504) | a request timed out | retry with back-off |
-| `mask_exhausted` (503) | masks not ready for `prompt + max_tokens` | retry shortly, or lower `max_tokens` |
+| `mask_exhausted` (503) | masks not ready for `prompt + max_tokens`; the message says why (setup still running, factory failing, disk almost full) | retry shortly, or lower `max_tokens`; act on the reason given |
+| `payload_too_large` (400) | `prompt + max_tokens` needs more masks than the stock ever holds | lower `max_tokens` or shorten the prompt, or raise `mask_store_gb` |
 | `bad_shape` (400) | prompt too long for the model context | shorten the prompt |
+| `unauthenticated` (401), `permission_denied` (403) during requests | the key was revoked, or the service no longer accepts this installation's credentials | if the key is valid, the next request enrolls again by itself; else use a valid key |
 | `integrity_check_failed` (502) | a result from our GPU failed verification | **do not retry automatically**; report it |
 | `mask_reuse` (500) | the library stopped an attempted mask reuse | **do not retry**; report it at once |
+
+### "the request was stopped because the pgw client was closed"
+
+`close()` was called (or the interpreter exited) while the request ran in another thread or task. Close the client
+only after its requests are done, or treat this as a cancellation.
+
+### "the disk holding the pgw cache is full"
+
+Free space on the volume of the cache directory (`pgw sdk status` shows it). The client recovers by itself once
+there is room. The mask factory keeps 2 GiB free on that volume and stops producing below it; requests waiting for
+masks then say so.
+
+### "the mask store of this API key cannot be opened safely"
+
+Its database, key or rollback counter is damaged, or was changed outside the library. The library never repairs
+this by itself, because the rollback counter is what stops an old copy of the store from serving used masks again.
+If you know the cause (a full disk, a crash, a partial copy of the cache), stop every process using the cache and
+delete the two paths the message names; the stored masks are discarded, enrollment and models are kept.
+
+### The mask factory "killed by SIGKILL"
+
+Usually the out-of-memory killer. Give the process more memory or lower `mask_workers`; the factory is restarted by
+itself in the meantime.
+
+### "the clock is wrong"
+
+This machine's clock is far off. Enable time synchronisation (NTP); check with `date -u`.
 
 ## Reporting an issue
 

@@ -87,6 +87,7 @@ PREFERRED_RING = "K32A12C27"
 _RETRY_CODES = frozenset({str(ErrorCode.BACKEND_UNAVAILABLE), str(ErrorCode.DEADLINE_EXCEEDED),
                           str(ErrorCode.UNAVAILABLE)})
 _AUTH_CODES = frozenset({str(ErrorCode.UNAUTHENTICATED), str(ErrorCode.PERMISSION_DENIED)})
+_REFUSED = "the provider refused the session's credentials"
 #: How often the client certificate is re-checked (renewal due, or replaced by another process).
 CERT_CHECK_S = 600.0
 
@@ -436,13 +437,20 @@ class Engine:
                     await asyncio.wait_for(old.stop(), timeout=30.0)
             if fac is not None:  # restarted with the session's new files once the model is ready again
                 await asyncio.to_thread(fac.stop)
+            if reason.startswith(_REFUSED):
+                try:  # the provider refused the session itself: a new one (a revoked key fails here, clearly)
+                    await self.ensure_session(force=True)
+                except BaseException as exc:
+                    h.state = "failed"
+                    h.error = getattr(exc, "message", None) or type(exc).__name__
+                    raise
         await self._start_guarded(h)
 
     def _note_auth_failure(self, h: ModelHandle, exc: PGWError) -> None:
         """The provider refused the session's credentials during a request: the next request reconnects (and enrolls
         again if needed; a revoked key then fails with a clear AuthenticationError). At most once per minute."""
         if h.state == "ready" and h.reconnect is None and time.monotonic() - h.last_reconnect_at > 60.0:
-            h.reconnect = f"the provider refused the session's credentials ({exc.message})"
+            h.reconnect = f"{_REFUSED} ({exc.message})"
 
     async def _start_guarded(self, h: ModelHandle) -> None:
         async with h.lock:
@@ -528,14 +536,15 @@ class Engine:
             rt = ModelRuntime(cfg, self._settings, mask_store=self.store, metrics=GatewayMetrics(enabled=False))
             try:
                 await rt.start()
-            except AuthError:
-                if attempt == 2:
-                    raise
-                # the provider no longer accepts the service token (rotated / revoked): enroll again once
-                session = await self.ensure_session(force=True)
-                cfg = self._model_config(h, session, prov)
-                continue
             except PGWError as exc:
+                if isinstance(exc, AuthError) or str(exc.code) in _AUTH_CODES:
+                    if attempt == 2:
+                        raise
+                    # the provider no longer accepts the service token or certificate (rotated, lost, revoked):
+                    # enroll again once (a revoked key then fails there with a clear AuthenticationError)
+                    session = await self.ensure_session(force=True)
+                    cfg = self._model_config(h, session, prov)
+                    continue
                 if repaired or rt.fingerprint or not self._in_cache(prov.pack_path):
                     raise
                 # the cached gateway pack failed its verification before anything was sent (a damaged or partly

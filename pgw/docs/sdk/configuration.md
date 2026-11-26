@@ -66,6 +66,9 @@ silently ignored.
 | `PGW_SPECULATION` | `off` | `speculation` |
 | `PGW_MASK_STORE_GB` | `8` | `mask_store_gb` |
 | `PGW_SDK_LOG` | unset | `log_level` |
+| `PGW_FACTORY_MIN_FREE_BYTES` | `2147483648` (2 GiB) | free space the mask factory leaves on the cache volume; it stops producing below it ([Reliability](reliability.md#disk)) |
+| `PGW_MASKSTORE_MIN_FREE_BYTES` | `1073741824` (1 GiB) | free space the mask store keeps when it writes a segment |
+| `PGW_SDK_FACTORY_HANG_S` | `300` | a mask factory process without a heartbeat for this long is killed and restarted |
 | `PGW_NATIVE` | `1` | `0` disables all native extensions (pure-Python path: same results, much slower). For diagnosis only |
 | `PGW_NTT` | `1` | `0` disables only the native NTT products of mask generation |
 | `PGW_PKS_NATIVE` | `1` | `0` disables only the native `pks-v3` kernels |
