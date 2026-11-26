@@ -27,6 +27,7 @@ __all__ = [
     "NotReadyError",
     "PGWAPIError",
     "PermissionDeniedError",
+    "ProviderStalledError",
     "RateLimitError",
     "UnsupportedModelError",
     "from_pgw_error",
@@ -122,6 +123,13 @@ class APIConnectionError(PGWAPIError):
     status_code = 503
     default_code = ErrorCode.BACKEND_UNAVAILABLE.value
     retryable = True
+
+
+class ProviderStalledError(APIConnectionError):
+    """The provider answers its health check but its mask generation makes no progress (a wedged GPU, a hung
+    kernel): the maskgen watchdog of the background mask factory saw an item of this key run past its bound.
+    Retryable (the factory resumes by itself once the provider's operator restarts it); ``details["reason"]`` is
+    ``"provider_maskgen_stalled"``."""
 
 
 class APITimeoutError(APIConnectionError):

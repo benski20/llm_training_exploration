@@ -210,6 +210,7 @@ def start_provider(root: Path, pack_dir: Path, pki: dict[str, Any], *, extra_env
         "PGW_SERVICE_SDK_ENROLLS_PER_KEY_PER_HOUR": "1000",
         "PGW_SERVICE_PROVISION": "true", "PGW_PLATFORM_ENABLED": "1",
         "PGW_TEST_TAMPER_FILE": str(tamper),
+        "PGW_TEST_MASKGEN_HANG_FILE": str(root / "maskgen-hang.flag"),
     })
     if public_lane_port:
         env["PGW_SERVICE_LANE_ADVERTISED_PORT"] = str(public_lane_port)

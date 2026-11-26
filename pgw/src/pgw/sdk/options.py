@@ -95,6 +95,13 @@ class SDKOptions:
             waiting for masks fail at once with ``APIConnectionError`` / ``NotReadyError`` naming the reason
             (default 120 s). The factory keeps retrying with back-off and resumes by itself when the provider is
             back. A long first-time setup that makes progress is never cut short by this.
+        maskgen_stall_s: [``PGW_SDK_MASKGEN_STALL_S``] The maskgen watchdog (default 30 s; 0 turns it off): while
+            the factory makes a segment it reads this key's own maskgen progress from the provider
+            (``GET /pgw/v1/maskgen/status``); when one of its items has been running there this long without
+            finishing (at least 4x the slowest recent item, and the provider's warm-up bound, 300 s, for the first
+            item of a shape), the provider's mask generation counts as stalled (a wedged GPU) and requests waiting
+            for masks fail at once with ``ProviderStalledError`` (an ``APIConnectionError``, retryable). Providers
+            without the endpoint: off. The client's own work (encryption, the hint build) never counts.
         mask_admission: [``PGW_MASK_ADMISSION``] ``"entitled"`` (default): a request starts only when the mask
             stock covers the whole remaining prompt + ``max_tokens`` of every running request (a running answer
             never waits for masks; N concurrent requests need a stock of about N x (prompt + max_tokens) slots).
@@ -175,6 +182,7 @@ class SDKOptions:
     mask_segment_slots: int = 1024
     mask_wait_s: float = 120.0
     factory_stall_s: float = 120.0
+    maskgen_stall_s: float = 30.0
     mask_admission: Literal["entitled", "overcommit"] = "entitled"
     factory: bool = True
     lane: Literal["auto", "stream", "off"] = "auto"
@@ -225,6 +233,9 @@ class SDKOptions:
         stall = os.environ.get("PGW_FACTORY_STALL_S", "").strip()
         if stall:
             base["factory_stall_s"] = float(stall)
+        mstall = os.environ.get("PGW_SDK_MASKGEN_STALL_S", "").strip()
+        if mstall:
+            base["maskgen_stall_s"] = float(mstall)
         adm = os.environ.get("PGW_MASK_ADMISSION", "").strip()
         if adm:
             base["mask_admission"] = adm
@@ -284,6 +295,8 @@ class SDKOptions:
             raise ValueError("spec_pass_gap_ms must be between 0 and 1000")
         if not 1.0 <= float(self.factory_stall_s) <= 86400.0:
             raise ValueError("factory_stall_s must be between 1 and 86400 seconds")
+        if not (float(self.maskgen_stall_s) == 0.0 or 1.0 <= float(self.maskgen_stall_s) <= 86400.0):
+            raise ValueError("maskgen_stall_s must be 0 (off) or between 1 and 86400 seconds")
         if self.timeout_s <= 0 or self.mask_wait_s < 0 or self.max_retries < 0 or self.max_concurrent < 1:
             raise ValueError("timeouts must be positive and max_concurrent >= 1")
 

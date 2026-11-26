@@ -184,6 +184,12 @@ def _group_min_rows_default() -> int:
         return GROUP_MIN_ROWS
 
 
+def _item_shape(kern: Any) -> tuple[str, int, int]:
+    """(device, out, in) of a maskgen item's kernel: the first item of a shape may compile kernels."""
+    return (str(getattr(kern, "device", "cpu")), int(getattr(kern, "out_features", 0) or 0),
+            int(getattr(kern, "in_features", 0) or 0))
+
+
 class TokenBucket:
     """Classic token bucket (monotonic clock).
 
@@ -300,6 +306,10 @@ class ServiceHandler:
         self.lane_requests = 0
         #: SDK-key policy and usage metering (:class:`pgw.service.accounts.Accounts`), or ``None`` (off)
         self.accounts: Any = None
+        from pgw.hemask.progress import MaskgenProgress
+
+        #: item-level maskgen liveness (``/readyz`` bit, ``GET /pgw/v1/maskgen/status``)
+        self.maskgen_progress = MaskgenProgress()
 
     # ---- ComputeHandler protocol -------------------------------------------------------------
     def authenticate(self, authorization: str | None, client_cert_subject: str | None) -> TenantIdentity:
@@ -455,9 +465,10 @@ class ServiceHandler:
                 fp = str(request.fingerprint)
                 ys = await asyncio.gather(*(self._maskgen_in_slot(
                     model.kernel(it.linear), it,
-                    lambda kern, item, *_: pv.run_item(fp, kern, item, request.a_seed, dims)) for it in request.items))
+                    lambda kern, item, *_: pv.run_item(fp, kern, item, request.a_seed, dims), tenant=tenant)
+                    for it in request.items))
             else:
-                ys = await asyncio.gather(*(self._maskgen_in_slot(model.kernel(it.linear), it)
+                ys = await asyncio.gather(*(self._maskgen_in_slot(model.kernel(it.linear), it, tenant=tenant)
                                             for it in request.items))
             out = [MaskgenResult(it.linear, it.cols, y) for it, y in zip(request.items, ys, strict=True)]
             if acc is not None:
@@ -480,22 +491,33 @@ class ServiceHandler:
             self._pks = PKSProvider()
         return self._pks
 
-    async def _maskgen_in_slot(self, kern: Any, it: Any, fn: Any = None) -> bytes | bytearray:
+    async def _maskgen_in_slot(self, kern: Any, it: Any, fn: Any = None, *,
+                               tenant: str = "anonymous") -> bytes | bytearray:
         """Run one maskgen item in a worker thread under :attr:`_maskgen_slots`.
 
         The slot is released when the thread finishes, not when the awaiting request goes away:
         a cancelled request (client disconnect) cannot stop ``to_thread`` work, so releasing on
-        cancellation would let more than :attr:`maskgen_concurrency` items run at once.
+        cancellation would let more than :attr:`maskgen_concurrency` items run at once. The item is
+        counted in :attr:`maskgen_progress` from admission to the end of its thread.
         """
         from pgw.service.maskgen_budget import item_device_bytes, maskgen_budget_for
 
+        prog = getattr(self, "maskgen_progress", None)
+        tok = prog.admit(tenant, _item_shape(kern)) if prog is not None else 0
         slots = self._maskgen_slots_for(kern)
-        await slots.acquire()
+        try:
+            await slots.acquire()
+        except BaseException:
+            if prog is not None:
+                prog.finish(tok, ok=False)
+            raise
         budget = maskgen_budget_for(self, kern)  # opt-in per-device byte budget: queueing only
         charged = 0
         try:
             if budget is not None:
                 charged = await budget.acquire(item_device_bytes(kern, it))
+            if prog is not None:
+                prog.start(tok)
             if fn is None:
                 fut = asyncio.ensure_future(asyncio.to_thread(_maskgen_item, kern, it, *self._maskgen_extra(kern)))
             else:
@@ -504,12 +526,16 @@ class ServiceHandler:
             if budget is not None:
                 budget.release(charged)
             slots.release()
+            if prog is not None:
+                prog.finish(tok, ok=False)
             raise
 
         def _done(f: asyncio.Future[bytes | bytearray]) -> None:
             if budget is not None:
                 budget.release(charged)
             slots.release()
+            if prog is not None:
+                prog.finish(tok, ok=not f.cancelled() and f.exception() is None)
             if not f.cancelled():
                 f.exception()  # retrieved: no "exception was never retrieved" for abandoned items
 

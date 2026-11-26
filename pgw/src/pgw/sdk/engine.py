@@ -55,6 +55,7 @@ from pgw.sdk.errors import (
     NotFoundError,
     NotReadyError,
     PGWAPIError,
+    ProviderStalledError,
     from_pgw_error,
 )
 from pgw.sdk.factory import (
@@ -630,7 +631,8 @@ class Engine:
             self._cert_task = asyncio.get_running_loop().create_task(self._cert_loop(), name="pgw-sdk-cert")
         if self.options.factory and h.factory is None:
             try:
-                h.factory = FactoryProcess(self._factory_plan(h), stall_s=self.options.factory_stall_s).start()
+                h.factory = FactoryProcess(self._factory_plan(h), stall_s=self.options.factory_stall_s,
+                                           maskgen_stall_s=self.options.maskgen_stall_s).start()
             except Exception as exc:  # the stock still serves; status shows it
                 log.error("mask factory for %s not started: %s", h.name, getattr(exc, "message", type(exc).__name__))
         self._write_status()
@@ -1122,6 +1124,15 @@ class Engine:
         stalled = hl.get("stalled")
         if not stalled:
             return
+        if hl.get("phase") == "maskgen_stalled":
+            mg = _as_dict(hl.get("maskgen"))
+            raise ProviderStalledError(
+                f"no masks for model {h.name!r}: {str(stalled)[:600]}. The mask factory waits for the provider and "
+                "resumes by itself once it makes progress again; retry later (pgw sdk status shows the factory)",
+                code=str(ErrorCode.BACKEND_UNAVAILABLE), request_id=rid,
+                details={"reason": "provider_maskgen_stalled", "phase": "maskgen_stalled",
+                         "oldest_running_s": mg.get("oldest_running_s"), "bound_s": mg.get("bound_s"),
+                         "maskgen_stall_s": hl.get("maskgen_stall_s")}) from cause
         msg = (f"no masks for model {h.name!r}: the mask factory has made no progress for at least "
                f"{self.options.factory_stall_s:.0f}s: {str(stalled)[:600]}. It keeps retrying with back-off and "
                "resumes by itself when the provider is back; retry later (pgw sdk status shows the factory)")

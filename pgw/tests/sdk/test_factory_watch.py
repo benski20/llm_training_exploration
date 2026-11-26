@@ -4,9 +4,12 @@ for masks use it (``Engine._open``). End to end with a real provider: ``tests/sd
 
 from __future__ import annotations
 
+import http.server
 import json
 import os
+import threading
 import time
+from collections.abc import Iterator
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -246,3 +249,234 @@ def test_the_wait_extension_is_bounded(tmp_path: Path) -> None:
         eng.close()
     assert time.monotonic() - t0 < 3
     assert ei.value.code == "mask_exhausted" and "due in about 100s" in ei.value.message, ei.value.message
+
+
+# ---- the maskgen watchdog: a provider that answers /readyz but finishes no maskgen item --------------------------
+class FakeProvider:
+    """``/readyz`` (always ready) and ``GET /pgw/v1/maskgen/status`` (bearer ``good``, tenant ``t``) over plain HTTP
+    on loopback, driven by a real :class:`pgw.hemask.progress.MaskgenProgress`; ``status_code`` overrides the
+    status endpoint's answer (an older provider: 404)."""
+
+    def __init__(self, stall_s: float = 30.0, warmup_s: float = 300.0):
+        from pgw.hemask.progress import MaskgenProgress
+
+        self.prog = MaskgenProgress(stall_s=stall_s, warmup_s=warmup_s)
+        self.status_code = 200
+        self.seen_auth: list[str | None] = []
+        fake = self
+
+        class H(http.server.BaseHTTPRequestHandler):
+            def log_message(self, *a: Any) -> None:
+                pass
+
+            def do_GET(self) -> None:
+                code: int
+                body: dict[str, Any]
+                if self.path == "/readyz":
+                    code, body = 200, {"ready": True, "maskgen": fake.prog.public_state()}
+                elif self.path == "/pgw/v1/maskgen/status":
+                    auth = self.headers.get("Authorization")
+                    fake.seen_auth.append(auth)
+                    if fake.status_code != 200:
+                        code, body = fake.status_code, {"error": "x"}
+                    elif auth != "Bearer good":
+                        code, body = 401, {"error": "unauthenticated"}
+                    else:
+                        code, body = 200, fake.prog.tenant_view("t")
+                else:
+                    code, body = 404, {}
+                data = json.dumps(body).encode()
+                self.send_response(code)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+
+        self.srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), H)
+        self.url = f"http://127.0.0.1:{self.srv.server_address[1]}"
+        threading.Thread(target=self.srv.serve_forever, daemon=True).start()
+
+    def close(self) -> None:
+        self.srv.shutdown()
+        self.srv.server_close()
+
+    def done_item(self, seconds: float = 0.01, tenant: str = "t") -> None:
+        tok = self.prog.admit(tenant, "shape")
+        self.prog.start(tok)
+        time.sleep(seconds)
+        self.prog.finish(tok)
+
+
+@pytest.fixture()
+def fake_provider() -> Iterator[FakeProvider]:
+    fp = FakeProvider()
+    try:
+        yield fp
+    finally:
+        fp.close()
+
+
+def _mg_proc(tmp_path: Path, prov: FakeProvider, maskgen_stall_s: float = 0.6, **plan: Any) -> Any:
+    from pgw.sdk.factory import FactoryProcess
+
+    tok = tmp_path / "token"
+    tok.write_text("good\n")
+    fp = FactoryProcess(_plan(tmp_path, service_url=prov.url, token_file=tok, **plan), poll_s=0.05, stall_s=30.0,
+                        probe_s=0.05, maskgen_stall_s=maskgen_stall_s)
+    fp._probe_once = lambda: None  # type: ignore[method-assign]
+    assert fp._lock.try_acquire()
+    fp._spawn_wall = time.time() - 1.0
+    return fp
+
+
+def _producing(fp: Any) -> None:
+    _state(fp, totals={"x/K": {"segments": 3, "slots": 768, "seconds": 3.0}}, last_run_at=time.time() - 60,
+           in_progress={"slots": 256, "started_at": time.time(), "pid": 1}, throughput={"x/K": 256.0})
+
+
+def _look_for(fp: Any, pred: Any, timeout_s: float) -> tuple[dict[str, Any], float]:
+    t0 = time.monotonic()
+    h: dict[str, Any] = {}
+    while time.monotonic() - t0 < timeout_s:
+        h, _ = _look(fp)
+        if pred(h):
+            break
+        time.sleep(0.05)
+    return h, time.monotonic() - t0
+
+
+def test_a_wedged_maskgen_item_is_a_stall_within_the_bound(tmp_path: Path, fake_provider: FakeProvider) -> None:
+    """The provider answers /readyz (ready, its coarse bit still "ok") but one maskgen item of this key runs and never
+    finishes: within maskgen_stall_s the supervisor reports a maskgen stall (phase, reason, supervisor.json), not
+    before; once the item finishes, the stall clears (at once on a request's recheck)."""
+    from pgw.sdk.factory import read_factory_state
+
+    fake_provider.done_item()  # warm: the shape has finished once
+    fp = _mg_proc(tmp_path, fake_provider, maskgen_stall_s=0.6)
+    _producing(fp)
+    tok = fake_provider.prog.admit("t", "shape")
+    fake_provider.prog.start(tok)
+    t0 = time.monotonic()
+    h, _ = _look_for(fp, lambda h: h.get("stalled"), 5.0)
+    took = time.monotonic() - t0
+    assert 0.55 <= took < 2.5, took
+    assert h["phase"] == "maskgen_stalled" and "without finishing" in h["stalled"], h
+    assert fake_provider.url in h["stalled"] and h["provider"]["reachable"] is not False
+    assert h["maskgen"]["running"] == 1 and h["maskgen"]["bound_s"] == 0.6
+    assert fake_provider.seen_auth and set(fake_provider.seen_auth) == {"Bearer good"}
+    w = read_factory_state(fp.plan.state_dir)["watch"]
+    assert w["phase"] == "maskgen_stalled" and w["stalled"] and "good" not in json.dumps(w)
+    fake_provider.prog.finish(tok)
+    time.sleep(1.1)
+    h = fp.recheck()
+    assert not h["stalled"] and h["phase"] != "maskgen_stalled", h
+    h, _ = _look_for(fp, lambda h: (h.get("maskgen") or {}).get("running") == 0, 3.0)
+    assert not h["stalled"] and h["phase"] == "producing"
+
+
+def test_slow_items_that_finish_are_never_a_stall(tmp_path: Path, fake_provider: FakeProvider) -> None:
+    """Items of 0.5 s each against a bound of 0.6 s (and, first, a cold first item of 1.5 s within the provider's
+    warm-up bound): progress, never a stall, over many bounds."""
+    fake_provider.prog.warmup_s = 2.0
+    fp = _mg_proc(tmp_path, fake_provider, maskgen_stall_s=0.6)
+    _producing(fp)
+    stop = threading.Event()
+
+    def work() -> None:
+        fake_provider.done_item(1.5)  # cold: the first of its shape
+        while not stop.is_set():
+            fake_provider.done_item(0.5)
+
+    th = threading.Thread(target=work, daemon=True)
+    th.start()
+    try:
+        t0 = time.monotonic()
+        seen_running = 0
+        while time.monotonic() - t0 < 5.0:
+            h, _ = _look(fp)
+            assert not h["stalled"], h
+            seen_running += bool((h.get("maskgen") or {}).get("running"))
+            time.sleep(0.05)
+        assert seen_running > 10
+    finally:
+        stop.set()
+        th.join(5)
+
+
+def test_the_providers_coarse_bit_with_items_of_this_key_waiting(tmp_path: Path,
+                                                                 fake_provider: FakeProvider) -> None:
+    """Items of this key wait for a device slot and the provider's own bit says its maskgen is stalled (nothing
+    starts or finishes there): a maskgen stall."""
+    fake_provider.prog.stall_s = 0.3
+    fp = _mg_proc(tmp_path, fake_provider, maskgen_stall_s=30.0)
+    _producing(fp)
+    fake_provider.prog.admit("t", "shape")  # waits; never starts
+    h, took = _look_for(fp, lambda h: h.get("stalled"), 5.0)
+    assert h["phase"] == "maskgen_stalled" and "reports its mask generation as stalled" in h["stalled"], h
+    assert took < 2.5
+
+
+def test_no_watchdog_while_no_segment_is_made_or_against_an_older_provider(tmp_path: Path,
+                                                                           fake_provider: FakeProvider) -> None:
+    fake_provider.done_item()
+    fp = _mg_proc(tmp_path, fake_provider, maskgen_stall_s=0.3)
+    _state(fp, totals={"x/K": {"segments": 3, "slots": 768, "seconds": 3.0}}, last_run_at=time.time())
+    tok = fake_provider.prog.admit("t", "shape")
+    fake_provider.prog.start(tok)  # another process's item of this key; this factory is idle
+    for _ in range(15):
+        h, _ = _look(fp)
+        time.sleep(0.05)
+    assert not h["stalled"] and h["phase"] == "idle", h
+    fake_provider.prog.finish(tok)
+    # an older provider without the status endpoint: the watchdog turns itself off after one read
+    fake_provider.status_code = 404
+    _producing(fp)
+    for _ in range(10):
+        h, _ = _look(fp)
+        time.sleep(0.05)
+    assert fp._mg_unsupported and not h["stalled"]
+    n = len(fake_provider.seen_auth)
+    for _ in range(5):
+        _look(fp)
+        time.sleep(0.05)
+    assert len(fake_provider.seen_auth) == n
+
+
+def test_maskgen_stall_s_zero_turns_the_watchdog_off(tmp_path: Path, fake_provider: FakeProvider) -> None:
+    fp = _mg_proc(tmp_path, fake_provider, maskgen_stall_s=0.0)
+    _producing(fp)
+    tok = fake_provider.prog.admit("t", "shape")
+    fake_provider.prog.start(tok)
+    for _ in range(10):
+        h, _ = _look(fp)
+        time.sleep(0.05)
+    assert not h["stalled"] and not fake_provider.seen_auth
+
+
+def test_maskgen_stall_s_option(monkeypatch: pytest.MonkeyPatch) -> None:
+    from pgw.sdk.options import SDKOptions
+
+    assert SDKOptions().maskgen_stall_s == 30.0
+    monkeypatch.setenv("PGW_SDK_MASKGEN_STALL_S", "0")
+    assert SDKOptions.from_env().maskgen_stall_s == 0.0
+    with pytest.raises(ValueError, match="maskgen_stall_s"):
+        SDKOptions.from_env(maskgen_stall_s=0.5)
+
+
+def test_a_maskgen_stall_fails_waiting_requests_with_provider_stalled_error(tmp_path: Path) -> None:
+    stalled = {"phase": "maskgen_stalled", "stalled": "the provider (https://x) accepted mask generation work from "
+               "this key but one item has been running there for 41s without finishing (bound 30s)",
+               "maskgen": {"running": 1, "oldest_running_s": 41.0, "bound_s": 30.0}, "maskgen_stall_s": 30.0,
+               "provider": {"reachable": True}}
+    eng, h = _engine(tmp_path, stalled, mask_wait_s=600.0)
+    t0 = time.monotonic()
+    try:
+        with pytest.raises(E.ProviderStalledError) as ei:
+            eng.call(eng._open(h, _RT(), [0], None, "r", None, time.monotonic() + 3600), timeout_s=30)
+    finally:
+        eng.close()
+    assert time.monotonic() - t0 < 5
+    exc = ei.value
+    assert isinstance(exc, E.APIConnectionError) and exc.retryable and exc.code == "backend_unavailable"
+    assert exc.details["reason"] == "provider_maskgen_stalled" and exc.details["oldest_running_s"] == 41.0
+    assert "without finishing" in exc.message and "resumes by itself" in exc.message

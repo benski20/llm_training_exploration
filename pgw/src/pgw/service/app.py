@@ -114,6 +114,13 @@ class ServiceState:
             "inflight": self.handler.inflight,
             "queued_rows": self.batcher.queued_rows,
         }
+        prog = getattr(self.handler, "maskgen_progress", None)
+        if prog is not None:
+            # public: one coarse bit (a wedged device answers /readyz but finishes no maskgen item); the numbers
+            # only on the operator's metrics port (tenants see their own at /pgw/v1/maskgen/status)
+            details["maskgen"] = prog.public_state()
+            if not public:
+                details["maskgen_progress"] = prog.operator_view()
         if self.load_error:
             details["error"] = self.load_error
         if self.lane is not None:

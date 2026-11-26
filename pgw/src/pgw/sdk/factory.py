@@ -50,6 +50,10 @@ _LOG_MAX_BYTES = 4 << 20
 WATCH_FILE = "supervisor.json"
 #: A ``supervisor.json`` older than this is not used by other processes (its owner is gone or stuck).
 _WATCH_FRESH_S = 60.0
+#: Default of the maskgen watchdog's bound (``SDKOptions.maskgen_stall_s``, ``PGW_SDK_MASKGEN_STALL_S``).
+MASKGEN_STALL_S = 30.0
+#: The provider's maskgen status endpoint (:mod:`pgw.hemask.server`).
+_MASKGEN_STATUS_PATH = "/pgw/v1/maskgen/status"
 #: Factory errors that say the provider could not be reached or could not serve (wording of messages only: the
 #: supervisor's own probe decides whether the provider is reachable).
 _UNREACHABLE = re.compile(r"transport error|unavailable|unreachable|timed? ?out|timeout|deadline|connect|reset|"
@@ -214,7 +218,7 @@ class FactoryProcess:
     command: tuple[str, ...] = (sys.executable, "-m", "pgw.sdk._factory_child")
 
     def __init__(self, plan: FactoryPlan, *, poll_s: float = 3.0, hang_s: float | None = None,
-                 stall_s: float | None = None, probe_s: float | None = None):
+                 stall_s: float | None = None, probe_s: float | None = None, maskgen_stall_s: float | None = None):
         self.plan = plan
         self.poll_s = poll_s
         #: a running child whose heartbeat is older than this is killed and restarted (``PGW_SDK_FACTORY_HANG_S``)
@@ -224,6 +228,14 @@ class FactoryProcess:
         self.stall_s = float(stall_s if stall_s is not None else os.environ.get("PGW_FACTORY_STALL_S", "") or 120.0)
         #: how often the provider is probed while it matters (``GET /readyz``)
         self.probe_s = float(probe_s if probe_s is not None else min(10.0, max(1.0, self.stall_s / 6)))
+        #: the maskgen watchdog: a maskgen item of this key running on the provider this long (at least 4x the
+        #: slowest recent item; the first item of a shape gets the provider's warm-up bound) while a segment is
+        #: being made is a stall of the provider (``SDKOptions.maskgen_stall_s``; 0: off)
+        self.maskgen_stall_s = float(maskgen_stall_s if maskgen_stall_s is not None else
+                                     os.environ.get("PGW_SDK_MASKGEN_STALL_S", "") or MASKGEN_STALL_S)
+        #: how often the provider's maskgen status is read while a segment is being made
+        self.mg_probe_s = (min(probe_s if probe_s is not None else 5.0, max(0.5, self.maskgen_stall_s / 6))
+                           if self.maskgen_stall_s > 0 else 0.0)
         ensure_private_dir(plan.state_dir)
         self._lock = HeldLock(plan.state_dir / "owner.lock")
         self._proc: subprocess.Popen[bytes] | None = None
@@ -257,6 +269,13 @@ class FactoryProcess:
         self._last_nudge = 0.0
         self._hint_t0: tuple[str, float, float] | None = None  # (build dir, monotonic, fraction) at first sight
         self._health: dict[str, Any] = {}
+        # the maskgen watchdog (GET /pgw/v1/maskgen/status of this key, and /readyz's coarse bit)
+        self._mg: dict[str, Any] | None = None  # the last status read
+        self._mg_at = 0.0  # monotonic: when it was read
+        self._mg_next = 0.0
+        self._mg_error: str | None = None
+        self._mg_unsupported = False  # the provider does not serve the status endpoint (an older provider)
+        self._ready_maskgen: str | None = None  # /readyz's "maskgen" field at the last probe
         self._watch_written = 0.0
         self._watch_sig = ""
 
@@ -405,13 +424,16 @@ class FactoryProcess:
                 return False
         return False
 
-    def _start_probe(self) -> None:
+    def _start_probe(self, readyz: bool = True, maskgen: bool = False) -> None:
         t = self._probe_thread
         if t is not None and t.is_alive():
             return
 
         def run() -> None:
-            self._note_probe(self._probe_once())
+            if readyz:
+                self._note_probe(self._probe_once())
+            if maskgen:
+                self._note_mg(self._maskgen_status_once())
 
         self._probe_thread = threading.Thread(target=run, name=f"pgw-sdk-probe-{self.plan.model}", daemon=True)
         self._probe_thread.start()
@@ -444,14 +466,120 @@ class FactoryProcess:
 
     def recheck(self) -> dict[str, Any]:
         """Before a request fails on a stall: probe the provider once more now (at most once a second), so a
-        provider that just came back is not reported as gone; returns :meth:`health`. Blocks up to the probe's
-        timeout (call it off the event loop)."""
+        provider that just came back is not reported as gone (or, for a maskgen stall, whose item just finished);
+        returns :meth:`health`. Blocks up to the probe's timeout (call it off the event loop)."""
         if self.owner and self.plan.service_url:
             with self._wmu:
-                due = time.monotonic() - self._last_probe_at >= 1.0 and self._health.get("stalled") is not None
+                stalled = self._health.get("stalled") is not None
+                due = time.monotonic() - self._last_probe_at >= 1.0 and stalled
+                mg = stalled and self._health.get("phase") == "maskgen_stalled" and (
+                    time.monotonic() - self._mg_at >= 1.0)
             if due:
                 self._note_probe(self._probe_once())
+            if mg:
+                self._note_mg(self._maskgen_status_once())
+                with self._wmu:
+                    if self._health.get("phase") == "maskgen_stalled":
+                        why, view = self._mg_verdict(time.monotonic())
+                        if why is None:
+                            self._health = {**self._health, "stalled": None, "phase": "producing",
+                                            "maskgen": view}
         return self.health()
+
+    def _mg_due(self, in_prog: dict[str, Any] | None) -> bool:
+        """Whether the maskgen watchdog reads the provider's status now: on, the provider computes masks for this
+        factory (pks-v3 / mlwe) and a segment is being made (or this key's items were running at the last read)."""
+        if self.maskgen_stall_s <= 0 or self._mg_unsupported or not self.plan.service_url or (
+                self.plan.scheme not in ("pks-v3", "mlwe")):
+            return False
+        if in_prog is not None:
+            return True
+        t = (self._mg or {}).get("tenant")
+        return isinstance(t, dict) and bool(t.get("running") or t.get("waiting"))
+
+    def _maskgen_status_once(self) -> dict[str, Any] | str:
+        """``GET /pgw/v1/maskgen/status`` with the session's credentials (pinned CA, client certificate, the
+        factory's bearer token): this key's own maskgen items on the provider (no other tenant's numbers). A dict,
+        else why not (no secrets). A provider without the endpoint (404/405) turns the watchdog off."""
+        import httpx
+
+        from pgw.wire.client import ClientConfig, build_ssl_context
+
+        url = str(self.plan.service_url).rstrip("/")
+        timeout = max(2.0, min(10.0, self.mg_probe_s or 5.0))
+        headers: dict[str, str] = {}
+        if self.plan.token_file is not None:
+            with contextlib.suppress(OSError):
+                tok = self.plan.token_file.read_text(encoding="utf-8").strip()
+                if tok:
+                    headers["Authorization"] = f"Bearer {tok}"
+        try:
+            verify: Any = True
+            if url.startswith("https://"):
+                cfg = ClientConfig(base_url=url, ca_file=self.plan.ca_file,
+                                   client_cert_file=self.plan.client_cert_file,
+                                   client_key_file=self.plan.client_key_file)
+                verify = build_ssl_context(cfg, register=False)
+            with httpx.Client(verify=verify, trust_env=False, timeout=timeout, follow_redirects=False) as c:
+                r = c.get(f"{url}{_MASKGEN_STATUS_PATH}", headers=headers)
+        except httpx.TimeoutException as exc:
+            return f"no answer within {timeout:.0f}s ({type(exc).__name__})"
+        except (httpx.HTTPError, OSError) as exc:
+            return f"connection failed ({type(exc).__name__})"
+        except Exception as exc:  # TLS context errors and the like: reported, never raised
+            return f"status failed ({type(exc).__name__})"
+        if r.status_code in (404, 405):
+            self._mg_unsupported = True
+            log.info("the provider of %s does not report maskgen progress (HTTP %d): maskgen watchdog off",
+                     self.plan.model, r.status_code)
+            return f"not served (HTTP {r.status_code})"
+        if r.status_code != 200:
+            return f"HTTP {r.status_code}"
+        try:
+            out = r.json()
+        except ValueError:
+            return "not JSON"
+        return out if isinstance(out, dict) and isinstance(out.get("tenant"), dict) else "malformed"
+
+    def _note_mg(self, res: dict[str, Any] | str) -> None:
+        with self._wmu:
+            if isinstance(res, dict):
+                self._mg, self._mg_at, self._mg_error = res, time.monotonic(), None
+            else:
+                self._mg_error = res
+
+    def _mg_verdict(self, now: float) -> tuple[str | None, dict[str, Any] | None]:
+        """``(why maskgen is stalled or None, what the watchdog saw)`` from the last status read (call under
+        ``_wmu``). Stalled: one of this key's items has been running on the provider for the bound
+        (:func:`pgw.hemask.progress.stall_bound`: ``maskgen_stall_s``, at least 4x the slowest recent item, the
+        provider's warm-up bound for the first item of a shape), or the provider's coarse bit says its maskgen is
+        stalled while items of this key wait there. A stale read (older than 4 reads) decides nothing."""
+        from pgw.hemask.progress import DEFAULT_WARMUP_S, stall_bound
+
+        mg = self._mg
+        if mg is None or self.maskgen_stall_s <= 0 or now - self._mg_at > max(30.0, 4 * self.mg_probe_s):
+            return None, None
+        t: dict[str, Any] = mg["tenant"]
+        since = now - self._mg_at
+        running, waiting = int(t.get("running") or 0), int(t.get("waiting") or 0)
+        oldest = t.get("oldest_running_s")
+        age = float(oldest) + since if running and isinstance(oldest, int | float) else None
+        slowest = t.get("slowest_item_s") if isinstance(t.get("slowest_item_s"), int | float) else None
+        warm = mg.get("warmup_s") if isinstance(mg.get("warmup_s"), int | float) else DEFAULT_WARMUP_S
+        bound = stall_bound(self.maskgen_stall_s, slowest, bool(t.get("cold")), float(warm))
+        view = {"running": running, "waiting": waiting, "oldest_running_s": None if age is None else round(age, 1),
+                "slowest_item_s": slowest, "bound_s": round(bound, 1), "done": t.get("done"),
+                "provider": mg.get("maskgen"), "checked_s_ago": round(since, 1)}
+        url = self.plan.service_url
+        if age is not None and age >= bound:
+            return (f"the provider ({url}) accepted mask generation work from this key but one item has been "
+                    f"running there for {age:.0f}s without finishing (bound {bound:.0f}s; the slowest recent item "
+                    f"took {float(slowest or 0):.1f}s): its mask generation is stalled (for example a wedged GPU). "
+                    "The provider still answers its health check; its operator has to restart it"), view
+        if mg.get("maskgen") == "stalled" and (running or waiting):
+            return (f"the provider ({url}) reports its mask generation as stalled while {running + waiting} "
+                    "item(s) of this key wait there (for example a wedged GPU); its operator has to restart it"), view
+        return None, view
 
     def _probe_once(self) -> str | None:
         """``GET /readyz`` of the provider with the session's TLS settings (pinned CA, client certificate; no
@@ -561,10 +689,14 @@ class FactoryProcess:
                         self._down_in_err = True
             else:
                 self._err_since, self._down_in_err = None, False
-            due = running and self._probe_due(st, fresh_err)
-            if due and now >= self._next_probe:
+            due = running and self._probe_due(st, fresh_err) and now >= self._next_probe
+            mg_due = running and now >= self._mg_next and self._mg_due(in_prog)
+            if due:
                 self._next_probe = now + self.probe_s
-                self._start_probe()
+            if mg_due:
+                self._mg_next = now + self.mg_probe_s
+            if due or mg_due:
+                self._start_probe(readyz=due, maskgen=mg_due)
             down_for = now - self._probe_fail_since if self._probe_fail_since is not None else 0.0
             err_for = now - self._err_since if self._err_since is not None else 0.0
             probe_ok = self._probe_fail_since is None
@@ -577,6 +709,9 @@ class FactoryProcess:
                            + (" (the provider answers its health check but cannot serve mask generation)"
                               if probe_ok and self._probe_ok_at is not None and provider_error(err) else "")
                            + f"; the mask factory's last error: {err}")
+            mg_why, mg_view = self._mg_verdict(now) if running and in_prog is not None else (None, None)
+            if stalled is None and mg_why is not None:
+                stalled = mg_why
             nudge = bool(running and fresh_err and self._down_in_err and probe_ok and self._back_at is not None
                          and now - self._back_at >= min(10.0, 2 * self.probe_s) and in_prog is None and hint is None
                          and now - self._last_nudge >= 30.0)
@@ -600,7 +735,9 @@ class FactoryProcess:
                 run_s = max(0.0, wall - float(in_prog.get("started_at") or wall))
                 seg = {"slots": slots, "running_s": round(run_s, 1),
                        "eta_s": round(max(0.0, slots / rate - run_s), 1) if rate > 0 else None}
-            if stalled:
+            if stalled and stalled is mg_why:
+                phase = "maskgen_stalled"
+            elif stalled:
                 phase = "waiting_for_provider" if (not probe_ok or provider_error(err)) else "failing"
             elif setup is not None:
                 phase = {"hint": "hint_build", "first_segment": "first_segment",
@@ -620,6 +757,7 @@ class FactoryProcess:
                              "down_for_s": round(down_for, 1) if not probe_ok else None,
                              "error": self._probe_error, "checked_ok_at": self._probe_ok_at},
                 "stall_s": self.stall_s, "updated_at": wall,
+                "maskgen": mg_view, "maskgen_stall_s": self.maskgen_stall_s,
             }
             health = dict(self._health)
         self._write_watch(health)

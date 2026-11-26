@@ -20,6 +20,7 @@ import json
 import time
 from collections.abc import Iterator
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -212,6 +213,69 @@ def test_provider_dies_in_steady_state(rig: Rig, want: str, tmp_path: Path) -> N
         _text(c, **big)  # the factory makes what the big request needs
         print(f"steady state: the big request served {time.monotonic() - t1:.1f}s after the first answer")
     finally:
+        c.close()
+
+
+def test_a_wedged_provider_maskgen_fails_waiting_requests_fast(rig: Rig, want: str, tmp_path: Path) -> None:
+    """The provider keeps answering /readyz but its maskgen items stop finishing (a wedged GPU: every pks-v3 item
+    blocks in its worker thread). Before: the factory's request waited out its 600 s budget and requests waiting for
+    masks failed after mask_wait_s. Now the maskgen watchdog reads this key's progress from the provider and a
+    request waiting for masks fails with ProviderStalledError within maskgen_stall_s (plus a few seconds); the
+    provider's public /readyz says only "maskgen": "stalled"; when the items finish again the same client serves,
+    bit-identically."""
+    import httpx
+
+    from pgw.sdk import APIConnectionError, ProviderStalledError
+
+    hang = rig.prov.root / "maskgen-hang.flag"
+    mg_stall = 4.0
+    c = _client(rig, rig.prov.new_key("wedged"), tmp_path, maskgen_stall_s=mg_stall)
+    try:
+        assert _text(c) == want  # the first fill: the provider's shapes are warm now
+        fac = c._engine.models[MODEL].factory
+        assert _wait(lambda: fac.health().get("phase") == "idle" and not fac.health().get("segment"), 120)
+        hang.touch()
+        # requests use the stock down; the refill below the low-water mark hangs on the provider; the first request
+        # that has to wait for masks fails with the stall
+        t_hang = time.monotonic()
+        served = 0
+        while True:
+            t0 = time.monotonic()
+            try:
+                assert _text(c) == want
+                served += 1
+                assert served < 40 and time.monotonic() - t_hang < 300, "the stock never ran out"
+            except APIConnectionError as exc:
+                took = time.monotonic() - t0
+                ei = SimpleNamespace(value=exc)
+                break
+        seg = _factory(c)["health"].get("segment") or {}
+        print(f"\nwedged provider maskgen: {served} answers from the stock, then a request failed after {took:.1f}s "
+              f"(the refill segment had run for {seg.get('running_s')}s): {ei.value.message}")
+        assert isinstance(ei.value, ProviderStalledError), ei.value
+        assert ei.value.retryable and ei.value.details["reason"] == "provider_maskgen_stalled"
+        assert took < mg_stall + 20, took
+        h = _factory(c)["health"]
+        assert h["phase"] == "maskgen_stalled" and h["provider"]["reachable"] is not False, h
+        assert "STALLED" in _status_text(tmp_path)
+        r = httpx.get(f"https://127.0.0.1:{rig.prov.port}/readyz", verify=str(rig.prov.ca_file), timeout=10,
+                      trust_env=False)
+        body = r.json()
+        assert r.status_code == 200 and body["maskgen"] in ("ok", "stalled")  # the provider's own bound is 30 s
+        assert "maskgen_progress" not in body and "inflight" not in body
+        hang.unlink()
+        t1 = time.monotonic()
+        while True:
+            try:
+                assert _text(c) == want
+                break
+            except ProviderStalledError:
+                assert time.monotonic() - t1 < 60
+                time.sleep(0.5)
+        print(f"wedged provider maskgen: served again {time.monotonic() - t1:.1f}s after the items finished")
+        assert not _factory(c)["health"].get("stalled")
+    finally:
+        hang.unlink(missing_ok=True)
         c.close()
 
 

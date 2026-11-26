@@ -33,7 +33,10 @@ from pgw.wire.server import (
     response_headers,
 )
 
-__all__ = ["DEFAULT_MAX_MASKGEN_BYTES", "add_maskgen_route"]
+__all__ = ["DEFAULT_MAX_MASKGEN_BYTES", "MASKGEN_STATUS_PATH", "add_maskgen_route"]
+
+#: ``GET``: the caller's own maskgen progress (authenticated; :meth:`MaskgenProgress.tenant_view`)
+MASKGEN_STATUS_PATH = "/pgw/v1/maskgen/status"
 
 log = logging.getLogger(__name__)
 
@@ -91,3 +94,25 @@ def add_maskgen_route(app: Any, handler: Any, *, max_request_bytes: int = DEFAUL
                 body_budget.release(held[0])
 
     app.add_route(MASKGEN_PATH, maskgen, methods=["POST"], include_in_schema=False)
+
+    progress = getattr(handler, "maskgen_progress", None)
+    if progress is None or not has_auth:
+        return
+
+    async def maskgen_status(request: Request) -> Response:
+        """The caller's own maskgen items (waiting, running, the oldest running item's age, finished, failed,
+        the slowest recent one) plus the public coarse bit: a client's mask factory tells a stalled provider
+        from a slow one with it. Never another tenant's numbers."""
+        from starlette.responses import JSONResponse
+
+        try:
+            identity = await _maybe_await(handler.authenticate(
+                request.headers.get("authorization"), _client_cert_subject(request.scope)))
+        except Exception as exc:
+            status, _ = error_response_bytes(exc, None)
+            code = str(exc.code) if isinstance(exc, PGWError) else str(ErrorCode.INTERNAL)
+            return JSONResponse({"error": code}, status_code=status, headers={"Cache-Control": "no-store"})
+        tenant = str(getattr(identity, "tenant_id", None) or "anonymous")
+        return JSONResponse(progress.tenant_view(tenant), headers={"Cache-Control": "no-store"})
+
+    app.add_route(MASKGEN_STATUS_PATH, maskgen_status, methods=["GET"], include_in_schema=False)

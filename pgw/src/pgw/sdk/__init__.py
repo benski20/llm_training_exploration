@@ -47,6 +47,7 @@ __all__ = [
     "OpenAI",
     "PGWAPIError",
     "PermissionDeniedError",
+    "ProviderStalledError",
     "RateLimitError",
     "SDKOptions",
     "SdkKey",
@@ -57,7 +58,7 @@ __all__ = [
 
 _ERRORS = ("APIConnectionError", "APIError", "APITimeoutError", "AuthenticationError", "BadRequestError",
            "IntegrityError", "InternalServerError", "NotFoundError", "NotReadyError", "PGWAPIError",
-           "PermissionDeniedError", "RateLimitError", "UnsupportedModelError")
+           "PermissionDeniedError", "ProviderStalledError", "RateLimitError", "UnsupportedModelError")
 
 _LAZY: dict[str, str] = {
     "OpenAI": "pgw.sdk.client",
