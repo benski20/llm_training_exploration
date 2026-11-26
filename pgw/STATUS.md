@@ -2928,3 +2928,108 @@ Fixed or found on the way:
 - Open (client reliability): after the provider died, the client's request waited out its whole timeout. The factory's `ConnectError` was not counted as a failure, and the request was not failed.
 - Attempt B: on a T4 the factory is the bottleneck. A request beyond the stock is correctly refused with `mask_exhausted` after the default 120 s. The harness now waits for the next segment and sends the request again (recorded; options unchanged).
 - Harness: provider-exit watchdog and wall budget (kernel under 3 h), per-process RSS, and `provider.log` kept even when the run is cut short.
+
+
+## 2026-11-26: client mask factory stalls (provider dies during maskgen) and first-use UX
+
+Scope: `src/pgw/sdk` (engine `_open`, factory supervision), docs. Trigger: run 2 attempt A on the 7B T4
+(`results/kaggle/sdk-7b-validation/run2_7b/`). The provider died during pks-v3 maskgen. The factory logged
+`ServiceUnavailableError: compute service transport error (ConnectError)`, but `consecutive_failures` stayed 0.
+The first request, still in its first-fill window, waited out the step's 3 h.
+
+**Root cause.** The supervisor (`FactoryProcess`) counted only *child exits* as failures. A run error inside the
+child is retried with back-off (5 s doubling to 10 min) and only lands in `factory-state.json` `last_error`.
+- At `bfee514` (attempt A), the first-fill wait (`_first_fill`) ignored that file, so the request waited up to
+  `ready_timeout_s` plus `timeout`.
+- The later reliability fix (`fac_error is None` in `_open`) went the other way. Any `last_error` ended the
+  first-fill wait at once: a single transient blip, or a stale error left in the file by an earlier process.
+- A blackholed provider recorded no error for `he_timeout_s` (600 s).
+- Nothing measured progress, so the code could not tell "slow" from "stuck".
+
+**Fix (supervisor watch, `pgw.sdk.factory`).** Every `poll_s` the owner's supervisor looks at the child from
+outside. Signals:
+- the hint build's progress, from the files in `*.building-<pid>-*` or `*.partial`, weighted by rows x columns
+  per linear; this gives a percentage and an ETA;
+- segment progress: writes to `.part` files and `last_run_at`;
+- the child's heartbeat (unchanged);
+- the provider's reachability: `GET /readyz` with the session's pinned CA and client certificate, no token. It
+  runs only during first fill, after a run error, or while a request waits.
+
+Run errors saved before the current child started are ignored. A **stall** is either of:
+- the provider has not answered for `factory_stall_s` (new option, default 120 s, `PGW_FACTORY_STALL_S`) and no
+  segment progress was seen in that time;
+- run errors for `factory_stall_s` with no segment made, and no retry running against a reachable provider.
+
+What a stall does:
+- `_open` fails waiting requests at once, in first fill and in steady state, after one more probe confirms it.
+  The provider unreachable gives `APIConnectionError` (`backend_unavailable`). Otherwise it is `NotReadyError`.
+  The message names the provider, the probe result, the factory's last error and any first-time setup.
+- The child keeps retrying.
+- When the provider answers again after an outage, a child that is waiting out its back-off is restarted at once
+  ("nudge"). This never happens during a hint build or a running segment, and it does not count as a failure.
+
+A healthy setup is never cut short, however long it takes, up to `ready_timeout_s`.
+
+What the supervisor sees is written to `<factory dir>/supervisor.json` (public values, 0600). `client.status()`
+shows it as `factory.health`, and `pgw sdk status` and request errors show:
+- `first-time setup in progress: building the one-time pks-v3 hint, 45% done (about 9 min left)`, or the first
+  segment and its running time;
+- the segment being made and its ETA;
+- `provider not answering for N s`;
+- `STALLED ...`.
+
+**mask_wait_s scaling (bounded).** In steady state, a request whose masks are minutes away now waits for them
+under all of these conditions:
+- the factory is visibly making a segment, or made one within `factory_stall_s`;
+- the factory is not stalled;
+- the segments the request lacks are due, at the last measured rate, before `max(mask_wait_s, timeout_s)` from
+  the request's start and before its deadline.
+
+The cap is the request's own `timeout_s` (600 s by default), so the wait stays bounded. Attempt B (needed 42
+slots, 14 in stock, 512-slot segments in 266 s) would have waited instead of failing at 120 s. When the request
+does fail with `mask_exhausted`, the message says when the factory expects the next masks.
+
+Integrity failures and halts are unchanged: they stay fatal, are never retried and are never nudged away.
+
+**Measured** (tiny model, pks-v3, real provider behind the chaos proxy, SIGKILL plus refused connections,
+`factory_stall_s` = 8 s):
+
+| case | result |
+|---|---|
+| provider dies during first fill: the waiting request fails after | 12.2 s / 13.4 s (two runs) (APIConnectionError naming the provider and the factory's ConnectError) |
+| answer after the provider restarts | 7.9 s (1 nudge) / 5.0 s (the child's own retry) after it is ready |
+| provider dies in steady state: a request beyond the stock fails after | 10.8 s / 12.9 s (`mask_wait_s` was 600 s) |
+| answer after the restart | 1.0 s (the stock covered it) |
+| that big request served after the restart | 13.6 s / 10.2 s later (needs the factory: nudge, then segments) |
+| slow but healthy first fill (every provider read delayed 0.1 s; stall bound 3 s) | answered after 59.9 s; no stall, no restart |
+
+Detection takes `factory_stall_s` plus up to one probe interval (`min(10 s, stall/6)`) plus one supervisor poll
+(3 s). With the defaults that is at most about 133 s, against hours before.
+
+**Docs.**
+- `reliability.md`: stall and failing-runs rows, "slow is not stuck", the status lines.
+- `troubleshooting.md`: the run-2 first-use timeline, `pgw sdk prepare` before first traffic, the new
+  `APIConnectionError` entry, `mask_exhausted` reasons.
+- `quickstart.md` and `configuration.md`: `pgw sdk prepare` is recommended before traffic; `mask_wait_s` and
+  `factory_stall_s` rows.
+- `changelog.md`.
+
+**Tests.**
+- `tests/sdk/test_factory_watch.py` (11, no provider): hint progress, percentage and ETA, a dead build ignored;
+  a dead provider stalls within the bound, then the recheck and the nudge once it is back; a stale error is not
+  counted; a retry against a reachable provider is not a stall; segment progress overrides a failing probe; the
+  real probe; option validation; `_open` fails at once on a stall (first fill and steady state); the wait
+  extension, and its bound.
+- `tests/sdk/test_factory_stall.py` (4, end to end): the three cases above, plus "first-time setup in progress"
+  in `pgw sdk status`.
+- `tests/sdk/chaos.py`: `delay_s` (a slow but working path).
+- tests/sdk: 178 passed, 1 opt-in skip, 10.5 min, sequential, no xdist. That run used a `pgw_fast` built from this tree. The installed site-packages `pgw_fast` lacks the lane-format-2 multi calls, and 3 `test_lane_multi` tests fail with it; this is unrelated to the change (sequential, no xdist).
+
+**Open.**
+- A provider that answers `/readyz` but never answers maskgen (no reset, no error) is detected only when the
+  factory's request times out (`he_timeout_s`, 600 s) plus `factory_stall_s`.
+- A provider that is down while the hint is being built fails waiting requests after `factory_stall_s`. They could
+  not be served anyway, and the build continues.
+- The nudge is a child restart: at 7B it re-verifies the hint digests (seconds).
+- The wait extension uses the last segment's rate (the first 64-slot segment is slower per slot than later ones).
+- A real 7B rerun of attempt A's failure was not done (no cloud spend).
