@@ -648,3 +648,82 @@ def test_fused2_tables_live_in_modelpack() -> None:
 
     for n in ("F2Linear", "Fused2Weights", "migration_multipliers", "select_gateway_columns", "hf_float_linears"):
         assert getattr(ef, n) is getattr(mf, n)
+
+
+# ---- mask stock under bursts --------------------------------------------------------------------------
+def _mask_engine(tmp_path: Path, **opts: Any) -> Any:
+    from pgw.sdk.engine import Engine, ModelHandle
+    from pgw.sdk.options import SDKOptions
+
+    key = SdkKey.new("live", "https://gpu.example.com", bytes(32 * [5]))
+    eng = Engine(key, SDKOptions(cache_dir=tmp_path / "c", state_dir=tmp_path / "s", usage_reports=False, **opts))
+    h = ModelHandle("qwen2.5-0.5b-instruct", state="ready")
+    h.masks_seen = True
+    h.factory = SimpleNamespace(owner=True, failures=0, last_error=None, state=lambda: {"halted": False},
+                                plan=SimpleNamespace(target_slots=100, segment_slots=16))
+    return eng, h
+
+
+def test_requests_waiting_for_masks_are_served_in_arrival_order(tmp_path: Path) -> None:
+    """A burst larger than the stock: a large request that waits first is served before the smaller ones that
+    arrive later and would each fit the stock left (no starvation); every request is served in arrival order."""
+    import asyncio as aio
+
+    eng, h = _mask_engine(tmp_path, mask_wait_s=30.0)
+    stock = {"n": 0}
+    served: list[str] = []
+
+    class _RT:
+        state = "ready"
+
+        async def open_sessions(self, prompts: Any, params: Any, **kw: Any) -> Any:
+            need = len(prompts[0])
+            if stock["n"] < need:
+                raise MaskExhaustedError("no masks", details={"entitled": need})
+            stock["n"] -= need
+            served.append(kw["request_id"])
+            return [SimpleNamespace()]
+
+    rt = _RT()
+
+    async def run() -> None:
+        async def refill() -> None:
+            for _ in range(60):
+                await aio.sleep(0.02)
+                stock["n"] += 1
+
+        filler = aio.create_task(refill())
+        dl = time.monotonic() + 30
+        big = aio.create_task(eng._open(h, rt, [0] * 10, None, "big", None, dl))
+        await aio.sleep(0.05)
+        small = []
+        for i in range(8):  # later, smaller requests, one at a time
+            small.append(aio.create_task(eng._open(h, rt, [0], None, f"small{i}", None, dl)))
+            await aio.sleep(0.03)
+        await aio.gather(big, *small)
+        await filler
+
+    try:
+        eng.call(run(), timeout_s=60)
+    finally:
+        eng.close()
+    assert served == ["big"] + [f"small{i}" for i in range(8)], served
+    assert h.mask_waiters == []
+
+
+def test_a_request_larger_than_the_stock_fails_at_once(tmp_path: Path) -> None:
+    eng, h = _mask_engine(tmp_path, mask_wait_s=30.0)
+
+    class _RT:
+        state = "ready"
+
+        async def open_sessions(self, prompts: Any, params: Any, **kw: Any) -> Any:
+            raise MaskExhaustedError("no masks", details={"entitled": 500})
+
+    t0 = time.monotonic()
+    try:
+        with pytest.raises(E.BadRequestError, match="mask_store_gb"):
+            eng.call(eng._open(h, _RT(), [0], None, "r", None, time.monotonic() + 30), timeout_s=30)
+    finally:
+        eng.close()
+    assert time.monotonic() - t0 < 5 and h.mask_waiters == []

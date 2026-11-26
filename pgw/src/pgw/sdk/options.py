@@ -87,6 +87,12 @@ class SDKOptions:
         mask_wait_s: How long a request waits for masks when the stock is empty before failing (back-pressure).
             During a model's first fill on a host (the factory still building its one-time setup) a request without
             an explicit ``timeout`` waits up to ``ready_timeout_s`` instead.
+        mask_admission: [``PGW_MASK_ADMISSION``] ``"entitled"`` (default): a request starts only when the mask
+            stock covers the whole remaining prompt + ``max_tokens`` of every running request (a running answer never waits for masks; N concurrent
+            requests need a stock of about N x (prompt + max_tokens) slots). ``"overcommit"`` (opt-in): a request
+            starts when the stock covers its prompt and one chunk for every running request; an answer that finds
+            the stock short waits for the factory (up to 30 s, then fails closed), so a burst slows every answer to
+            the factory's rate instead of queueing new requests. Single use of masks is the same in both.
         factory: Run the background mask factory (``False``: consume existing stock only).
         lane: ``"auto"`` (the provider's TCP+TLS trip lane when offered, else the blocking WebSocket stream lane),
             ``"stream"`` or ``"off"`` (the async stream channel only).
@@ -140,6 +146,7 @@ class SDKOptions:
     mask_low_water_slots: int | None = None
     mask_segment_slots: int = 1024
     mask_wait_s: float = 120.0
+    mask_admission: Literal["entitled", "overcommit"] = "entitled"
     factory: bool = True
     lane: Literal["auto", "stream", "off"] = "auto"
     native: bool = True
@@ -173,6 +180,9 @@ class SDKOptions:
         hint = os.environ.get("PGW_HINT", "").strip()
         if hint:
             base["hint"] = hint
+        adm = os.environ.get("PGW_MASK_ADMISSION", "").strip()
+        if adm:
+            base["mask_admission"] = adm
         spec = os.environ.get("PGW_SPECULATION", "").strip()
         if spec:
             base["speculation"] = spec
@@ -186,6 +196,8 @@ class SDKOptions:
 
     def validate(self) -> None:
         """Raise ``ValueError`` on an invalid combination."""
+        if self.mask_admission not in ("entitled", "overcommit"):
+            raise ValueError("mask_admission must be 'entitled' or 'overcommit'")
         if self.mask_scheme not in ("pks-v3", "mlwe", "plain"):
             raise ValueError("mask_scheme must be 'pks-v3', 'mlwe' or 'plain'")
         if self.lane not in ("auto", "stream", "off"):
