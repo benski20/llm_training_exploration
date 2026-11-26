@@ -1292,7 +1292,8 @@ class ModelRuntime:
         emb = self.model.embed_tokens
         head = FeatureHeadDrafter.from_file(
             path, emb if emb.dtype == torch.float32 else emb.to(torch.float32),
-            target_vocab=getattr(self.model.arch, "vocab_size", None), kernel="auto", ring=self.ring)
+            target_vocab=getattr(self.model.arch, "vocab_size", None), kernel="auto", ring=self.ring,
+            lookup=int(self.config.spec_lookup), lookup_min_n=int(self.config.spec_lookup_min_n))
         log.info("model %s: strict speculation with draft head %s (%s kernel, %.1f MB per draft step int8)",
                  self.name, path, head.kernel, head.nbytes_per_step() / 1e6)
         return head

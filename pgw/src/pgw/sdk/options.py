@@ -165,9 +165,12 @@ class SDKOptions:
             masks) and ``spec_rows`` rows of provider work per trip. Drafts: ``"lookup"`` (prompt lookup: no
             weights, no model; strong when the answer copies the prompt or the conversation: code edits, RAG,
             summaries, rewrites; about 1.0-1.1 tokens per pass on open chat) or ``"draft_head"`` (a trained
-            target-feature draft head file, ``draft_head_path``: a few MB, one small CPU step per draft row).
+            target-feature draft head: a few MB, one small CPU step per draft row, on this machine only; it
+            drafts open chat too. The library ships a head per supported model, pinned by SHA-256
+            (``pgw.sdk.draft_heads``); ``draft_head_path`` replaces it with your own file).
         spec_rows: Rows per verify pass with ``speculation`` (2-8; default 3: up to 2 drafts per pass).
-        draft_head_path: The draft head file for ``speculation="draft_head"`` (a public artefact for this model).
+        draft_head_path: Your own draft head file for ``speculation="draft_head"`` (default: the pinned head
+            shipped for the model).
         spec_pass_gap_ms: With ``speculation``: the least time from the end of one pass to the start of the next
             (default 8 ms; 0 = off). The client work between passes (sampling, drafting, handing tokens to the
             application, and the application waking up when the answer is complete) differs a little between the
@@ -303,8 +306,6 @@ class SDKOptions:
             raise ValueError("speculation must be 'off', 'lookup' or 'draft_head'")
         if not 2 <= int(self.spec_rows) <= 8:
             raise ValueError("spec_rows must be between 2 and 8")
-        if self.speculation == "draft_head" and self.draft_head_path is None:
-            raise ValueError("speculation='draft_head' needs draft_head_path (the trained head file)")
         if self.draft_head_path is not None and self.speculation != "draft_head":
             raise ValueError("draft_head_path is used only with speculation='draft_head'")
         if not 0.0 <= float(self.spec_pass_gap_ms) <= 1000.0:

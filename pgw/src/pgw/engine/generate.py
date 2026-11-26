@@ -700,20 +700,30 @@ class FeatureHeadDrafter(BuiltinDrafter):
     uses_features = True
     supports_tree = True
 
-    #: ``FeatureHeadDrafter.from_file`` format (``benchmarks/feature_head_train.py`` writes it).
-    FILE_FORMAT = "pgw-feature-head-v1"
+    #: ``FeatureHeadDrafter.from_file`` format (``benchmarks/feature_head_train.py`` writes it). v2 adds the
+    #: per-input-column scales (``in_scale``): ``W_in``'s halves are stored quantized in the trained (normalized)
+    #: input space and the input is scaled instead. v1 files (input scales folded into ``W_in``) still load.
+    FILE_FORMAT = "pgw-feature-head-v2"
+    FILE_FORMATS = ("pgw-feature-head-v1", "pgw-feature-head-v2")
     KERNELS = ("auto", "float", "native_int8")
 
     def __init__(self, weights: dict[str, torch.Tensor], embed: torch.Tensor, vocab: Sequence[int], *,
                  target_vocab: int | None = None, kernel: str = "float", ring: Any = None,
-                 int8: dict[str, tuple[torch.Tensor, torch.Tensor]] | None = None, threads: int = 1):
+                 int8: dict[str, tuple[torch.Tensor, torch.Tensor]] | None = None, threads: int = 1,
+                 in_scale: tuple[torch.Tensor, torch.Tensor] | None = None, lookup: int = 0,
+                 lookup_min_n: int = 3):
         """``weights``: float ``w_in`` (d, 2H), ``b_in``, ``w1``, ``b1``, ``w2``, ``b2``, ``w_out`` (H, d) and
         optionally ``u`` (V, d), the reduced-vocabulary LM head ``H_V W_out`` (default ``E_V W_out``: right
         for a tied target only). ``kernel``: ``"float"`` (float32 products), ``"native_int8"`` (int8 per-row
         weights on the native local-linear kernel, ``pgw_fast.local_linear_into``: a quarter of the bytes;
         needs ``ring``) or ``"auto"`` (native when available, else float). ``int8``: per-row int8 weights and
-        scales to use as they are (the file's), else they are quantized from ``weights``. Drafts are
-        proposals only: the kernel changes speed and acceptance, never the outputs."""
+        scales to use as they are (the file's), else they are quantized from ``weights``. ``in_scale``: the
+        per-column input scales (feature half, token half) of a v2 file; then ``int8``'s ``w_in_f`` / ``w_in_e``
+        are in the scaled input space (``w_in`` in ``weights`` is the folded float product either way).
+        ``lookup``: also run prompt lookup (n-grams of ``lookup`` down to ``lookup_min_n`` tokens, the fixed-work
+        search) on every chain job, and propose its continuation instead of the head's when it fills the whole
+        chain (copy-heavy text: code edits, quotes, rewrites). The head runs either way (the same work per pass).
+        Drafts are proposals only: the kernel and the lookup change speed and acceptance, never the outputs."""
         f32 = torch.float32
         if kernel not in self.KERNELS:
             raise ConfigError(f"FeatureHeadDrafter kernel must be one of {self.KERNELS}")
@@ -736,19 +746,33 @@ class FeatureHeadDrafter(BuiltinDrafter):
         else:
             self.u = (embed[self.vocab].to(f32) @ self.w_out).contiguous()  # (V, d)
         self.model = None
-        self.lookup = 0
-        self.lookup_min_n = 3
+        self.lookup = int(lookup)
+        self.lookup_min_n = int(lookup_min_n)
         self.target_vocab = target_vocab if target_vocab is not None else int(embed.shape[0])
         self.draft_vocab = None
-        self.stats = {"calls": 0.0, "steps": 0.0, "ms": 0.0}
-        if kernel == "auto":
+        self.stats = {"calls": 0.0, "steps": 0.0, "ms": 0.0, "lookup_chains": 0.0}
+        auto = kernel == "auto"
+        if auto:
             from pgw.engine.backends import NativeInt8DraftBackend
 
             kernel = "native_int8" if ring is not None and NativeInt8DraftBackend.available() else "float"
         self.kernel = kernel
+        self._in_scale = None if in_scale is None else (in_scale[0].to(f32).reshape(1, -1),
+                                                        in_scale[1].to(f32).reshape(1, -1))
+        if self._in_scale is not None and any(int(x.shape[1]) != hidden for x in self._in_scale):
+            raise ConfigError("draft head: in_scale must hold hidden-size feature and token scales")
         self._lin: dict[str, Callable[[torch.Tensor], torch.Tensor]] | None = None
         if kernel == "native_int8":
             self._lin = self._native_linears(ring, int8 or {}, threads)
+            if auto:  # keep the native kernel only where it is the faster one (it reads a quarter of the bytes,
+                # but the float32 products win on some CPUs and head sizes): a few timed steps of each at load
+                native_s = self._time_steps()
+                lin, self._lin = self._lin, None
+                float_s = self._time_steps()
+                if native_s < float_s:
+                    self._lin = lin
+                else:
+                    self.kernel = "float"
         # the full-vocabulary row the reduced logits are scattered into: one reused buffer (only the V
         # entries are rewritten per row; a fresh 0.6 MB row per step costs ~1 ms in page faults on a 7B vocab)
         self._buf = torch.full((int(self.target_vocab),), float("-inf"))
@@ -756,11 +780,25 @@ class FeatureHeadDrafter(BuiltinDrafter):
         self._all_kept = bool(self._keep.all())
         self._vocab_kept = self.vocab[self._keep]
 
+    def _time_steps(self, n: int = 5) -> float:
+        """Median seconds of one head step (2 rows) on the current kernel."""
+        f = torch.zeros(2, int(self.w_out.shape[0]))
+        toks = [int(self.vocab[0])] * 2
+        self._step(f, toks)  # warm-up
+        times = []
+        for _ in range(n):
+            t0 = time.perf_counter()
+            self._step(f, toks)
+            times.append(time.perf_counter() - t0)
+        return sorted(times)[n // 2]
+
     def _native_linears(self, ring: Any, int8: dict[str, tuple[torch.Tensor, torch.Tensor]],
                         threads: int) -> dict[str, Callable[[torch.Tensor], torch.Tensor]]:
         """Per-row int8 products on the native kernel. ``W_in`` is split into its feature and token halves:
         the kernel quantizes each input row as a whole, and the target feature (outliers in the hundreds)
-        would swamp the token embedding (~1e-2) in one row."""
+        would swamp the token embedding (~1e-2) in one row. With a v2 file's ``in_scale`` the halves read the
+        scaled inputs (``f * in_scale_f``, ``e * in_scale_e``): each column near unit range, so neither the
+        per-row weight scale nor the per-row input quantizer is set by a few outlier columns."""
         from pgw.core.ring import quantize_weight_rows
         from pgw.engine.backends import NativeInt8DraftBackend, _native_int8_linear
 
@@ -774,31 +812,42 @@ class FeatureHeadDrafter(BuiltinDrafter):
                 return w8.to(torch.int8), sc.to(torch.float32)
             return quantize_weight_rows(w)
 
+        if self._in_scale is not None and not {"w_in_f", "w_in_e"} <= set(int8):
+            raise ConfigError("draft head: in_scale needs the file's int8 w_in_f and w_in_e")
         mats = {n: q(n, w) for n, w in (("w_in_f", self.w_in[:, :hidden]), ("w_in_e", self.w_in[:, hidden:]),
                                         ("w1", self.w1), ("w2", self.w2), ("w_out", self.w_out), ("u", self.u))}
         return {n: _native_int8_linear(w8, sc, None, ring, threads) for n, (w8, sc) in mats.items()}
 
     @classmethod
     def from_file(cls, path: Any, embed: torch.Tensor, *, target_vocab: int | None = None, kernel: str = "auto",
-                  ring: Any = None, threads: int = 1) -> FeatureHeadDrafter:
+                  ring: Any = None, threads: int = 1, lookup: int = 0, lookup_min_n: int = 3) -> FeatureHeadDrafter:
         """Load a trained head (``benchmarks/feature_head_train.py``: int8 per-row weights and scales, float
         biases, the reduced vocabulary and ``U = H_V W_out``). Checked against the target's hidden size."""
         blob = torch.load(path, map_location="cpu", weights_only=True)
-        if not isinstance(blob, dict) or blob.get("format") != cls.FILE_FORMAT:
-            raise ConfigError(f"{path}: not a feature-head file ({cls.FILE_FORMAT})")
+        if not isinstance(blob, dict) or blob.get("format") not in cls.FILE_FORMATS:
+            raise ConfigError(f"{path}: not a feature-head file ({', '.join(cls.FILE_FORMATS)})")
         if int(blob["hidden"]) != int(embed.shape[1]):
             raise ConfigError(f"{path}: head for hidden size {blob['hidden']}, target has {int(embed.shape[1])}")
         q8 = {k: (v["w8"], v["scale"]) for k, v in blob["int8"].items()}
         w = {k: w8.to(torch.float32) * sc.to(torch.float32)[:, None] for k, (w8, sc) in q8.items()}
+        ins = blob.get("in_scale")
+        in_scale = None
         if "w_in" in w:  # one scale per row over both halves (older files): the kernel splits it below
             q8.pop("w_in")
         else:  # the feature and token halves quantized on their own (feature_head_train.py)
-            w["w_in"] = torch.cat([w.pop("w_in_f"), w.pop("w_in_e")], dim=1)
+            wf, we = w.pop("w_in_f"), w.pop("w_in_e")
+            if ins is not None:  # v2: halves in the scaled input space; fold the column scales for float
+                in_scale = (ins["f"].to(torch.float32).reshape(-1), ins["e"].to(torch.float32).reshape(-1))
+                if any(int(x.numel()) != int(wf.shape[1]) for x in in_scale):
+                    raise ConfigError(f"{path}: in_scale does not match the hidden size")
+                wf, we = wf * in_scale[0][None, :], we * in_scale[1][None, :]
+            w["w_in"] = torch.cat([wf, we], dim=1)
         w.update({k: v.to(torch.float32) for k, v in blob["bias"].items()})
         tv = target_vocab if target_vocab is not None else int(embed.shape[0])
         if any(int(t) < 0 or int(t) >= tv for t in blob["vocab"]):
             raise ConfigError(f"{path}: vocabulary ids outside the target's vocabulary")
-        return cls(w, embed, blob["vocab"], target_vocab=tv, kernel=kernel, ring=ring, int8=q8, threads=threads)
+        return cls(w, embed, blob["vocab"], target_vocab=tv, kernel=kernel, ring=ring, int8=q8, threads=threads,
+                   in_scale=in_scale, lookup=lookup, lookup_min_n=lookup_min_n)
 
     def nbytes_per_step(self, bytes_per_weight: int = 1) -> int:
         """Weights read by one draft step (int8: 1 byte per weight)."""
@@ -822,6 +871,8 @@ class FeatureHeadDrafter(BuiltinDrafter):
             z = torch.cat([f, e], dim=1) @ self.w_in.T + self.b_in
             z = z + torch.nn.functional.silu(z @ self.w1.T + self.b1) @ self.w2.T + self.b2
             return z @ self.w_out.T, z @ self.u.T
+        if self._in_scale is not None:
+            f, e = f * self._in_scale[0], e * self._in_scale[1]
         z = lin["w_in_f"](f) + lin["w_in_e"](e) + self.b_in
         z = z + lin["w2"](torch.nn.functional.silu(lin["w1"](z) + self.b1)) + self.b2
         return lin["w_out"](z), lin["u"](z)
@@ -843,6 +894,13 @@ class FeatureHeadDrafter(BuiltinDrafter):
         t0 = time.perf_counter()
         try:
             self._head_steps(live)
+            if self.lookup:
+                for j in live:  # every chain job searched (fixed work); a full-length match replaces the head's
+                    if j.tree is None:
+                        prop = self._lookup(list(j.context), j.k)
+                        if len(prop) == j.k:
+                            j.out = [int(t) for t in prop]
+                            self.stats["lookup_chains"] += 1
         except Exception:
             log.warning("draft head failed; no drafts for %d sequence(s)", len(live), exc_info=True)
             for j in live:

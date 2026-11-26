@@ -108,7 +108,8 @@ version = { attr = "pgw.__version__" }
 where = ["src"]
 
 [tool.setuptools.package-data]
-pgw = ["py.typed", "observability/static/*", "console/static/**/*", "design/*.css", "design/fonts/*", "platform/static/*"]
+pgw = ["py.typed", "observability/static/*", "console/static/**/*", "design/*.css", "design/fonts/*", "platform/static/*",
+       "sdk/draft_heads/*.pgwhead"]
 
 [tool.cibuildwheel]
 # One abi3 wheel per platform (CPython >= 3.11 stable ABI); .github/workflows/wheels.yml tests it on 3.11-3.13.

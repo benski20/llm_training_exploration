@@ -72,14 +72,24 @@ SDK_SERVE_MS = 2.0
 #: values: 93 / 160 / 225 / 746 us, fitted. The monitor samples ``SDK_NOISE_RATE`` of the trips (its default).
 SDK_NOISE_US = (75.0, 0.0227)
 SDK_NOISE_RATE = 0.05
-#: tokens per verify pass (strict, chain): measured here on Qwen2.5-0.5B with prompt lookup (sdk_trip_profile.py,
-#: 64 tokens): open chat 1.14 (R=2) / 1.15 (R=3), a code edit 1.66 (R=2) / 2.10-2.14 (R=3) / 2.52 (R=4); draft head:
-#: alpha 0.46 is the 7B float head's measured top-1 (export bug pending), 0.8 an EAGLE-class head (not trained)
-#: -> (1 - a^3) / (1 - a).
-SDK_TAU = {"off (R=1)": (1, 1.0), "lookup, open chat (R=2)": (2, 1.14), "lookup, open chat (R=3)": (3, 1.15),
-           "lookup, copy-heavy (R=2)": (2, 1.66), "lookup, copy-heavy (R=3)": (3, 2.1),
-           "draft head a=0.46 (R=3)": (3, (1 - 0.46 ** 3) / (1 - 0.46)),
-           "draft head a=0.8 (R=3)": (3, (1 - 0.8 ** 3) / (1 - 0.8))}
+#: tokens per verify pass (strict, chain) and whether the pass runs the draft head: prompt lookup measured here on
+#: Qwen2.5-0.5B (sdk_trip_profile.py, 64 tokens): open chat 1.14 (R=2) / 1.15 (R=3), a code edit 1.66 (R=2) /
+#: 2.10-2.14 (R=3) / 2.52 (R=4). Draft head (speculation="draft_head": the shipped head + prompt lookup), measured
+#: 2026-11-26: 7B held-out open chat 1.46 / 1.66 / 1.74 at R = 2 / 3 / 4 (code 1.69 at R = 3), exact replay of the
+#: 7B's own greedy answers through the strict acceptance rule (benchmarks/results/feature_head/kaggle_7b; alpha
+#: 0.47 chat / 0.51 code at depth 1); 0.5B end to end through the library 1.51 / 1.77 / 1.95 (sdk_spec_bench.py).
+#: 32B / 72B have no trained head: the 7B values are an assumption there. EAGLE-class (alpha 0.8, attention over
+#: past features; not trained) for comparison: (1 - a^3) / (1 - a).
+SDK_TAU = {"off (R=1)": (1, 1.0, False), "lookup, open chat (R=2)": (2, 1.14, False),
+           "lookup, open chat (R=3)": (3, 1.15, False), "lookup, copy-heavy (R=2)": (2, 1.66, False),
+           "lookup, copy-heavy (R=3)": (3, 2.1, False),
+           "draft head, open chat (R=2)": (2, 1.46, True), "draft head, open chat (R=3)": (3, 1.66, True),
+           "draft head, open chat (R=4)": (4, 1.74, True), "draft head, code (R=3)": (3, 1.69, True),
+           "EAGLE-class a=0.8 (R=3, not trained)": (3, (1 - 0.8 ** 3) / (1 - 0.8), True)}
+#: draft head CPU time per head step (R - 1 steps per pass), ms: 7B d = 384, V = 16,384 measured here (float32
+#: kernel, 4 threads, feature_head_cpu_bench.py; 0.88 ms; the native int8 kernel 1.3 ms); 32B / 72B scaled by the
+#: head's weights (estimate, H = 5120 / 8192).
+SDK_HEAD_STEP_MS = {"7B": 0.88, "32B": 1.02, "72B": 1.30}
 
 
 def _sm() -> Any:
@@ -100,7 +110,8 @@ def _noise_us(values: int) -> float:
 
 
 def sdk_ms_per_token(model: str, rtt_ms: float, rows: int = 1, tau: float = 1.0, nic_gbit: float = 25.0,
-                     tp: int | None = None, lane_ms: float | None = None, gw_scale: float = 1.0) -> dict[str, float]:
+                     tp: int | None = None, lane_ms: float | None = None, gw_scale: float = 1.0,
+                     head: bool = False) -> dict[str, float]:
     """ms per decoded token by component on the library's path (see the constants above)."""
     sm = _sm()
 
@@ -119,7 +130,8 @@ def sdk_ms_per_token(model: str, rtt_ms: float, rows: int = 1, tau: float = 1.0,
            "gateway": (4 * shape.layers * SDK_GW_TRIP_MS[model] + SDK_GW_HEAD_MS) * rowf * gw_scale,
            "serve": SDK_SERVE_MS * (1 + 0.1 * (rows - 1)),
            "noise": SDK_NOISE_RATE * (shape.layers * sum(_noise_us(rows * n) for _, n, _ in shape.linears())
-                                      + _noise_us(rows * shape.hidden)) / 1e3}
+                                      + _noise_us(rows * shape.hidden)) / 1e3,
+           "draft": (rows - 1) * SDK_HEAD_STEP_MS[model] if head else 0.0}
     per_pass = sum(v for k, v in out.items() if k != "trips")
     out["pass_ms"] = per_pass
     out["ms_per_token"] = per_pass / tau
@@ -134,12 +146,12 @@ def sdk_main(nic_gbit: float = 25.0) -> None:
           " | ".join(f"RTT {r} ms" for r in rtts) + " |")
     print("|---|---|---|" + "---|" * len(rtts))
     for model in SDK_SHAPES:
-        for mode, (rows, tau) in SDK_TAU.items():
+        for mode, (rows, tau, head) in SDK_TAU.items():
             cells = []
             for rtt in rtts:
-                b = sdk_ms_per_token(model, rtt, rows, tau, nic_gbit)
+                b = sdk_ms_per_token(model, rtt, rows, tau, nic_gbit, head=head)
                 cells.append(f"{b['ms_per_token']:.1f} ({1e3 / b['ms_per_token']:.1f})")
-            b = sdk_ms_per_token(model, rtts[0], rows, tau, nic_gbit)
+            b = sdk_ms_per_token(model, rtts[0], rows, tau, nic_gbit, head=head)
             print(f"| {model} | {mode} | {b['critical_trips_per_token']:.0f} | " + " | ".join(cells) + " |")
     print("\nComponents per pass at RTT 0.2 ms, 1 row (ms): ")
     for model in SDK_SHAPES:
@@ -149,9 +161,14 @@ def sdk_main(nic_gbit: float = 25.0) -> None:
     for model in SDK_SHAPES:
         cells = []
         for lane, gws, name in ((None, 1.0, "today"), (0.05, 1.0, "lane 0.05"), (0.05, 0.5, "lane 0.05 + gateway/2"),
+                                (0.05, 0.5, "same + shipped draft head R=3"),
                                 (0.05, 0.5, "same + draft head a=0.8 R=3")):
-            rows, tau = (3, (1 - 0.8 ** 3) / 0.2) if "draft" in name else (1, 1.0)
-            b = sdk_ms_per_token(model, 0.2, rows, tau, nic_gbit, lane_ms=lane, gw_scale=gws)
+            rows, tau = (1, 1.0)
+            if "shipped" in name:
+                rows, tau = SDK_TAU["draft head, open chat (R=3)"][:2]
+            elif "draft" in name:
+                rows, tau = (3, (1 - 0.8 ** 3) / 0.2)
+            b = sdk_ms_per_token(model, 0.2, rows, tau, nic_gbit, lane_ms=lane, gw_scale=gws, head=rows > 1)
             cells.append(f"{name}: {b['ms_per_token']:.0f} ({1e3 / b['ms_per_token']:.1f})")
         print(f"  {model}: " + "; ".join(cells))
     print("\nLocal linear on the client (factory-pack weights) vs one remote trip at RTT 0.2 ms, ms per layer, 1 row")

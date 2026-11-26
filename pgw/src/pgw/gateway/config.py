@@ -493,9 +493,10 @@ class GatewayModelConfig(BaseModel):
         if self.draft_head_path is not None:
             if self.spec_rows is None or not self.spec_strict_passes:
                 raise ValueError(f"model {self.name!r}: draft_head_path needs spec_rows and spec_strict_passes")
-            if self.draft_pack_path is not None or self.spec_lookup > 0 or self.spec_pipeline_steps is not None:
-                raise ValueError(f"model {self.name!r}: draft_head_path excludes draft_pack_path, spec_lookup and "
-                                 "spec_pipeline_steps (the head is the only draft source)")
+            if self.draft_pack_path is not None or self.spec_pipeline_steps is not None:
+                raise ValueError(f"model {self.name!r}: draft_head_path excludes draft_pack_path and "
+                                 "spec_pipeline_steps (spec_lookup combines: a full-chain lookup match replaces "
+                                 "the head's drafts)")
         if self.spec_mask_credit is not None and self.spec_mask_rows is None:
             raise ValueError(f"model {self.name!r}: spec_mask_credit needs spec_mask_rows")
         if self.speculates and self.device.split(":", 1)[0].strip().lower() != "cpu":

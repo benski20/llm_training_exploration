@@ -87,8 +87,7 @@ def test_options() -> None:
         SDKOptions(speculation="fast").validate()  # type: ignore[arg-type]
     with pytest.raises(ValueError, match="spec_rows"):
         SDKOptions(speculation="lookup", spec_rows=9).validate()
-    with pytest.raises(ValueError, match="draft_head_path"):
-        SDKOptions(speculation="draft_head").validate()
+    SDKOptions(speculation="draft_head").validate()  # the head pinned for the model (pgw.sdk.draft_heads)
     with pytest.raises(ValueError, match="draft_head_path"):
         SDKOptions(draft_head_path=Path("/h.pt")).validate()
     SDKOptions(speculation="lookup", spec_rows=4).validate()

@@ -194,33 +194,53 @@ def q8(w: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
     return torch.clamp(torch.round(w / sc[:, None]), -127, 127).to(torch.int8), sc
 
 
-def export(head: Head, hv: torch.Tensor, vocab: list[int], target: str, extra: dict) -> dict:
-    """The FeatureHeadDrafter file: int8 per-row weights + float32 scales, float32 biases, ``U = H_V W_out``.
+def export(head: Head, hv: torch.Tensor, vocab: list[int], target: str, extra: dict,
+           keep_float: bool = True) -> dict:
+    """The FeatureHeadDrafter file (format v2): int8 per-row weights + float32 scales, float32 biases, the
+    per-input-column scales ``in_scale`` and ``U = H_V W_out``.
 
-    ``W_in`` is stored as its feature half and token half, each quantized per row on its own: the folded input
-    scales make the token half's weights ~100x the feature half's, so one scale per row would round the
-    feature half to almost nothing. The float weights are kept too (``float``; not read by the gateway)."""
+    ``W_in`` is stored in the trained (normalized) input space, as its feature half and token half, each
+    quantized per row, with the input scales kept apart (``in_scale.f`` = 1 / feature std per dimension,
+    ``in_scale.e`` = 1 / embedding rms): the loader folds them for float products and scales the input for
+    the native int8 kernel. Folding them into ``W_in`` before quantizing (format v1) is the 7B export bug:
+    the target's final-norm features have outlier dimensions (std up to ~100x the median), so the folded
+    columns span 100-1000x within a row and one per-row int8 scale rounds the outlier columns' weights to
+    0 or +-1 (the dimensions that carry most of the feature); with one scale over both halves (the first
+    export) the whole feature half rounded to 0. The float weights are kept too (``float``; not read by
+    the gateway) unless ``keep_float`` is false."""
     hidden = int(hv.shape[1])
-    w_in = head.w_in_eff()
+    w_in = head.w_in.weight  # (d, 2H) in the normalized input space: x_norm = [f / fs ; e / es]
     ws = {"w_in_f": w_in[:, :hidden], "w_in_e": w_in[:, hidden:], "w1": head.w1.weight, "w2": head.w2.weight,
           "w_out": head.w_out_eff()}
     q = {k: q8(v) for k, v in ws.items()}
     w_out_dq = q["w_out"][0].float() * q["w_out"][1][:, None]
     u = hv.detach().float().cpu() @ w_out_dq  # (V, d)
     q["u"] = q8(u)
-    return {"format": "pgw-feature-head-v1", "target": target, "hidden": int(hv.shape[1]),
+    ins = head.in_scale.detach().float().cpu()
+    blob = {"format": "pgw-feature-head-v2", "target": target, "hidden": hidden,
             "d": int(head.w_in.weight.shape[0]), "vocab": [int(t) for t in vocab],
             "int8": {k: {"w8": v[0], "scale": v[1]} for k, v in q.items()},
+            "in_scale": {"f": ins[:hidden].contiguous(), "e": ins[hidden:].contiguous()},
             "bias": {"b_in": head.w_in.bias.detach().float().cpu(), "b1": head.w1.bias.detach().float().cpu(),
                      "b2": head.w2.bias.detach().float().cpu()},
-            "float": {k: v.detach().float().cpu() for k, v in {**ws, "b_in": head.w_in.bias}.items()},
             **extra}
+    if keep_float:
+        w_eff = head.w_in_eff()
+        fl = {"w_in_f": w_eff[:, :hidden], "w_in_e": w_eff[:, hidden:], "w1": head.w1.weight,
+              "w2": head.w2.weight, "w_out": head.w_out_eff(), "b_in": head.w_in.bias}
+        blob["float"] = {k: v.detach().float().cpu() for k, v in fl.items()}
+    return blob
 
 
 def dequant_head(blob: dict) -> dict[str, torch.Tensor]:
+    """Float weights of a head file as the gateway's float kernel uses them (v1 and v2 layouts)."""
     w = {k: v["w8"].float() * v["scale"][:, None] for k, v in blob["int8"].items()}
     if "w_in_f" in w:
-        w["w_in"] = torch.cat([w.pop("w_in_f"), w.pop("w_in_e")], dim=1)
+        wf, we = w.pop("w_in_f"), w.pop("w_in_e")
+        if "in_scale" in blob:
+            wf = wf * blob["in_scale"]["f"].float()[None, :]
+            we = we * blob["in_scale"]["e"].float()[None, :]
+        w["w_in"] = torch.cat([wf, we], dim=1)
     w.update(blob["bias"])
     return w
 

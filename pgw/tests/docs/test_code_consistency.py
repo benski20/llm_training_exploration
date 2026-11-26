@@ -122,10 +122,12 @@ _NON_FIELD_ENV = {
     "PGW_SDK_MASKGEN_STALL_S",  # SDKOptions.maskgen_stall_s (pgw.sdk.factory: the maskgen watchdog)
     "PGW_PKS_ISA",  # pgw_pks (Rust): caps the ISA of the pks-v3 and check-vector kernels
     "PGW_MASK_ADMISSION",  # SDKOptions.mask_admission
-    "PGW_SPECULATION",  # SDKOptions.speculation
     "PGW_PKS_COMPACT",  # pks-v3 compact output switch read by pgw.hemask.pks_backend
     "PGW_VECMAT_NATIVE",  # native vecmat switch read by pgw.factory.kernels
     "PGW_WRITER_THREADS",  # segment writer threads read by pgw.maskstore.segment_io
+
+    "PGW_SPECULATION",  # SDKOptions.speculation (read in SDKOptions.from_env)
+    "PGW_DRAFT_HEAD_URL",  # mirror of the pinned draft heads (pgw.sdk.draft_heads.resolve_draft_head)
     "PGW_PLATFORM_ENABLED",  # developer console on the provider (pgw.platform.PlatformSettings)
     "PGW_PLATFORM_ACCOUNTS_URL",
     "PGW_PLATFORM_ACCOUNTS_TOKEN_FILE",

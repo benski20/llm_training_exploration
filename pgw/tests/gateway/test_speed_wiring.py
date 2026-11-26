@@ -748,8 +748,6 @@ def _cfg(**kw: Any) -> GatewayModelConfig:
     ({"draft_head_path": "/h.pt"}, "go together"),
     ({"draft_backend": "feature_head", "draft_head_path": "/h.pt"}, "needs spec_rows and spec_strict_passes"),
     ({"draft_backend": "feature_head", "draft_head_path": "/h.pt", "spec_rows": 3, "spec_strict_passes": True,
-      "spec_lookup": 3}, "excludes draft_pack_path"),
-    ({"draft_backend": "feature_head", "draft_head_path": "/h.pt", "spec_rows": 3, "spec_strict_passes": True,
       "draft_pack_path": "/x"}, "excludes draft_pack_path"),
 ])
 def test_cpu_gateway_spec_validation(kw: dict[str, Any], match: str) -> None:
@@ -767,6 +765,10 @@ def test_cpu_only_strict_speculation_config_is_accepted() -> None:
     h = _cfg(local_linears="off", float_ops="native", device="cpu", draft_backend="feature_head",
              draft_head_path="/h.pt", spec_rows=4, spec_strict_passes=True, spec_mask_rows=4, spec_mask_credit=160)
     assert h.speculates and h.draft_pack_path is None
+    # head + prompt lookup (the client library's draft_head mode): a full-chain lookup match replaces the head's
+    hl = _cfg(draft_backend="feature_head", draft_head_path="/h.pt", spec_rows=3, spec_strict_passes=True,
+              spec_lookup=4, spec_lookup_min_n=2)
+    assert hl.speculates and hl.spec_lookup == 4
     assert _cfg().draft_head_path is None and _cfg().draft_backend == "auto"  # defaults off
 
 
