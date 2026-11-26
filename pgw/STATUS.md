@@ -3114,3 +3114,81 @@ New settings:
 - `PGW_SERVICE_PKS_HOST_THREADS`, default `min(8, cpus)`.
 
 Cloud spend: one Kaggle T4 kernel (6.5 min). No other compute.
+
+
+## 2026-11-26: trained draft heads for strict speculation in the client library (0.5B, 7B; shipped, pinned)
+
+Goal: `speculation="draft_head"` that pays off on ordinary chat, not only on copy-heavy text.
+
+- **7B export bug, fixed** (`benchmarks/feature_head_train.py`, `FeatureHeadDrafter`): the exporter folded the
+  input scales (1 / feature std per dimension, 1 / embedding rms) into `W_in` before int8 per-row quantization.
+  One scale over both halves (the first Modal export) rounded the feature half to 0 (alpha 0.19); the per-half
+  fix of 2026-11-23 still rounded the outlier feature dimensions (the folded columns span 100-1000x in a row).
+  Format `pgw-feature-head-v2` stores `W_in` in the trained input space plus `in_scale`; the loader folds it for
+  the float kernel and scales the input for the native int8 kernel; v1 files still load. Test
+  (`tests/benchmarks/test_feature_head_export.py`, 7B-like feature statistics): exported head vs float head top-1
+  agreement 98% (float and native kernels) vs 86% (folded per half) and 48% (one scale).
+- **Training on Kaggle** (`benchmarks/feature_head_distill.py`, job builder `benchmarks/kaggle/build_head.py`,
+  T4 x 2, one kernel at a time): prompts from UltraChat 200k, Alpaca and Dolly (pinned dataset revisions); the
+  target answers them itself (greedy, 25% sampled at T = 0.7, no repetition penalty) and forward hooks capture the
+  final-norm feature and the raw arg-max at every generated position (checked equal to a teacher-forced pass);
+  features kept as int8 in host RAM; held out first: 179 UltraChat `test_sft` prompts (open chat) and 120 Alpaca
+  code prompts. 0.5B: 2.58M rows (66 min). 7B (fp16 split over both T4s): 1.20M rows (generation ran at ~220
+  tok/s, so data limited it; 109 min). Results: `benchmarks/results/feature_head/kaggle_{05b,7b}/`.
+- **Head + prompt lookup**: `FeatureHeadDrafter(lookup=...)` runs prompt lookup (fixed-work search) on every pass
+  and proposes its continuation when it fills the whole chain; the head runs either way. The SDK's
+  `draft_head` mode turns it on (n-grams 4..2). `kernel="auto"` keeps the native int8 kernel only when timed
+  faster at load (float32 is faster on this box: 0.88 vs 1.3 ms per 7B head step).
+
+Alpha (depth-1 top-1 of the exported head on held-out greedy answers) and tokens per pass (strict chain, R - 1
+drafts; replay = exact replay of the target's own answers through the acceptance rule, `feature_head_hybrid_sim.py`):
+
+| model, head | alpha chat / code | tokens per pass, open chat, R = 2 / 3 / 4 | code, R = 2 / 3 / 4 |
+|---|---|---|---|
+| 0.5B d 256 V 16384 (5.3 MB, shipped), head alone | 0.48 / 0.49 | 1.46 / 1.65 / 1.72 | 1.46 / 1.66 / 1.74 |
+| same + lookup (replay) | | 1.52 / 1.78 / 1.91 | 1.50 / 1.74 / 1.86 |
+| same + lookup, **end to end through `pgw.OpenAI`** (CPU provider) | | 1.51 / 1.77 / 1.95 | 1.50 / 1.74 / 1.86 |
+| 0.5B d 384 V 32768 (14.5 MB), head alone | 0.50 / 0.53 | 1.48 / 1.69 / 1.78 | 1.50 / 1.72 / 1.82 |
+| 7B d 384 V 16384 (11.2 MB, shipped), head alone | 0.47 / 0.51 | 1.45 / 1.62 / 1.68 | 1.48 / 1.66 / 1.73 |
+| same + lookup (replay) | | 1.46 / 1.66 / 1.74 | 1.48 / 1.69 / 1.77 |
+| same + lookup, **end to end on a Kaggle T4** (5 prompts, 48 tokens) | | 1.53 / 1.69 / - | 1.59 / 1.81 / - |
+| 7B d 512 V 32768 (23.6 MB), head alone | 0.48 / 0.52 | 1.46 / 1.63 / 1.70 | 1.49 / 1.68 / 1.75 |
+
+End-to-end speed (`benchmarks/sdk_spec_bench.py`, greedy, streamed; every answer's tokens and logprobs identical to
+`off`):
+
+- 0.5B on this 4-vCPU box (real pack, CPU provider, 7 chat + 5 code prompts, 96 tokens): open chat 3.22 tok/s off
+  -> 3.81 / 4.09 / 4.27 at R = 2 / 3 / 4 (+18 / +27 / +32%); code 3.23 -> 3.82 / 3.96 / 4.11; lookup alone 3.07
+  (slower); the code-edit prompt 3.21 -> 4.90 (R = 3; lookup alone 4.99).
+- 7B on one Kaggle T4 (provider on cuda, client and plain mask factory on the same 4 vCPUs): 5.38 tok/s off ->
+  3.93 (R = 2) / 2.03 (R = 3). On that machine each extra row costs the T4 (no int8 tensor-core GEMV) and the
+  factory competes for the CPUs, so it confirms exactness and tokens per pass, not deployment speed.
+- Model (`round_trip_model.py --sdk`, now with the measured tokens per pass and R - 1 head steps per pass), 7B,
+  H100 provider, RTT 0.2 ms: off 16.6 tok/s, draft head 19.6 / 18.7 / 16.9 at R = 2 / 3 / 4; 32B 6.5 -> 7.7
+  (R = 2), 72B 5.0 -> 5.7 (32B/72B with the 7B tau: no head trained there).
+
+Shipping: the heads are package data (`src/pgw/sdk/draft_heads/*.pgwhead`, 16.5 MB together; in the repo, not
+LFS: small, and a pip install from git keeps working), pinned in `pgw.sdk.draft_heads.PINNED_DRAFT_HEADS` (file,
+SHA-256, size, target checkpoint = the SDK's model pin). `speculation="draft_head"` without `draft_head_path`
+resolves the pinned head: the shipped file (a hash mismatch refuses), else a cache copy, else a mirror
+(`PGW_DRAFT_HEAD_URL`), fetched and checked before it is moved into the cache. The head runs on the client's CPU
+only; nothing about it is sent to the provider. Docs: `docs/sdk/configuration.md`, "Speculative decoding: when to
+enable it".
+
+**Default unchanged (off).** Open chat is faster end to end at 0.5B on this box (+27% at R = 3) and in the 7B model
+(+18% at R = 2), but speculation multiplies mask use and per-round traffic by `spec_rows`: where the mask factory
+or the link is the limit (7B `pks-v3` on a small machine; the T4 run) it is a loss, and it orders a user's
+requests behind the previous answer's dummy rounds. Recommendation: `draft_head` with `spec_rows=2` at 7B and 3 at
+0.5B for interactive use when the mask stock keeps up.
+
+Tests: export (4), shipped heads and resolution (7: pins, tampered file, mirror fetch, bad mirror, engine wiring),
+head + lookup strict exactness (greedy and seeded; head steps unchanged), gateway config, round-trip model;
+`tests/sdk` 165 passed (S4/S20 tests included) with `test_lane_multi.py` deselected (3 failures there that the
+base commit has too); `tests/engine/test_tree_spec.py` 134, `tests/gateway/test_speed_wiring.py` 68,
+`tests/benchmarks` 49. tests/docs: the `PGW_SPECULATION` failure is fixed; `PGW_MASK_ADMISSION` (not this change)
+and the README index test still fail as before.
+
+Open: alpha ~0.48 is the MLP head's level (EAGLE's ~0.8 needs attention over past features); more 7B data needs a
+faster generator than HF generate on T4s. The training prompts include Alpaca (CC BY-NC 4.0): retrain without it
+(`--mix 0.8,0,0.2`) if that licence matters for the shipped heads. Kaggle: the 7B head kernel started 3 s after
+another agent's CPU pin kernel (both checked idle before pushing).

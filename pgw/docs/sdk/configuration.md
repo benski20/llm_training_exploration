@@ -95,6 +95,7 @@ heads were not trained on):
 | `qwen2.5-0.5b-instruct`, `draft_head`, `spec_rows` 2 / 3 / 4 (end to end, CPU service) | 1.51 / 1.77 / 1.95 | 1.50 / 1.74 / 1.86 | chat +18 / +27 / +32 %, code +18 / +23 / +27 % |
 | `qwen2.5-0.5b-instruct`, `lookup`, `spec_rows` 3 (same run) | 1.18 | 1.22 | -5 % (chat), -3 % (code) |
 | `qwen2.5-7b-instruct`, `draft_head`, `spec_rows` 2 / 3 / 4 (replay of the model's own answers) | 1.46 / 1.66 / 1.74 | 1.48 / 1.69 / 1.77 | modelled at 0.2 ms round-trip time on a GPU service: +18 / +13 / +2 % |
+| `qwen2.5-7b-instruct`, `draft_head`, `spec_rows` 2 / 3 (end to end on one 4-vCPU T4 machine: service, your process and its mask factory together) | 1.53 / 1.69 | 1.59 / 1.81 | -27 / -62 %: on that machine every extra row costs the T4 (no int8 tensor-core GEMV) and the factory shares the 4 CPUs; it measures tokens per round, not a deployment |
 | a code edit (the answer copies the prompt), 0.5B, `spec_rows` 3: `draft_head` / `lookup` | 2.11 / 1.98 | | +53 % / +55 % |
 
 Enable `speculation="draft_head"` when:
