@@ -74,6 +74,14 @@ def check(name: str, ok: bool, detail: Any = None) -> bool:
     return bool(ok)
 
 
+def _rss_gb(pid: int) -> float | None:
+    with contextlib.suppress(Exception):
+        for ln in Path(f"/proc/{pid}/status").read_text().splitlines():
+            if ln.startswith("VmRSS:"):
+                return round(int(ln.split()[1]) / 2**20, 2)
+    return None
+
+
 def mem_sample() -> dict[str, Any]:
     out: dict[str, Any] = {"t": round(time.monotonic() - T0, 1)}
     with contextlib.suppress(Exception):
@@ -87,17 +95,50 @@ def mem_sample() -> dict[str, Any]:
 
 
 class Sampler(threading.Thread):
-    """Client status + host memory + GPU every ``every`` seconds into status.jsonl; tracks the memory low."""
+    """Client status + host memory (and each process's RSS) + GPU every ``every`` seconds into status.jsonl; tracks
+    the memory low; copies the provider log to ``--out`` as it goes. Watchdog: when the provider process exits, or
+    the run's wall budget is spent, it records why, writes the results and ends the run (a client blocked on a dead
+    provider must not hold the GPU kernel until the step timeout, which also loses the logs)."""
 
-    def __init__(self, every: float = 15.0):
+    def __init__(self, every: float = 15.0, budget_s: float = 1e9, grace_s: float = 300.0):
         super().__init__(daemon=True)
-        self.every, self.client, self.stop_ev = every, None, threading.Event()
-        self.min_avail = 1e9
+        self.every, self.client, self.prov, self.stop_ev = every, None, None, threading.Event()
+        self.budget_s, self.grace_s, self.min_avail, self.dead_at = budget_s, grace_s, 1e9, None
+        self.last: dict[str, Any] = {}
+
+    def _copy_provider_log(self) -> None:
+        if self.prov is not None:
+            with contextlib.suppress(Exception):
+                shutil.copy(self.prov.log, OUT / "provider.log")
+
+    def _finish(self, why: str) -> None:
+        R["errors"].append(why)
+        R["watchdog"] = why
+        R["total_min"] = round((time.monotonic() - T0) / 60, 1)
+        log("WATCHDOG", why)
+        self._copy_provider_log()
+        save()
+        if self.prov is not None:
+            with contextlib.suppress(Exception):
+                self.prov.proc.kill()
+        os._exit(2)
 
     def run(self) -> None:
+        n = 0
         with (OUT / "status.jsonl").open("a") as f:
             while not self.stop_ev.is_set():
                 s = mem_sample()
+                s["rss_gb"] = {"client": _rss_gb(os.getpid())}
+                prov = self.prov
+                if prov is not None:
+                    s["rss_gb"]["provider"] = _rss_gb(prov.proc.pid)
+                    rc = prov.proc.poll()
+                    if rc is not None and self.dead_at is None:
+                        self.dead_at = time.monotonic()
+                        R["provider_exit"] = {"rc": rc, "t": s["t"], "last_sample_before": self.last}
+                        log("PROVIDER EXITED", rc, "last sample:", json.dumps(self.last)[:400])
+                        self._copy_provider_log()
+                        save()
                 self.min_avail = min(self.min_avail, s.get("mem_avail_gb", 1e9))
                 R["min_mem_avail_gb"] = self.min_avail
                 if self.client is not None:
@@ -105,6 +146,16 @@ class Sampler(threading.Thread):
                         s["status"] = self.client.status()
                 f.write(json.dumps(s, default=str) + "\n")
                 f.flush()
+                self.last = {k: s.get(k) for k in ("t", "mem_avail_gb", "gpu", "rss_gb")}
+                n += 1
+                if n % 4 == 0:
+                    self._copy_provider_log()
+                if self.dead_at is not None and self.client is not None \
+                        and time.monotonic() - self.dead_at > self.grace_s:
+                    self._finish(f"provider exited (rc {R['provider_exit']['rc']}) at t={R['provider_exit']['t']} s "
+                                 f"and the client was still waiting {self.grace_s:.0f} s later")
+                if time.monotonic() - T0 > self.budget_s:
+                    self._finish(f"wall budget of {self.budget_s:.0f} s spent (phase {R.get('phase')})")
                 self.stop_ev.wait(self.every)
 
 
@@ -332,6 +383,8 @@ def main() -> int:
     ap.add_argument("--out", type=Path, default=Path("sdk_e2e_out"))
     ap.add_argument("--device", default="cuda")
     ap.add_argument("--provider-ready-s", type=float, default=2400)
+    ap.add_argument("--budget-s", type=float, default=1e9,
+                    help="wall budget for the whole run: past it the watchdog writes the results and exits")
     ap.add_argument("--drop-checkpoint", action="store_true", help="delete the HF checkpoint once packed")
     ap.add_argument("--client-opts", type=json.loads, default={},
                     help="JSON option overrides (local smoke tests only; the validation uses the defaults)")
@@ -352,8 +405,9 @@ def main() -> int:
         R["env"]["native"] = {"pgw_fast": native.fast is not None, "pgw_ntt": ntt.available(),
                               "pgw_pks": bool(getattr(pks_native, "available", lambda: None)())}
     log("env", R["env"])
-    sampler = Sampler()
+    sampler = Sampler(budget_s=a.budget_s)
     sampler.start()
+    R["phase"] = "provider"
     prov = None
     recs: list[dict[str, Any]] = []
     try:
@@ -365,6 +419,8 @@ def main() -> int:
         pki_dir.mkdir(exist_ok=True)
         prov = start_gpu_provider(a.work, pack, make_pki(pki_dir), a.device, a.provider_ready_s)
         log("provider ready", R["timings"]["provider_start_s"], "s")
+        sampler.prov = prov
+        R["phase"] = "client"
         recs = run_client(prov, a.model, a.work, sampler, a.client_opts)
     except BaseException as e:
         R["errors"].append(traceback.format_exc())
@@ -373,10 +429,12 @@ def main() -> int:
         if prov is not None:
             from tests.sdk.conftest import stop_provider
 
+            sampler.prov = None
             stop_provider(prov)
             shutil.copy(prov.log, OUT / "provider.log")
         save()
     (OUT / "sdk_requests.json").write_text(json.dumps(recs, indent=1, default=str))
+    R["phase"] = "reference"
     if recs:
         try:
             head = "provider_int8" if R.get("masked_head") else "gateway"
