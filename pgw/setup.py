@@ -14,7 +14,10 @@ change speed.
 Environment:
     PGW_REQUIRE_NATIVE=1   a failed extension build fails the build (CI and release wheels).
                            Default: optional, so ``pip install`` from an sdist without a Rust
-                           toolchain still installs (pure-Python path, much slower).
+                           toolchain still installs (pure-Python path, much slower). Without
+                           setuptools-rust at all (``pip install --no-build-isolation .`` in the
+                           provider images, which build ``pgw_fast`` with rust/tools/build_fast.py),
+                           the package installs without extensions too.
 """
 
 from __future__ import annotations
@@ -22,9 +25,14 @@ from __future__ import annotations
 import os
 
 from setuptools import setup
-from setuptools_rust import Binding, RustExtension, Strip
 
 REQUIRE_NATIVE = os.environ.get("PGW_REQUIRE_NATIVE", "0").strip().lower() in ("1", "true", "yes", "on")
+try:
+    from setuptools_rust import Binding, RustExtension, Strip
+except ImportError:  # no build isolation and no setuptools-rust: pure-Python install unless natives are required
+    if REQUIRE_NATIVE:
+        raise
+    RustExtension = None  # type: ignore[assignment,misc]
 
 NATIVE = [
     ("pgw_fast", "rust/pgw-fast/Cargo.toml"),
@@ -32,8 +40,8 @@ NATIVE = [
     ("pgw_pks", "rust/pgw-pks/Cargo.toml"),
 ]
 
-setup(
-    rust_extensions=[
+NATIVE_KW = {} if RustExtension is None else {
+    "rust_extensions": [
         RustExtension(
             target,
             path=path,
@@ -46,6 +54,10 @@ setup(
         )
         for target, path in NATIVE
     ],
+}
+
+setup(
+    **NATIVE_KW,
     options={"bdist_wheel": {"py_limited_api": "cp311"}},
     zip_safe=False,
 )
