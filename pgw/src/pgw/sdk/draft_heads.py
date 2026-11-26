@@ -66,6 +66,12 @@ PINNED_DRAFT_HEADS: dict[str, DraftHeadPin] = {
         "qwen2.5-0.5b-instruct-d256-v16384.pgwhead",
         "948b95e70608620b420707e5df5ed69ee8ecf9c07351ff4036c33a80f8242162", 5288953,
         "Qwen/Qwen2.5-0.5B-Instruct", "7ae557604adf67be50417f59c2c2f167def9a775"),
+    # d = 384, V = 16,384, 11.2 MB; held-out greedy alpha 0.47 (chat) / 0.51 (code), tokens per pass at R = 3 with
+    # prompt lookup: 1.66 / 1.69 (replay of the 7B's own answers)
+    "qwen2.5-7b-instruct": DraftHeadPin(
+        "qwen2.5-7b-instruct-d384-v16384.pgwhead",
+        "019397d17a8cc2313288d722c1a791c2e18e04d9a2a92eca2316b879538ad604", 11191161,
+        "Qwen/Qwen2.5-7B-Instruct", "a09a35458c702b33eeacc393d103063234e8bc28"),
 }
 
 

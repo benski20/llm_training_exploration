@@ -1,0 +1,48 @@
+[   0.2m] loading prompts
+[   0.4m] prompts: train 30000, eval chat 200, eval code 120
+[   0.4m] loading Qwen/Qwen2.5-7B-Instruct
+[transformers] `torch_dtype` is deprecated! Use `dtype` instead!
+
+Fetching 4 files:  25%|██▌       | 1/4 [01:11<03:33, 71.28s/it]
+Fetching 4 files: 100%|██████████| 4/4 [01:11<00:00, 17.82s/it]
+
+Loading weights:   0%|          | 1/339 [00:10<57:44, 10.25s/it]
+[   2.1m] model loaded ({'model.embed_tokens': 0, 'model.layers.0': 0, 'model.layers.1': 0, 'model.layers.2': 0, 'model.layers.3': 0, 'model.layers.4': 0, 'model.layers.5': 0, 'model.layers.6': 0, 'model.layers.7': 0, 'model.layers.8': 0, 'model.layers.9': 0, 'model.layers.10': 0, 'model.layers.11': 0, 'model.layers.12': 0, 'model.layers.13': 1, 'model.layers.14': 1, 'model.layers.15': 1, 'model.layers.16': 1, 'model.layers.17': 1, 'model.layers.18': 1, 'model.layers.19': 1, 'model.layers.20': 1, 'model.layers.21': 1, 'model.layers.22': 1, 'model.layers.23': 1, 'model.layers.24': 1, 'model.layers.25': 1, 'model.layers.26': 1, 'model.layers.27': 1, 'model.norm': 1, 'model.rotary_emb': 1, 'lm_head': 1})
+[   5.4m] eval chat: 179/179 answers, 42214 tokens, 215 tok/s (batch 8, prompt 41)
+[   5.4m] eval chat: 179 answers, 0 with non-finite features; sample: 'The estimated value of the 1.57kg lump of ambergris discovered by the couple in Lancashire is around £50,000.<|im_end|>'
+[   7.0m] eval code: 120/120 answers, 23798 tokens, 242 tok/s (batch 24, prompt 40)
+[   7.0m] eval code: 120 answers, 0 with non-finite features; sample: "The provided code implements a binary search algorithm. Binary search is an efficient algorithm for finding an item from a sorted list of items. It works by repeatedly dividing in half the portion of the list that could contain the item, until you've narrowed down the possible locations to just one.\n\nHere's a step"
+[  21.8m] train: 568/27900 answers, 174339 tokens, 201 tok/s (batch 96, prompt 93)
+[  29.8m] train: 1048/27900 answers, 311825 tokens, 232 tok/s (batch 96, prompt 41)
+[  36.9m] train: 1337/27900 answers, 398953 tokens, 225 tok/s (batch 84, prompt 145, sampled)
+[  40.5m] train: 1529/27900 answers, 451839 tokens, 227 tok/s (batch 96, prompt 45, sampled)
+[  42.2m] train: 1560/27900 answers, 460139 tokens, 220 tok/s (batch 24, prompt 512)
+[  51.4m] train: 1886/27900 answers, 558131 tokens, 211 tok/s (batch 91, prompt 135)
+[  53.3m] train: 1982/27900 answers, 592441 tokens, 215 tok/s (batch 96, prompt 118)
+[  61.6m] train: 2462/27900 answers, 727513 tokens, 224 tok/s (batch 96, prompt 43)
+[  72.2m] train: 2951/27900 answers, 866538 tokens, 223 tok/s (batch 96, prompt 80, sampled)
+[  83.4m] train: 3350/27900 answers, 978783 tokens, 215 tok/s (batch 82, prompt 149)
+[  85.4m] train: 3446/27900 answers, 1013128 tokens, 216 tok/s (batch 96, prompt 128)
+[  93.9m] train: 3926/27900 answers, 1146537 tokens, 221 tok/s (batch 96, prompt 46)
+[  97.0m] train: deadline after 4118 answers
+[  97.0m] training rows 1204740 from 4118 answers (store full: False)
+  sched.step()
+[  97.9m] d384_v16384 {'epoch': 0, 'loss': 10.5118, 'val_top1_by_depth': [0.3779, 0.2846, 0.2527], 'steps': 1126, 's': 50.5}
+[  98.6m] d512_v32768 {'epoch': 0, 'loss': 10.9556, 'val_top1_by_depth': [0.3754, 0.2772, 0.2381], 'steps': 1126, 's': 91.4}
+[  98.7m] d384_v16384 {'epoch': 1, 'loss': 8.1096, 'val_top1_by_depth': [0.3993, 0.2977, 0.2649], 'steps': 1126, 's': 100.8}
+[  99.6m] d384_v16384 {'epoch': 2, 'loss': 7.3495, 'val_top1_by_depth': [0.4204, 0.3216, 0.282], 'steps': 1126, 's': 151.3}
+[ 100.1m] d512_v32768 {'epoch': 1, 'loss': 8.5673, 'val_top1_by_depth': [0.4013, 0.3001, 0.2648], 'steps': 1126, 's': 182.7}
+[ 100.4m] d384_v16384 {'epoch': 3, 'loss': 6.6369, 'val_top1_by_depth': [0.4343, 0.3356, 0.2956], 'steps': 1126, 's': 201.8}
+[ 101.3m] d384_v16384 {'epoch': 4, 'loss': 5.8947, 'val_top1_by_depth': [0.4503, 0.3516, 0.3105], 'steps': 1126, 's': 252.3}
+[ 101.6m] d512_v32768 {'epoch': 2, 'loss': 7.7322, 'val_top1_by_depth': [0.4159, 0.3098, 0.2698], 'steps': 1126, 's': 273.5}
+[ 102.1m] d384_v16384 {'epoch': 5, 'loss': 5.1707, 'val_top1_by_depth': [0.4581, 0.3632, 0.3248], 'steps': 1126, 's': 302.9}
+[ 102.9m] d384_v16384 {'epoch': 6, 'loss': 4.5808, 'val_top1_by_depth': [0.463, 0.3704, 0.3373], 'steps': 1126, 's': 353.7}
+[ 103.1m] d512_v32768 {'epoch': 3, 'loss': 6.8838, 'val_top1_by_depth': [0.4347, 0.3345, 0.2986], 'steps': 1126, 's': 364.1}
+[ 103.8m] d384_v16384 {'epoch': 7, 'loss': 4.2307, 'val_top1_by_depth': [0.4637, 0.3709, 0.3391], 'steps': 1126, 's': 404.6}
+[ 103.9m] d384_v16384: {"chat": {"alpha_d1": 0.4743190198643987, "positions": 42035, "alpha_by_depth": [0.4743, 0.4403, 0.4379, 0.4297, 0.4324, 0.4454], "tau_R2": 1.447, "tau_R3": 1.6204, "tau_R4": 1.6849}, "code": {"alpha_d1": 0.5089112256102711, "positions": 23678, "alpha_by_depth": [0.5089, 0.4523, 0.4625, 0.446, 0.4488, 0.454], "tau_R2": 1.476, "tau_R3": 1.6601, "tau_R4": 1.7285}}
+[ 104.7m] d512_v32768 {'epoch': 4, 'loss': 5.9438, 'val_top1_by_depth': [0.4508, 0.3507, 0.3122], 'steps': 1126, 's': 455.7}
+[ 106.2m] d512_v32768 {'epoch': 5, 'loss': 5.0263, 'val_top1_by_depth': [0.4662, 0.3667, 0.3281], 'steps': 1126, 's': 546.4}
+[ 107.7m] d512_v32768 {'epoch': 6, 'loss': 4.2768, 'val_top1_by_depth': [0.4703, 0.3746, 0.339], 'steps': 1126, 's': 636.8}
+[ 109.2m] d512_v32768 {'epoch': 7, 'loss': 3.8344, 'val_top1_by_depth': [0.471, 0.3747, 0.3403], 'steps': 1126, 's': 727.5}
+[ 109.4m] d512_v32768: {"chat": {"alpha_d1": 0.48212204115617935, "positions": 42035, "alpha_by_depth": [0.4821, 0.4512, 0.4581, 0.4361, 0.4236, 0.4594], "tau_R2": 1.4561, "tau_R3": 1.6335, "tau_R4": 1.7025}, "code": {"alpha_d1": 0.5203142157276797, "positions": 23678, "alpha_by_depth": [0.5203, 0.4758, 0.4659, 0.4612, 0.4394, 0.3985], "tau_R2": 1.4857, "tau_R3": 1.6811, "tau_R4": 1.7532}}
+[ 109.4m] done

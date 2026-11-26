@@ -46,3 +46,14 @@ def test_sdk_table_prints(capsys: pytest.CaptureFixture[str]) -> None:
     rt.sdk_main()
     out = capsys.readouterr().out
     assert "| 72B | off (R=1) | 321 |" in out and "Local linear on the client" in out
+
+
+def test_draft_head_mode_uses_the_measured_tau_and_pays_the_head_steps() -> None:
+    rows, tau, head = rt.SDK_TAU["draft head, open chat (R=3)"]
+    assert head and rows == 3 and 1.5 < tau < 2.0  # measured (7B replay), not the 0.8-alpha guess
+    with_head = rt.sdk_ms_per_token("7B", 0.2, rows, tau, head=True)
+    without = rt.sdk_ms_per_token("7B", 0.2, rows, tau)
+    assert with_head["draft"] == pytest.approx(2 * rt.SDK_HEAD_STEP_MS["7B"]) and without["draft"] == 0.0
+    assert with_head["pass_ms"] == pytest.approx(without["pass_ms"] + with_head["draft"])
+    # the shipped head beats speculation off on open chat at a same-data-center RTT
+    assert with_head["ms_per_token"] < rt.sdk_ms_per_token("7B", 0.2)["ms_per_token"]
