@@ -42,7 +42,7 @@ import numpy as np
 import torch
 
 from pgw.core import native
-from pgw.core.errors import ConfigError, IntegrityError, PGWError
+from pgw.core.errors import ConfigError, IntegrityError, PGWError, ShapeError
 from pgw.core.fingerprint import short_fingerprint
 from pgw.core.prng import MAX_STREAM_BYTES, SEED_BYTES, SeedExpander, max_stream_rows, new_seed
 from pgw.core.proc_tuning import os_thread_name
@@ -51,7 +51,7 @@ from pgw.core.settings import ring_from_setting
 from pgw.core.types import LinearId, LinearSpec
 from pgw.factory import gpu_prng as _gp
 from pgw.factory.governor import Throttle
-from pgw.factory.kernels import RingKernel, resolve_backend, resolve_device, ring_vecmat
+from pgw.factory.kernels import RingKernel, prime_vecmat, resolve_backend, resolve_device, ring_vecmat
 from pgw.factory.streaming import WeightStreamer, auto_resident_bytes
 from pgw.maskstore.format import DEFAULT_CHUNK_BYTES, auto_chunk_slots
 
@@ -78,7 +78,8 @@ class GeneratedLinear:
     Attributes:
         id: Linear id.
         slot_start: First slot of this chunk.
-        wr: ``(rows, m)`` int64 ring elements ``W8 r``.
+        wr: ``(rows, m)`` int64 ring elements ``W8 r`` (for ``K <= 32`` from a backend with ``compact_output``:
+            int32 holding the low 32 bits, the compact form every segment writer accepts).
         uw: ``(checks, n)`` int64 ``u^T W8`` (only on the first chunk of each linear, else ``None``).
     """
 
@@ -155,6 +156,46 @@ def _u64(t: torch.Tensor) -> np.ndarray:
     return t.detach().cpu().numpy().astype(np.uint64)
 
 
+def check_flags(r: np.ndarray, wr: np.ndarray, cu: np.ndarray, cw: np.ndarray, mask: int) -> np.ndarray:
+    """Rows ``t`` (bool ``(rows,)``) with ``(wr[t] @ cu) & mask != (r[t] @ cw) & mask``: the factory's
+    Freivalds self-check of :meth:`MaskGenerator._self_check`.
+
+    For ``mask < 2^32`` and at most 16 vectors natively on 32-bit lanes with 16-row blocks
+    (``pgw_pks.check_rows32``; every product and sum mod 2^32, which ``2^K`` divides), else
+    :func:`pgw.hemask.backend.verify_rows` (uint64 arithmetic mod 2^64). Both give the same flags
+    (``tests/factory/test_vecmat_native.py``). ``cu`` / ``cw`` may be uint32 (K <= 32) or uint64."""
+    from pgw.factory.kernels import _native_vecmat, _vecmat_threads
+
+    nat = _native_vecmat()
+    c = int(cu.shape[1]) if cu.ndim == 2 else 0
+    compact = wr.dtype in (np.int32, np.uint32)  # the low 32 bits (K <= 32): PKSMaskBackend's compact form
+    if (nat is not None and hasattr(nat, "check_rows32") and mask <= 0xFFFFFFFF and 1 <= c <= 16
+            and cu.dtype == np.uint32 and cw.dtype == np.uint32):
+        w_in = np.ascontiguousarray(wr).view(np.uint32) if compact else np.ascontiguousarray(wr, dtype=np.int64)
+        out: np.ndarray = nat.check_rows32(np.ascontiguousarray(r, dtype=np.int64), w_in,
+                                           np.ascontiguousarray(cu), np.ascontiguousarray(cw), int(mask),
+                                           _vecmat_threads())
+        return out.astype(bool)
+    from pgw.hemask.backend import verify_rows
+
+    if compact:
+        if mask > 0xFFFFFFFF:
+            raise ShapeError("32-bit W r rows need a ring with K <= 32")
+        w64 = np.ascontiguousarray(wr).view(np.uint32).astype(np.int64)
+        try:
+            return check_flags(r, w64, cu, cw, mask)
+        finally:
+            w64.fill(0)
+    if cu.dtype == np.uint64 and cw.dtype == np.uint64:
+        return verify_rows(r, wr, cu, cw, mask)
+    cu64, cw64 = cu.astype(np.uint64), cw.astype(np.uint64)
+    try:
+        return verify_rows(r, wr, cu64, cw64, mask)
+    finally:
+        cu64.fill(0)
+        cw64.fill(0)
+
+
 class _RemoteKernel:
     """Adapter giving :class:`pgw.hemask.HEMaskBackend` the ``RingKernel.matmul`` interface."""
 
@@ -163,6 +204,11 @@ class _RemoteKernel:
         self.linear = linear
 
     def matmul(self, r: torch.Tensor, ring: RingParams) -> torch.Tensor:
+        if ring.k <= 32 and getattr(self.backend, "compact_output", False):
+            # the low 32 bits as int32 (no int64 copy of W r): every consumer of the generator's chunks (the
+            # self-check, the segment writers) takes this form for K <= 32 and writes the same bytes
+            compact: torch.Tensor = self.backend.matmul(self.linear, r, compact=True)
+            return compact
         out: torch.Tensor = self.backend.matmul(self.linear, r)
         return out
 
@@ -737,10 +783,10 @@ class MaskGenerator:
                 cw: np.ndarray | None = None
                 if checks and self.check_field is not None:
                     # prime-field format: u uniform in F_p (stream "u-p31"), uW = u W8 mod p (exact)
-                    from pgw.core.freivalds import prime_check_vectors, prime_precompute
+                    from pgw.core.freivalds import prime_check_vectors
 
                     u = prime_check_vectors(bytes(seed), checks, spec.out_features, lid.key)
-                    uw = prime_precompute(u, w)
+                    uw = prime_vecmat(u, w)  # native exact sums on a CPU weight (same integers)
                     u.zero_()  # the W r self-check below uses private ring vectors
                 elif checks:
                     u = exp.ring_uniform((checks, spec.out_features), k, "u", lid.key)
@@ -813,7 +859,7 @@ class MaskGenerator:
 
     def _private_check(self, spec: LinearSpec, w: torch.Tensor) -> tuple[np.ndarray, np.ndarray]:
         """``(cu, cw)`` of a linear's private self-check: ``c`` uniform vectors ``v`` (``(m, c)``) and ``v W8``
-        (``(n, c)``), uint64, C-contiguous.
+        (``(n, c)``), C-contiguous, uint32 for ``K <= 32`` rings (else uint64).
 
         With a remote backend they are kept across segments (within :attr:`PRIVATE_CACHE_BYTES`): ``v W8``
         costs as much as a few hundred slots of checks per segment at 7B with 14 vectors, and reusing ``v`` does
@@ -829,9 +875,13 @@ class MaskGenerator:
             if hit is not None:
                 return hit
         v = SeedExpander(new_seed()).ring_uniform((self._private_vectors(spec), spec.out_features), self.ring.k, "v")
+        # K <= 32: the values fit uint32 (half the memory, so the whole 72B set fits the cache); the check widens
+        # them per chunk (:meth:`_self_check`)
+        dt = np.uint32 if self.ring.k <= 32 else np.uint64
         try:
             vw = ring_vecmat(v, w, self.ring)
-            cu, cw = np.ascontiguousarray(_u64(v.t())), np.ascontiguousarray(_u64(vw.t()))
+            cu = np.ascontiguousarray(v.t().numpy().astype(dt))
+            cw = np.ascontiguousarray(vw.t().numpy().astype(dt))
             vw.zero_()
         finally:
             v.zero_()
@@ -897,16 +947,18 @@ class MaskGenerator:
         else:
             rs = r.index_select(0, idx) if n_check < rows else r
         try:
-            if _NATIVE_CHECK and ws.device.type == "cpu" and rs.device.type == "cpu" and n_check >= 64:
-                # native, threaded, GIL released (pgw.hemask.backend.verify_rows): the same flags as below
-                from pgw.hemask.backend import verify_rows
-
-                flags = verify_rows(rs.numpy(), ws.numpy(), cu, cw, self.ring.mask)
-                bad = int(flags.sum())
+            if ws.device.type == "cpu" and rs.device.type == "cpu" and n_check >= 64:
+                # native, threaded, GIL released (check_flags): the same flags as below
+                bad = int(check_flags(rs.numpy(), ws.numpy(), cu, cw, self.ring.mask).sum())
             else:
-                lhs = (_u64(ws) @ cu) & np.uint64(self.ring.mask)
-                rhs = (_u64(rs) @ cw) & np.uint64(self.ring.mask)
-                bad = int((lhs != rhs).any(axis=1).sum())
+                cu64, cw64 = cu.astype(np.uint64), cw.astype(np.uint64)
+                try:
+                    lhs = (_u64(ws) @ cu64) & np.uint64(self.ring.mask)
+                    rhs = (_u64(rs) @ cw64) & np.uint64(self.ring.mask)
+                    bad = int((lhs != rhs).any(axis=1).sum())
+                finally:
+                    cu64.fill(0)
+                    cw64.fill(0)
         finally:
             if rs is not r:
                 rs.zero_()

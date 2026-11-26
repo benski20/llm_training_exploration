@@ -312,6 +312,80 @@ fn unpack_bits<'py>(py: Python<'py>, data: &Bound<'py, PyBytes>, count: usize, b
     Ok(PyArray1::from_vec(py, v))
 }
 
+/// ``vecmat_wrap32(x, w, threads)``: ``x @ w mod 2^32`` as uint32 ``(c, n)`` for ``x`` ``(c, m)`` uint32 and the int8
+/// weight ``w`` ``(m, n)`` (the factory's ring check vectors and private self-check sets; ``crate::vecmat``).
+#[pyfunction]
+#[pyo3(signature = (x, w, threads = 1))]
+fn vecmat_wrap32<'py>(py: Python<'py>, x: PyReadonlyArray2<'py, u32>, w: PyReadonlyArray2<'py, i8>, threads: usize)
+                      -> PyResult<Bound<'py, PyArray2<u32>>> {
+    let (c, m) = (x.shape()[0], x.shape()[1]);
+    let (wm, n) = (w.shape()[0], w.shape()[1]);
+    if wm != m {
+        return Err(verr(format!("x is ({c}, {m}) but w is ({wm}, {n})")));
+    }
+    let xs = x.as_slice().map_err(|_| verr("x must be C-contiguous"))?;
+    let ws = w.as_slice().map_err(|_| verr("w must be C-contiguous"))?;
+    let mut out = vec![0u32; c * n];
+    py.allow_threads(|| crate::vecmat::vecmat_wrap32(xs, c, ws, m, n, &mut out, threads)).map_err(|e| verr(e.0))?;
+    Ok(Array2::from_shape_vec((c, n), out).map_err(|e| verr(e.to_string()))?.into_pyarray(py))
+}
+
+/// ``vecmat_p31(u, w, threads)``: ``u @ w mod (2^31 - 1)`` as uint64 ``(c, n)`` for ``u`` ``(c, m)`` uint64 in
+/// ``[0, 2^31 - 1)`` and the int8 weight ``w`` ``(m, n)`` (the prime-field check vectors; ``crate::vecmat``).
+#[pyfunction]
+#[pyo3(signature = (u, w, threads = 1))]
+fn vecmat_p31<'py>(py: Python<'py>, u: PyReadonlyArray2<'py, u64>, w: PyReadonlyArray2<'py, i8>, threads: usize)
+                   -> PyResult<Bound<'py, PyArray2<u64>>> {
+    let (c, m) = (u.shape()[0], u.shape()[1]);
+    let (wm, n) = (w.shape()[0], w.shape()[1]);
+    if wm != m {
+        return Err(verr(format!("u is ({c}, {m}) but w is ({wm}, {n})")));
+    }
+    let us = u.as_slice().map_err(|_| verr("u must be C-contiguous"))?;
+    let ws = w.as_slice().map_err(|_| verr("w must be C-contiguous"))?;
+    let mut out = vec![0u64; c * n];
+    py.allow_threads(|| crate::vecmat::vecmat_p31(us, c, ws, m, n, &mut out, threads)).map_err(|e| verr(e.0))?;
+    Ok(Array2::from_shape_vec((c, n), out).map_err(|e| verr(e.to_string()))?.into_pyarray(py))
+}
+
+/// ``check_rows32(r, wr, cu, cw, mask, threads)``: the factory's every-row self-check for ``K <= 32``, uint8
+/// ``(rows,)`` flags (``1`` where ``(wr[t] @ cu) & mask != (r[t] @ cw) & mask``; arithmetic mod 2^32): ``r``
+/// ``(rows, n)`` and ``wr`` ``(rows, m)`` int64, ``cu`` ``(m, c)`` and ``cw`` ``(n, c)`` uint32, ``c <= 16``.
+#[pyfunction]
+#[pyo3(signature = (r, wr, cu, cw, mask, threads = 1))]
+fn check_rows32<'py>(py: Python<'py>, r: PyReadonlyArray2<'py, i64>, wr: &Bound<'py, PyAny>,
+                     cu: PyReadonlyArray2<'py, u32>, cw: PyReadonlyArray2<'py, u32>, mask: u32, threads: usize)
+                     -> PyResult<Bound<'py, PyArray1<u8>>> {
+    let (rows, n) = (r.shape()[0], r.shape()[1]);
+    let (m, c) = (cu.shape()[0], cu.shape()[1]);
+    if cw.shape()[0] != n || cw.shape()[1] != c {
+        return Err(verr(format!("shape mismatch: r {:?}, cu {:?}, cw {:?}", r.shape(), cu.shape(), cw.shape())));
+    }
+    let cerr = |w: &str| verr(format!("{w} must be C-contiguous"));
+    let (rs, us, vs) = (r.as_slice().map_err(|_| cerr("r"))?, cu.as_slice().map_err(|_| cerr("cu"))?,
+                        cw.as_slice().map_err(|_| cerr("cw"))?);
+    let mut bad = vec![0u8; rows];
+    macro_rules! go {
+        ($t:ty) => {{
+            let a = wr.downcast::<PyArray2<$t>>()?.try_readonly().map_err(|e| verr(format!("wr: {e}")))?;
+            if a.shape()[0] != rows || a.shape()[1] != m {
+                return Err(verr(format!("wr is {:?}, expected ({rows}, {m})", a.shape())));
+            }
+            let ws = a.as_slice().map_err(|_| cerr("wr"))?;
+            py.allow_threads(|| crate::vecmat::check_rows32(rs, n, ws, m, us, vs, c, mask, &mut bad, threads))
+                .map_err(|e| verr(e.0))?;
+        }};
+    }
+    if wr.downcast::<PyArray2<i64>>().is_ok() {
+        go!(i64)
+    } else if wr.downcast::<PyArray2<u32>>().is_ok() {
+        go!(u32)
+    } else {
+        return Err(verr("wr must be a 2-D int64 or uint32 array"));
+    }
+    Ok(PyArray1::from_vec(py, bad))
+}
+
 #[pymodule]
 fn pgw_pks(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(info, m)?)?;
@@ -326,6 +400,9 @@ fn pgw_pks(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(a_planes, m)?)?;
     m.add_function(wrap_pyfunction!(pack_ksk, m)?)?;
     m.add_function(wrap_pyfunction!(unpack_bits, m)?)?;
+    m.add_function(wrap_pyfunction!(vecmat_wrap32, m)?)?;
+    m.add_function(wrap_pyfunction!(vecmat_p31, m)?)?;
+    m.add_function(wrap_pyfunction!(check_rows32, m)?)?;
     m.add_class::<KHat>()?;
     Ok(())
 }

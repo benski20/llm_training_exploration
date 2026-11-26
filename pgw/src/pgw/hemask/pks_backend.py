@@ -586,7 +586,13 @@ class PKSMaskBackend:
     def preferred_chunk_slots(self) -> int:
         return D * self.groups_per_call
 
-    def matmul(self, linear: str, r: torch.Tensor) -> torch.Tensor:
+    #: :class:`pgw.factory.MaskGenerator` asks for the compact form (``matmul(..., compact=True)``): ``W8 r mod 2^32``
+    #: as int32 (the low 32 bits) straight from the decryption, without the int64 copy (``PGW_PKS_COMPACT=0``: off).
+    compact_output = os.environ.get("PGW_PKS_COMPACT", "1").strip().lower() not in ("0", "false", "no", "off")
+
+    def matmul(self, linear: str, r: torch.Tensor, *, compact: bool = False) -> torch.Tensor:
+        """``W8 r mod 2^32`` for ``r`` ``(rows, n)``: int64 ``(rows, m)``, or with ``compact`` int32 holding the low
+        32 bits (the same values mod 2^32; the decryption's own buffer when one request covers every row)."""
         from pgw.service.pks_provider import pack_ksk
 
         spec = self.specs[linear]
@@ -595,8 +601,10 @@ class PKSMaskBackend:
             raise ConfigError(f"{linear}: r must be (rows, {spec.in_features})")
         t_wall = time.perf_counter()
         hint = self.store.hint(linear)
-        out = np.empty((rn.shape[0], spec.out_features), dtype=np.int64)  # the caller owns (and wipes) it
         step = D * self.groups_per_call
+        one_pass = compact and 0 < rn.shape[0] <= step
+        # the caller owns (and wipes) it
+        out = None if one_pass else np.empty((rn.shape[0], spec.out_features), dtype=np.uint32 if compact else np.int64)
         try:
             for r0 in range(0, rn.shape[0], step):
                 rc = rn[r0:r0 + step]
@@ -614,7 +622,12 @@ class PKSMaskBackend:
                     y = self.remote(linear, b, ksk)
                     t2 = time.perf_counter()
                     wr = self.customer.decrypt(hint, y, secrets)
-                    out[r0:r0 + wr.shape[0]] = wr  # W8 r mod 2^32 (secret): no other copy is kept
+                    if out is None:  # compact, one request: hand on the decryption's buffer itself
+                        out = np.ascontiguousarray(wr, dtype=np.uint32)
+                        if out is wr:
+                            wr = None
+                    else:
+                        out[r0:r0 + wr.shape[0]] = wr  # W8 r mod 2^32 (secret): no other copy is kept
                 finally:
                     for s in secrets:
                         s.wipe()
@@ -624,9 +637,13 @@ class PKSMaskBackend:
                 self._add(encrypt_s=t1 - t0, remote_s=t2 - t1, decrypt_s=t3 - t2, groups=len(secrets), passes=1,
                           jobs=1)
         except BaseException:
-            out.fill(0)
+            if out is not None:
+                out.fill(0)
             raise
         self._add(wall_s=time.perf_counter() - t_wall)
+        assert out is not None
+        if compact:
+            return torch.from_numpy(out.view(np.int32))
         return torch.from_numpy(out)
 
     def _add(self, **kw: float) -> None:
