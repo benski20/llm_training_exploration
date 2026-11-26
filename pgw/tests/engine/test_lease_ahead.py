@@ -4,6 +4,9 @@ The next native trip lease of a linear is built on the lease-ahead thread (the `
 extent's soundness check, the native ``TripLease``) instead of on the plaintext thread when the attached lease runs
 out. Proven here:
 
+Prepared only for several-answer trips (the per-trip path of several answers and the native decode driver's
+several-answer passes), where the plaintext thread is the limit; these tests prepare ahead on every trip.
+
 * exact: payloads (every byte, in order), outputs and check statistics equal the path without it, for ring and p31
   extents, plain and incremental (chunked) windowed reservations, across chunk, extent, part and segment boundaries;
   the prepared leases are actually used;
@@ -44,6 +47,13 @@ def _flags(monkeypatch: pytest.MonkeyPatch, ahead: bool) -> None:
 
     monkeypatch.setattr(store_mod, "TRIP_DECRYPT_AHEAD", True)
     monkeypatch.setattr(store_mod, "TRIP_LEASE_AHEAD", ahead)
+    # the backend prepares ahead for several-answer trips only; here every trip of these one-call runs does
+    real = MaskedBackend._trip_lease_for
+
+    def every(self: Any, res: Any, leases: Any, lid: Any, meta: Any, t: int, ahead: bool = False) -> Any:
+        return real(self, res, leases, lid, meta, t, True)
+
+    monkeypatch.setattr(MaskedBackend, "_trip_lease_for", every)
 
 
 class _Chunks:
@@ -270,3 +280,33 @@ def test_default_off() -> None:
     from pgw.maskstore import store as store_mod
 
     assert 'os.environ.get("PGW_TRIP_LEASE_AHEAD", "0")' in Path(store_mod.__file__).read_text()
+
+
+def test_single_answer_trips_prepare_nothing_ahead(qwen_pack: InMemoryPack, store_template: Path,
+                                                   monkeypatch: pytest.MonkeyPatch) -> None:
+    """One answer per trip (the single-answer paths): nothing is prepared ahead (no extra CPU where the plaintext
+    thread is not the limit); several answers in one trip: the next leases are prepared."""
+    from pgw.maskstore import store as store_mod
+
+    _env(monkeypatch, True, True)
+    monkeypatch.setenv("PGW_TRIP_NATIVE_MULTI", "1")
+    monkeypatch.setattr(store_mod, "TRIP_DECRYPT_AHEAD", True)
+    monkeypatch.setattr(store_mod, "TRIP_LEASE_AHEAD", True)
+    st = _Store(store_template, qwen_pack)
+    be = MaskedBackend(qwen_pack, None, LocalComputeClient(qwen_pack), DEFAULT_RING, qwen_pack.fingerprint,
+                       trip_engine=True)
+    try:
+        spec = qwen_pack.linear_specs()[0]
+        a = st.store.reserve(qwen_pack.fingerprint, DEFAULT_RING, 40)
+        b = st.store.reserve(qwen_pack.fingerprint, DEFAULT_RING, 40)
+        be.forward_many([LinearCall(spec.id, _x(spec), a)])
+        _drain(be)
+        assert not a._next and be._ahead_pool is None
+        be.forward_many([LinearCall(spec.id, _x(spec, 1), a), LinearCall(spec.id, _x(spec, 2), b)])
+        _drain(be)
+        assert spec.id.key in b._next  # b's first lease came from the several-answer trip
+        a.close()
+        b.close()
+    finally:
+        be.close()
+        st.close()

@@ -1937,10 +1937,13 @@ class MaskedBackend(LinearBackend):
         return prep
 
     # ---- native per-trip path (PGW_TRIP_NATIVE) ------------------------------------------------------
-    def _trip_lease_for(self, res: Any, leases: dict[str, Any], lid: LinearId, meta: _MaskedMeta, t: int) -> Any:
+    def _trip_lease_for(self, res: Any, leases: dict[str, Any], lid: LinearId, meta: _MaskedMeta, t: int,
+                        ahead: bool = False) -> Any:
         """The lease serving the next ``t`` rows of ``lid`` (the attached one, or a new one: the window's
         ``ensure`` / exhaustion pre-check and the extent's soundness check run before any row is taken), or
-        ``None`` (the ordinary path)."""
+        ``None`` (the ordinary path). ``ahead`` (several-answer trips, where the plaintext thread is the limit):
+        with ``PGW_TRIP_LEASE_AHEAD``, a new lease also starts preparing the next one on the lease-ahead thread;
+        a lease prepared ahead is attached on any path."""
         key = lid.key
         lease = leases.get(key)
         sound = (float(self.min_soundness_bits), len(self._sound_ok))
@@ -1954,11 +1957,11 @@ class MaskedBackend(LinearBackend):
             verify = self._verifiers.get(vkey) if self.min_soundness_bits > 0 else None
             if verify is None and self.min_soundness_bits > 0:
                 verify = self._verifiers[vkey] = self._sound_verifier(lid, n)
-            ahead = _store_flags.TRIP_LEASE_AHEAD and getattr(res, "lease_ahead", None) is not None
+            can_ahead = _store_flags.TRIP_LEASE_AHEAD and getattr(res, "lease_ahead", None) is not None
             kw: dict[str, Any] = {}
             if self.prime_check:  # prime-field extents are leased only to a gateway that runs their check
                 kw["prime_ok"] = True
-            if ahead:  # the policy a lease prepared ahead was verified under (attached only under the same)
+            if can_ahead:  # the policy a lease prepared ahead was verified under (attached only under the same)
                 kw["tag"] = (float(self.min_soundness_bits), bool(self.prime_check))
             lease = res.trip_lease(lid, t, verify, float(meta.wnorm or 0.0), **kw)
             if lease is None:
@@ -1966,7 +1969,7 @@ class MaskedBackend(LinearBackend):
             if len(self._lease_sound) > 65536:
                 self._lease_sound.clear()
             self._lease_sound[id(lease)] = (float(self.min_soundness_bits), len(self._sound_ok))
-            if ahead and lease is not prev:
+            if ahead and can_ahead and lease is not prev:
                 self._lease_ahead_submit(res, lid, meta, t, kw["tag"])
         return lease
 
@@ -2160,7 +2163,7 @@ class MaskedBackend(LinearBackend):
                 raise RingOverflowError("non-finite activation values cannot be quantized")
         leases: list[Any] = []
         for c, res, meta, xn in zip(calls, reservations, metas, xs, strict=True):
-            lease = self._trip_lease_for(res, res.trip_leases, c.id, meta, int(xn.shape[0]))
+            lease = self._trip_lease_for(res, res.trip_leases, c.id, meta, int(xn.shape[0]), ahead=True)
             if lease is None:  # no row taken yet (leases only reserve): the batch path serves the whole trip
                 return None
             leases.append(lease)

@@ -38,9 +38,18 @@ client machine as the number of concurrent streams grows, how to size it, and ho
    3.9 -> 1.6 ms at a 152k vocabulary; 5.5-6.1 -> 3.1-3.3 ms CPU per sampled token with logprobs). Measured on this
    box (before / after): tiny 16 streams 215-223 / 279-282 tokens/s at 3.2 / 2.0 ms client CPU per token, 4 streams
    117-119 / 128-130; 0.5B 16 streams 7.3-8.1 / 9.3-10.1 tokens/s, 4 streams 5.5-5.7 / 6.2-6.3 (CPU provider
-   saturated). What remains per answer and trip on the plaintext thread: lease creation (a `W r` chunk decrypt every
-   16 rows per linear) and the Python loop around the batched native calls; per answer and token: the inline noise
-   statistics (5 % of trips) and the top-p sort.
+   saturated). Since the second round (same day, also exact and on by default): the decoder layers of a
+   several-answer step run in the native decode driver (`PGW_DECODE_NATIVE_MULTI`: one native call, GIL released,
+   per stretch of trips; per trip every answer's prepare, the duplicate-row checks, one lane multi call, every
+   answer's finish and float ops), and the next trip lease of each linear of such answers is prepared on a background
+   thread (`PGW_TRIP_LEASE_AHEAD`; rows the session already holds, attached only at its first row, zeroed otherwise).
+   Measured (before / after, interleaved pairs): tiny 16 streams 279-290 / 337-360 tokens/s at 2.0-2.1 / 1.36-1.47 ms
+   client CPU per token (plaintext thread 1.55-1.64 / 0.86-0.95), 4 streams 123-126 / 140-147 tokens/s at 2.9 / 1.9-2.1
+   ms; 0.5B 4 streams 6.4-6.6 / 6.9-7.7 tokens/s at 62-65 / 49-54 ms, 16 streams 10.4-11.0 / 11.9-12.4 at 50-52 /
+   44-46 ms (the CPU provider limits tokens/s there); one stream unchanged. What remains on the plaintext thread
+   per trip: the noise monitor's statistics of a sampled answer (a
+   step of 16 answers has one in about half its trips), the leases' window bookkeeping, and the masked LM head's trip
+   (still the per-trip Python path); per answer and token: the top-p sort.
 4. **The fast trip lane: all answers of a step in one call** (lane format 2, on in the SDK). When several answers
    share a decode step (or a prompt has more rows than one lane call serves), the batched trip goes over the
    TCP+TLS lane as one `multi` call: the same items, order, bytes and request id as the WebSocket channel's
@@ -291,7 +300,10 @@ client = OpenAI(
 * Client CPU per stream (on by default in the library; environment variables, `0` turns each off, nothing else
   changes): `PGW_SYNC_MULTI` (several-answer decode steps as one synchronous pass), `PGW_TRIP_NATIVE_MULTI` (one native
   lease per answer, batched native prepare / finish), `PGW_SAMPLE_THREADS` (`auto`: sampling threads, at most 8),
-  `PGW_NATIVE_MULTINOMIAL` (the exact native draw for `temperature > 0`, checked against torch at first use).
+  `PGW_NATIVE_MULTINOMIAL` (the exact native draw for `temperature > 0`, checked against torch at first use),
+  `PGW_DECODE_NATIVE_MULTI` (several-answer steps in the native decode driver), `PGW_TRIP_LEASE_AHEAD` (trip leases
+  of several-answer steps prepared on a background thread: about 1.5-2 ms of CPU per token moves off the plaintext
+  thread, the total stays about the same).
 
 ## When the stock runs short (bursts)
 

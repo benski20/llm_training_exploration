@@ -487,7 +487,7 @@ class NativeDecode:
         inject (a trip finished here after a hand-back, or run on the ordinary path) or ``None``."""
         be = self.backend
         drv = self.drv
-        from pgw.engine.backends import _note_activity
+        from pgw.core.factory_yield import note_activity as _note_activity
 
         _note_activity()
         k = len(resv)
@@ -518,7 +518,7 @@ class NativeDecode:
                 continue
             got = []
             for res, t in zip(resv, ts, strict=True):
-                lease = be._trip_lease_for(res, res.trip_leases, lid, meta, t)
+                lease = be._trip_lease_for(res, res.trip_leases, lid, meta, t, ahead=True)
                 if lease is None:
                     break
                 got.append(lease)
