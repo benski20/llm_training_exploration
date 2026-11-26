@@ -1,0 +1,46 @@
+[   0.0m] env {'torch': '2.11.0+cu130', 'gpu': ['Tesla T4', 'Tesla T4'], 'cpus': 4, 'native': {'pgw_fast': True, 'pgw_ntt': True, 'pgw_pks': True}}
+[   6.4m] CHECK provider_pack_equals_baked_pin PASS {'provider': 'f7c6fb4f5f8fbc5e4149972c07afdc749de8e5f9adc604d30edb7eb94b834b67', 'baked': 'f7c6fb4f5f8fbc5e4149972c07afdc749de8e5f9adc604d30edb7eb94b834b67'}
+[   7.2m] provider ready 47.2 s
+[  11.1m] warmup done {"model": "qwen2.5-7b-instruct", "state": "ready", "error": null, "progress": "done: 1 / 1 models", "masked_head": true, "ring": "K32A12C27", "requests": 0, "verified_requests": 0, "integrity_failures": 0, "requests_waiting_for_masks": 0, "last_integrity_check_ok_at": null, "last_integrity_failure_at": null, "integrity_halt": {"halted": false, "failures": 0, "halted_at": null, "last_failure_at": null, "tampered": null, "reason": null}, "provisioned": {"fingerprint": "f7c6fb4f5f8fbc5e4149972c07afdc749de8e5f9adc604d30edb7eb94b834b67", "source": "provider", "pack_path": "/tmp/sdke2e/client/cache/models/f7c6fb4f5f8fbc5e/pack", "hint_dir": null}, "lane": "open", "fingerprint": "f44352906cd8d5d89811f86d45d84cba96f4b9577d9fdf25727b425d47b705b3", "masks_available": 0, "native": {"trip_engine": true, "trip_native": true, "decode_native": true, "prime_check": true}, "backend": {"calls": 0, "rows": 0, "round_trips": 0, "bytes_up": 0, "bytes_down": 0, "freivalds_checked": 0, "freivalds_skipped": 0, "integrity_failures": 0, "remote_seconds": 0.0, "local_seconds": 0.0, "decode_calls": 0, "decode_remote_seconds": 0.0, "decode_local_seconds": 0.0, "deferred_checks": 0, "pad_rows": 0, "dummy_calls": 0, "local_calls": 0, "local_rows": 0}, "breaker": {"open": false, "trips": 0, "cooldown_s": null, "open_for_s": null, "last_code": null}, "factory": {"owner": true, "running": true, "starts": 1, "consecutive_failures": 0, "last_child_error": null, "workers": 1, "scheme": "pks-v3", "target_slots": 
+[  31.9m] first answer 'The color of the sky can vary,'
+[  34.9m] mask stock wait {'request': 'sampled_stream', 'at_s': 2032.5, 'available': 14, 'waited_s': 60.0, 'available_after': 142}
+[  39.3m] mask stock wait {'request': 'long_stream_0', 'at_s': 2220.9, 'available': 92, 'waited_s': 140.0, 'available_after': 604}
+[  39.9m] long stream {'ttft_s': 3.947, 'total_s': 32.46, 'content_chunks': 64, 'completion_tokens': 64, 'steady_tok_s': 2.21}
+[  40.1m] long stream {'ttft_s': 3.914, 'total_s': 11.68, 'content_chunks': 64, 'completion_tokens': 64, 'steady_tok_s': 8.14}
+[  40.2m] turn 0 'Nice to meet you, Ada, and enjoy your tea!'
+[  40.3m] turn 1 'Your name is Ada, and you like tea.'
+[  40.4m] turn 2 'Crackers with cheese and tea.'
+[  40.4m] CHECK no_integrity_failures PASS 0
+[  40.4m] CHECK factory_scheme_not_halted PASS {'scheme': 'pks-v3', 'halted': False}
+[  40.4m] CHECK hint_built_locally PASS {'files': 115, 'gb': 2.37, 'first_mtime': 1795667606.5384367, 'last_mtime': 1795668626.9972491}
+[  40.4m] CHECK no_content_in_provider_records PASS 
+[  40.5m] CHECK revoked_key_refused_connected_client PASS AuthenticationError: unauthenticated
+[  40.6m] CHECK revoked_key_refused_fresh_client PASS AuthenticationError: unauthenticated
+[  47.3m] reference greedy 330.5s
+[  51.0m] reference sampled_stream 224.7s
+[  80.2m] reference long_stream_0 1750.7s
+[  86.2m] reference turn_0 359.7s
+[  91.3m] reference turn_1 310.4s
+[  95.2m] reference turn_2 232.5s
+[  95.2m] CHECK bit_identical_greedy PASS 
+[  95.2m] CHECK bit_identical_sampled_stream PASS 
+[  95.2m] CHECK bit_identical_long_stream_0 PASS 
+[  95.2m] CHECK bit_identical_long_stream_1 PASS 
+[  95.2m] CHECK bit_identical_turn_0 PASS 
+[  95.2m] CHECK bit_identical_turn_1 PASS 
+[  95.2m] CHECK bit_identical_turn_2 PASS 
+[  95.2m] CHECK bit_identical_all PASS 
+[  95.2m] DONE failed checks: [] errors: 0
+
+---stderr---
+
+Fetching 11 files:   0%|          | 0/11 [00:00<?, ?it/s]Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+
+Fetching 11 files:   9%|▉         | 1/11 [00:00<00:02,  4.28it/s]
+Fetching 11 files:  45%|████▌     | 5/11 [00:00<00:00, 16.21it/s]
+Fetching 11 files:  64%|██████▎   | 7/11 [00:20<00:00, 16.21it/s]
+Fetching 11 files:  73%|███████▎  | 8/11 [01:12<00:34, 11.58s/it]
+Fetching 11 files: 100%|██████████| 11/11 [01:12<00:00,  6.63s/it]
+
+Fetching 11 files:   0%|          | 0/11 [00:00<?, ?it/s]
+Fetching 11 files: 100%|██████████| 11/11 [00:00<00:00, 839.29it/s]

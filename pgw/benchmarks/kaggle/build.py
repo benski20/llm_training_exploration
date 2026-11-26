@@ -910,20 +910,22 @@ BUILD_NATIVE_ALL = {**BUILD_NATIVE, "cmd": BUILD_NATIVE["cmd"] + " && python rus
 
 
 def _sdk_e2e_job(model: str, timeout_s: int) -> dict:
+    # the script's own wall budget ends it (results and logs written) before the step timeout would kill it
+    budget_s = timeout_s - 600
     return {"machine_shape": "NvidiaTeslaT4", "source": "dataset", "exclude": _SDK_E2E_EXCLUDE, "steps": [
         BUILD_NATIVE_ALL,
         {"kind": "pytest", "name": "pytest_kernels_gpu", "timeout": 1200,
-         "args": ["tests/service/test_kernels.py", "tests/core/test_ringmm.py", "-q", "-rs", "-m", "gpu",
-                  "--timeout", "900"]},
+         "args": ["tests/service/test_kernels.py", "tests/service/test_kernels_memory.py", "tests/core/test_ringmm.py",
+                  "-q", "-rs", "-m", "gpu", "--timeout", "900"]},
         {"kind": "shell", "name": "cpu_info", "cmd": "lscpu | head -20; nproc; free -g; nvidia-smi; df -h / /tmp",
          "timeout": 60},
         {"kind": "shell", "name": f"sdk_e2e_{model}",
          "cmd": f"python benchmarks/sdk_e2e_gpu.py --model {model} --work /tmp/sdke2e --drop-checkpoint "
-                f"--out /kaggle/working/sdk_e2e", "timeout": timeout_s},
+                f"--out /kaggle/working/sdk_e2e --budget-s {budget_s}", "timeout": timeout_s},
     ]}
 
 
-JOBS["pgw-sdk-e2e-7b"] = _sdk_e2e_job("qwen2.5-7b-instruct", 3 * 3600)
+JOBS["pgw-sdk-e2e-7b"] = _sdk_e2e_job("qwen2.5-7b-instruct", 2 * 3600 + 2700)  # kernel under 3 h in all
 JOBS["pgw-sdk-e2e-3b"] = _sdk_e2e_job("qwen2.5-3b-instruct", 2 * 3600)
 JOBS["pgw-sdk-e2e-15b"] = _sdk_e2e_job("qwen2.5-1.5b-instruct", 2 * 3600)
 

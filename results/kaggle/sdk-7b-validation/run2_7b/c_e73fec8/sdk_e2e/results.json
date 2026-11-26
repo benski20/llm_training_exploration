@@ -1,0 +1,452 @@
+{
+ "checks": {
+  "provider_pack_equals_baked_pin": {
+   "pass": true,
+   "detail": {
+    "provider": "f7c6fb4f5f8fbc5e4149972c07afdc749de8e5f9adc604d30edb7eb94b834b67",
+    "baked": "f7c6fb4f5f8fbc5e4149972c07afdc749de8e5f9adc604d30edb7eb94b834b67"
+   }
+  },
+  "no_integrity_failures": {
+   "pass": true,
+   "detail": 0
+  },
+  "factory_scheme_not_halted": {
+   "pass": true,
+   "detail": {
+    "scheme": "pks-v3",
+    "halted": false
+   }
+  },
+  "hint_built_locally": {
+   "pass": true,
+   "detail": {
+    "files": 115,
+    "gb": 2.37,
+    "first_mtime": 1795667606.5384367,
+    "last_mtime": 1795668626.9972491
+   }
+  },
+  "no_content_in_provider_records": {
+   "pass": true
+  },
+  "revoked_key_refused_connected_client": {
+   "pass": true,
+   "detail": "AuthenticationError: unauthenticated"
+  },
+  "revoked_key_refused_fresh_client": {
+   "pass": true,
+   "detail": "AuthenticationError: unauthenticated"
+  },
+  "bit_identical_greedy": {
+   "pass": true
+  },
+  "bit_identical_sampled_stream": {
+   "pass": true
+  },
+  "bit_identical_long_stream_0": {
+   "pass": true
+  },
+  "bit_identical_long_stream_1": {
+   "pass": true
+  },
+  "bit_identical_turn_0": {
+   "pass": true
+  },
+  "bit_identical_turn_1": {
+   "pass": true
+  },
+  "bit_identical_turn_2": {
+   "pass": true
+  },
+  "bit_identical_all": {
+   "pass": true
+  }
+ },
+ "timings": {
+  "provider_checkpoint_download_s": 73.2,
+  "provider_pack_s": 310.0,
+  "provider_start_s": 47.2,
+  "client_enroll_provision_s": 233.3,
+  "first_request_after_warmup_s": 1245.8,
+  "long_stream_0": {
+   "ttft_s": 3.947,
+   "total_s": 32.46,
+   "content_chunks": 64,
+   "completion_tokens": 64,
+   "steady_tok_s": 2.21
+  },
+  "long_stream_1": {
+   "ttft_s": 3.914,
+   "total_s": 11.68,
+   "content_chunks": 64,
+   "completion_tokens": 64,
+   "steady_tok_s": 8.14
+  },
+  "turn_0_s": 5.39,
+  "turn_1_s": 7.49,
+  "turn_2_s": 8.61,
+  "reference_s": 3247.4
+ },
+ "errors": [],
+ "model": "qwen2.5-7b-instruct",
+ "device": "cuda",
+ "env": {
+  "torch": "2.11.0+cu130",
+  "gpu": [
+   "Tesla T4",
+   "Tesla T4"
+  ],
+  "cpus": 4,
+  "native": {
+   "pgw_fast": true,
+   "pgw_ntt": true,
+   "pgw_pks": true
+  }
+ },
+ "phase": "reference",
+ "min_mem_avail_gb": 11.9,
+ "fingerprint": "f7c6fb4f5f8fbc5e4149972c07afdc749de8e5f9adc604d30edb7eb94b834b67",
+ "sdk_defaults": {
+  "mask_scheme": "pks-v3",
+  "hint": "local",
+  "masked_head": "auto",
+  "workers": 1
+ },
+ "client_overrides": {},
+ "after_warmup": {
+  "model": "qwen2.5-7b-instruct",
+  "state": "ready",
+  "error": null,
+  "progress": "done: 1 / 1 models",
+  "masked_head": true,
+  "ring": "K32A12C27",
+  "requests": 0,
+  "verified_requests": 0,
+  "integrity_failures": 0,
+  "requests_waiting_for_masks": 0,
+  "last_integrity_check_ok_at": null,
+  "last_integrity_failure_at": null,
+  "integrity_halt": {
+   "halted": false,
+   "failures": 0,
+   "halted_at": null,
+   "last_failure_at": null,
+   "tampered": null,
+   "reason": null
+  },
+  "provisioned": {
+   "fingerprint": "f7c6fb4f5f8fbc5e4149972c07afdc749de8e5f9adc604d30edb7eb94b834b67",
+   "source": "provider",
+   "pack_path": "/tmp/sdke2e/client/cache/models/f7c6fb4f5f8fbc5e/pack",
+   "hint_dir": null
+  },
+  "lane": "open",
+  "fingerprint": "f44352906cd8d5d89811f86d45d84cba96f4b9577d9fdf25727b425d47b705b3",
+  "masks_available": 0,
+  "native": {
+   "trip_engine": true,
+   "trip_native": true,
+   "decode_native": true,
+   "prime_check": true
+  },
+  "backend": {
+   "calls": 0,
+   "rows": 0,
+   "round_trips": 0,
+   "bytes_up": 0,
+   "bytes_down": 0,
+   "freivalds_checked": 0,
+   "freivalds_skipped": 0,
+   "integrity_failures": 0,
+   "remote_seconds": 0.0,
+   "local_seconds": 0.0,
+   "decode_calls": 0,
+   "decode_remote_seconds": 0.0,
+   "decode_local_seconds": 0.0,
+   "deferred_checks": 0,
+   "pad_rows": 0,
+   "dummy_calls": 0,
+   "local_calls": 0,
+   "local_rows": 0
+  },
+  "breaker": {
+   "open": false,
+   "trips": 0,
+   "cooldown_s": null,
+   "open_for_s": null,
+   "last_code": null
+  },
+  "factory": {
+   "owner": true,
+   "running": true,
+   "starts": 1,
+   "consecutive_failures": 0,
+   "last_child_error": null,
+   "workers": 1,
+   "scheme": "pks-v3",
+   "target_slots": 1296,
+   "low_water_slots": 648,
+   "halted": false
+  }
+ },
+ "mask_stock_waits": [
+  {
+   "request": "sampled_stream",
+   "at_s": 2032.5,
+   "available": 14,
+   "waited_s": 60.0,
+   "available_after": 142
+  },
+  {
+   "request": "long_stream_0",
+   "at_s": 2220.9,
+   "available": 92,
+   "waited_s": 140.0,
+   "available_after": 604
+  }
+ ],
+ "conversation": [
+  {
+   "role": "system",
+   "content": "You are a concise assistant."
+  },
+  {
+   "role": "user",
+   "content": "My name is Ada and I like tea. Reply in one sentence."
+  },
+  {
+   "role": "assistant",
+   "content": "Nice to meet you, Ada, and enjoy your tea!"
+  },
+  {
+   "role": "user",
+   "content": "What is my name, and what do I like? Answer briefly."
+  },
+  {
+   "role": "assistant",
+   "content": "Your name is Ada, and you like tea."
+  },
+  {
+   "role": "user",
+   "content": "Suggest one snack that goes with it, in five words or fewer."
+  },
+  {
+   "role": "assistant",
+   "content": "Crackers with cheese and tea."
+  }
+ ],
+ "status_before_revoke": {
+  "model": "qwen2.5-7b-instruct",
+  "state": "ready",
+  "error": null,
+  "progress": "done: 1 / 1 models",
+  "masked_head": true,
+  "ring": "K32A12C27",
+  "requests": 7,
+  "verified_requests": 7,
+  "integrity_failures": 0,
+  "requests_waiting_for_masks": 0,
+  "last_integrity_check_ok_at": 1795669347.1977704,
+  "last_integrity_failure_at": null,
+  "local_errors": {
+   "mask_exhausted": 2
+  },
+  "integrity_halt": {
+   "halted": false,
+   "failures": 0,
+   "halted_at": null,
+   "last_failure_at": null,
+   "tampered": null,
+   "reason": null
+  },
+  "provisioned": {
+   "fingerprint": "f7c6fb4f5f8fbc5e4149972c07afdc749de8e5f9adc604d30edb7eb94b834b67",
+   "source": "provider",
+   "pack_path": "/tmp/sdke2e/client/cache/models/f7c6fb4f5f8fbc5e/pack",
+   "hint_dir": null
+  },
+  "lane": "open",
+  "fingerprint": "f44352906cd8d5d89811f86d45d84cba96f4b9577d9fdf25727b425d47b705b3",
+  "masks_available": 146,
+  "native": {
+   "trip_engine": true,
+   "trip_native": true,
+   "decode_native": true,
+   "prime_check": true
+  },
+  "backend": {
+   "calls": 22240,
+   "rows": 56512,
+   "round_trips": 22240,
+   "bytes_up": 1675476992,
+   "bytes_down": 2904924160,
+   "freivalds_checked": 22352,
+   "freivalds_skipped": 0,
+   "integrity_failures": 0,
+   "remote_seconds": 98.0094087439841,
+   "local_seconds": 18.219811373996443,
+   "decode_calls": 20784,
+   "decode_remote_seconds": 64.60969032899239,
+   "decode_local_seconds": 9.306417558993891,
+   "deferred_checks": 0,
+   "pad_rows": 0,
+   "dummy_calls": 0,
+   "local_calls": 0,
+   "local_rows": 0
+  },
+  "breaker": {
+   "open": false,
+   "trips": 0,
+   "cooldown_s": null,
+   "open_for_s": null,
+   "last_code": null
+  },
+  "factory": {
+   "owner": true,
+   "running": true,
+   "starts": 1,
+   "consecutive_failures": 0,
+   "last_child_error": null,
+   "workers": 1,
+   "scheme": "pks-v3",
+   "target_slots": 1296,
+   "low_water_slots": 648,
+   "totals": {
+    "f44352906cd8d5d89811f86d45d84cba96f4b9577d9fdf25727b425d47b705b3/K32A12C27": {
+     "seconds": 650.0090273470005,
+     "segments": 3,
+     "slots": 704
+    }
+   },
+   "provider_integrity_failures": 0,
+   "last_run_at": 1795669278.0357985,
+   "last_error": null,
+   "halted": false,
+   "throughput": {
+    "f44352906cd8d5d89811f86d45d84cba96f4b9577d9fdf25727b425d47b705b3/K32A12C27": 1.9285282939837933
+   }
+  }
+ },
+ "masked_head": true,
+ "provider_usage": [
+  {
+   "day": "2026-11-26",
+   "key_id": "sk_6f59e1122cf8010e",
+   "model": "qwen2.5-7b-instruct",
+   "trips": 22013,
+   "rows": 56285,
+   "tokens": 501.0000000000003,
+   "maskgen_cols": 134144,
+   "maskgen_requests": 357,
+   "bytes_in": 9484605440,
+   "bytes_out": 10953689088,
+   "requests": 6,
+   "prompt_tokens": 230,
+   "completion_tokens": 168,
+   "errors": 0,
+   "verified": 6,
+   "reported_by": "client"
+  }
+ ],
+ "provider_request_log": [
+  {
+   "id": "6",
+   "ts": 1795669331.1240199,
+   "key_id": "sk_6f59e1122cf8010e",
+   "model": "qwen2.5-7b-instruct",
+   "status": "ok",
+   "error_code": null,
+   "prompt_tokens": 69,
+   "completion_tokens": 11,
+   "latency_ms": 7479.799,
+   "ttft_ms": 6082.15,
+   "stream": false,
+   "private": true,
+   "verified": true,
+   "verification": "client-reported"
+  },
+  {
+   "id": "5",
+   "ts": 1795669325.7406294,
+   "key_id": "sk_6f59e1122cf8010e",
+   "model": "qwen2.5-7b-instruct",
+   "status": "ok",
+   "error_code": null,
+   "prompt_tokens": 33,
+   "completion_tokens": 13,
+   "latency_ms": 5379.473,
+   "ttft_ms": 3918.541,
+   "stream": false,
+   "private": true,
+   "verified": true,
+   "verification": "client-reported"
+  },
+  {
+   "id": "4",
+   "ts": 1795669314.061767,
+   "key_id": "sk_6f59e1122cf8010e",
+   "model": "qwen2.5-7b-instruct",
+   "status": "ok",
+   "error_code": null,
+   "prompt_tokens": 30,
+   "completion_tokens": 64,
+   "latency_ms": 11671.756,
+   "ttft_ms": 3909.626,
+   "stream": true,
+   "private": true,
+   "verified": true,
+   "verification": "client-reported"
+  },
+  {
+   "id": "3",
+   "ts": 1795669281.6009243,
+   "key_id": "sk_6f59e1122cf8010e",
+   "model": "qwen2.5-7b-instruct",
+   "status": "ok",
+   "error_code": null,
+   "prompt_tokens": 30,
+   "completion_tokens": 64,
+   "latency_ms": 32454.366,
+   "ttft_ms": 3946.099,
+   "stream": true,
+   "private": true,
+   "verified": true,
+   "verification": "client-reported"
+  },
+  {
+   "id": "2",
+   "ts": 1795669013.188702,
+   "key_id": "sk_6f59e1122cf8010e",
+   "model": "qwen2.5-7b-instruct",
+   "status": "ok",
+   "error_code": null,
+   "prompt_tokens": 34,
+   "completion_tokens": 8,
+   "latency_ms": 8958.005,
+   "ttft_ms": 4384.256,
+   "stream": true,
+   "private": true,
+   "verified": true,
+   "verification": "client-reported"
+  },
+  {
+   "id": "1",
+   "ts": 1795667587.940812,
+   "key_id": "sk_6f59e1122cf8010e",
+   "model": "qwen2.5-7b-instruct",
+   "status": "ok",
+   "error_code": null,
+   "prompt_tokens": 34,
+   "completion_tokens": 8,
+   "latency_ms": 1245576.869,
+   "ttft_ms": 1241646.628,
+   "stream": false,
+   "private": true,
+   "verified": true,
+   "verification": "client-reported"
+  }
+ ],
+ "reference_head_mode": "provider_int8",
+ "total_min": 95.2
+}
