@@ -8,7 +8,7 @@ import pytest
 import torch
 
 from pgw.hemask import pks
-from pgw.hemask.pks import NU, PACK, RANK, D, NR, PKSParams
+from pgw.hemask.pks import NR, NU, PACK, RANK, D, PKSParams
 from pgw.service import pks_gpu
 
 

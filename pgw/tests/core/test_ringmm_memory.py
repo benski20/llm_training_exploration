@@ -108,9 +108,9 @@ def test_eager_work_budget_env(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_weight_rowsum_never_copies_the_weight_to_int64() -> None:
     """``weight_rowsum`` allocates one bounded int64 chunk; ``sum(1, dtype=torch.int64)`` (the maskgen constant
     before 2026-11-26) allocates an int64 copy of the whole weight: 8x its size."""
-    from pgw.core.ringmm import weight_rowsum
-
     from torch.profiler import ProfilerActivity, profile
+
+    from pgw.core.ringmm import weight_rowsum
 
     def largest_alloc(fn):  # type: ignore[no-untyped-def]
         # the cast inside ``sum(dtype=)`` happens below the Python dispatcher: the profiler sees it

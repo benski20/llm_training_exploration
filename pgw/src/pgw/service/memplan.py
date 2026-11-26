@@ -48,11 +48,11 @@ from pgw.core.ringmm import (
 __all__ = [
     "GPUS",
     "MODELS",
-    "check_fit",
     "GpuSpec",
     "MemConfig",
     "MemPlan",
     "ModelShape",
+    "check_fit",
     "main",
     "plan",
     "plan_model",
@@ -415,9 +415,10 @@ def plan(model: str, linears: Sequence[tuple[str, int, int]], gpu: GpuSpec, cfg:
             for m, n, mp, np_ in pads:
                 b = cfg.max_batch_rows
                 if not legacy:
-                    b = chunk_rows_for(cfg.eager_work_bytes,
-                                       lambda r, k=k, n=n, np_=np_, mp=mp, m=m: _eager_bytes(k, r, n, np_, mp, m, False),
-                                       b)
+                    def work(r: int, k: int = k, n: int = n, np_: int = np_, mp: int = mp, m: int = m) -> int:
+                        return _eager_bytes(k, r, n, np_, mp, m, False)
+
+                    b = chunk_rows_for(cfg.eager_work_bytes, work, b)
                 eager = max(eager, _eager_bytes(k, b, n, np_, mp, m, legacy))
         dp.serving["eager_call"] = eager
         if cfg.maskgen:
