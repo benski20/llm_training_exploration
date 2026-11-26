@@ -2488,3 +2488,44 @@ method and the levers not taken: `docs/sdk/scaling.md` ("Mask cost per slot, by 
   the factory tests compare canonical values), Rust `cargo test -p pgw-pks vecmat`. tests/factory 463 passed /
   9 skipped; tests/hemask 439 passed / 20 skipped; tests/sdk 115 passed / 1 opt-in skip (the factory subset rerun after the last
   kernel-selection change: 96 passed).
+
+
+## 2026-11-26: SDK end to end on Qwen2.5-7B, GPU provider (Kaggle T4): all checks pass
+
+What ran:
+- The provider service on one T4 (`cuda:0`): pack derived from the pinned checkpoint, accounts, provisioning, TCP+TLS lane.
+- `from pgw import OpenAI` in the same VM over loopback, with the library's defaults (`pks-v3`, `hint="local"`, masked head on) and an empty cache.
+- Harness and job: `benchmarks/sdk_e2e_gpu.py`, `pgw-sdk-e2e-7b`.
+- Results: `results/kaggle/sdk-7b-validation/run2_7b/` (`summary.md` and the raw logs of three attempts).
+
+**The T4 numbers are a correctness check, not a measure of speed.** The T4 has no int8 tensor-core GEMV, and 4 vCPUs share the client, its hint build, the mask factory and the provider.
+
+Attempt C (code `e73fec8`) passed everything:
+- the provider pack matches the baked pin;
+- the provider loads (6.54 GB on the T4, memory plan fits, 47 s);
+- enroll and provisioning work;
+- the local hint is built;
+- bit-identical to the gateway path (text and log-probs, the `test_e2e_product.py` comparison) for greedy, sampled-stream, two 64-token streams and 3 conversation turns;
+- no integrity failures (22,352 Freivalds checks);
+- the factory is not halted;
+- no content in the provider's records;
+- the revoked key is refused by both the connected client and a fresh client;
+- the GPU unit tests pass (21).
+
+Timings on the T4:
+
+| phase | time |
+|---|---|
+| provisioning | 182 s (weight stream 6.5 GB in 116 s; artifacts 2.2 GB in 26 s) |
+| local pks-v3 hint build (4 vCPUs) | 17.3 min |
+| first 64-slot mask segment | 196 s (factory ~1.9 slots/s once segments grow) |
+| first answer after `warmup()` | 1,246 s |
+| TTFT | 3.9 s |
+| steady decode | 8.1 tok/s (2.2 tok/s while a factory segment shares the T4) |
+
+Fixed or found on the way:
+- Run 1's start-up CUDA OOM is fixed by `bfee514`.
+- Attempt A (`bfee514`): the provider died 66 min in. Host RAM was exhausted by the old pks-v3 host hint cache (`m x 4096` uint64 per seed and linear, 50.5 GB per seed at 7B; host RAM fell to 3.9 GB). `3e347e1` (hint recomputed per item on the device) fixes it; after that, provider RSS stayed <= 2.6 GB and GPU use <= 9.1 GB.
+- Open (client reliability): after the provider died, the client's request waited out its whole timeout. The factory's `ConnectError` was not counted as a failure, and the request was not failed.
+- Attempt B: on a T4 the factory is the bottleneck. A request beyond the stock is correctly refused with `mask_exhausted` after the default 120 s. The harness now waits for the next segment and sends the request again (recorded; options unchanged).
+- Harness: provider-exit watchdog and wall budget (kernel under 3 h), per-process RSS, and `provider.log` kept even when the run is cut short.

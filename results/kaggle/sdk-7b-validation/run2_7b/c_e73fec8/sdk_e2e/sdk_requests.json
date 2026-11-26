@@ -1,0 +1,8320 @@
+[
+ {
+  "name": "greedy",
+  "messages": [
+   {
+    "role": "system",
+    "content": "You are a concise assistant."
+   },
+   {
+    "role": "user",
+    "content": "Name a colour of the sky. Secret-marker-7f3a."
+   }
+  ],
+  "body": {
+   "temperature": 0,
+   "max_tokens": 8,
+   "logprobs": true,
+   "top_logprobs": 2,
+   "extra_body": {
+    "ignore_eos": true
+   }
+  },
+  "stream": false,
+  "resp": {
+   "id": "chatcmpl-a1804d8acaa8497aacd8c6b9",
+   "object": "chat.completion",
+   "created": 1795668833,
+   "model": "qwen2.5-7b-instruct",
+   "choices": [
+    {
+     "index": 0,
+     "message": {
+      "role": "assistant",
+      "content": "The color of the sky can vary,",
+      "refusal": null,
+      "tool_calls": null,
+      "function_call": null
+     },
+     "finish_reason": "length",
+     "logprobs": {
+      "content": [
+       {
+        "token": "The",
+        "logprob": -0.22208832204341888,
+        "bytes": [
+         84,
+         104,
+         101
+        ],
+        "top_logprobs": [
+         {
+          "token": "The",
+          "logprob": -0.22208832204341888,
+          "bytes": [
+           84,
+           104,
+           101
+          ]
+         },
+         {
+          "token": "A",
+          "logprob": -2.242952823638916,
+          "bytes": [
+           65
+          ]
+         }
+        ]
+       },
+       {
+        "token": " color",
+        "logprob": -0.009765234775841236,
+        "bytes": [
+         32,
+         99,
+         111,
+         108,
+         111,
+         114
+        ],
+        "top_logprobs": [
+         {
+          "token": " color",
+          "logprob": -0.009765234775841236,
+          "bytes": [
+           32,
+           99,
+           111,
+           108,
+           111,
+           114
+          ]
+         },
+         {
+          "token": " sky",
+          "logprob": -4.823623180389404,
+          "bytes": [
+           32,
+           115,
+           107,
+           121
+          ]
+         }
+        ]
+       },
+       {
+        "token": " of",
+        "logprob": -0.0015975582646206021,
+        "bytes": [
+         32,
+         111,
+         102
+        ],
+        "top_logprobs": [
+         {
+          "token": " of",
+          "logprob": -0.0015975582646206021,
+          "bytes": [
+           32,
+           111,
+           102
+          ]
+         },
+         {
+          "token": " blue",
+          "logprob": -6.870060920715332,
+          "bytes": [
+           32,
+           98,
+           108,
+           117,
+           101
+          ]
+         }
+        ]
+       },
+       {
+        "token": " the",
+        "logprob": -7.152531907195225e-06,
+        "bytes": [
+         32,
+         116,
+         104,
+         101
+        ],
+        "top_logprobs": [
+         {
+          "token": " the",
+          "logprob": -7.152531907195225e-06,
+          "bytes": [
+           32,
+           116,
+           104,
+           101
+          ]
+         },
+         {
+          "token": " sky",
+          "logprob": -11.873087882995605,
+          "bytes": [
+           32,
+           115,
+           107,
+           121
+          ]
+         }
+        ]
+       },
+       {
+        "token": " sky",
+        "logprob": -3.4570634852570947e-06,
+        "bytes": [
+         32,
+         115,
+         107,
+         121
+        ],
+        "top_logprobs": [
+         {
+          "token": " sky",
+          "logprob": -3.4570634852570947e-06,
+          "bytes": [
+           32,
+           115,
+           107,
+           121
+          ]
+         },
+         {
+          "token": "sky",
+          "logprob": -12.621036529541016,
+          "bytes": [
+           115,
+           107,
+           121
+          ]
+         }
+        ]
+       },
+       {
+        "token": " can",
+        "logprob": -0.10298033058643341,
+        "bytes": [
+         32,
+         99,
+         97,
+         110
+        ],
+        "top_logprobs": [
+         {
+          "token": " can",
+          "logprob": -0.10298033058643341,
+          "bytes": [
+           32,
+           99,
+           97,
+           110
+          ]
+         },
+         {
+          "token": " is",
+          "logprob": -2.3341891765594482,
+          "bytes": [
+           32,
+           105,
+           115
+          ]
+         }
+        ]
+       },
+       {
+        "token": " vary",
+        "logprob": -0.6792736649513245,
+        "bytes": [
+         32,
+         118,
+         97,
+         114,
+         121
+        ],
+        "top_logprobs": [
+         {
+          "token": " vary",
+          "logprob": -0.6792736649513245,
+          "bytes": [
+           32,
+           118,
+           97,
+           114,
+           121
+          ]
+         },
+         {
+          "token": " be",
+          "logprob": -0.7269116044044495,
+          "bytes": [
+           32,
+           98,
+           101
+          ]
+         }
+        ]
+       },
+       {
+        "token": ",",
+        "logprob": -0.011671236716210842,
+        "bytes": [
+         44
+        ],
+        "top_logprobs": [
+         {
+          "token": ",",
+          "logprob": -0.011671236716210842,
+          "bytes": [
+           44
+          ]
+         },
+         {
+          "token": " but",
+          "logprob": -4.984983444213867,
+          "bytes": [
+           32,
+           98,
+           117,
+           116
+          ]
+         }
+        ]
+       }
+      ],
+      "refusal": null
+     }
+    }
+   ],
+   "usage": {
+    "prompt_tokens": 34,
+    "completion_tokens": 8,
+    "total_tokens": 42,
+    "prompt_tokens_details": null
+   },
+   "system_fingerprint": "f44352906cd8",
+   "service_tier": null
+  }
+ },
+ {
+  "name": "sampled_stream",
+  "messages": [
+   {
+    "role": "system",
+    "content": "You are a concise assistant."
+   },
+   {
+    "role": "user",
+    "content": "Name a colour of the sky. Secret-marker-7f3a."
+   }
+  ],
+  "body": {
+   "temperature": 0.8,
+   "top_p": 0.95,
+   "seed": 77,
+   "max_tokens": 8,
+   "logprobs": true,
+   "top_logprobs": 2,
+   "extra_body": {
+    "ignore_eos": true
+   }
+  },
+  "stream": true,
+  "chunks": [
+   {
+    "id": "chatcmpl-5fde787700844036b979504f",
+    "object": "chat.completion.chunk",
+    "created": 1795669013,
+    "model": "qwen2.5-7b-instruct",
+    "choices": [
+     {
+      "index": 0,
+      "delta": {
+       "role": "assistant",
+       "content": "",
+       "refusal": null,
+       "tool_calls": null,
+       "function_call": null
+      },
+      "finish_reason": null,
+      "logprobs": null
+     }
+    ],
+    "usage": null,
+    "system_fingerprint": "f44352906cd8",
+    "service_tier": null
+   },
+   {
+    "id": "chatcmpl-5fde787700844036b979504f",
+    "object": "chat.completion.chunk",
+    "created": 1795669013,
+    "model": "qwen2.5-7b-instruct",
+    "choices": [
+     {
+      "index": 0,
+      "delta": {
+       "role": null,
+       "content": "The",
+       "refusal": null,
+       "tool_calls": null,
+       "function_call": null
+      },
+      "finish_reason": null,
+      "logprobs": {
+       "content": [
+        {
+         "token": "The",
+         "logprob": -0.22208832204341888,
+         "bytes": [
+          84,
+          104,
+          101
+         ],
+         "top_logprobs": [
+          {
+           "token": "The",
+           "logprob": -0.22208832204341888,
+           "bytes": [
+            84,
+            104,
+            101
+           ]
+          },
+          {
+           "token": "A",
+           "logprob": -2.242952823638916,
+           "bytes": [
+            65
+           ]
+          }
+         ]
+        }
+       ],
+       "refusal": null
+      }
+     }
+    ],
+    "usage": null,
+    "system_fingerprint": "f44352906cd8",
+    "service_tier": null
+   },
+   {
+    "id": "chatcmpl-5fde787700844036b979504f",
+    "object": "chat.completion.chunk",
+    "created": 1795669013,
+    "model": "qwen2.5-7b-instruct",
+    "choices": [
+     {
+      "index": 0,
+      "delta": {
+       "role": null,
+       "content": " color",
+       "refusal": null,
+       "tool_calls": null,
+       "function_call": null
+      },
+      "finish_reason": null,
+      "logprobs": {
+       "content": [
+        {
+         "token": " color",
+         "logprob": -0.009765234775841236,
+         "bytes": [
+          32,
+          99,
+          111,
+          108,
+          111,
+          114
+         ],
+         "top_logprobs": [
+          {
+           "token": " color",
+           "logprob": -0.009765234775841236,
+           "bytes": [
+            32,
+            99,
+            111,
+            108,
+            111,
+            114
+           ]
+          },
+          {
+           "token": " sky",
+           "logprob": -4.823623180389404,
+           "bytes": [
+            32,
+            115,
+            107,
+            121
+           ]
+          }
+         ]
+        }
+       ],
+       "refusal": null
+      }
+     }
+    ],
+    "usage": null,
+    "system_fingerprint": "f44352906cd8",
+    "service_tier": null
+   },
+   {
+    "id": "chatcmpl-5fde787700844036b979504f",
+    "object": "chat.completion.chunk",
+    "created": 1795669013,
+    "model": "qwen2.5-7b-instruct",
+    "choices": [
+     {
+      "index": 0,
+      "delta": {
+       "role": null,
+       "content": " of",
+       "refusal": null,
+       "tool_calls": null,
+       "function_call": null
+      },
+      "finish_reason": null,
+      "logprobs": {
+       "content": [
+        {
+         "token": " of",
+         "logprob": -0.0015975582646206021,
+         "bytes": [
+          32,
+          111,
+          102
+         ],
+         "top_logprobs": [
+          {
+           "token": " of",
+           "logprob": -0.0015975582646206021,
+           "bytes": [
+            32,
+            111,
+            102
+           ]
+          },
+          {
+           "token": " blue",
+           "logprob": -6.870060920715332,
+           "bytes": [
+            32,
+            98,
+            108,
+            117,
+            101
+           ]
+          }
+         ]
+        }
+       ],
+       "refusal": null
+      }
+     }
+    ],
+    "usage": null,
+    "system_fingerprint": "f44352906cd8",
+    "service_tier": null
+   },
+   {
+    "id": "chatcmpl-5fde787700844036b979504f",
+    "object": "chat.completion.chunk",
+    "created": 1795669013,
+    "model": "qwen2.5-7b-instruct",
+    "choices": [
+     {
+      "index": 0,
+      "delta": {
+       "role": null,
+       "content": " the",
+       "refusal": null,
+       "tool_calls": null,
+       "function_call": null
+      },
+      "finish_reason": null,
+      "logprobs": {
+       "content": [
+        {
+         "token": " the",
+         "logprob": -7.152531907195225e-06,
+         "bytes": [
+          32,
+          116,
+          104,
+          101
+         ],
+         "top_logprobs": [
+          {
+           "token": " the",
+           "logprob": -7.152531907195225e-06,
+           "bytes": [
+            32,
+            116,
+            104,
+            101
+           ]
+          },
+          {
+           "token": " sky",
+           "logprob": -11.873087882995605,
+           "bytes": [
+            32,
+            115,
+            107,
+            121
+           ]
+          }
+         ]
+        }
+       ],
+       "refusal": null
+      }
+     }
+    ],
+    "usage": null,
+    "system_fingerprint": "f44352906cd8",
+    "service_tier": null
+   },
+   {
+    "id": "chatcmpl-5fde787700844036b979504f",
+    "object": "chat.completion.chunk",
+    "created": 1795669013,
+    "model": "qwen2.5-7b-instruct",
+    "choices": [
+     {
+      "index": 0,
+      "delta": {
+       "role": null,
+       "content": " sky",
+       "refusal": null,
+       "tool_calls": null,
+       "function_call": null
+      },
+      "finish_reason": null,
+      "logprobs": {
+       "content": [
+        {
+         "token": " sky",
+         "logprob": -3.4570634852570947e-06,
+         "bytes": [
+          32,
+          115,
+          107,
+          121
+         ],
+         "top_logprobs": [
+          {
+           "token": " sky",
+           "logprob": -3.4570634852570947e-06,
+           "bytes": [
+            32,
+            115,
+            107,
+            121
+           ]
+          },
+          {
+           "token": "sky",
+           "logprob": -12.621036529541016,
+           "bytes": [
+            115,
+            107,
+            121
+           ]
+          }
+         ]
+        }
+       ],
+       "refusal": null
+      }
+     }
+    ],
+    "usage": null,
+    "system_fingerprint": "f44352906cd8",
+    "service_tier": null
+   },
+   {
+    "id": "chatcmpl-5fde787700844036b979504f",
+    "object": "chat.completion.chunk",
+    "created": 1795669013,
+    "model": "qwen2.5-7b-instruct",
+    "choices": [
+     {
+      "index": 0,
+      "delta": {
+       "role": null,
+       "content": " can",
+       "refusal": null,
+       "tool_calls": null,
+       "function_call": null
+      },
+      "finish_reason": null,
+      "logprobs": {
+       "content": [
+        {
+         "token": " can",
+         "logprob": -0.10298033058643341,
+         "bytes": [
+          32,
+          99,
+          97,
+          110
+         ],
+         "top_logprobs": [
+          {
+           "token": " can",
+           "logprob": -0.10298033058643341,
+           "bytes": [
+            32,
+            99,
+            97,
+            110
+           ]
+          },
+          {
+           "token": " is",
+           "logprob": -2.3341891765594482,
+           "bytes": [
+            32,
+            105,
+            115
+           ]
+          }
+         ]
+        }
+       ],
+       "refusal": null
+      }
+     }
+    ],
+    "usage": null,
+    "system_fingerprint": "f44352906cd8",
+    "service_tier": null
+   },
+   {
+    "id": "chatcmpl-5fde787700844036b979504f",
+    "object": "chat.completion.chunk",
+    "created": 1795669013,
+    "model": "qwen2.5-7b-instruct",
+    "choices": [
+     {
+      "index": 0,
+      "delta": {
+       "role": null,
+       "content": " vary",
+       "refusal": null,
+       "tool_calls": null,
+       "function_call": null
+      },
+      "finish_reason": null,
+      "logprobs": {
+       "content": [
+        {
+         "token": " vary",
+         "logprob": -0.6792736649513245,
+         "bytes": [
+          32,
+          118,
+          97,
+          114,
+          121
+         ],
+         "top_logprobs": [
+          {
+           "token": " vary",
+           "logprob": -0.6792736649513245,
+           "bytes": [
+            32,
+            118,
+            97,
+            114,
+            121
+           ]
+          },
+          {
+           "token": " be",
+           "logprob": -0.7269116044044495,
+           "bytes": [
+            32,
+            98,
+            101
+           ]
+          }
+         ]
+        }
+       ],
+       "refusal": null
+      }
+     }
+    ],
+    "usage": null,
+    "system_fingerprint": "f44352906cd8",
+    "service_tier": null
+   },
+   {
+    "id": "chatcmpl-5fde787700844036b979504f",
+    "object": "chat.completion.chunk",
+    "created": 1795669013,
+    "model": "qwen2.5-7b-instruct",
+    "choices": [
+     {
+      "index": 0,
+      "delta": {
+       "role": null,
+       "content": ",",
+       "refusal": null,
+       "tool_calls": null,
+       "function_call": null
+      },
+      "finish_reason": "length",
+      "logprobs": {
+       "content": [
+        {
+         "token": ",",
+         "logprob": -0.011671236716210842,
+         "bytes": [
+          44
+         ],
+         "top_logprobs": [
+          {
+           "token": ",",
+           "logprob": -0.011671236716210842,
+           "bytes": [
+            44
+           ]
+          },
+          {
+           "token": " but",
+           "logprob": -4.984983444213867,
+           "bytes": [
+            32,
+            98,
+            117,
+            116
+           ]
+          }
+         ]
+        }
+       ],
+       "refusal": null
+      }
+     }
+    ],
+    "usage": null,
+    "system_fingerprint": "f44352906cd8",
+    "service_tier": null
+   },
+   {
+    "id": "chatcmpl-5fde787700844036b979504f",
+    "object": "chat.completion.chunk",
+    "created": 1795669013,
+    "model": "qwen2.5-7b-instruct",
+    "choices": [],
+    "usage": {
+     "prompt_tokens": 34,
+     "completion_tokens": 8,
+     "total_tokens": 42,
+     "prompt_tokens_details": null
+    },
+    "system_fingerprint": "f44352906cd8",
+    "service_tier": null
+   }
+  ]
+ },
+ {
+  "name": "long_stream_0",
+  "messages": [
+   {
+    "role": "system",
+    "content": "You are a concise assistant."
+   },
+   {
+    "role": "user",
+    "content": "Write a short paragraph about why the sky is blue."
+   }
+  ],
+  "body": {
+   "temperature": 0,
+   "max_tokens": 64,
+   "logprobs": true,
+   "top_logprobs": 1,
+   "extra_body": {
+    "ignore_eos": true
+   }
+  },
+  "stream": true,
+  "chunks": [
+   {
+    "id": "chatcmpl-ec7c68a5c9234f96ac0c875d",
+    "object": "chat.completion.chunk",
+    "created": 1795669281,
+    "model": "qwen2.5-7b-instruct",
+    "choices": [
+     {
+      "index": 0,
+      "delta": {
+       "role": "assistant",
+       "content": "",
+       "refusal": null,
+       "tool_calls": null,
+       "function_call": null
+      },
+      "finish_reason": null,
+      "logprobs": null
+     }
+    ],
+    "usage": null,
+    "system_fingerprint": "f44352906cd8",
+    "service_tier": null
+   },
+   {
+    "id": "chatcmpl-ec7c68a5c9234f96ac0c875d",
+    "object": "chat.completion.chunk",
+    "created": 1795669281,
+    "model": "qwen2.5-7b-instruct",
+    "choices": [
+     {
+      "index": 0,
+      "delta": {
+       "role": null,
+       "content": "The",
+       "refusal": null,
+       "tool_calls": null,
+       "function_call": null
+      },
+      "finish_reason": null,
+      "logprobs": {
+       "content": [
+        {
+         "token": "The",
+         "logprob": -8.344646857949556e-07,
+         "bytes": [
+          84,
+          104,
+          101
+         ],
+         "top_logprobs": [
+          {
+           "token": "The",
+           "logprob": -8.344646857949556e-07,
+           "bytes": [
+            84,
+            104,
+            101
+           ]
+          }
+         ]
+        }
+       ],
+       "refusal": null
+      }
+     }
+    ],
+    "usage": null,
+    "system_fingerprint": "f44352906cd8",
+    "service_tier": null
+   },
+   {
+    "id": "chatcmpl-ec7c68a5c9234f96ac0c875d",
+    "object": "chat.completion.chunk",
+    "created": 1795669281,
+    "model": "qwen2.5-7b-instruct",
+    "choices": [
+     {
+      "index": 0,
+      "delta": {
+       "role": null,
+       "content": " sky",
+       "refusal": null,
+       "tool_calls": null,
+       "function_call": null
+      },
+      "finish_reason": null,
+      "logprobs": {
+       "content": [
+        {
+         "token": " sky",
+         "logprob": -0.002242433140054345,
+         "bytes": [
+          32,
+          115,
+          107,
+          121
+         ],
+         "top_logprobs": [
+          {
+           "token": " sky",
+           "logprob": -0.002242433140054345,
+           "bytes": [
+            32,
+            115,
+            107,
+            121
+           ]
+          }
+         ]
+        }
+       ],
+       "refusal": null
+      }
+     }
+    ],
+    "usage": null,
+    "system_fingerprint": "f44352906cd8",
+    "service_tier": null
+   },
+   {
+    "id": "chatcmpl-ec7c68a5c9234f96ac0c875d",
+    "object": "chat.completion.chunk",
+    "created": 1795669281,
+    "model": "qwen2.5-7b-instruct",
+    "choices": [
+     {
+      "index": 0,
+      "delta": {
+       "role": null,
+       "content": " appears",
+       "refusal": null,
+       "tool_calls": null,
+       "function_call": null
+      },
+      "finish_reason": null,
+      "logprobs": {
+       "content": [
+        {
+         "token": " appears",
+         "logprob": -4.684815212385729e-05,
+         "bytes": [
+          32,
+          97,
+          112,
+          112,
+          101,
+          97,
+          114,
+          115
+         ],
+         "top_logprobs": [
+          {
+           "token": " appears",
+           "logprob": -4.684815212385729e-05,
+           "bytes": [
+            32,
+            97,
+            112,
+            112,
+            101,
+            97,
+            114,
+            115
+           ]
+          }
+         ]
+        }
+       ],
+       "refusal": null
+      }
+     }
+    ],
+    "usage": null,
+    "system_fingerprint": "f44352906cd8",
+    "service_tier": null
+   },
+   {
+    "id": "chatcmpl-ec7c68a5c9234f96ac0c875d",
+    "object": "chat.completion.chunk",
+    "created": 1795669281,
+    "model": "qwen2.5-7b-instruct",
+    "choices": [
+     {
+      "index": 0,
+      "delta": {
+       "role": null,
+       "content": " blue",
+       "refusal": null,
+       "tool_calls": null,
+       "function_call": null
+      },
+      "finish_reason": null,
+      "logprobs": {
+       "content": [
+        {
+         "token": " blue",
+         "logprob": -6.937739817658439e-05,
+         "bytes": [
+          32,
+          98,
+          108,
+          117,
+          101
+         ],
+         "top_logprobs": [
+          {
+           "token": " blue",
+           "logprob": -6.937739817658439e-05,
+           "bytes": [
+            32,
+            98,
+            108,
+            117,
+            101
+           ]
+          }
+         ]
+        }
+       ],
+       "refusal": null
+      }
+     }
+    ],
+    "usage": null,
+    "system_fingerprint": "f44352906cd8",
+    "service_tier": null
+   },
+   {
+    "id": "chatcmpl-ec7c68a5c9234f96ac0c875d",
+    "object": "chat.completion.chunk",
+    "created": 1795669281,
+    "model": "qwen2.5-7b-instruct",
+    "choices": [
+     {
+      "index": 0,
+      "delta": {
+       "role": null,
+       "content": " during",
+       "refusal": null,
+       "tool_calls": null,
+       "function_call": null
+      },
+      "finish_reason": null,
+      "logprobs": {
+       "content": [
+        {
+         "token": " during",
+         "logprob": -0.22836945950984955,
+         "bytes": [
+          32,
+          100,
+          117,
+          114,
+          105,
+          110,
+          103
+         ],
+         "top_logprobs": [
+          {
+           "token": " during",
+           "logprob": -0.22836945950984955,
+           "bytes": [
+            32,
+            100,
+            117,
+            114,
+            105,
+            110,
+            103
+           ]
+          }
+         ]
+        }
+       ],
+       "refusal": null
+      }
+     }
+    ],
+    "usage": null,
+    "system_fingerprint": "f44352906cd8",
+    "service_tier": null
+   },
+   {
+    "id": "chatcmpl-ec7c68a5c9234f96ac0c875d",
+    "object": "chat.completion.chunk",
+    "created": 1795669281,
+    "model": "qwen2.5-7b-instruct",
+    "choices": [
+     {
+      "index": 0,
+      "delta": {
+       "role": null,
+       "content": " the",
+       "refusal": null,
+       "tool_calls": null,
+       "function_call": null
+      },
+      "finish_reason": null,
+      "logprobs": {
+       "content": [
+        {
+         "token": " the",
+         "logprob": -0.04111591354012489,
+         "bytes": [
+          32,
+          116,
+          104,
+          101
+         ],
+         "top_logprobs": [
+          {
+           "token": " the",
+           "logprob": -0.04111591354012489,
+           "bytes": [
+            32,
+            116,
+            104,
+            101
+           ]
+          }
+         ]
+        }
+       ],
+       "refusal": null
+      }
+     }
+    ],
+    "usage": null,
+    "system_fingerprint": "f44352906cd8",
+    "service_tier": null
+   },
+   {
+    "id": "chatcmpl-ec7c68a5c9234f96ac0c875d",
+    "object": "chat.completion.chunk",
+    "created": 1795669281,
+    "model": "qwen2.5-7b-instruct",
+    "choices": [
+     {
+      "index": 0,
+      "delta": {
+       "role": null,
+       "content": " day",
+       "refusal": null,
+       "tool_calls": null,
+       "function_call": null
+      },
+      "finish_reason": null,
+      "logprobs": {
+       "content": [
+        {
+         "token": " day",
+         "logprob": -0.32243812084198,
+         "bytes": [
+          32,
+          100,
+          97,
+          121
+         ],
+         "top_logprobs": [
+          {
+           "token": " day",
+           "logprob": -0.32243812084198,
+           "bytes": [
+            32,
+            100,
+            97,
+            121
+           ]
+          }
+         ]
+        }
+       ],
+       "refusal": null
+      }
+     }
+    ],
+    "usage": null,
+    "system_fingerprint": "f44352906cd8",
+    "service_tier": null
+   },
+   {
+    "id": "chatcmpl-ec7c68a5c9234f96ac0c875d",
+    "object": "chat.completion.chunk",
+    "created": 1795669281,
+    "model": "qwen2.5-7b-instruct",
+    "choices": [
+     {
+      "index": 0,
+      "delta": {
+       "role": null,
+       "content": " due",
+       "refusal": null,
+       "tool_calls": null,
+       "function_call": null
+      },
+      "finish_reason": null,
+      "logprobs": {
+       "content": [
+        {
+         "token": " due",
+         "logprob": -0.1218835785984993,
+         "bytes": [
+          32,
+          100,
+          117,
+          101
+         ],
+         "top_logprobs": [
+          {
+           "token": " due",
+           "logprob": -0.1218835785984993,
+           "bytes": [
+            32,
+            100,
+            117,
+            101
+           ]
+          }
+         ]
+        }
+       ],
+       "refusal": null
+      }
+     }
+    ],
+    "usage": null,
+    "system_fingerprint": "f44352906cd8",
+    "service_tier": null
+   },
+   {
+    "id": "chatcmpl-ec7c68a5c9234f96ac0c875d",
+    "object": "chat.completion.chunk",
+    "created": 1795669281,
+    "model": "qwen2.5-7b-instruct",
+    "choices": [
+     {
+      "index": 0,
+      "delta": {
+       "role": null,
+       "content": " to",
+       "refusal": null,
+       "tool_calls": null,
+       "function_call": null
+      },
+      "finish_reason": null,
+      "logprobs": {
+       "content": [
+        {
+         "token": " to",
+         "logprob": 0.0,
+         "bytes": [
+          32,
+          116,
+          111
+         ],
+         "top_logprobs": [
+          {
+           "token": " to",
+           "logprob": 0.0,
+           "bytes": [
+            32,
+            116,
+            111
+           ]
+          }
+         ]
+        }
+       ],
+       "refusal": null
+      }
+     }
+    ],
+    "usage": null,
+    "system_fingerprint": "f44352906cd8",
+    "service_tier": null
+   },
+   {
+    "id": "chatcmpl-ec7c68a5c9234f96ac0c875d",
+    "object": "chat.completion.chunk",
+    "created": 1795669281,
+    "model": "qwen2.5-7b-instruct",
+    "choices": [
+     {
+      "index": 0,
+      "delta": {
+       "role": null,
+       "content": " a",
+       "refusal": null,
+       "tool_calls": null,
+       "function_call": null
+      },
+      "finish_reason": null,
+      "logprobs": {
+       "content": [
+        {
+         "token": " a",
+         "logprob": -4.577531944960356e-05,
+         "bytes": [
+          32,
+          97
+         ],
+         "top_logprobs": [
+          {
+           "token": " a",
+           "logprob": -4.577531944960356e-05,
+           "bytes": [
+            32,
+            97
+           ]
+          }
+         ]
+        }
+       ],
+       "refusal": null
+      }
+     }
+    ],
+    "usage": null,
+    "system_fingerprint": "f44352906cd8",
+    "service_tier": null
+   },
+   {
+    "id": "chatcmpl-ec7c68a5c9234f96ac0c875d",
+    "object": "chat.completion.chunk",
+    "created": 1795669281,
+    "model": "qwen2.5-7b-instruct",
+    "choices": [
+     {
+      "index": 0,
+      "delta": {
+       "role": null,
+       "content": " phenomenon",
+       "refusal": null,
+       "tool_calls": null,
+       "function_call": null
+      },
+      "finish_reason": null,
+      "logprobs": {
+       "content": [
+        {
+         "token": " phenomenon",
+         "logprob": -0.09233877807855606,
+         "bytes": [
+          32,
+          112,
+          104,
+          101,
+          110,
+          111,
+          109,
+          101,
+          110,
+          111,
+          110
+         ],
+         "top_logprobs": [
+          {
+           "token": " phenomenon",
+           "logprob": -0.09233877807855606,
+           "bytes": [
+            32,
+            112,
+            104,
+            101,
+            110,
+            111,
+            109,
+            101,
+            110,
+            111,
+            110
+           ]
+          }
+         ]
+        }
+       ],
+       "refusal": null
+      }
+     }
+    ],
+    "usage": null,
+    "system_fingerprint": "f44352906cd8",
+    "service_tier": null
+   },
+   {
+    "id": "chatcmpl-ec7c68a5c9234f96ac0c875d",
+    "object": "chat.completion.chunk",
+    "created": 1795669281,
+    "model": "qwen2.5-7b-instruct",
+    "choices": [
+     {
+      "index": 0,
+      "delta": {
+       "role": null,
+       "content": " called",
+       "refusal": null,
+       "tool_calls": null,
+       "function_call": null
+      },
+      "finish_reason": null,
+      "logprobs": {
+       "content": [
+        {
+         "token": " called",
+         "logprob": -0.07366237789392471,
+         "bytes": [
+          32,
+          99,
+          97,
+          108,
+          108,
+          101,
+          100
+         ],
+         "top_logprobs": [
+          {
+           "token": " called",
+           "logprob": -0.07366237789392471,
+           "bytes": [
+            32,
+            99,
+            97,
+            108,
+            108,
+            101,
+            100
+           ]
+          }
+         ]
+        }
+       ],
+       "refusal": null
+      }
+     }
+    ],
+    "usage": null,
+    "system_fingerprint": "f44352906cd8",
+    "service_tier": null
+   },
+   {
+    "id": "chatcmpl-ec7c68a5c9234f96ac0c875d",
+    "object": "chat.completion.chunk",
+    "created": 1795669281,
+    "model": "qwen2.5-7b-instruct",
+    "choices": [
+     {
+      "index": 0,
+      "delta": {
+       "role": null,
+       "content": " Ray",
+       "refusal": null,
+       "tool_calls": null,
+       "function_call": null
+      },
+      "finish_reason": null,
+      "logprobs": {
+       "content": [
+        {
+         "token": " Ray",
+         "logprob": -0.0016277885297313333,
+         "bytes": [
+          32,
+          82,
+          97,
+          121
+         ],
+         "top_logprobs": [
+          {
+           "token": " Ray",
+           "logprob": -0.0016277885297313333,
+           "bytes": [
+            32,
+            82,
+            97,
+            121
+           ]
+          }
+         ]
+        }
+       ],
+       "refusal": null
+      }
+     }
+    ],
+    "usage": null,
+    "system_fingerprint": "f44352906cd8",
+    "service_tier": null
+   },
+   {
+    "id": "chatcmpl-ec7c68a5c9234f96ac0c875d",
+    "object": "chat.completion.chunk",
+    "created": 1795669281,
+    "model": "qwen2.5-7b-instruct",
+    "choices": [
+     {
+      "index": 0,
+      "delta": {
+       "role": null,
+       "content": "leigh",
+       "refusal": null,
+       "tool_calls": null,
+       "function_call": null
+      },
+      "finish_reason": null,
+      "logprobs": {
+       "content": [
+        {
+         "token": "leigh",
+         "logprob": 0.0,
+         "bytes": [
+          108,
+          101,
+          105,
+          103,
+          104
+         ],
+         "top_logprobs": [
+          {
+           "token": "leigh",
+           "logprob": 0.0,
+           "bytes": [
+            108,
+            101,
+            105,
+            103,
+            104
+           ]
+          }
+         ]
+        }
+       ],
+       "refusal": null
+      }
+     }
+    ],
+    "usage": null,
+    "system_fingerprint": "f44352906cd8",
+    "service_tier": null
+   },
+   {
+    "id": "chatcmpl-ec7c68a5c9234f96ac0c875d",
+    "object": "chat.completion.chunk",
+    "created": 1795669281,
+    "model": "qwen2.5-7b-instruct",
+    "choices": [
+     {
+      "index": 0,
+      "delta": {
+       "role": null,
+       "content": " scattering",
+       "refusal": null,
+       "tool_calls": null,
+       "function_call": null
+      },
+      "finish_reason": null,
+      "logprobs": {
+       "content": [
+        {
+         "token": " scattering",
+         "logprob": -7.64102369430475e-05,
+         "bytes": [
+          32,
+          115,
+          99,
+          97,
+          116,
+          116,
+          101,
+          114,
+          105,
+          110,
+          103
+         ],
+         "top_logprobs": [
+          {
+           "token": " scattering",
+           "logprob": -7.64102369430475e-05,
+           "bytes": [
+            32,
+            115,
+            99,
+            97,
+            116,
+            116,
+            101,
+            114,
+            105,
+            110,
+            103
+           ]
+          }
+         ]
+        }
+       ],
+       "refusal": null
+      }
+     }
+    ],
+    "usage": null,
+    "system_fingerprint": "f44352906cd8",
+    "service_tier": null
+   },
+   {
+    "id": "chatcmpl-ec7c68a5c9234f96ac0c875d",
+    "object": "chat.completion.chunk",
+    "created": 1795669281,
+    "model": "qwen2.5-7b-instruct",
+    "choices": [
+     {
+      "index": 0,
+      "delta": {
+       "role": null,
+       "content": ".",
+       "refusal": null,
+       "tool_calls": null,
+       "function_call": null
+      },
+      "finish_reason": null,
+      "logprobs": {
+       "content": [
+        {
+         "token": ".",
+         "logprob": -0.00016032364510465413,
+         "bytes": [
+          46
+         ],
+         "top_logprobs": [
+          {
+           "token": ".",
+           "logprob": -0.00016032364510465413,
+           "bytes": [
+            46
+           ]
+          }
+         ]
+        }
+       ],
+       "refusal": null
+      }
+     }
+    ],
+    "usage": null,
+    "system_fingerprint": "f44352906cd8",
+    "service_tier": null
+   },
+   {
+    "id": "chatcmpl-ec7c68a5c9234f96ac0c875d",
+    "object": "chat.completion.chunk",
+    "created": 1795669281,
+    "model": "qwen2.5-7b-instruct",
+    "choices": [
+     {
+      "index": 0,
+      "delta": {
+       "role": null,
+       "content": " When",
+       "refusal": null,
+       "tool_calls": null,
+       "function_call": null
+      },
+      "finish_reason": null,
+      "logprobs": {
+       "content": [
+        {
+         "token": " When",
+         "logprob": -0.05365664139389992,
+         "bytes": [
+          32,
+          87,
+          104,
+          101,
+          110
+         ],
+         "top_logprobs": [
+          {
+           "token": " When",
+           "logprob": -0.05365664139389992,
+           "bytes": [
+            32,
+            87,
+            104,
+            101,
+            110
+           ]
+          }
+         ]
+        }
+       ],
+       "refusal": null
+      }
+     }
+    ],
+    "usage": null,
+    "system_fingerprint": "f44352906cd8",
+    "service_tier": null
+   },
+   {
+    "id": "chatcmpl-ec7c68a5c9234f96ac0c875d",
+    "object": "chat.completion.chunk",
+    "created": 1795669281,
+    "model": "qwen2.5-7b-instruct",
+    "choices": [
+     {
+      "index": 0,
+      "delta": {
+       "role": null,
+       "content": " sunlight",
+       "refusal": null,
+       "tool_calls": null,
+       "function_call": null
+      },
+      "finish_reason": null,
+      "logprobs": {
+       "content": [
+        {
+         "token": " sunlight",
+         "logprob": -0.010699761100113392,
+         "bytes": [
+          32,
+          115,
+          117,
+          110,
+          108,
+          105,
+          103,
+          104,
+          116
+         ],
+         "top_logprobs": [
+          {
+           "token": " sunlight",
+           "logprob": -0.010699761100113392,
+           "bytes": [
+            32,
+            115,
+            117,
+            110,
+            108,
+            105,
+            103,
+            104,
+            116
+           ]
+          }
+         ]
+        }
+       ],
+       "refusal": null
+      }
+     }
+    ],
+    "usage": null,
+    "system_fingerprint": "f44352906cd8",
+    "service_tier": null
+   },
+   {
+    "id": "chatcmpl-ec7c68a5c9234f96ac0c875d",
+    "object": "chat.completion.chunk",
+    "created": 1795669281,
+    "model": "qwen2.5-7b-instruct",
+    "choices": [
+     {
+      "index": 0,
+      "delta": {
+       "role": null,
+       "content": " enters",
+       "refusal": null,
+       "tool_calls": null,
+       "function_call": null
+      },
+      "finish_reason": null,
+      "logprobs": {
+       "content": [
+        {
+         "token": " enters",
+         "logprob": -0.0017970141489058733,
+         "bytes": [
+          32,
+          101,
+          110,
+          116,
+          101,
+          114,
+          115
+         ],
+         "top_logprobs": [
+          {
+           "token": " enters",
+           "logprob": -0.0017970141489058733,
+           "bytes": [
+            32,
+            101,
+            110,
+            116,
+            101,
+            114,
+            115
+           ]
+          }
+         ]
+        }
+       ],
+       "refusal": null
+      }
+     }
+    ],
+    "usage": null,
+    "system_fingerprint": "f44352906cd8",
+    "service_tier": null
+   },
+   {
+    "id": "chatcmpl-ec7c68a5c9234f96ac0c875d",
+    "object": "chat.completion.chunk",
+    "created": 1795669281,
+    "model": "qwen2.5-7b-instruct",
+    "choices": [
+     {
+      "index": 0,
+      "delta": {
+       "role": null,
+       "content": " the",
+       "refusal": null,
+       "tool_calls": null,
+       "function_call": null
+      },
+      "finish_reason": null,
+      "logprobs": {
+       "content": [
+        {
+         "token": " the",
+         "logprob": -0.020655876025557518,
+         "bytes": [
+          32,
+          116,
+          104,
+          101
+         ],
+         "top_logprobs": [
+          {
+           "token": " the",
+           "logprob": -0.020655876025557518,
+           "bytes": [
+            32,
+            116,
+            104,
+            101
+           ]
+          }
+         ]
+        }
+       ],
+       "refusal": null
+      }
+     }
+    ],
+    "usage": null,
+    "system_fingerprint": "f44352906cd8",
+    "service_tier": null
+   },
+   {
+    "id": "chatcmpl-ec7c68a5c9234f96ac0c875d",
+    "object": "chat.completion.chunk",
+    "created": 1795669281,
+    "model": "qwen2.5-7b-instruct",
+    "choices": [
+     {
+      "index": 0,
+      "delta": {
+       "role": null,
+       "content": " Earth",
+       "refusal": null,
+       "tool_calls": null,
+       "function_call": null
+      },
+      "finish_reason": null,
+      "logprobs": {
+       "content": [
+        {
+         "token": " Earth",
+         "logprob": -0.0005658455775119364,
+         "bytes": [
+          32,
+          69,
+          97,
+          114,
+          116,
+          104
+         ],
+         "top_logprobs": [
+          {
+           "token": " Earth",
+           "logprob": -0.0005658455775119364,
+           "bytes": [
+            32,
+            69,
+            97,
+            114,
+            116,
+            104
+           ]
+          }
+         ]
+        }
+       ],
+       "refusal": null
+      }
+     }
+    ],
+    "usage": null,
+    "system_fingerprint": "f44352906cd8",
+    "service_tier": null
+   },
+   {
+    "id": "chatcmpl-ec7c68a5c9234f96ac0c875d",
+    "object": "chat.completion.chunk",
+    "created": 1795669281,
+    "model": "qwen2.5-7b-instruct",
+    "choices": [
+     {
+      "index": 0,
+      "delta": {
+       "role": null,
+       "content": "'s",
+       "refusal": null,
+       "tool_calls": null,
+       "function_call": null
+      },
+      "finish_reason": null,
+      "logprobs": {
+       "content": [
+        {
+         "token": "'s",
+         "logprob": -6.794698856538162e-05,
+         "bytes": [
+          39,
+          115
+         ],
+         "top_logprobs": [
+          {
+           "token": "'s",
+           "logprob": -6.794698856538162e-05,
+           "bytes": [
+            39,
+            115
+           ]
+          }
+         ]
+        }
+       ],
+       "refusal": null
+      }
+     }
+    ],
+    "usage": null,
+    "system_fingerprint": "f44352906cd8",
+    "service_tier": null
+   },
+   {
+    "id": "chatcmpl-ec7c68a5c9234f96ac0c875d",
+    "object": "chat.completion.chunk",
+    "created": 1795669281,
+    "model": "qwen2.5-7b-instruct",
+    "choices": [
+     {
+      "index": 0,
+      "delta": {
+       "role": null,
+       "content": " atmosphere",
+       "refusal": null,
+       "tool_calls": null,
+       "function_call": null
+      },
+      "finish_reason": null,
+      "logprobs": {
+       "content": [
+        {
+         "token": " atmosphere",
+         "logprob": -0.00040904260822571814,
+         "bytes": [
+          32,
+          97,
+          116,
+          109,
+          111,
+          115,
+          112,
+          104,
+          101,
+          114,
+          101
+         ],
+         "top_logprobs": [
+          {
+           "token": " atmosphere",
+           "logprob": -0.00040904260822571814,
+           "bytes": [
+            32,
+            97,
+            116,
+            109,
+            111,
+            115,
+            112,
+            104,
+            101,
+            114,
+            101
+           ]
+          }
+         ]
+        }
+       ],
+       "refusal": null
+      }
+     }
+    ],
+    "usage": null,
+    "system_fingerprint": "f44352906cd8",
+    "service_tier": null
+   },
+   {
+    "id": "chatcmpl-ec7c68a5c9234f96ac0c875d",
+    "object": "chat.completion.chunk",
+    "created": 1795669281,
+    "model": "qwen2.5-7b-instruct",
+    "choices": [
+     {
+      "index": 0,
+      "delta": {
+       "role": null,
+       "content": ",",
+       "refusal": null,
+       "tool_calls": null,
+       "function_call": null
+      },
+      "finish_reason": null,
+      "logprobs": {
+       "content": [
+        {
+         "token": ",",
+         "logprob": -7.390948667307384e-06,
+         "bytes": [
+          44
+         ],
+         "top_logprobs": [
+          {
+           "token": ",",
+           "logprob": -7.390948667307384e-06,
+           "bytes": [
+            44
+           ]
+          }
+         ]
+        }
+       ],
+       "refusal": null
+      }
+     }
+    ],
+    "usage": null,
+    "system_fingerprint": "f44352906cd8",
+    "service_tier": null
+   },
+   {
+    "id": "chatcmpl-ec7c68a5c9234f96ac0c875d",
+    "object": "chat.completion.chunk",
+    "created": 1795669281,
+    "model": "qwen2.5-7b-instruct",
+    "choices": [
+     {
+      "index": 0,
+      "delta": {
+       "role": null,
+       "content": " it",
+       "refusal": null,
+       "tool_calls": null,
+       "function_call": null
+      },
+      "finish_reason": null,
+      "logprobs": {
+       "content": [
+        {
+         "token": " it",
+         "logprob": -0.000359351426595822,
+         "bytes": [
+          32,
+          105,
+          116
+         ],
+         "top_logprobs": [
+          {
+           "token": " it",
+           "logprob": -0.000359351426595822,
+           "bytes": [
+            32,
+            105,
+            116
+           ]
+          }
+         ]
+        }
+       ],
+       "refusal": null
+      }
+     }
+    ],
+    "usage": null,
+    "system_fingerprint": "f44352906cd8",
+    "service_tier": null
+   },
+   {
+    "id": "chatcmpl-ec7c68a5c9234f96ac0c875d",
+    "object": "chat.completion.chunk",
+    "created": 1795669281,
+    "model": "qwen2.5-7b-instruct",
+    "choices": [
+     {
+      "index": 0,
+      "delta": {
+       "role": null,
+       "content": " coll",
+       "refusal": null,
+       "tool_calls": null,
+       "function_call": null
+      },
+      "finish_reason": null,
+      "logprobs": {
+       "content": [
+        {
+         "token": " coll",
+         "logprob": -0.14408721029758453,
+         "bytes": [
+          32,
+          99,
+          111,
+          108,
+          108
+         ],
+         "top_logprobs": [
+          {
+           "token": " coll",
+           "logprob": -0.14408721029758453,
+           "bytes": [
+            32,
+            99,
+            111,
+            108,
+            108
+           ]
+          }
+         ]
+        }
+       ],
+       "refusal": null
+      }
+     }
+    ],
+    "usage": null,
+    "system_fingerprint": "f44352906cd8",
+    "service_tier": null
+   },
+   {
+    "id": "chatcmpl-ec7c68a5c9234f96ac0c875d",
+    "object": "chat.completion.chunk",
+    "created": 1795669281,
+    "model": "qwen2.5-7b-instruct",
+    "choices": [
+     {
+      "index": 0,
+      "delta": {
+       "role": null,
+       "content": "ides",
+       "refusal": null,
+       "tool_calls": null,
+       "function_call": null
+      },
+      "finish_reason": null,
+      "logprobs": {
+       "content": [
+        {
+         "token": "ides",
+         "logprob": -1.9073468138230965e-06,
+         "bytes": [
+          105,
+          100,
+          101,
+          115
+         ],
+         "top_logprobs": [
+          {
+           "token": "ides",
+           "logprob": -1.9073468138230965e-06,
+           "bytes": [
+            105,
+            100,
+            101,
+            115
+           ]
+          }
+         ]
+        }
+       ],
+       "refusal": null
+      }
+     }
+    ],
+    "usage": null,
+    "system_fingerprint": "f44352906cd8",
+    "service_tier": null
+   },
+   {
+    "id": "chatcmpl-ec7c68a5c9234f96ac0c875d",
+    "object": "chat.completion.chunk",
+    "created": 1795669281,
+    "model": "qwen2.5-7b-instruct",
+    "choices": [
+     {
+      "index": 0,
+      "delta": {
+       "role": null,
+       "content": " with",
+       "refusal": null,
+       "tool_calls": null,
+       "function_call": null
+      },
+      "finish_reason": null,
+      "logprobs": {
+       "content": [
+        {
+         "token": " with",
+         "logprob": -7.152555099310121e-07,
+         "bytes": [
+          32,
+          119,
+          105,
+          116,
+          104
+         ],
+         "top_logprobs": [
+          {
+           "token": " with",
+           "logprob": -7.152555099310121e-07,
+           "bytes": [
+            32,
+            119,
+            105,
+            116,
+            104
+           ]
+          }
+         ]
+        }
+       ],
+       "refusal": null
+      }
+     }
+    ],
+    "usage": null,
+    "system_fingerprint": "f44352906cd8",
+    "service_tier": null
+   },
+   {
+    "id": "chatcmpl-ec7c68a5c9234f96ac0c875d",
+    "object": "chat.completion.chunk",
+    "created": 1795669281,
+    "model": "qwen2.5-7b-instruct",
+    "choices": [
+     {
+      "index": 0,
+      "delta": {
+       "role": null,
+       "content": " molecules",
+       "refusal": null,
+       "tool_calls": null,
+       "function_call": null
+      },
+      "finish_reason": null,
+      "logprobs": {
+       "content": [
+        {
+         "token": " molecules",
+         "logprob": -0.07188846170902252,
+         "bytes": [
+          32,
+          109,
+          111,
+          108,
+          101,
+          99,
+          117,
+          108,
+          101,
+          115
+         ],
+         "top_logprobs": [
+          {
+           "token": " molecules",
+           "logprob": -0.07188846170902252,
+           "bytes": [
+            32,
+            109,
+            111,
+            108,
+            101,
+            99,
+            117,
+            108,
+            101,
+            115
+           ]
+          }
+         ]
+        }
+       ],
+       "refusal": null
+      }
+     }
+    ],
+    "usage": null,
+    "system_fingerprint": "f44352906cd8",
+    "service_tier": null
+   },
+   {
+    "id": "chatcmpl-ec7c68a5c9234f96ac0c875d",
+    "object": "chat.completion.chunk",
+    "created": 1795669281,
+    "model": "qwen2.5-7b-instruct",
+    "choices": [
+     {
+      "index": 0,
+      "delta": {
+       "role": null,
+       "content": " and",
+       "refusal": null,
+       "tool_calls": null,
+       "function_call": null
+      },
+      "finish_reason": null,
+      "logprobs": {
+       "content": [
+        {
+         "token": " and",
+         "logprob": -0.02360527403652668,
+         "bytes": [
+          32,
+          97,
+          110,
+          100
+         ],
+         "top_logprobs": [
+          {
+           "token": " and",
+           "logprob": -0.02360527403652668,
+           "bytes": [
+            32,
+            97,
+            110,
+            100
+           ]
+          }
+         ]
+        }
+       ],
+       "refusal": null
+      }
+     }
+    ],
+    "usage": null,
+    "system_fingerprint": "f44352906cd8",
+    "service_tier": null
+   },
+   {
+    "id": "chatcmpl-ec7c68a5c9234f96ac0c875d",
+    "object": "chat.completion.chunk",
+    "created": 1795669281,
+    "model": "qwen2.5-7b-instruct",
+    "choices": [
+     {
+      "index": 0,
+      "delta": {
+       "role": null,
+       "content": " small",
+       "refusal": null,
+       "tool_calls": null,
+       "function_call": null
+      },
+      "finish_reason": null,
+      "logprobs": {
+       "content": [
+        {
+         "token": " small",
+         "logprob": -0.23794755339622498,
+         "bytes": [
+          32,
+          115,
+          109,
+          97,
+          108,
+          108
+         ],
+         "top_logprobs": [
+          {
+           "token": " small",
+           "logprob": -0.23794755339622498,
+           "bytes": [
+            32,
+            115,
+            109,
+            97,
+            108,
+            108
+           ]
+          }
+         ]
+        }
+       ],
+       "refusal": null
+      }
+     }
+    ],
+    "usage": null,
+    "system_fingerprint": "f44352906cd8",
+    "service_tier": null
+   },
+   {
+    "id": "chatcmpl-ec7c68a5c9234f96ac0c875d",
+    "object": "chat.completion.chunk",
+    "created": 1795669281,
+    "model": "qwen2.5-7b-instruct",
+    "choices": [
+     {
+      "index": 0,
+      "delta": {
+       "role": null,
+       "content": " particles",
+       "refusal": null,
+       "tool_calls": null,
+       "function_call": null
+      },
+      "finish_reason": null,
+      "logprobs": {
+       "content": [
+        {
+         "token": " particles",
+         "logprob": -0.00015209948469419032,
+         "bytes": [
+          32,
+          112,
+          97,
+          114,
+          116,
+          105,
+          99,
+          108,
+          101,
+          115
+         ],
+         "top_logprobs": [
+          {
+           "token": " particles",
+           "logprob": -0.00015209948469419032,
+           "bytes": [
+            32,
+            112,
+            97,
+            114,
+            116,
+            105,
+            99,
+            108,
+            101,
+            115
+           ]
+          }
+         ]
+        }
+       ],
+       "refusal": null
+      }
+     }
+    ],
+    "usage": null,
+    "system_fingerprint": "f44352906cd8",
+    "service_tier": null
+   },
+   {
+    "id": "chatcmpl-ec7c68a5c9234f96ac0c875d",
+    "object": "chat.completion.chunk",
+    "created": 1795669281,
+    "model": "qwen2.5-7b-instruct",
+    "choices": [
+     {
+      "index": 0,
+      "delta": {
+       "role": null,
+       "content": " in",
+       "refusal": null,
+       "tool_calls": null,
+       "function_call": null
+      },
+      "finish_reason": null,
+      "logprobs": {
+       "content": [
+        {
+         "token": " in",
+         "logprob": -0.0011865011183544993,
+         "bytes": [
+          32,
+          105,
+          110
+         ],
+         "top_logprobs": [
+          {
+           "token": " in",
+           "logprob": -0.0011865011183544993,
+           "bytes": [
+            32,
+            105,
+            110
+           ]
+          }
+         ]
+        }
+       ],
+       "refusal": null
+      }
+     }
+    ],
+    "usage": null,
+    "system_fingerprint": "f44352906cd8",
+    "service_tier": null
+   },
+   {
+    "id": "chatcmpl-ec7c68a5c9234f96ac0c875d",
+    "object": "chat.completion.chunk",
+    "created": 1795669281,
+    "model": "qwen2.5-7b-instruct",
+    "choices": [
+     {
+      "index": 0,
+      "delta": {
+       "role": null,
+       "content": " the",
+       "refusal": null,
+       "tool_calls": null,
+       "function_call": null
+      },
+      "finish_reason": null,
+      "logprobs": {
+       "content": [
+        {
+         "token": " the",
+         "logprob": -2.622600959512056e-06,
+         "bytes": [
+          32,
+          116,
+          104,
+          101
+         ],
+         "top_logprobs": [
+          {
+           "token": " the",
+           "logprob": -2.622600959512056e-06,
+           "bytes": [
+            32,
+            116,
+            104,
+            101
+           ]
+          }
+         ]
+        }
+       ],
+       "refusal": null
+      }
+     }
+    ],
+    "usage": null,
+    "system_fingerprint": "f44352906cd8",
+    "service_tier": null
+   },
+   {
+    "id": "chatcmpl-ec7c68a5c9234f96ac0c875d",
+    "object": "chat.completion.chunk",
+    "created": 1795669281,
+    "model": "qwen2.5-7b-instruct",
+    "choices": [
+     {
+      "index": 0,
+      "delta": {
+       "role": null,
+       "content": " air",
+       "refusal": null,
+       "tool_calls": null,
+       "function_call": null
+      },
+      "finish_reason": null,
+      "logprobs": {
+       "content": [
+        {
+         "token": " air",
+         "logprob": -9.262132516596466e-05,
+         "bytes": [
+          32,
+          97,
+          105,
+          114
+         ],
+         "top_logprobs": [
+          {
+           "token": " air",
+           "logprob": -9.262132516596466e-05,
+           "bytes": [
+            32,
+            97,
+            105,
+            114
+           ]
+          }
+         ]
+        }
+       ],
+       "refusal": null
+      }
+     }
+    ],
+    "usage": null,
+    "system_fingerprint": "f44352906cd8",
+    "service_tier": null
+   },
+   {
+    "id": "chatcmpl-ec7c68a5c9234f96ac0c875d",
+    "object": "chat.completion.chunk",
+    "created": 1795669281,
+    "model": "qwen2.5-7b-instruct",
+    "choices": [
+     {
+      "index": 0,
+      "delta": {
+       "role": null,
+       "content": ".",
+       "refusal": null,
+       "tool_calls": null,
+       "function_call": null
+      },
+      "finish_reason": null,
+      "logprobs": {
+       "content": [
+        {
+         "token": ".",
+         "logprob": -0.00054058717796579,
+         "bytes": [
+          46
+         ],
+         "top_logprobs": [
+          {
+           "token": ".",
+           "logprob": -0.00054058717796579,
+           "bytes": [
+            46
+           ]
+          }
+         ]
+        }
+       ],
+       "refusal": null
+      }
+     }
+    ],
+    "usage": null,
+    "system_fingerprint": "f44352906cd8",
+    "service_tier": null
+   },
+   {
+    "id": "chatcmpl-ec7c68a5c9234f96ac0c875d",
+    "object": "chat.completion.chunk",
+    "created": 1795669281,
+    "model": "qwen2.5-7b-instruct",
+    "choices": [
+     {
+      "index": 0,
+      "delta": {
+       "role": null,
+       "content": " Sun",
+       "refusal": null,
+       "tool_calls": null,
+       "function_call": null
+      },
+      "finish_reason": null,
+      "logprobs": {
+       "content": [
+        {
+         "token": " Sun",
+         "logprob": -0.004747547209262848,
+         "bytes": [
+          32,
+          83,
+          117,
+          110
+         ],
+         "top_logprobs": [
+          {
+           "token": " Sun",
+           "logprob": -0.004747547209262848,
+           "bytes": [
+            32,
+            83,
+            117,
+            110
+           ]
+          }
+         ]
+        }
+       ],
+       "refusal": null
+      }
+     }
+    ],
+    "usage": null,
+    "system_fingerprint": "f44352906cd8",
+    "service_tier": null
+   },
+   {
+    "id": "chatcmpl-ec7c68a5c9234f96ac0c875d",
+    "object": "chat.completion.chunk",
+    "created": 1795669281,
+    "model": "qwen2.5-7b-instruct",
+    "choices": [
+     {
+      "index": 0,
+      "delta": {
+       "role": null,
+       "content": "light",
+       "refusal": null,
+       "tool_calls": null,
+       "function_call": null
+      },
+      "finish_reason": null,
+      "logprobs": {
+       "content": [
+        {
+         "token": "light",
+         "logprob": 0.0,
+         "bytes": [
+          108,
+          105,
+          103,
+          104,
+          116
+         ],
+         "top_logprobs": [
+          {
+           "token": "light",
+           "logprob": 0.0,
+           "bytes": [
+            108,
+            105,
+            103,
+            104,
+            116
+           ]
+          }
+         ]
+        }
+       ],
+       "refusal": null
+      }
+     }
+    ],
+    "usage": null,
+    "system_fingerprint": "f44352906cd8",
+    "service_tier": null
+   },
+   {
+    "id": "chatcmpl-ec7c68a5c9234f96ac0c875d",
+    "object": "chat.completion.chunk",
+    "created": 1795669281,
+    "model": "qwen2.5-7b-instruct",
+    "choices": [
+     {
+      "index": 0,
+      "delta": {
+       "role": null,
+       "content": " is",
+       "refusal": null,
+       "tool_calls": null,
+       "function_call": null
+      },
+      "finish_reason": null,
+      "logprobs": {
+       "content": [
+        {
+         "token": " is",
+         "logprob": -0.05783578380942345,
+         "bytes": [
+          32,
+          105,
+          115
+         ],
+         "top_logprobs": [
+          {
+           "token": " is",
+           "logprob": -0.05783578380942345,
+           "bytes": [
+            32,
+            105,
+            115
+           ]
+          }
+         ]
+        }
+       ],
+       "refusal": null
+      }
+     }
+    ],
+    "usage": null,
+    "system_fingerprint": "f44352906cd8",
+    "service_tier": null
+   },
+   {
+    "id": "chatcmpl-ec7c68a5c9234f96ac0c875d",
+    "object": "chat.completion.chunk",
+    "created": 1795669281,
+    "model": "qwen2.5-7b-instruct",
+    "choices": [
+     {
+      "index": 0,
+      "delta": {
+       "role": null,
+       "content": " made",
+       "refusal": null,
+       "tool_calls": null,
+       "function_call": null
+      },
+      "finish_reason": null,
+      "logprobs": {
+       "content": [
+        {
+         "token": " made",
+         "logprob": -0.05749256908893585,
+         "bytes": [
+          32,
+          109,
+          97,
+          100,
+          101
+         ],
+         "top_logprobs": [
+          {
+           "token": " made",
+           "logprob": -0.05749256908893585,
+           "bytes": [
+            32,
+            109,
+            97,
+            100,
+            101
+           ]
+          }
+         ]
+        }
+       ],
+       "refusal": null
+      }
+     }
+    ],
+    "usage": null,
+    "system_fingerprint": "f44352906cd8",
+    "service_tier": null
+   },
+   {
+    "id": "chatcmpl-ec7c68a5c9234f96ac0c875d",
+    "object": "chat.completion.chunk",
+    "created": 1795669281,
+    "model": "qwen2.5-7b-instruct",
+    "choices": [
+     {
+      "index": 0,
+      "delta": {
+       "role": null,
+       "content": " up",
+       "refusal": null,
+       "tool_calls": null,
+       "function_call": null
+      },
+      "finish_reason": null,
+      "logprobs": {
+       "content": [
+        {
+         "token": " up",
+         "logprob": -1.3470558769768104e-05,
+         "bytes": [
+          32,
+          117,
+          112
+         ],
+         "top_logprobs": [
+          {
+           "token": " up",
+           "logprob": -1.3470558769768104e-05,
+           "bytes": [
+            32,
+            117,
+            112
+           ]
+          }
+         ]
+        }
+       ],
+       "refusal": null
+      }
+     }
+    ],
+    "usage": null,
+    "system_fingerprint": "f44352906cd8",
+    "service_tier": null
+   },
+   {
+    "id": "chatcmpl-ec7c68a5c9234f96ac0c875d",
+    "object": "chat.completion.chunk",
+    "created": 1795669281,
+    "model": "qwen2.5-7b-instruct",
+    "choices": [
+     {
+      "index": 0,
+      "delta": {
+       "role": null,
+       "content": " of",
+       "refusal": null,
+       "tool_calls": null,
+       "function_call": null
+      },
+      "finish_reason": null,
+      "logprobs": {
+       "content": [
+        {
+         "token": " of",
+         "logprob": 0.0,
+         "bytes": [
+          32,
+          111,
+          102
+         ],
+         "top_logprobs": [
+          {
+           "token": " of",
+           "logprob": 0.0,
+           "bytes": [
+            32,
+            111,
+            102
+           ]
+          }
+         ]
+        }
+       ],
+       "refusal": null
+      }
+     }
+    ],
+    "usage": null,
+    "system_fingerprint": "f44352906cd8",
+    "service_tier": null
+   },
+   {
+    "id": "chatcmpl-ec7c68a5c9234f96ac0c875d",
+    "object": "chat.completion.chunk",
+    "created": 1795669281,
+    "model": "qwen2.5-7b-instruct",
+    "choices": [
+     {
+      "index": 0,
+      "delta": {
+       "role": null,
+       "content": " different",
+       "refusal": null,
+       "tool_calls": null,
+       "function_call": null
+      },
+      "finish_reason": null,
+      "logprobs": {
+       "content": [
+        {
+         "token": " different",
+         "logprob": -0.06693024933338165,
+         "bytes": [
+          32,
+          100,
+          105,
+          102,
+          102,
+          101,
+          114,
+          101,
+          110,
+          116
+         ],
+         "top_logprobs": [
+          {
+           "token": " different",
+           "logprob": -0.06693024933338165,
+           "bytes": [
+            32,
+            100,
+            105,
+            102,
+            102,
+            101,
+            114,
+            101,
+            110,
+            116
+           ]
+          }
+         ]
+        }
+       ],
+       "refusal": null
+      }
+     }
+    ],
+    "usage": null,
+    "system_fingerprint": "f44352906cd8",
+    "service_tier": null
+   },
+   {
+    "id": "chatcmpl-ec7c68a5c9234f96ac0c875d",
+    "object": "chat.completion.chunk",
+    "created": 1795669281,
+    "model": "qwen2.5-7b-instruct",
+    "choices": [
+     {
+      "index": 0,
+      "delta": {
+       "role": null,
+       "content": " colors",
+       "refusal": null,
+       "tool_calls": null,
+       "function_call": null
+      },
+      "finish_reason": null,
+      "logprobs": {
+       "content": [
+        {
+         "token": " colors",
+         "logprob": -0.0002460177056491375,
+         "bytes": [
+          32,
+          99,
+          111,
+          108,
+          111,
+          114,
+          115
+         ],
+         "top_logprobs": [
+          {
+           "token": " colors",
+           "logprob": -0.0002460177056491375,
+           "bytes": [
+            32,
+            99,
+            111,
+            108,
+            111,
+            114,
+            115
+           ]
+          }
+         ]
+        }
+       ],
+       "refusal": null
+      }
+     }
+    ],
+    "usage": null,
+    "system_fingerprint": "f44352906cd8",
+    "service_tier": null
+   },
+   {
+    "id": "chatcmpl-ec7c68a5c9234f96ac0c875d",
+    "object": "chat.completion.chunk",
+    "created": 1795669281,
+    "model": "qwen2.5-7b-instruct",
+    "choices": [
+     {
+      "index": 0,
+      "delta": {
+       "role": null,
+       "content": ",",
+       "refusal": null,
+       "tool_calls": null,
+       "function_call": null
+      },
+      "finish_reason": null,
+      "logprobs": {
+       "content": [
+        {
+         "token": ",",
+         "logprob": -5.6265202147187665e-05,
+         "bytes": [
+          44
+         ],
+         "top_logprobs": [
+          {
+           "token": ",",
+           "logprob": -5.6265202147187665e-05,
+           "bytes": [
+            44
+           ]
+          }
+         ]
+        }
+       ],
+       "refusal": null
+      }
+     }
+    ],
+    "usage": null,
+    "system_fingerprint": "f44352906cd8",
+    "service_tier": null
+   },
+   {
+    "id": "chatcmpl-ec7c68a5c9234f96ac0c875d",
+    "object": "chat.completion.chunk",
+    "created": 1795669281,
+    "model": "qwen2.5-7b-instruct",
+    "choices": [
+     {
+      "index": 0,
+      "delta": {
+       "role": null,
+       "content": " each",
+       "refusal": null,
+       "tool_calls": null,
+       "function_call": null
+      },
+      "finish_reason": null,
+      "logprobs": {
+       "content": [
+        {
+         "token": " each",
+         "logprob": -0.007436688058078289,
+         "bytes": [
+          32,
+          101,
+          97,
+          99,
+          104
+         ],
+         "top_logprobs": [
+          {
+           "token": " each",
+           "logprob": -0.007436688058078289,
+           "bytes": [
+            32,
+            101,
+            97,
+            99,
+            104
+           ]
+          }
+         ]
+        }
+       ],
+       "refusal": null
+      }
+     }
+    ],
+    "usage": null,
+    "system_fingerprint": "f44352906cd8",
+    "service_tier": null
+   },
+   {
+    "id": "chatcmpl-ec7c68a5c9234f96ac0c875d",
+    "object": "chat.completion.chunk",
+    "created": 1795669281,
+    "model": "qwen2.5-7b-instruct",
+    "choices": [
+     {
+      "index": 0,
+      "delta": {
+       "role": null,
+       "content": " of",
+       "refusal": null,
+       "tool_calls": null,
+       "function_call": null
+      },
+      "finish_reason": null,
+      "logprobs": {
+       "content": [
+        {
+         "token": " of",
+         "logprob": -0.13017617166042328,
+         "bytes": [
+          32,
+          111,
+          102
+         ],
+         "top_logprobs": [
+          {
+           "token": " of",
+           "logprob": -0.13017617166042328,
+           "bytes": [
+            32,
+            111,
+            102
+           ]
+          }
+         ]
+        }
+       ],
+       "refusal": null
+      }
+     }
+    ],
+    "usage": null,
+    "system_fingerprint": "f44352906cd8",
+    "service_tier": null
+   },
+   {
+    "id": "chatcmpl-ec7c68a5c9234f96ac0c875d",
+    "object": "chat.completion.chunk",
+    "created": 1795669281,
+    "model": "qwen2.5-7b-instruct",
+    "choices": [
+     {
+      "index": 0,
+      "delta": {
+       "role": null,
+       "content": " which",
+       "refusal": null,
+       "tool_calls": null,
+       "function_call": null
+      },
+      "finish_reason": null,
+      "logprobs": {
+       "content": [
+        {
+         "token": " which",
+         "logprob": -2.264974000354414e-06,
+         "bytes": [
+          32,
+          119,
+          104,
+          105,
+          99,
+          104
+         ],
+         "top_logprobs": [
+          {
+           "token": " which",
+           "logprob": -2.264974000354414e-06,
+           "bytes": [
+            32,
+            119,
+            104,
+            105,
+            99,
+            104
+           ]
+          }
+         ]
+        }
+       ],
+       "refusal": null
+      }
+     }
+    ],
+    "usage": null,
+    "system_fingerprint": "f44352906cd8",
+    "service_tier": null
+   },
+   {
+    "id": "chatcmpl-ec7c68a5c9234f96ac0c875d",
+    "object": "chat.completion.chunk",
+    "created": 1795669281,
+    "model": "qwen2.5-7b-instruct",
+    "choices": [
+     {
+      "index": 0,
+      "delta": {
+       "role": null,
+       "content": " has",
+       "refusal": null,
+       "tool_calls": null,
+       "function_call": null
+      },
+      "finish_reason": null,
+      "logprobs": {
+       "content": [
+        {
+         "token": " has",
+         "logprob": -0.14406956732273102,
+         "bytes": [
+          32,
+          104,
+          97,
+          115
+         ],
+         "top_logprobs": [
+          {
+           "token": " has",
+           "logprob": -0.14406956732273102,
+           "bytes": [
+            32,
+            104,
+            97,
+            115
+           ]
+          }
+         ]
+        }
+       ],
+       "refusal": null
+      }
+     }
+    ],
+    "usage": null,
+    "system_fingerprint": "f44352906cd8",
+    "service_tier": null
+   },
+   {
+    "id": "chatcmpl-ec7c68a5c9234f96ac0c875d",
+    "object": "chat.completion.chunk",
+    "created": 1795669281,
+    "model": "qwen2.5-7b-instruct",
+    "choices": [
+     {
+      "index": 0,
+      "delta": {
+       "role": null,
+       "content": " a",
+       "refusal": null,
+       "tool_calls": null,
+       "function_call": null
+      },
+      "finish_reason": null,
+      "logprobs": {
+       "content": [
+        {
+         "token": " a",
+         "logprob": -0.00020668754586949944,
+         "bytes": [
+          32,
+          97
+         ],
+         "top_logprobs": [
+          {
+           "token": " a",
+           "logprob": -0.00020668754586949944,
+           "bytes": [
+            32,
+            97
+           ]
+          }
+         ]
+        }
+       ],
+       "refusal": null
+      }
+     }
+    ],
+    "usage": null,
+    "system_fingerprint": "f44352906cd8",
+    "service_tier": null
+   },
+   {
+    "id": "chatcmpl-ec7c68a5c9234f96ac0c875d",
+    "object": "chat.completion.chunk",
+    "created": 1795669281,
+    "model": "qwen2.5-7b-instruct",
+    "choices": [
+     {
+      "index": 0,
+      "delta": {
+       "role": null,
+       "content": " different",
+       "refusal": null,
+       "tool_calls": null,
+       "function_call": null
+      },
+      "finish_reason": null,
+      "logprobs": {
+       "content": [
+        {
+         "token": " different",
+         "logprob": -0.0006831934442743659,
+         "bytes": [
+          32,
+          100,
+          105,
+          102,
+          102,
+          101,
+          114,
+          101,
+          110,
+          116
+         ],
+         "top_logprobs": [
+          {
+           "token": " different",
+           "logprob": -0.0006831934442743659,
+           "bytes": [
+            32,
+            100,
+            105,
+            102,
+            102,
+            101,
+            114,
+            101,
+            110,
+            116
+           ]
+          }
+         ]
+        }
+       ],
+       "refusal": null
+      }
+     }
+    ],
+    "usage": null,
+    "system_fingerprint": "f44352906cd8",
+    "service_tier": null
+   },
+   {
+    "id": "chatcmpl-ec7c68a5c9234f96ac0c875d",
+    "object": "chat.completion.chunk",
+    "created": 1795669281,
+    "model": "qwen2.5-7b-instruct",
+    "choices": [
+     {
+      "index": 0,
+      "delta": {
+       "role": null,
+       "content": " wavelength",
+       "refusal": null,
+       "tool_calls": null,
+       "function_call": null
+      },
+      "finish_reason": null,
+      "logprobs": {
+       "content": [
+        {
+         "token": " wavelength",
+         "logprob": -5.447716102935374e-05,
+         "bytes": [
+          32,
+          119,
+          97,
+          118,
+          101,
+          108,
+          101,
+          110,
+          103,
+          116,
+          104
+         ],
+         "top_logprobs": [
+          {
+           "token": " wavelength",
+           "logprob": -5.447716102935374e-05,
+           "bytes": [
+            32,
+            119,
+            97,
+            118,
+            101,
+            108,
+            101,
+            110,
+            103,
+            116,
+            104
+           ]
+          }
+         ]
+        }
+       ],
+       "refusal": null
+      }
+     }
+    ],
+    "usage": null,
+    "system_fingerprint": "f44352906cd8",
+    "service_tier": null
+   },
+   {
+    "id": "chatcmpl-ec7c68a5c9234f96ac0c875d",
+    "object": "chat.completion.chunk",
+    "created": 1795669281,
+    "model": "qwen2.5-7b-instruct",
+    "choices": [
+     {
+      "index": 0,
+      "delta": {
+       "role": null,
+       "content": ".",
+       "refusal": null,
+       "tool_calls": null,
+       "function_call": null
+      },
+      "finish_reason": null,
+      "logprobs": {
+       "content": [
+        {
+         "token": ".",
+         "logprob": -0.017176207154989243,
+         "bytes": [
+          46
+         ],
+         "top_logprobs": [
+          {
+           "token": ".",
+           "logprob": -0.017176207154989243,
+           "bytes": [
+            46
+           ]
+          }
+         ]
+        }
+       ],
+       "refusal": null
+      }
+     }
+    ],
+    "usage": null,
+    "system_fingerprint": "f44352906cd8",
+    "service_tier": null
+   },
+   {
+    "id": "chatcmpl-ec7c68a5c9234f96ac0c875d",
+    "object": "chat.completion.chunk",
+    "created": 1795669281,
+    "model": "qwen2.5-7b-instruct",
+    "choices": [
+     {
+      "index": 0,
+      "delta": {
+       "role": null,
+       "content": " Blue",
+       "refusal": null,
+       "tool_calls": null,
+       "function_call": null
+      },
+      "finish_reason": null,
+      "logprobs": {
+       "content": [
+        {
+         "token": " Blue",
+         "logprob": -0.401224285364151,
+         "bytes": [
+          32,
+          66,
+          108,
+          117,
+          101
+         ],
+         "top_logprobs": [
+          {
+           "token": " Blue",
+           "logprob": -0.401224285364151,
+           "bytes": [
+            32,
+            66,
+            108,
+            117,
+            101
+           ]
+          }
+         ]
+        }
+       ],
+       "refusal": null
+      }
+     }
+    ],
+    "usage": null,
+    "system_fingerprint": "f44352906cd8",
+    "service_tier": null
+   },
+   {
+    "id": "chatcmpl-ec7c68a5c9234f96ac0c875d",
+    "object": "chat.completion.chunk",
+    "created": 1795669281,
+    "model": "qwen2.5-7b-instruct",
+    "choices": [
+     {
+      "index": 0,
+      "delta": {
+       "role": null,
+       "content": " light",
+       "refusal": null,
+       "tool_calls": null,
+       "function_call": null
+      },
+      "finish_reason": null,
+      "logprobs": {
+       "content": [
+        {
+         "token": " light",
+         "logprob": -0.0004210777406115085,
+         "bytes": [
+          32,
+          108,
+          105,
+          103,
+          104,
+          116
+         ],
+         "top_logprobs": [
+          {
+           "token": " light",
+           "logprob": -0.0004210777406115085,
+           "bytes": [
+            32,
+            108,
+            105,
+            103,
+            104,
+            116
+           ]
+          }
+         ]
+        }
+       ],
+       "refusal": null
+      }
+     }
+    ],
+    "usage": null,
+    "system_fingerprint": "f44352906cd8",
+    "service_tier": null
+   },
+   {
+    "id": "chatcmpl-ec7c68a5c9234f96ac0c875d",
+    "object": "chat.completion.chunk",
+    "created": 1795669281,
+    "model": "qwen2.5-7b-instruct",
+    "choices": [
+     {
+      "index": 0,
+      "delta": {
+       "role": null,
+       "content": ",",
+       "refusal": null,
+       "tool_calls": null,
+       "function_call": null
+      },
+      "finish_reason": null,
+      "logprobs": {
+       "content": [
+        {
+         "token": ",",
+         "logprob": -0.8446704149246216,
+         "bytes": [
+          44
+         ],
+         "top_logprobs": [
+          {
+           "token": ",",
+           "logprob": -0.8446704149246216,
+           "bytes": [
+            44
+           ]
+          }
+         ]
+        }
+       ],
+       "refusal": null
+      }
+     }
+    ],
+    "usage": null,
+    "system_fingerprint": "f44352906cd8",
+    "service_tier": null
+   },
+   {
+    "id": "chatcmpl-ec7c68a5c9234f96ac0c875d",
+    "object": "chat.completion.chunk",
+    "created": 1795669281,
+    "model": "qwen2.5-7b-instruct",
+    "choices": [
+     {
+      "index": 0,
+      "delta": {
+       "role": null,
+       "content": " with",
+       "refusal": null,
+       "tool_calls": null,
+       "function_call": null
+      },
+      "finish_reason": null,
+      "logprobs": {
+       "content": [
+        {
+         "token": " with",
+         "logprob": -0.6481493711471558,
+         "bytes": [
+          32,
+          119,
+          105,
+          116,
+          104
+         ],
+         "top_logprobs": [
+          {
+           "token": " with",
+           "logprob": -0.6481493711471558,
+           "bytes": [
+            32,
+            119,
+            105,
+            116,
+            104
+           ]
+          }
+         ]
+        }
+       ],
+       "refusal": null
+      }
+     }
+    ],
+    "usage": null,
+    "system_fingerprint": "f44352906cd8",
+    "service_tier": null
+   },
+   {
+    "id": "chatcmpl-ec7c68a5c9234f96ac0c875d",
+    "object": "chat.completion.chunk",
+    "created": 1795669281,
+    "model": "qwen2.5-7b-instruct",
+    "choices": [
+     {
+      "index": 0,
+      "delta": {
+       "role": null,
+       "content": " its",
+       "refusal": null,
+       "tool_calls": null,
+       "function_call": null
+      },
+      "finish_reason": null,
+      "logprobs": {
+       "content": [
+        {
+         "token": " its",
+         "logprob": -0.0016025570221245289,
+         "bytes": [
+          32,
+          105,
+          116,
+          115
+         ],
+         "top_logprobs": [
+          {
+           "token": " its",
+           "logprob": -0.0016025570221245289,
+           "bytes": [
+            32,
+            105,
+            116,
+            115
+           ]
+          }
+         ]
+        }
+       ],
+       "refusal": null
+      }
+     }
+    ],
+    "usage": null,
+    "system_fingerprint": "f44352906cd8",
+    "service_tier": null
+   },
+   {
+    "id": "chatcmpl-ec7c68a5c9234f96ac0c875d",
+    "object": "chat.completion.chunk",
+    "created": 1795669281,
+    "model": "qwen2.5-7b-instruct",
+    "choices": [
+     {
+      "index": 0,
+      "delta": {
+       "role": null,
+       "content": " shorter",
+       "refusal": null,
+       "tool_calls": null,
+       "function_call": null
+      },
+      "finish_reason": null,
+      "logprobs": {
+       "content": [
+        {
+         "token": " shorter",
+         "logprob": -0.010590777732431889,
+         "bytes": [
+          32,
+          115,
+          104,
+          111,
+          114,
+          116,
+          101,
+          114
+         ],
+         "top_logprobs": [
+          {
+           "token": " shorter",
+           "logprob": -0.010590777732431889,
+           "bytes": [
+            32,
+            115,
+            104,
+            111,
+            114,
+            116,
+            101,
+            114
+           ]
+          }
+         ]
+        }
+       ],
+       "refusal": null
+      }
+     }
+    ],
+    "usage": null,
+    "system_fingerprint": "f44352906cd8",
+    "service_tier": null
+   },
+   {
+    "id": "chatcmpl-ec7c68a5c9234f96ac0c875d",
+    "object": "chat.completion.chunk",
+    "created": 1795669281,
+    "model": "qwen2.5-7b-instruct",
+    "choices": [
+     {
+      "index": 0,
+      "delta": {
+       "role": null,
+       "content": " wavelength",
+       "refusal": null,
+       "tool_calls": null,
+       "function_call": null
+      },
+      "finish_reason": null,
+      "logprobs": {
+       "content": [
+        {
+         "token": " wavelength",
+         "logprob": -0.4258522093296051,
+         "bytes": [
+          32,
+          119,
+          97,
+          118,
+          101,
+          108,
+          101,
+          110,
+          103,
+          116,
+          104
+         ],
+         "top_logprobs": [
+          {
+           "token": " wavelength",
+           "logprob": -0.4258522093296051,
+           "bytes": [
+            32,
+            119,
+            97,
+            118,
+            101,
+            108,
+            101,
+            110,
+            103,
+            116,
+            104
+           ]
+          }
+         ]
+        }
+       ],
+       "refusal": null
+      }
+     }
+    ],
+    "usage": null,
+    "system_fingerprint": "f44352906cd8",
+    "service_tier": null
+   },
+   {
+    "id": "chatcmpl-ec7c68a5c9234f96ac0c875d",
+    "object": "chat.completion.chunk",
+    "created": 1795669281,
+    "model": "qwen2.5-7b-instruct",
+    "choices": [
+     {
+      "index": 0,
+      "delta": {
+       "role": null,
+       "content": ",",
+       "refusal": null,
+       "tool_calls": null,
+       "function_call": null
+      },
+      "finish_reason": null,
+      "logprobs": {
+       "content": [
+        {
+         "token": ",",
+         "logprob": -1.3708974620385561e-05,
+         "bytes": [
+          44
+         ],
+         "top_logprobs": [
+          {
+           "token": ",",
+           "logprob": -1.3708974620385561e-05,
+           "bytes": [
+            44
+           ]
+          }
+         ]
+        }
+       ],
+       "refusal": null
+      }
+     }
+    ],
+    "usage": null,
+    "system_fingerprint": "f44352906cd8",
+    "service_tier": null
+   },
+   {
+    "id": "chatcmpl-ec7c68a5c9234f96ac0c875d",
+    "object": "chat.completion.chunk",
+    "created": 1795669281,
+    "model": "qwen2.5-7b-instruct",
+    "choices": [
+     {
+      "index": 0,
+      "delta": {
+       "role": null,
+       "content": " is",
+       "refusal": null,
+       "tool_calls": null,
+       "function_call": null
+      },
+      "finish_reason": null,
+      "logprobs": {
+       "content": [
+        {
+         "token": " is",
+         "logprob": -0.7243005633354187,
+         "bytes": [
+          32,
+          105,
+          115
+         ],
+         "top_logprobs": [
+          {
+           "token": " is",
+           "logprob": -0.7243005633354187,
+           "bytes": [
+            32,
+            105,
+            115
+           ]
+          }
+         ]
+        }
+       ],
+       "refusal": null
+      }
+     }
+    ],
+    "usage": null,
+    "system_fingerprint": "f44352906cd8",
+    "service_tier": null
+   },
+   {
+    "id": "chatcmpl-ec7c68a5c9234f96ac0c875d",
+    "object": "chat.completion.chunk",
+    "created": 1795669281,
+    "model": "qwen2.5-7b-instruct",
+    "choices": [
+     {
+      "index": 0,
+      "delta": {
+       "role": null,
+       "content": " scattered",
+       "refusal": null,
+       "tool_calls": null,
+       "function_call": null
+      },
+      "finish_reason": null,
+      "logprobs": {
+       "content": [
+        {
+         "token": " scattered",
+         "logprob": -0.0050959461368620396,
+         "bytes": [
+          32,
+          115,
+          99,
+          97,
+          116,
+          116,
+          101,
+          114,
+          101,
+          100
+         ],
+         "top_logprobs": [
+          {
+           "token": " scattered",
+           "logprob": -0.0050959461368620396,
+           "bytes": [
+            32,
+            115,
+            99,
+            97,
+            116,
+            116,
+            101,
+            114,
+            101,
+            100
+           ]
+          }
+         ]
+        }
+       ],
+       "refusal": null
+      }
+     }
+    ],
+    "usage": null,
+    "system_fingerprint": "f44352906cd8",
+    "service_tier": null
+   },
+   {
+    "id": "chatcmpl-ec7c68a5c9234f96ac0c875d",
+    "object": "chat.completion.chunk",
+    "created": 1795669281,
+    "model": "qwen2.5-7b-instruct",
+    "choices": [
+     {
+      "index": 0,
+      "delta": {
+       "role": null,
+       "content": " more",
+       "refusal": null,
+       "tool_calls": null,
+       "function_call": null
+      },
+      "finish_reason": "length",
+      "logprobs": {
+       "content": [
+        {
+         "token": " more",
+         "logprob": -0.250154584646225,
+         "bytes": [
+          32,
+          109,
+          111,
+          114,
+          101
+         ],
+         "top_logprobs": [
+          {
+           "token": " more",
+           "logprob": -0.250154584646225,
+           "bytes": [
+            32,
+            109,
+            111,
+            114,
+            101
+           ]
+          }
+         ]
+        }
+       ],
+       "refusal": null
+      }
+     }
+    ],
+    "usage": null,
+    "system_fingerprint": "f44352906cd8",
+    "service_tier": null
+   },
+   {
+    "id": "chatcmpl-ec7c68a5c9234f96ac0c875d",
+    "object": "chat.completion.chunk",
+    "created": 1795669281,
+    "model": "qwen2.5-7b-instruct",
+    "choices": [],
+    "usage": {
+     "prompt_tokens": 30,
+     "completion_tokens": 64,
+     "total_tokens": 94,
+     "prompt_tokens_details": null
+    },
+    "system_fingerprint": "f44352906cd8",
+    "service_tier": null
+   }
+  ]
+ },
+ {
+  "name": "long_stream_1",
+  "messages": [
+   {
+    "role": "system",
+    "content": "You are a concise assistant."
+   },
+   {
+    "role": "user",
+    "content": "Write a short paragraph about why the sky is blue."
+   }
+  ],
+  "body": {
+   "temperature": 0,
+   "max_tokens": 64,
+   "logprobs": true,
+   "top_logprobs": 1,
+   "extra_body": {
+    "ignore_eos": true
+   }
+  },
+  "stream": true,
+  "chunks": [
+   {
+    "id": "chatcmpl-ef981916973940e48ac2af60",
+    "object": "chat.completion.chunk",
+    "created": 1795669314,
+    "model": "qwen2.5-7b-instruct",
+    "choices": [
+     {
+      "index": 0,
+      "delta": {
+       "role": "assistant",
+       "content": "",
+       "refusal": null,
+       "tool_calls": null,
+       "function_call": null
+      },
+      "finish_reason": null,
+      "logprobs": null
+     }
+    ],
+    "usage": null,
+    "system_fingerprint": "f44352906cd8",
+    "service_tier": null
+   },
+   {
+    "id": "chatcmpl-ef981916973940e48ac2af60",
+    "object": "chat.completion.chunk",
+    "created": 1795669314,
+    "model": "qwen2.5-7b-instruct",
+    "choices": [
+     {
+      "index": 0,
+      "delta": {
+       "role": null,
+       "content": "The",
+       "refusal": null,
+       "tool_calls": null,
+       "function_call": null
+      },
+      "finish_reason": null,
+      "logprobs": {
+       "content": [
+        {
+         "token": "The",
+         "logprob": -8.344646857949556e-07,
+         "bytes": [
+          84,
+          104,
+          101
+         ],
+         "top_logprobs": [
+          {
+           "token": "The",
+           "logprob": -8.344646857949556e-07,
+           "bytes": [
+            84,
+            104,
+            101
+           ]
+          }
+         ]
+        }
+       ],
+       "refusal": null
+      }
+     }
+    ],
+    "usage": null,
+    "system_fingerprint": "f44352906cd8",
+    "service_tier": null
+   },
+   {
+    "id": "chatcmpl-ef981916973940e48ac2af60",
+    "object": "chat.completion.chunk",
+    "created": 1795669314,
+    "model": "qwen2.5-7b-instruct",
+    "choices": [
+     {
+      "index": 0,
+      "delta": {
+       "role": null,
+       "content": " sky",
+       "refusal": null,
+       "tool_calls": null,
+       "function_call": null
+      },
+      "finish_reason": null,
+      "logprobs": {
+       "content": [
+        {
+         "token": " sky",
+         "logprob": -0.002242433140054345,
+         "bytes": [
+          32,
+          115,
+          107,
+          121
+         ],
+         "top_logprobs": [
+          {
+           "token": " sky",
+           "logprob": -0.002242433140054345,
+           "bytes": [
+            32,
+            115,
+            107,
+            121
+           ]
+          }
+         ]
+        }
+       ],
+       "refusal": null
+      }
+     }
+    ],
+    "usage": null,
+    "system_fingerprint": "f44352906cd8",
+    "service_tier": null
+   },
+   {
+    "id": "chatcmpl-ef981916973940e48ac2af60",
+    "object": "chat.completion.chunk",
+    "created": 1795669314,
+    "model": "qwen2.5-7b-instruct",
+    "choices": [
+     {
+      "index": 0,
+      "delta": {
+       "role": null,
+       "content": " appears",
+       "refusal": null,
+       "tool_calls": null,
+       "function_call": null
+      },
+      "finish_reason": null,
+      "logprobs": {
+       "content": [
+        {
+         "token": " appears",
+         "logprob": -4.684815212385729e-05,
+         "bytes": [
+          32,
+          97,
+          112,
+          112,
+          101,
+          97,
+          114,
+          115
+         ],
+         "top_logprobs": [
+          {
+           "token": " appears",
+           "logprob": -4.684815212385729e-05,
+           "bytes": [
+            32,
+            97,
+            112,
+            112,
+            101,
+            97,
+            114,
+            115
+           ]
+          }
+         ]
+        }
+       ],
+       "refusal": null
+      }
+     }
+    ],
+    "usage": null,
+    "system_fingerprint": "f44352906cd8",
+    "service_tier": null
+   },
+   {
+    "id": "chatcmpl-ef981916973940e48ac2af60",
+    "object": "chat.completion.chunk",
+    "created": 1795669314,
+    "model": "qwen2.5-7b-instruct",
+    "choices": [
+     {
+      "index": 0,
+      "delta": {
+       "role": null,
+       "content": " blue",
+       "refusal": null,
+       "tool_calls": null,
+       "function_call": null
+      },
+      "finish_reason": null,
+      "logprobs": {
+       "content": [
+        {
+         "token": " blue",
+         "logprob": -6.937739817658439e-05,
+         "bytes": [
+          32,
+          98,
+          108,
+          117,
+          101
+         ],
+         "top_logprobs": [
+          {
+           "token": " blue",
+           "logprob": -6.937739817658439e-05,
+           "bytes": [
+            32,
+            98,
+            108,
+            117,
+            101
+           ]
+          }
+         ]
+        }
+       ],
+       "refusal": null
+      }
+     }
+    ],
+    "usage": null,
+    "system_fingerprint": "f44352906cd8",
+    "service_tier": null
+   },
+   {
+    "id": "chatcmpl-ef981916973940e48ac2af60",
+    "object": "chat.completion.chunk",
+    "created": 1795669314,
+    "model": "qwen2.5-7b-instruct",
+    "choices": [
+     {
+      "index": 0,
+      "delta": {
+       "role": null,
+       "content": " during",
+       "refusal": null,
+       "tool_calls": null,
+       "function_call": null
+      },
+      "finish_reason": null,
+      "logprobs": {
+       "content": [
+        {
+         "token": " during",
+         "logprob": -0.22836945950984955,
+         "bytes": [
+          32,
+          100,
+          117,
+          114,
+          105,
+          110,
+          103
+         ],
+         "top_logprobs": [
+          {
+           "token": " during",
+           "logprob": -0.22836945950984955,
+           "bytes": [
+            32,
+            100,
+            117,
+            114,
+            105,
+            110,
+            103
+           ]
+          }
+         ]
+        }
+       ],
+       "refusal": null
+      }
+     }
+    ],
+    "usage": null,
+    "system_fingerprint": "f44352906cd8",
+    "service_tier": null
+   },
+   {
+    "id": "chatcmpl-ef981916973940e48ac2af60",
+    "object": "chat.completion.chunk",
+    "created": 1795669314,
+    "model": "qwen2.5-7b-instruct",
+    "choices": [
+     {
+      "index": 0,
+      "delta": {
+       "role": null,
+       "content": " the",
+       "refusal": null,
+       "tool_calls": null,
+       "function_call": null
+      },
+      "finish_reason": null,
+      "logprobs": {
+       "content": [
+        {
+         "token": " the",
+         "logprob": -0.04111591354012489,
+         "bytes": [
+          32,
+          116,
+          104,
+          101
+         ],
+         "top_logprobs": [
+          {
+           "token": " the",
+           "logprob": -0.04111591354012489,
+           "bytes": [
+            32,
+            116,
+            104,
+            101
+           ]
+          }
+         ]
+        }
+       ],
+       "refusal": null
+      }
+     }
+    ],
+    "usage": null,
+    "system_fingerprint": "f44352906cd8",
+    "service_tier": null
+   },
+   {
+    "id": "chatcmpl-ef981916973940e48ac2af60",
+    "object": "chat.completion.chunk",
+    "created": 1795669314,
+    "model": "qwen2.5-7b-instruct",
+    "choices": [
+     {
+      "index": 0,
+      "delta": {
+       "role": null,
+       "content": " day",
+       "refusal": null,
+       "tool_calls": null,
+       "function_call": null
+      },
+      "finish_reason": null,
+      "logprobs": {
+       "content": [
+        {
+         "token": " day",
+         "logprob": -0.32243812084198,
+         "bytes": [
+          32,
+          100,
+          97,
+          121
+         ],
+         "top_logprobs": [
+          {
+           "token": " day",
+           "logprob": -0.32243812084198,
+           "bytes": [
+            32,
+            100,
+            97,
+            121
+           ]
+          }
+         ]
+        }
+       ],
+       "refusal": null
+      }
+     }
+    ],
+    "usage": null,
+    "system_fingerprint": "f44352906cd8",
+    "service_tier": null
+   },
+   {
+    "id": "chatcmpl-ef981916973940e48ac2af60",
+    "object": "chat.completion.chunk",
+    "created": 1795669314,
+    "model": "qwen2.5-7b-instruct",
+    "choices": [
+     {
+      "index": 0,
+      "delta": {
+       "role": null,
+       "content": " due",
+       "refusal": null,
+       "tool_calls": null,
+       "function_call": null
+      },
+      "finish_reason": null,
+      "logprobs": {
+       "content": [
+        {
+         "token": " due",
+         "logprob": -0.1218835785984993,
+         "bytes": [
+          32,
+          100,
+          117,
+          101
+         ],
+         "top_logprobs": [
+          {
+           "token": " due",
+           "logprob": -0.1218835785984993,
+           "bytes": [
+            32,
+            100,
+            117,
+            101
+           ]
+          }
+         ]
+        }
+       ],
+       "refusal": null
+      }
+     }
+    ],
+    "usage": null,
+    "system_fingerprint": "f44352906cd8",
+    "service_tier": null
+   },
+   {
+    "id": "chatcmpl-ef981916973940e48ac2af60",
+    "object": "chat.completion.chunk",
+    "created": 1795669314,
+    "model": "qwen2.5-7b-instruct",
+    "choices": [
+     {
+      "index": 0,
+      "delta": {
+       "role": null,
+       "content": " to",
+       "refusal": null,
+       "tool_calls": null,
+       "function_call": null
+      },
+      "finish_reason": null,
+      "logprobs": {
+       "content": [
+        {
+         "token": " to",
+         "logprob": 0.0,
+         "bytes": [
+          32,
+          116,
+          111
+         ],
+         "top_logprobs": [
+          {
+           "token": " to",
+           "logprob": 0.0,
+           "bytes": [
+            32,
+            116,
+            111
+           ]
+          }
+         ]
+        }
+       ],
+       "refusal": null
+      }
+     }
+    ],
+    "usage": null,
+    "system_fingerprint": "f44352906cd8",
+    "service_tier": null
+   },
+   {
+    "id": "chatcmpl-ef981916973940e48ac2af60",
+    "object": "chat.completion.chunk",
+    "created": 1795669314,
+    "model": "qwen2.5-7b-instruct",
+    "choices": [
+     {
+      "index": 0,
+      "delta": {
+       "role": null,
+       "content": " a",
+       "refusal": null,
+       "tool_calls": null,
+       "function_call": null
+      },
+      "finish_reason": null,
+      "logprobs": {
+       "content": [
+        {
+         "token": " a",
+         "logprob": -4.577531944960356e-05,
+         "bytes": [
+          32,
+          97
+         ],
+         "top_logprobs": [
+          {
+           "token": " a",
+           "logprob": -4.577531944960356e-05,
+           "bytes": [
+            32,
+            97
+           ]
+          }
+         ]
+        }
+       ],
+       "refusal": null
+      }
+     }
+    ],
+    "usage": null,
+    "system_fingerprint": "f44352906cd8",
+    "service_tier": null
+   },
+   {
+    "id": "chatcmpl-ef981916973940e48ac2af60",
+    "object": "chat.completion.chunk",
+    "created": 1795669314,
+    "model": "qwen2.5-7b-instruct",
+    "choices": [
+     {
+      "index": 0,
+      "delta": {
+       "role": null,
+       "content": " phenomenon",
+       "refusal": null,
+       "tool_calls": null,
+       "function_call": null
+      },
+      "finish_reason": null,
+      "logprobs": {
+       "content": [
+        {
+         "token": " phenomenon",
+         "logprob": -0.09233877807855606,
+         "bytes": [
+          32,
+          112,
+          104,
+          101,
+          110,
+          111,
+          109,
+          101,
+          110,
+          111,
+          110
+         ],
+         "top_logprobs": [
+          {
+           "token": " phenomenon",
+           "logprob": -0.09233877807855606,
+           "bytes": [
+            32,
+            112,
+            104,
+            101,
+            110,
+            111,
+            109,
+            101,
+            110,
+            111,
+            110
+           ]
+          }
+         ]
+        }
+       ],
+       "refusal": null
+      }
+     }
+    ],
+    "usage": null,
+    "system_fingerprint": "f44352906cd8",
+    "service_tier": null
+   },
+   {
+    "id": "chatcmpl-ef981916973940e48ac2af60",
+    "object": "chat.completion.chunk",
+    "created": 1795669314,
+    "model": "qwen2.5-7b-instruct",
+    "choices": [
+     {
+      "index": 0,
+      "delta": {
+       "role": null,
+       "content": " called",
+       "refusal": null,
+       "tool_calls": null,
+       "function_call": null
+      },
+      "finish_reason": null,
+      "logprobs": {
+       "content": [
+        {
+         "token": " called",
+         "logprob": -0.07366237789392471,
+         "bytes": [
+          32,
+          99,
+          97,
+          108,
+          108,
+          101,
+          100
+         ],
+         "top_logprobs": [
+          {
+           "token": " called",
+           "logprob": -0.07366237789392471,
+           "bytes": [
+            32,
+            99,
+            97,
+            108,
+            108,
+            101,
+            100
+           ]
+          }
+         ]
+        }
+       ],
+       "refusal": null
+      }
+     }
+    ],
+    "usage": null,
+    "system_fingerprint": "f44352906cd8",
+    "service_tier": null
+   },
+   {
+    "id": "chatcmpl-ef981916973940e48ac2af60",
+    "object": "chat.completion.chunk",
+    "created": 1795669314,
+    "model": "qwen2.5-7b-instruct",
+    "choices": [
+     {
+      "index": 0,
+      "delta": {
+       "role": null,
+       "content": " Ray",
+       "refusal": null,
+       "tool_calls": null,
+       "function_call": null
+      },
+      "finish_reason": null,
+      "logprobs": {
+       "content": [
+        {
+         "token": " Ray",
+         "logprob": -0.0016277885297313333,
+         "bytes": [
+          32,
+          82,
+          97,
+          121
+         ],
+         "top_logprobs": [
+          {
+           "token": " Ray",
+           "logprob": -0.0016277885297313333,
+           "bytes": [
+            32,
+            82,
+            97,
+            121
+           ]
+          }
+         ]
+        }
+       ],
+       "refusal": null
+      }
+     }
+    ],
+    "usage": null,
+    "system_fingerprint": "f44352906cd8",
+    "service_tier": null
+   },
+   {
+    "id": "chatcmpl-ef981916973940e48ac2af60",
+    "object": "chat.completion.chunk",
+    "created": 1795669314,
+    "model": "qwen2.5-7b-instruct",
+    "choices": [
+     {
+      "index": 0,
+      "delta": {
+       "role": null,
+       "content": "leigh",
+       "refusal": null,
+       "tool_calls": null,
+       "function_call": null
+      },
+      "finish_reason": null,
+      "logprobs": {
+       "content": [
+        {
+         "token": "leigh",
+         "logprob": 0.0,
+         "bytes": [
+          108,
+          101,
+          105,
+          103,
+          104
+         ],
+         "top_logprobs": [
+          {
+           "token": "leigh",
+           "logprob": 0.0,
+           "bytes": [
+            108,
+            101,
+            105,
+            103,
+            104
+           ]
+          }
+         ]
+        }
+       ],
+       "refusal": null
+      }
+     }
+    ],
+    "usage": null,
+    "system_fingerprint": "f44352906cd8",
+    "service_tier": null
+   },
+   {
+    "id": "chatcmpl-ef981916973940e48ac2af60",
+    "object": "chat.completion.chunk",
+    "created": 1795669314,
+    "model": "qwen2.5-7b-instruct",
+    "choices": [
+     {
+      "index": 0,
+      "delta": {
+       "role": null,
+       "content": " scattering",
+       "refusal": null,
+       "tool_calls": null,
+       "function_call": null
+      },
+      "finish_reason": null,
+      "logprobs": {
+       "content": [
+        {
+         "token": " scattering",
+         "logprob": -7.64102369430475e-05,
+         "bytes": [
+          32,
+          115,
+          99,
+          97,
+          116,
+          116,
+          101,
+          114,
+          105,
+          110,
+          103
+         ],
+         "top_logprobs": [
+          {
+           "token": " scattering",
+           "logprob": -7.64102369430475e-05,
+           "bytes": [
+            32,
+            115,
+            99,
+            97,
+            116,
+            116,
+            101,
+            114,
+            105,
+            110,
+            103
+           ]
+          }
+         ]
+        }
+       ],
+       "refusal": null
+      }
+     }
+    ],
+    "usage": null,
+    "system_fingerprint": "f44352906cd8",
+    "service_tier": null
+   },
+   {
+    "id": "chatcmpl-ef981916973940e48ac2af60",
+    "object": "chat.completion.chunk",
+    "created": 1795669314,
+    "model": "qwen2.5-7b-instruct",
+    "choices": [
+     {
+      "index": 0,
+      "delta": {
+       "role": null,
+       "content": ".",
+       "refusal": null,
+       "tool_calls": null,
+       "function_call": null
+      },
+      "finish_reason": null,
+      "logprobs": {
+       "content": [
+        {
+         "token": ".",
+         "logprob": -0.00016032364510465413,
+         "bytes": [
+          46
+         ],
+         "top_logprobs": [
+          {
+           "token": ".",
+           "logprob": -0.00016032364510465413,
+           "bytes": [
+            46
+           ]
+          }
+         ]
+        }
+       ],
+       "refusal": null
+      }
+     }
+    ],
+    "usage": null,
+    "system_fingerprint": "f44352906cd8",
+    "service_tier": null
+   },
+   {
+    "id": "chatcmpl-ef981916973940e48ac2af60",
+    "object": "chat.completion.chunk",
+    "created": 1795669314,
+    "model": "qwen2.5-7b-instruct",
+    "choices": [
+     {
+      "index": 0,
+      "delta": {
+       "role": null,
+       "content": " When",
+       "refusal": null,
+       "tool_calls": null,
+       "function_call": null
+      },
+      "finish_reason": null,
+      "logprobs": {
+       "content": [
+        {
+         "token": " When",
+         "logprob": -0.05365664139389992,
+         "bytes": [
+          32,
+          87,
+          104,
+          101,
+          110
+         ],
+         "top_logprobs": [
+          {
+           "token": " When",
+           "logprob": -0.05365664139389992,
+           "bytes": [
+            32,
+            87,
+            104,
+            101,
+            110
+           ]
+          }
+         ]
+        }
+       ],
+       "refusal": null
+      }
+     }
+    ],
+    "usage": null,
+    "system_fingerprint": "f44352906cd8",
+    "service_tier": null
+   },
+   {
+    "id": "chatcmpl-ef981916973940e48ac2af60",
+    "object": "chat.completion.chunk",
+    "created": 1795669314,
+    "model": "qwen2.5-7b-instruct",
+    "choices": [
+     {
+      "index": 0,
+      "delta": {
+       "role": null,
+       "content": " sunlight",
+       "refusal": null,
+       "tool_calls": null,
+       "function_call": null
+      },
+      "finish_reason": null,
+      "logprobs": {
+       "content": [
+        {
+         "token": " sunlight",
+         "logprob": -0.010699761100113392,
+         "bytes": [
+          32,
+          115,
+          117,
+          110,
+          108,
+          105,
+          103,
+          104,
+          116
+         ],
+         "top_logprobs": [
+          {
+           "token": " sunlight",
+           "logprob": -0.010699761100113392,
+           "bytes": [
+            32,
+            115,
+            117,
+            110,
+            108,
+            105,
+            103,
+            104,
+            116
+           ]
+          }
+         ]
+        }
+       ],
+       "refusal": null
+      }
+     }
+    ],
+    "usage": null,
+    "system_fingerprint": "f44352906cd8",
+    "service_tier": null
+   },
+   {
+    "id": "chatcmpl-ef981916973940e48ac2af60",
+    "object": "chat.completion.chunk",
+    "created": 1795669314,
+    "model": "qwen2.5-7b-instruct",
+    "choices": [
+     {
+      "index": 0,
+      "delta": {
+       "role": null,
+       "content": " enters",
+       "refusal": null,
+       "tool_calls": null,
+       "function_call": null
+      },
+      "finish_reason": null,
+      "logprobs": {
+       "content": [
+        {
+         "token": " enters",
+         "logprob": -0.0017970141489058733,
+         "bytes": [
+          32,
+          101,
+          110,
+          116,
+          101,
+          114,
+          115
+         ],
+         "top_logprobs": [
+          {
+           "token": " enters",
+           "logprob": -0.0017970141489058733,
+           "bytes": [
+            32,
+            101,
+            110,
+            116,
+            101,
+            114,
+            115
+           ]
+          }
+         ]
+        }
+       ],
+       "refusal": null
+      }
+     }
+    ],
+    "usage": null,
+    "system_fingerprint": "f44352906cd8",
+    "service_tier": null
+   },
+   {
+    "id": "chatcmpl-ef981916973940e48ac2af60",
+    "object": "chat.completion.chunk",
+    "created": 1795669314,
+    "model": "qwen2.5-7b-instruct",
+    "choices": [
+     {
+      "index": 0,
+      "delta": {
+       "role": null,
+       "content": " the",
+       "refusal": null,
+       "tool_calls": null,
+       "function_call": null
+      },
+      "finish_reason": null,
+      "logprobs": {
+       "content": [
+        {
+         "token": " the",
+         "logprob": -0.020655876025557518,
+         "bytes": [
+          32,
+          116,
+          104,
+          101
+         ],
+         "top_logprobs": [
+          {
+           "token": " the",
+           "logprob": -0.020655876025557518,
+           "bytes": [
+            32,
+            116,
+            104,
+            101
+           ]
+          }
+         ]
+        }
+       ],
+       "refusal": null
+      }
+     }
+    ],
+    "usage": null,
+    "system_fingerprint": "f44352906cd8",
+    "service_tier": null
+   },
+   {
+    "id": "chatcmpl-ef981916973940e48ac2af60",
+    "object": "chat.completion.chunk",
+    "created": 1795669314,
+    "model": "qwen2.5-7b-instruct",
+    "choices": [
+     {
+      "index": 0,
+      "delta": {
+       "role": null,
+       "content": " Earth",
+       "refusal": null,
+       "tool_calls": null,
+       "function_call": null
+      },
+      "finish_reason": null,
+      "logprobs": {
+       "content": [
+        {
+         "token": " Earth",
+         "logprob": -0.0005658455775119364,
+         "bytes": [
+          32,
+          69,
+          97,
+          114,
+          116,
+          104
+         ],
+         "top_logprobs": [
+          {
+           "token": " Earth",
+           "logprob": -0.0005658455775119364,
+           "bytes": [
+            32,
+            69,
+            97,
+            114,
+            116,
+            104
+           ]
+          }
+         ]
+        }
+       ],
+       "refusal": null
+      }
+     }
+    ],
+    "usage": null,
+    "system_fingerprint": "f44352906cd8",
+    "service_tier": null
+   },
+   {
+    "id": "chatcmpl-ef981916973940e48ac2af60",
+    "object": "chat.completion.chunk",
+    "created": 1795669314,
+    "model": "qwen2.5-7b-instruct",
+    "choices": [
+     {
+      "index": 0,
+      "delta": {
+       "role": null,
+       "content": "'s",
+       "refusal": null,
+       "tool_calls": null,
+       "function_call": null
+      },
+      "finish_reason": null,
+      "logprobs": {
+       "content": [
+        {
+         "token": "'s",
+         "logprob": -6.794698856538162e-05,
+         "bytes": [
+          39,
+          115
+         ],
+         "top_logprobs": [
+          {
+           "token": "'s",
+           "logprob": -6.794698856538162e-05,
+           "bytes": [
+            39,
+            115
+           ]
+          }
+         ]
+        }
+       ],
+       "refusal": null
+      }
+     }
+    ],
+    "usage": null,
+    "system_fingerprint": "f44352906cd8",
+    "service_tier": null
+   },
+   {
+    "id": "chatcmpl-ef981916973940e48ac2af60",
+    "object": "chat.completion.chunk",
+    "created": 1795669314,
+    "model": "qwen2.5-7b-instruct",
+    "choices": [
+     {
+      "index": 0,
+      "delta": {
+       "role": null,
+       "content": " atmosphere",
+       "refusal": null,
+       "tool_calls": null,
+       "function_call": null
+      },
+      "finish_reason": null,
+      "logprobs": {
+       "content": [
+        {
+         "token": " atmosphere",
+         "logprob": -0.00040904260822571814,
+         "bytes": [
+          32,
+          97,
+          116,
+          109,
+          111,
+          115,
+          112,
+          104,
+          101,
+          114,
+          101
+         ],
+         "top_logprobs": [
+          {
+           "token": " atmosphere",
+           "logprob": -0.00040904260822571814,
+           "bytes": [
+            32,
+            97,
+            116,
+            109,
+            111,
+            115,
+            112,
+            104,
+            101,
+            114,
+            101
+           ]
+          }
+         ]
+        }
+       ],
+       "refusal": null
+      }
+     }
+    ],
+    "usage": null,
+    "system_fingerprint": "f44352906cd8",
+    "service_tier": null
+   },
+   {
+    "id": "chatcmpl-ef981916973940e48ac2af60",
+    "object": "chat.completion.chunk",
+    "created": 1795669314,
+    "model": "qwen2.5-7b-instruct",
+    "choices": [
+     {
+      "index": 0,
+      "delta": {
+       "role": null,
+       "content": ",",
+       "refusal": null,
+       "tool_calls": null,
+       "function_call": null
+      },
+      "finish_reason": null,
+      "logprobs": {
+       "content": [
+        {
+         "token": ",",
+         "logprob": -7.390948667307384e-06,
+         "bytes": [
+          44
+         ],
+         "top_logprobs": [
+          {
+           "token": ",",
+           "logprob": -7.390948667307384e-06,
+           "bytes": [
+            44
+           ]
+          }
+         ]
+        }
+       ],
+       "refusal": null
+      }
+     }
+    ],
+    "usage": null,
+    "system_fingerprint": "f44352906cd8",
+    "service_tier": null
+   },
+   {
+    "id": "chatcmpl-ef981916973940e48ac2af60",
+    "object": "chat.completion.chunk",
+    "created": 1795669314,
+    "model": "qwen2.5-7b-instruct",
+    "choices": [
+     {
+      "index": 0,
+      "delta": {
+       "role": null,
+       "content": " it",
+       "refusal": null,
+       "tool_calls": null,
+       "function_call": null
+      },
+      "finish_reason": null,
+      "logprobs": {
+       "content": [
+        {
+         "token": " it",
+         "logprob": -0.000359351426595822,
+         "bytes": [
+          32,
+          105,
+          116
+         ],
+         "top_logprobs": [
+          {
+           "token": " it",
+           "logprob": -0.000359351426595822,
+           "bytes": [
+            32,
+            105,
+            116
+           ]
+          }
+         ]
+        }
+       ],
+       "refusal": null
+      }
+     }
+    ],
+    "usage": null,
+    "system_fingerprint": "f44352906cd8",
+    "service_tier": null
+   },
+   {
+    "id": "chatcmpl-ef981916973940e48ac2af60",
+    "object": "chat.completion.chunk",
+    "created": 1795669314,
+    "model": "qwen2.5-7b-instruct",
+    "choices": [
+     {
+      "index": 0,
+      "delta": {
+       "role": null,
+       "content": " coll",
+       "refusal": null,
+       "tool_calls": null,
+       "function_call": null
+      },
+      "finish_reason": null,
+      "logprobs": {
+       "content": [
+        {
+         "token": " coll",
+         "logprob": -0.14408721029758453,
+         "bytes": [
+          32,
+          99,
+          111,
+          108,
+          108
+         ],
+         "top_logprobs": [
+          {
+           "token": " coll",
+           "logprob": -0.14408721029758453,
+           "bytes": [
+            32,
+            99,
+            111,
+            108,
+            108
+           ]
+          }
+         ]
+        }
+       ],
+       "refusal": null
+      }
+     }
+    ],
+    "usage": null,
+    "system_fingerprint": "f44352906cd8",
+    "service_tier": null
+   },
+   {
+    "id": "chatcmpl-ef981916973940e48ac2af60",
+    "object": "chat.completion.chunk",
+    "created": 1795669314,
+    "model": "qwen2.5-7b-instruct",
+    "choices": [
+     {
+      "index": 0,
+      "delta": {
+       "role": null,
+       "content": "ides",
+       "refusal": null,
+       "tool_calls": null,
+       "function_call": null
+      },
+      "finish_reason": null,
+      "logprobs": {
+       "content": [
+        {
+         "token": "ides",
+         "logprob": -1.9073468138230965e-06,
+         "bytes": [
+          105,
+          100,
+          101,
+          115
+         ],
+         "top_logprobs": [
+          {
+           "token": "ides",
+           "logprob": -1.9073468138230965e-06,
+           "bytes": [
+            105,
+            100,
+            101,
+            115
+           ]
+          }
+         ]
+        }
+       ],
+       "refusal": null
+      }
+     }
+    ],
+    "usage": null,
+    "system_fingerprint": "f44352906cd8",
+    "service_tier": null
+   },
+   {
+    "id": "chatcmpl-ef981916973940e48ac2af60",
+    "object": "chat.completion.chunk",
+    "created": 1795669314,
+    "model": "qwen2.5-7b-instruct",
+    "choices": [
+     {
+      "index": 0,
+      "delta": {
+       "role": null,
+       "content": " with",
+       "refusal": null,
+       "tool_calls": null,
+       "function_call": null
+      },
+      "finish_reason": null,
+      "logprobs": {
+       "content": [
+        {
+         "token": " with",
+         "logprob": -7.152555099310121e-07,
+         "bytes": [
+          32,
+          119,
+          105,
+          116,
+          104
+         ],
+         "top_logprobs": [
+          {
+           "token": " with",
+           "logprob": -7.152555099310121e-07,
+           "bytes": [
+            32,
+            119,
+            105,
+            116,
+            104
+           ]
+          }
+         ]
+        }
+       ],
+       "refusal": null
+      }
+     }
+    ],
+    "usage": null,
+    "system_fingerprint": "f44352906cd8",
+    "service_tier": null
+   },
+   {
+    "id": "chatcmpl-ef981916973940e48ac2af60",
+    "object": "chat.completion.chunk",
+    "created": 1795669314,
+    "model": "qwen2.5-7b-instruct",
+    "choices": [
+     {
+      "index": 0,
+      "delta": {
+       "role": null,
+       "content": " molecules",
+       "refusal": null,
+       "tool_calls": null,
+       "function_call": null
+      },
+      "finish_reason": null,
+      "logprobs": {
+       "content": [
+        {
+         "token": " molecules",
+         "logprob": -0.07188846170902252,
+         "bytes": [
+          32,
+          109,
+          111,
+          108,
+          101,
+          99,
+          117,
+          108,
+          101,
+          115
+         ],
+         "top_logprobs": [
+          {
+           "token": " molecules",
+           "logprob": -0.07188846170902252,
+           "bytes": [
+            32,
+            109,
+            111,
+            108,
+            101,
+            99,
+            117,
+            108,
+            101,
+            115
+           ]
+          }
+         ]
+        }
+       ],
+       "refusal": null
+      }
+     }
+    ],
+    "usage": null,
+    "system_fingerprint": "f44352906cd8",
+    "service_tier": null
+   },
+   {
+    "id": "chatcmpl-ef981916973940e48ac2af60",
+    "object": "chat.completion.chunk",
+    "created": 1795669314,
+    "model": "qwen2.5-7b-instruct",
+    "choices": [
+     {
+      "index": 0,
+      "delta": {
+       "role": null,
+       "content": " and",
+       "refusal": null,
+       "tool_calls": null,
+       "function_call": null
+      },
+      "finish_reason": null,
+      "logprobs": {
+       "content": [
+        {
+         "token": " and",
+         "logprob": -0.02360527403652668,
+         "bytes": [
+          32,
+          97,
+          110,
+          100
+         ],
+         "top_logprobs": [
+          {
+           "token": " and",
+           "logprob": -0.02360527403652668,
+           "bytes": [
+            32,
+            97,
+            110,
+            100
+           ]
+          }
+         ]
+        }
+       ],
+       "refusal": null
+      }
+     }
+    ],
+    "usage": null,
+    "system_fingerprint": "f44352906cd8",
+    "service_tier": null
+   },
+   {
+    "id": "chatcmpl-ef981916973940e48ac2af60",
+    "object": "chat.completion.chunk",
+    "created": 1795669314,
+    "model": "qwen2.5-7b-instruct",
+    "choices": [
+     {
+      "index": 0,
+      "delta": {
+       "role": null,
+       "content": " small",
+       "refusal": null,
+       "tool_calls": null,
+       "function_call": null
+      },
+      "finish_reason": null,
+      "logprobs": {
+       "content": [
+        {
+         "token": " small",
+         "logprob": -0.23794755339622498,
+         "bytes": [
+          32,
+          115,
+          109,
+          97,
+          108,
+          108
+         ],
+         "top_logprobs": [
+          {
+           "token": " small",
+           "logprob": -0.23794755339622498,
+           "bytes": [
+            32,
+            115,
+            109,
+            97,
+            108,
+            108
+           ]
+          }
+         ]
+        }
+       ],
+       "refusal": null
+      }
+     }
+    ],
+    "usage": null,
+    "system_fingerprint": "f44352906cd8",
+    "service_tier": null
+   },
+   {
+    "id": "chatcmpl-ef981916973940e48ac2af60",
+    "object": "chat.completion.chunk",
+    "created": 1795669314,
+    "model": "qwen2.5-7b-instruct",
+    "choices": [
+     {
+      "index": 0,
+      "delta": {
+       "role": null,
+       "content": " particles",
+       "refusal": null,
+       "tool_calls": null,
+       "function_call": null
+      },
+      "finish_reason": null,
+      "logprobs": {
+       "content": [
+        {
+         "token": " particles",
+         "logprob": -0.00015209948469419032,
+         "bytes": [
+          32,
+          112,
+          97,
+          114,
+          116,
+          105,
+          99,
+          108,
+          101,
+          115
+         ],
+         "top_logprobs": [
+          {
+           "token": " particles",
+           "logprob": -0.00015209948469419032,
+           "bytes": [
+            32,
+            112,
+            97,
+            114,
+            116,
+            105,
+            99,
+            108,
+            101,
+            115
+           ]
+          }
+         ]
+        }
+       ],
+       "refusal": null
+      }
+     }
+    ],
+    "usage": null,
+    "system_fingerprint": "f44352906cd8",
+    "service_tier": null
+   },
+   {
+    "id": "chatcmpl-ef981916973940e48ac2af60",
+    "object": "chat.completion.chunk",
+    "created": 1795669314,
+    "model": "qwen2.5-7b-instruct",
+    "choices": [
+     {
+      "index": 0,
+      "delta": {
+       "role": null,
+       "content": " in",
+       "refusal": null,
+       "tool_calls": null,
+       "function_call": null
+      },
+      "finish_reason": null,
+      "logprobs": {
+       "content": [
+        {
+         "token": " in",
+         "logprob": -0.0011865011183544993,
+         "bytes": [
+          32,
+          105,
+          110
+         ],
+         "top_logprobs": [
+          {
+           "token": " in",
+           "logprob": -0.0011865011183544993,
+           "bytes": [
+            32,
+            105,
+            110
+           ]
+          }
+         ]
+        }
+       ],
+       "refusal": null
+      }
+     }
+    ],
+    "usage": null,
+    "system_fingerprint": "f44352906cd8",
+    "service_tier": null
+   },
+   {
+    "id": "chatcmpl-ef981916973940e48ac2af60",
+    "object": "chat.completion.chunk",
+    "created": 1795669314,
+    "model": "qwen2.5-7b-instruct",
+    "choices": [
+     {
+      "index": 0,
+      "delta": {
+       "role": null,
+       "content": " the",
+       "refusal": null,
+       "tool_calls": null,
+       "function_call": null
+      },
+      "finish_reason": null,
+      "logprobs": {
+       "content": [
+        {
+         "token": " the",
+         "logprob": -2.622600959512056e-06,
+         "bytes": [
+          32,
+          116,
+          104,
+          101
+         ],
+         "top_logprobs": [
+          {
+           "token": " the",
+           "logprob": -2.622600959512056e-06,
+           "bytes": [
+            32,
+            116,
+            104,
+            101
+           ]
+          }
+         ]
+        }
+       ],
+       "refusal": null
+      }
+     }
+    ],
+    "usage": null,
+    "system_fingerprint": "f44352906cd8",
+    "service_tier": null
+   },
+   {
+    "id": "chatcmpl-ef981916973940e48ac2af60",
+    "object": "chat.completion.chunk",
+    "created": 1795669314,
+    "model": "qwen2.5-7b-instruct",
+    "choices": [
+     {
+      "index": 0,
+      "delta": {
+       "role": null,
+       "content": " air",
+       "refusal": null,
+       "tool_calls": null,
+       "function_call": null
+      },
+      "finish_reason": null,
+      "logprobs": {
+       "content": [
+        {
+         "token": " air",
+         "logprob": -9.262132516596466e-05,
+         "bytes": [
+          32,
+          97,
+          105,
+          114
+         ],
+         "top_logprobs": [
+          {
+           "token": " air",
+           "logprob": -9.262132516596466e-05,
+           "bytes": [
+            32,
+            97,
+            105,
+            114
+           ]
+          }
+         ]
+        }
+       ],
+       "refusal": null
+      }
+     }
+    ],
+    "usage": null,
+    "system_fingerprint": "f44352906cd8",
+    "service_tier": null
+   },
+   {
+    "id": "chatcmpl-ef981916973940e48ac2af60",
+    "object": "chat.completion.chunk",
+    "created": 1795669314,
+    "model": "qwen2.5-7b-instruct",
+    "choices": [
+     {
+      "index": 0,
+      "delta": {
+       "role": null,
+       "content": ".",
+       "refusal": null,
+       "tool_calls": null,
+       "function_call": null
+      },
+      "finish_reason": null,
+      "logprobs": {
+       "content": [
+        {
+         "token": ".",
+         "logprob": -0.00054058717796579,
+         "bytes": [
+          46
+         ],
+         "top_logprobs": [
+          {
+           "token": ".",
+           "logprob": -0.00054058717796579,
+           "bytes": [
+            46
+           ]
+          }
+         ]
+        }
+       ],
+       "refusal": null
+      }
+     }
+    ],
+    "usage": null,
+    "system_fingerprint": "f44352906cd8",
+    "service_tier": null
+   },
+   {
+    "id": "chatcmpl-ef981916973940e48ac2af60",
+    "object": "chat.completion.chunk",
+    "created": 1795669314,
+    "model": "qwen2.5-7b-instruct",
+    "choices": [
+     {
+      "index": 0,
+      "delta": {
+       "role": null,
+       "content": " Sun",
+       "refusal": null,
+       "tool_calls": null,
+       "function_call": null
+      },
+      "finish_reason": null,
+      "logprobs": {
+       "content": [
+        {
+         "token": " Sun",
+         "logprob": -0.004747547209262848,
+         "bytes": [
+          32,
+          83,
+          117,
+          110
+         ],
+         "top_logprobs": [
+          {
+           "token": " Sun",
+           "logprob": -0.004747547209262848,
+           "bytes": [
+            32,
+            83,
+            117,
+            110
+           ]
+          }
+         ]
+        }
+       ],
+       "refusal": null
+      }
+     }
+    ],
+    "usage": null,
+    "system_fingerprint": "f44352906cd8",
+    "service_tier": null
+   },
+   {
+    "id": "chatcmpl-ef981916973940e48ac2af60",
+    "object": "chat.completion.chunk",
+    "created": 1795669314,
+    "model": "qwen2.5-7b-instruct",
+    "choices": [
+     {
+      "index": 0,
+      "delta": {
+       "role": null,
+       "content": "light",
+       "refusal": null,
+       "tool_calls": null,
+       "function_call": null
+      },
+      "finish_reason": null,
+      "logprobs": {
+       "content": [
+        {
+         "token": "light",
+         "logprob": 0.0,
+         "bytes": [
+          108,
+          105,
+          103,
+          104,
+          116
+         ],
+         "top_logprobs": [
+          {
+           "token": "light",
+           "logprob": 0.0,
+           "bytes": [
+            108,
+            105,
+            103,
+            104,
+            116
+           ]
+          }
+         ]
+        }
+       ],
+       "refusal": null
+      }
+     }
+    ],
+    "usage": null,
+    "system_fingerprint": "f44352906cd8",
+    "service_tier": null
+   },
+   {
+    "id": "chatcmpl-ef981916973940e48ac2af60",
+    "object": "chat.completion.chunk",
+    "created": 1795669314,
+    "model": "qwen2.5-7b-instruct",
+    "choices": [
+     {
+      "index": 0,
+      "delta": {
+       "role": null,
+       "content": " is",
+       "refusal": null,
+       "tool_calls": null,
+       "function_call": null
+      },
+      "finish_reason": null,
+      "logprobs": {
+       "content": [
+        {
+         "token": " is",
+         "logprob": -0.05783578380942345,
+         "bytes": [
+          32,
+          105,
+          115
+         ],
+         "top_logprobs": [
+          {
+           "token": " is",
+           "logprob": -0.05783578380942345,
+           "bytes": [
+            32,
+            105,
+            115
+           ]
+          }
+         ]
+        }
+       ],
+       "refusal": null
+      }
+     }
+    ],
+    "usage": null,
+    "system_fingerprint": "f44352906cd8",
+    "service_tier": null
+   },
+   {
+    "id": "chatcmpl-ef981916973940e48ac2af60",
+    "object": "chat.completion.chunk",
+    "created": 1795669314,
+    "model": "qwen2.5-7b-instruct",
+    "choices": [
+     {
+      "index": 0,
+      "delta": {
+       "role": null,
+       "content": " made",
+       "refusal": null,
+       "tool_calls": null,
+       "function_call": null
+      },
+      "finish_reason": null,
+      "logprobs": {
+       "content": [
+        {
+         "token": " made",
+         "logprob": -0.05749256908893585,
+         "bytes": [
+          32,
+          109,
+          97,
+          100,
+          101
+         ],
+         "top_logprobs": [
+          {
+           "token": " made",
+           "logprob": -0.05749256908893585,
+           "bytes": [
+            32,
+            109,
+            97,
+            100,
+            101
+           ]
+          }
+         ]
+        }
+       ],
+       "refusal": null
+      }
+     }
+    ],
+    "usage": null,
+    "system_fingerprint": "f44352906cd8",
+    "service_tier": null
+   },
+   {
+    "id": "chatcmpl-ef981916973940e48ac2af60",
+    "object": "chat.completion.chunk",
+    "created": 1795669314,
+    "model": "qwen2.5-7b-instruct",
+    "choices": [
+     {
+      "index": 0,
+      "delta": {
+       "role": null,
+       "content": " up",
+       "refusal": null,
+       "tool_calls": null,
+       "function_call": null
+      },
+      "finish_reason": null,
+      "logprobs": {
+       "content": [
+        {
+         "token": " up",
+         "logprob": -1.3470558769768104e-05,
+         "bytes": [
+          32,
+          117,
+          112
+         ],
+         "top_logprobs": [
+          {
+           "token": " up",
+           "logprob": -1.3470558769768104e-05,
+           "bytes": [
+            32,
+            117,
+            112
+           ]
+          }
+         ]
+        }
+       ],
+       "refusal": null
+      }
+     }
+    ],
+    "usage": null,
+    "system_fingerprint": "f44352906cd8",
+    "service_tier": null
+   },
+   {
+    "id": "chatcmpl-ef981916973940e48ac2af60",
+    "object": "chat.completion.chunk",
+    "created": 1795669314,
+    "model": "qwen2.5-7b-instruct",
+    "choices": [
+     {
+      "index": 0,
+      "delta": {
+       "role": null,
+       "content": " of",
+       "refusal": null,
+       "tool_calls": null,
+       "function_call": null
+      },
+      "finish_reason": null,
+      "logprobs": {
+       "content": [
+        {
+         "token": " of",
+         "logprob": 0.0,
+         "bytes": [
+          32,
+          111,
+          102
+         ],
+         "top_logprobs": [
+          {
+           "token": " of",
+           "logprob": 0.0,
+           "bytes": [
+            32,
+            111,
+            102
+           ]
+          }
+         ]
+        }
+       ],
+       "refusal": null
+      }
+     }
+    ],
+    "usage": null,
+    "system_fingerprint": "f44352906cd8",
+    "service_tier": null
+   },
+   {
+    "id": "chatcmpl-ef981916973940e48ac2af60",
+    "object": "chat.completion.chunk",
+    "created": 1795669314,
+    "model": "qwen2.5-7b-instruct",
+    "choices": [
+     {
+      "index": 0,
+      "delta": {
+       "role": null,
+       "content": " different",
+       "refusal": null,
+       "tool_calls": null,
+       "function_call": null
+      },
+      "finish_reason": null,
+      "logprobs": {
+       "content": [
+        {
+         "token": " different",
+         "logprob": -0.06693024933338165,
+         "bytes": [
+          32,
+          100,
+          105,
+          102,
+          102,
+          101,
+          114,
+          101,
+          110,
+          116
+         ],
+         "top_logprobs": [
+          {
+           "token": " different",
+           "logprob": -0.06693024933338165,
+           "bytes": [
+            32,
+            100,
+            105,
+            102,
+            102,
+            101,
+            114,
+            101,
+            110,
+            116
+           ]
+          }
+         ]
+        }
+       ],
+       "refusal": null
+      }
+     }
+    ],
+    "usage": null,
+    "system_fingerprint": "f44352906cd8",
+    "service_tier": null
+   },
+   {
+    "id": "chatcmpl-ef981916973940e48ac2af60",
+    "object": "chat.completion.chunk",
+    "created": 1795669314,
+    "model": "qwen2.5-7b-instruct",
+    "choices": [
+     {
+      "index": 0,
+      "delta": {
+       "role": null,
+       "content": " colors",
+       "refusal": null,
+       "tool_calls": null,
+       "function_call": null
+      },
+      "finish_reason": null,
+      "logprobs": {
+       "content": [
+        {
+         "token": " colors",
+         "logprob": -0.0002460177056491375,
+         "bytes": [
+          32,
+          99,
+          111,
+          108,
+          111,
+          114,
+          115
+         ],
+         "top_logprobs": [
+          {
+           "token": " colors",
+           "logprob": -0.0002460177056491375,
+           "bytes": [
+            32,
+            99,
+            111,
+            108,
+            111,
+            114,
+            115
+           ]
+          }
+         ]
+        }
+       ],
+       "refusal": null
+      }
+     }
+    ],
+    "usage": null,
+    "system_fingerprint": "f44352906cd8",
+    "service_tier": null
+   },
+   {
+    "id": "chatcmpl-ef981916973940e48ac2af60",
+    "object": "chat.completion.chunk",
+    "created": 1795669314,
+    "model": "qwen2.5-7b-instruct",
+    "choices": [
+     {
+      "index": 0,
+      "delta": {
+       "role": null,
+       "content": ",",
+       "refusal": null,
+       "tool_calls": null,
+       "function_call": null
+      },
+      "finish_reason": null,
+      "logprobs": {
+       "content": [
+        {
+         "token": ",",
+         "logprob": -5.6265202147187665e-05,
+         "bytes": [
+          44
+         ],
+         "top_logprobs": [
+          {
+           "token": ",",
+           "logprob": -5.6265202147187665e-05,
+           "bytes": [
+            44
+           ]
+          }
+         ]
+        }
+       ],
+       "refusal": null
+      }
+     }
+    ],
+    "usage": null,
+    "system_fingerprint": "f44352906cd8",
+    "service_tier": null
+   },
+   {
+    "id": "chatcmpl-ef981916973940e48ac2af60",
+    "object": "chat.completion.chunk",
+    "created": 1795669314,
+    "model": "qwen2.5-7b-instruct",
+    "choices": [
+     {
+      "index": 0,
+      "delta": {
+       "role": null,
+       "content": " each",
+       "refusal": null,
+       "tool_calls": null,
+       "function_call": null
+      },
+      "finish_reason": null,
+      "logprobs": {
+       "content": [
+        {
+         "token": " each",
+         "logprob": -0.007436688058078289,
+         "bytes": [
+          32,
+          101,
+          97,
+          99,
+          104
+         ],
+         "top_logprobs": [
+          {
+           "token": " each",
+           "logprob": -0.007436688058078289,
+           "bytes": [
+            32,
+            101,
+            97,
+            99,
+            104
+           ]
+          }
+         ]
+        }
+       ],
+       "refusal": null
+      }
+     }
+    ],
+    "usage": null,
+    "system_fingerprint": "f44352906cd8",
+    "service_tier": null
+   },
+   {
+    "id": "chatcmpl-ef981916973940e48ac2af60",
+    "object": "chat.completion.chunk",
+    "created": 1795669314,
+    "model": "qwen2.5-7b-instruct",
+    "choices": [
+     {
+      "index": 0,
+      "delta": {
+       "role": null,
+       "content": " of",
+       "refusal": null,
+       "tool_calls": null,
+       "function_call": null
+      },
+      "finish_reason": null,
+      "logprobs": {
+       "content": [
+        {
+         "token": " of",
+         "logprob": -0.13017617166042328,
+         "bytes": [
+          32,
+          111,
+          102
+         ],
+         "top_logprobs": [
+          {
+           "token": " of",
+           "logprob": -0.13017617166042328,
+           "bytes": [
+            32,
+            111,
+            102
+           ]
+          }
+         ]
+        }
+       ],
+       "refusal": null
+      }
+     }
+    ],
+    "usage": null,
+    "system_fingerprint": "f44352906cd8",
+    "service_tier": null
+   },
+   {
+    "id": "chatcmpl-ef981916973940e48ac2af60",
+    "object": "chat.completion.chunk",
+    "created": 1795669314,
+    "model": "qwen2.5-7b-instruct",
+    "choices": [
+     {
+      "index": 0,
+      "delta": {
+       "role": null,
+       "content": " which",
+       "refusal": null,
+       "tool_calls": null,
+       "function_call": null
+      },
+      "finish_reason": null,
+      "logprobs": {
+       "content": [
+        {
+         "token": " which",
+         "logprob": -2.264974000354414e-06,
+         "bytes": [
+          32,
+          119,
+          104,
+          105,
+          99,
+          104
+         ],
+         "top_logprobs": [
+          {
+           "token": " which",
+           "logprob": -2.264974000354414e-06,
+           "bytes": [
+            32,
+            119,
+            104,
+            105,
+            99,
+            104
+           ]
+          }
+         ]
+        }
+       ],
+       "refusal": null
+      }
+     }
+    ],
+    "usage": null,
+    "system_fingerprint": "f44352906cd8",
+    "service_tier": null
+   },
+   {
+    "id": "chatcmpl-ef981916973940e48ac2af60",
+    "object": "chat.completion.chunk",
+    "created": 1795669314,
+    "model": "qwen2.5-7b-instruct",
+    "choices": [
+     {
+      "index": 0,
+      "delta": {
+       "role": null,
+       "content": " has",
+       "refusal": null,
+       "tool_calls": null,
+       "function_call": null
+      },
+      "finish_reason": null,
+      "logprobs": {
+       "content": [
+        {
+         "token": " has",
+         "logprob": -0.14406956732273102,
+         "bytes": [
+          32,
+          104,
+          97,
+          115
+         ],
+         "top_logprobs": [
+          {
+           "token": " has",
+           "logprob": -0.14406956732273102,
+           "bytes": [
+            32,
+            104,
+            97,
+            115
+           ]
+          }
+         ]
+        }
+       ],
+       "refusal": null
+      }
+     }
+    ],
+    "usage": null,
+    "system_fingerprint": "f44352906cd8",
+    "service_tier": null
+   },
+   {
+    "id": "chatcmpl-ef981916973940e48ac2af60",
+    "object": "chat.completion.chunk",
+    "created": 1795669314,
+    "model": "qwen2.5-7b-instruct",
+    "choices": [
+     {
+      "index": 0,
+      "delta": {
+       "role": null,
+       "content": " a",
+       "refusal": null,
+       "tool_calls": null,
+       "function_call": null
+      },
+      "finish_reason": null,
+      "logprobs": {
+       "content": [
+        {
+         "token": " a",
+         "logprob": -0.00020668754586949944,
+         "bytes": [
+          32,
+          97
+         ],
+         "top_logprobs": [
+          {
+           "token": " a",
+           "logprob": -0.00020668754586949944,
+           "bytes": [
+            32,
+            97
+           ]
+          }
+         ]
+        }
+       ],
+       "refusal": null
+      }
+     }
+    ],
+    "usage": null,
+    "system_fingerprint": "f44352906cd8",
+    "service_tier": null
+   },
+   {
+    "id": "chatcmpl-ef981916973940e48ac2af60",
+    "object": "chat.completion.chunk",
+    "created": 1795669314,
+    "model": "qwen2.5-7b-instruct",
+    "choices": [
+     {
+      "index": 0,
+      "delta": {
+       "role": null,
+       "content": " different",
+       "refusal": null,
+       "tool_calls": null,
+       "function_call": null
+      },
+      "finish_reason": null,
+      "logprobs": {
+       "content": [
+        {
+         "token": " different",
+         "logprob": -0.0006831934442743659,
+         "bytes": [
+          32,
+          100,
+          105,
+          102,
+          102,
+          101,
+          114,
+          101,
+          110,
+          116
+         ],
+         "top_logprobs": [
+          {
+           "token": " different",
+           "logprob": -0.0006831934442743659,
+           "bytes": [
+            32,
+            100,
+            105,
+            102,
+            102,
+            101,
+            114,
+            101,
+            110,
+            116
+           ]
+          }
+         ]
+        }
+       ],
+       "refusal": null
+      }
+     }
+    ],
+    "usage": null,
+    "system_fingerprint": "f44352906cd8",
+    "service_tier": null
+   },
+   {
+    "id": "chatcmpl-ef981916973940e48ac2af60",
+    "object": "chat.completion.chunk",
+    "created": 1795669314,
+    "model": "qwen2.5-7b-instruct",
+    "choices": [
+     {
+      "index": 0,
+      "delta": {
+       "role": null,
+       "content": " wavelength",
+       "refusal": null,
+       "tool_calls": null,
+       "function_call": null
+      },
+      "finish_reason": null,
+      "logprobs": {
+       "content": [
+        {
+         "token": " wavelength",
+         "logprob": -5.447716102935374e-05,
+         "bytes": [
+          32,
+          119,
+          97,
+          118,
+          101,
+          108,
+          101,
+          110,
+          103,
+          116,
+          104
+         ],
+         "top_logprobs": [
+          {
+           "token": " wavelength",
+           "logprob": -5.447716102935374e-05,
+           "bytes": [
+            32,
+            119,
+            97,
+            118,
+            101,
+            108,
+            101,
+            110,
+            103,
+            116,
+            104
+           ]
+          }
+         ]
+        }
+       ],
+       "refusal": null
+      }
+     }
+    ],
+    "usage": null,
+    "system_fingerprint": "f44352906cd8",
+    "service_tier": null
+   },
+   {
+    "id": "chatcmpl-ef981916973940e48ac2af60",
+    "object": "chat.completion.chunk",
+    "created": 1795669314,
+    "model": "qwen2.5-7b-instruct",
+    "choices": [
+     {
+      "index": 0,
+      "delta": {
+       "role": null,
+       "content": ".",
+       "refusal": null,
+       "tool_calls": null,
+       "function_call": null
+      },
+      "finish_reason": null,
+      "logprobs": {
+       "content": [
+        {
+         "token": ".",
+         "logprob": -0.017176207154989243,
+         "bytes": [
+          46
+         ],
+         "top_logprobs": [
+          {
+           "token": ".",
+           "logprob": -0.017176207154989243,
+           "bytes": [
+            46
+           ]
+          }
+         ]
+        }
+       ],
+       "refusal": null
+      }
+     }
+    ],
+    "usage": null,
+    "system_fingerprint": "f44352906cd8",
+    "service_tier": null
+   },
+   {
+    "id": "chatcmpl-ef981916973940e48ac2af60",
+    "object": "chat.completion.chunk",
+    "created": 1795669314,
+    "model": "qwen2.5-7b-instruct",
+    "choices": [
+     {
+      "index": 0,
+      "delta": {
+       "role": null,
+       "content": " Blue",
+       "refusal": null,
+       "tool_calls": null,
+       "function_call": null
+      },
+      "finish_reason": null,
+      "logprobs": {
+       "content": [
+        {
+         "token": " Blue",
+         "logprob": -0.401224285364151,
+         "bytes": [
+          32,
+          66,
+          108,
+          117,
+          101
+         ],
+         "top_logprobs": [
+          {
+           "token": " Blue",
+           "logprob": -0.401224285364151,
+           "bytes": [
+            32,
+            66,
+            108,
+            117,
+            101
+           ]
+          }
+         ]
+        }
+       ],
+       "refusal": null
+      }
+     }
+    ],
+    "usage": null,
+    "system_fingerprint": "f44352906cd8",
+    "service_tier": null
+   },
+   {
+    "id": "chatcmpl-ef981916973940e48ac2af60",
+    "object": "chat.completion.chunk",
+    "created": 1795669314,
+    "model": "qwen2.5-7b-instruct",
+    "choices": [
+     {
+      "index": 0,
+      "delta": {
+       "role": null,
+       "content": " light",
+       "refusal": null,
+       "tool_calls": null,
+       "function_call": null
+      },
+      "finish_reason": null,
+      "logprobs": {
+       "content": [
+        {
+         "token": " light",
+         "logprob": -0.0004210777406115085,
+         "bytes": [
+          32,
+          108,
+          105,
+          103,
+          104,
+          116
+         ],
+         "top_logprobs": [
+          {
+           "token": " light",
+           "logprob": -0.0004210777406115085,
+           "bytes": [
+            32,
+            108,
+            105,
+            103,
+            104,
+            116
+           ]
+          }
+         ]
+        }
+       ],
+       "refusal": null
+      }
+     }
+    ],
+    "usage": null,
+    "system_fingerprint": "f44352906cd8",
+    "service_tier": null
+   },
+   {
+    "id": "chatcmpl-ef981916973940e48ac2af60",
+    "object": "chat.completion.chunk",
+    "created": 1795669314,
+    "model": "qwen2.5-7b-instruct",
+    "choices": [
+     {
+      "index": 0,
+      "delta": {
+       "role": null,
+       "content": ",",
+       "refusal": null,
+       "tool_calls": null,
+       "function_call": null
+      },
+      "finish_reason": null,
+      "logprobs": {
+       "content": [
+        {
+         "token": ",",
+         "logprob": -0.8446704149246216,
+         "bytes": [
+          44
+         ],
+         "top_logprobs": [
+          {
+           "token": ",",
+           "logprob": -0.8446704149246216,
+           "bytes": [
+            44
+           ]
+          }
+         ]
+        }
+       ],
+       "refusal": null
+      }
+     }
+    ],
+    "usage": null,
+    "system_fingerprint": "f44352906cd8",
+    "service_tier": null
+   },
+   {
+    "id": "chatcmpl-ef981916973940e48ac2af60",
+    "object": "chat.completion.chunk",
+    "created": 1795669314,
+    "model": "qwen2.5-7b-instruct",
+    "choices": [
+     {
+      "index": 0,
+      "delta": {
+       "role": null,
+       "content": " with",
+       "refusal": null,
+       "tool_calls": null,
+       "function_call": null
+      },
+      "finish_reason": null,
+      "logprobs": {
+       "content": [
+        {
+         "token": " with",
+         "logprob": -0.6481493711471558,
+         "bytes": [
+          32,
+          119,
+          105,
+          116,
+          104
+         ],
+         "top_logprobs": [
+          {
+           "token": " with",
+           "logprob": -0.6481493711471558,
+           "bytes": [
+            32,
+            119,
+            105,
+            116,
+            104
+           ]
+          }
+         ]
+        }
+       ],
+       "refusal": null
+      }
+     }
+    ],
+    "usage": null,
+    "system_fingerprint": "f44352906cd8",
+    "service_tier": null
+   },
+   {
+    "id": "chatcmpl-ef981916973940e48ac2af60",
+    "object": "chat.completion.chunk",
+    "created": 1795669314,
+    "model": "qwen2.5-7b-instruct",
+    "choices": [
+     {
+      "index": 0,
+      "delta": {
+       "role": null,
+       "content": " its",
+       "refusal": null,
+       "tool_calls": null,
+       "function_call": null
+      },
+      "finish_reason": null,
+      "logprobs": {
+       "content": [
+        {
+         "token": " its",
+         "logprob": -0.0016025570221245289,
+         "bytes": [
+          32,
+          105,
+          116,
+          115
+         ],
+         "top_logprobs": [
+          {
+           "token": " its",
+           "logprob": -0.0016025570221245289,
+           "bytes": [
+            32,
+            105,
+            116,
+            115
+           ]
+          }
+         ]
+        }
+       ],
+       "refusal": null
+      }
+     }
+    ],
+    "usage": null,
+    "system_fingerprint": "f44352906cd8",
+    "service_tier": null
+   },
+   {
+    "id": "chatcmpl-ef981916973940e48ac2af60",
+    "object": "chat.completion.chunk",
+    "created": 1795669314,
+    "model": "qwen2.5-7b-instruct",
+    "choices": [
+     {
+      "index": 0,
+      "delta": {
+       "role": null,
+       "content": " shorter",
+       "refusal": null,
+       "tool_calls": null,
+       "function_call": null
+      },
+      "finish_reason": null,
+      "logprobs": {
+       "content": [
+        {
+         "token": " shorter",
+         "logprob": -0.010590777732431889,
+         "bytes": [
+          32,
+          115,
+          104,
+          111,
+          114,
+          116,
+          101,
+          114
+         ],
+         "top_logprobs": [
+          {
+           "token": " shorter",
+           "logprob": -0.010590777732431889,
+           "bytes": [
+            32,
+            115,
+            104,
+            111,
+            114,
+            116,
+            101,
+            114
+           ]
+          }
+         ]
+        }
+       ],
+       "refusal": null
+      }
+     }
+    ],
+    "usage": null,
+    "system_fingerprint": "f44352906cd8",
+    "service_tier": null
+   },
+   {
+    "id": "chatcmpl-ef981916973940e48ac2af60",
+    "object": "chat.completion.chunk",
+    "created": 1795669314,
+    "model": "qwen2.5-7b-instruct",
+    "choices": [
+     {
+      "index": 0,
+      "delta": {
+       "role": null,
+       "content": " wavelength",
+       "refusal": null,
+       "tool_calls": null,
+       "function_call": null
+      },
+      "finish_reason": null,
+      "logprobs": {
+       "content": [
+        {
+         "token": " wavelength",
+         "logprob": -0.4258522093296051,
+         "bytes": [
+          32,
+          119,
+          97,
+          118,
+          101,
+          108,
+          101,
+          110,
+          103,
+          116,
+          104
+         ],
+         "top_logprobs": [
+          {
+           "token": " wavelength",
+           "logprob": -0.4258522093296051,
+           "bytes": [
+            32,
+            119,
+            97,
+            118,
+            101,
+            108,
+            101,
+            110,
+            103,
+            116,
+            104
+           ]
+          }
+         ]
+        }
+       ],
+       "refusal": null
+      }
+     }
+    ],
+    "usage": null,
+    "system_fingerprint": "f44352906cd8",
+    "service_tier": null
+   },
+   {
+    "id": "chatcmpl-ef981916973940e48ac2af60",
+    "object": "chat.completion.chunk",
+    "created": 1795669314,
+    "model": "qwen2.5-7b-instruct",
+    "choices": [
+     {
+      "index": 0,
+      "delta": {
+       "role": null,
+       "content": ",",
+       "refusal": null,
+       "tool_calls": null,
+       "function_call": null
+      },
+      "finish_reason": null,
+      "logprobs": {
+       "content": [
+        {
+         "token": ",",
+         "logprob": -1.3708974620385561e-05,
+         "bytes": [
+          44
+         ],
+         "top_logprobs": [
+          {
+           "token": ",",
+           "logprob": -1.3708974620385561e-05,
+           "bytes": [
+            44
+           ]
+          }
+         ]
+        }
+       ],
+       "refusal": null
+      }
+     }
+    ],
+    "usage": null,
+    "system_fingerprint": "f44352906cd8",
+    "service_tier": null
+   },
+   {
+    "id": "chatcmpl-ef981916973940e48ac2af60",
+    "object": "chat.completion.chunk",
+    "created": 1795669314,
+    "model": "qwen2.5-7b-instruct",
+    "choices": [
+     {
+      "index": 0,
+      "delta": {
+       "role": null,
+       "content": " is",
+       "refusal": null,
+       "tool_calls": null,
+       "function_call": null
+      },
+      "finish_reason": null,
+      "logprobs": {
+       "content": [
+        {
+         "token": " is",
+         "logprob": -0.7243005633354187,
+         "bytes": [
+          32,
+          105,
+          115
+         ],
+         "top_logprobs": [
+          {
+           "token": " is",
+           "logprob": -0.7243005633354187,
+           "bytes": [
+            32,
+            105,
+            115
+           ]
+          }
+         ]
+        }
+       ],
+       "refusal": null
+      }
+     }
+    ],
+    "usage": null,
+    "system_fingerprint": "f44352906cd8",
+    "service_tier": null
+   },
+   {
+    "id": "chatcmpl-ef981916973940e48ac2af60",
+    "object": "chat.completion.chunk",
+    "created": 1795669314,
+    "model": "qwen2.5-7b-instruct",
+    "choices": [
+     {
+      "index": 0,
+      "delta": {
+       "role": null,
+       "content": " scattered",
+       "refusal": null,
+       "tool_calls": null,
+       "function_call": null
+      },
+      "finish_reason": null,
+      "logprobs": {
+       "content": [
+        {
+         "token": " scattered",
+         "logprob": -0.0050959461368620396,
+         "bytes": [
+          32,
+          115,
+          99,
+          97,
+          116,
+          116,
+          101,
+          114,
+          101,
+          100
+         ],
+         "top_logprobs": [
+          {
+           "token": " scattered",
+           "logprob": -0.0050959461368620396,
+           "bytes": [
+            32,
+            115,
+            99,
+            97,
+            116,
+            116,
+            101,
+            114,
+            101,
+            100
+           ]
+          }
+         ]
+        }
+       ],
+       "refusal": null
+      }
+     }
+    ],
+    "usage": null,
+    "system_fingerprint": "f44352906cd8",
+    "service_tier": null
+   },
+   {
+    "id": "chatcmpl-ef981916973940e48ac2af60",
+    "object": "chat.completion.chunk",
+    "created": 1795669314,
+    "model": "qwen2.5-7b-instruct",
+    "choices": [
+     {
+      "index": 0,
+      "delta": {
+       "role": null,
+       "content": " more",
+       "refusal": null,
+       "tool_calls": null,
+       "function_call": null
+      },
+      "finish_reason": "length",
+      "logprobs": {
+       "content": [
+        {
+         "token": " more",
+         "logprob": -0.250154584646225,
+         "bytes": [
+          32,
+          109,
+          111,
+          114,
+          101
+         ],
+         "top_logprobs": [
+          {
+           "token": " more",
+           "logprob": -0.250154584646225,
+           "bytes": [
+            32,
+            109,
+            111,
+            114,
+            101
+           ]
+          }
+         ]
+        }
+       ],
+       "refusal": null
+      }
+     }
+    ],
+    "usage": null,
+    "system_fingerprint": "f44352906cd8",
+    "service_tier": null
+   },
+   {
+    "id": "chatcmpl-ef981916973940e48ac2af60",
+    "object": "chat.completion.chunk",
+    "created": 1795669314,
+    "model": "qwen2.5-7b-instruct",
+    "choices": [],
+    "usage": {
+     "prompt_tokens": 30,
+     "completion_tokens": 64,
+     "total_tokens": 94,
+     "prompt_tokens_details": null
+    },
+    "system_fingerprint": "f44352906cd8",
+    "service_tier": null
+   }
+  ]
+ },
+ {
+  "name": "turn_0",
+  "messages": [
+   {
+    "role": "system",
+    "content": "You are a concise assistant."
+   },
+   {
+    "role": "user",
+    "content": "My name is Ada and I like tea. Reply in one sentence."
+   }
+  ],
+  "body": {
+   "temperature": 0,
+   "max_tokens": 32,
+   "logprobs": true,
+   "top_logprobs": 1
+  },
+  "stream": false,
+  "resp": {
+   "id": "chatcmpl-52021e0637214246a5c8684d",
+   "object": "chat.completion",
+   "created": 1795669331,
+   "model": "qwen2.5-7b-instruct",
+   "choices": [
+    {
+     "index": 0,
+     "message": {
+      "role": "assistant",
+      "content": "Nice to meet you, Ada, and enjoy your tea!",
+      "refusal": null,
+      "tool_calls": null,
+      "function_call": null
+     },
+     "finish_reason": "stop",
+     "logprobs": {
+      "content": [
+       {
+        "token": "Nice",
+        "logprob": -0.4859890937805176,
+        "bytes": [
+         78,
+         105,
+         99,
+         101
+        ],
+        "top_logprobs": [
+         {
+          "token": "Nice",
+          "logprob": -0.4859890937805176,
+          "bytes": [
+           78,
+           105,
+           99,
+           101
+          ]
+         }
+        ]
+       },
+       {
+        "token": " to",
+        "logprob": 0.0,
+        "bytes": [
+         32,
+         116,
+         111
+        ],
+        "top_logprobs": [
+         {
+          "token": " to",
+          "logprob": 0.0,
+          "bytes": [
+           32,
+           116,
+           111
+          ]
+         }
+        ]
+       },
+       {
+        "token": " meet",
+        "logprob": -2.6702524337451905e-05,
+        "bytes": [
+         32,
+         109,
+         101,
+         101,
+         116
+        ],
+        "top_logprobs": [
+         {
+          "token": " meet",
+          "logprob": -2.6702524337451905e-05,
+          "bytes": [
+           32,
+           109,
+           101,
+           101,
+           116
+          ]
+         }
+        ]
+       },
+       {
+        "token": " you",
+        "logprob": -1.1920928244535389e-07,
+        "bytes": [
+         32,
+         121,
+         111,
+         117
+        ],
+        "top_logprobs": [
+         {
+          "token": " you",
+          "logprob": -1.1920928244535389e-07,
+          "bytes": [
+           32,
+           121,
+           111,
+           117
+          ]
+         }
+        ]
+       },
+       {
+        "token": ",",
+        "logprob": -7.152555099310121e-07,
+        "bytes": [
+         44
+        ],
+        "top_logprobs": [
+         {
+          "token": ",",
+          "logprob": -7.152555099310121e-07,
+          "bytes": [
+           44
+          ]
+         }
+        ]
+       },
+       {
+        "token": " Ada",
+        "logprob": -3.540453326422721e-05,
+        "bytes": [
+         32,
+         65,
+         100,
+         97
+        ],
+        "top_logprobs": [
+         {
+          "token": " Ada",
+          "logprob": -3.540453326422721e-05,
+          "bytes": [
+           32,
+           65,
+           100,
+           97
+          ]
+         }
+        ]
+       },
+       {
+        "token": ",",
+        "logprob": -0.1256200522184372,
+        "bytes": [
+         44
+        ],
+        "top_logprobs": [
+         {
+          "token": ",",
+          "logprob": -0.1256200522184372,
+          "bytes": [
+           44
+          ]
+         }
+        ]
+       },
+       {
+        "token": " and",
+        "logprob": -0.007909170351922512,
+        "bytes": [
+         32,
+         97,
+         110,
+         100
+        ],
+        "top_logprobs": [
+         {
+          "token": " and",
+          "logprob": -0.007909170351922512,
+          "bytes": [
+           32,
+           97,
+           110,
+           100
+          ]
+         }
+        ]
+       },
+       {
+        "token": " enjoy",
+        "logprob": -0.2920975387096405,
+        "bytes": [
+         32,
+         101,
+         110,
+         106,
+         111,
+         121
+        ],
+        "top_logprobs": [
+         {
+          "token": " enjoy",
+          "logprob": -0.2920975387096405,
+          "bytes": [
+           32,
+           101,
+           110,
+           106,
+           111,
+           121
+          ]
+         }
+        ]
+       },
+       {
+        "token": " your",
+        "logprob": -1.0371154530730564e-05,
+        "bytes": [
+         32,
+         121,
+         111,
+         117,
+         114
+        ],
+        "top_logprobs": [
+         {
+          "token": " your",
+          "logprob": -1.0371154530730564e-05,
+          "bytes": [
+           32,
+           121,
+           111,
+           117,
+           114
+          ]
+         }
+        ]
+       },
+       {
+        "token": " tea",
+        "logprob": -0.0002320735511602834,
+        "bytes": [
+         32,
+         116,
+         101,
+         97
+        ],
+        "top_logprobs": [
+         {
+          "token": " tea",
+          "logprob": -0.0002320735511602834,
+          "bytes": [
+           32,
+           116,
+           101,
+           97
+          ]
+         }
+        ]
+       },
+       {
+        "token": "!",
+        "logprob": -0.0029604677110910416,
+        "bytes": [
+         33
+        ],
+        "top_logprobs": [
+         {
+          "token": "!",
+          "logprob": -0.0029604677110910416,
+          "bytes": [
+           33
+          ]
+         }
+        ]
+       }
+      ],
+      "refusal": null
+     }
+    }
+   ],
+   "usage": {
+    "prompt_tokens": 33,
+    "completion_tokens": 13,
+    "total_tokens": 46,
+    "prompt_tokens_details": null
+   },
+   "system_fingerprint": "f44352906cd8",
+   "service_tier": null
+  }
+ },
+ {
+  "name": "turn_1",
+  "messages": [
+   {
+    "role": "system",
+    "content": "You are a concise assistant."
+   },
+   {
+    "role": "user",
+    "content": "My name is Ada and I like tea. Reply in one sentence."
+   },
+   {
+    "role": "assistant",
+    "content": "Nice to meet you, Ada, and enjoy your tea!"
+   },
+   {
+    "role": "user",
+    "content": "What is my name, and what do I like? Answer briefly."
+   }
+  ],
+  "body": {
+   "temperature": 0,
+   "max_tokens": 32,
+   "logprobs": true,
+   "top_logprobs": 1
+  },
+  "stream": false,
+  "resp": {
+   "id": "chatcmpl-5d9c06b54ecb47a5a88603aa",
+   "object": "chat.completion",
+   "created": 1795669338,
+   "model": "qwen2.5-7b-instruct",
+   "choices": [
+    {
+     "index": 0,
+     "message": {
+      "role": "assistant",
+      "content": "Your name is Ada, and you like tea.",
+      "refusal": null,
+      "tool_calls": null,
+      "function_call": null
+     },
+     "finish_reason": "stop",
+     "logprobs": {
+      "content": [
+       {
+        "token": "Your",
+        "logprob": -0.0014868644066154957,
+        "bytes": [
+         89,
+         111,
+         117,
+         114
+        ],
+        "top_logprobs": [
+         {
+          "token": "Your",
+          "logprob": -0.0014868644066154957,
+          "bytes": [
+           89,
+           111,
+           117,
+           114
+          ]
+         }
+        ]
+       },
+       {
+        "token": " name",
+        "logprob": -1.1920928244535389e-07,
+        "bytes": [
+         32,
+         110,
+         97,
+         109,
+         101
+        ],
+        "top_logprobs": [
+         {
+          "token": " name",
+          "logprob": -1.1920928244535389e-07,
+          "bytes": [
+           32,
+           110,
+           97,
+           109,
+           101
+          ]
+         }
+        ]
+       },
+       {
+        "token": " is",
+        "logprob": 0.0,
+        "bytes": [
+         32,
+         105,
+         115
+        ],
+        "top_logprobs": [
+         {
+          "token": " is",
+          "logprob": 0.0,
+          "bytes": [
+           32,
+           105,
+           115
+          ]
+         }
+        ]
+       },
+       {
+        "token": " Ada",
+        "logprob": -6.97350042173639e-05,
+        "bytes": [
+         32,
+         65,
+         100,
+         97
+        ],
+        "top_logprobs": [
+         {
+          "token": " Ada",
+          "logprob": -6.97350042173639e-05,
+          "bytes": [
+           32,
+           65,
+           100,
+           97
+          ]
+         }
+        ]
+       },
+       {
+        "token": ",",
+        "logprob": -0.007056315895169973,
+        "bytes": [
+         44
+        ],
+        "top_logprobs": [
+         {
+          "token": ",",
+          "logprob": -0.007056315895169973,
+          "bytes": [
+           44
+          ]
+         }
+        ]
+       },
+       {
+        "token": " and",
+        "logprob": 0.0,
+        "bytes": [
+         32,
+         97,
+         110,
+         100
+        ],
+        "top_logprobs": [
+         {
+          "token": " and",
+          "logprob": 0.0,
+          "bytes": [
+           32,
+           97,
+           110,
+           100
+          ]
+         }
+        ]
+       },
+       {
+        "token": " you",
+        "logprob": 0.0,
+        "bytes": [
+         32,
+         121,
+         111,
+         117
+        ],
+        "top_logprobs": [
+         {
+          "token": " you",
+          "logprob": 0.0,
+          "bytes": [
+           32,
+           121,
+           111,
+           117
+          ]
+         }
+        ]
+       },
+       {
+        "token": " like",
+        "logprob": -4.291525328881107e-06,
+        "bytes": [
+         32,
+         108,
+         105,
+         107,
+         101
+        ],
+        "top_logprobs": [
+         {
+          "token": " like",
+          "logprob": -4.291525328881107e-06,
+          "bytes": [
+           32,
+           108,
+           105,
+           107,
+           101
+          ]
+         }
+        ]
+       },
+       {
+        "token": " tea",
+        "logprob": -1.823885577323381e-05,
+        "bytes": [
+         32,
+         116,
+         101,
+         97
+        ],
+        "top_logprobs": [
+         {
+          "token": " tea",
+          "logprob": -1.823885577323381e-05,
+          "bytes": [
+           32,
+           116,
+           101,
+           97
+          ]
+         }
+        ]
+       },
+       {
+        "token": ".",
+        "logprob": 0.0,
+        "bytes": [
+         46
+        ],
+        "top_logprobs": [
+         {
+          "token": ".",
+          "logprob": 0.0,
+          "bytes": [
+           46
+          ]
+         }
+        ]
+       }
+      ],
+      "refusal": null
+     }
+    }
+   ],
+   "usage": {
+    "prompt_tokens": 69,
+    "completion_tokens": 11,
+    "total_tokens": 80,
+    "prompt_tokens_details": null
+   },
+   "system_fingerprint": "f44352906cd8",
+   "service_tier": null
+  }
+ },
+ {
+  "name": "turn_2",
+  "messages": [
+   {
+    "role": "system",
+    "content": "You are a concise assistant."
+   },
+   {
+    "role": "user",
+    "content": "My name is Ada and I like tea. Reply in one sentence."
+   },
+   {
+    "role": "assistant",
+    "content": "Nice to meet you, Ada, and enjoy your tea!"
+   },
+   {
+    "role": "user",
+    "content": "What is my name, and what do I like? Answer briefly."
+   },
+   {
+    "role": "assistant",
+    "content": "Your name is Ada, and you like tea."
+   },
+   {
+    "role": "user",
+    "content": "Suggest one snack that goes with it, in five words or fewer."
+   }
+  ],
+  "body": {
+   "temperature": 0,
+   "max_tokens": 32,
+   "logprobs": true,
+   "top_logprobs": 1
+  },
+  "stream": false,
+  "resp": {
+   "id": "chatcmpl-14e361b1fa624d8bbf36213c",
+   "object": "chat.completion",
+   "created": 1795669347,
+   "model": "qwen2.5-7b-instruct",
+   "choices": [
+    {
+     "index": 0,
+     "message": {
+      "role": "assistant",
+      "content": "Crackers with cheese and tea.",
+      "refusal": null,
+      "tool_calls": null,
+      "function_call": null
+     },
+     "finish_reason": "stop",
+     "logprobs": {
+      "content": [
+       {
+        "token": "Cr",
+        "logprob": -0.7359758019447327,
+        "bytes": [
+         67,
+         114
+        ],
+        "top_logprobs": [
+         {
+          "token": "Cr",
+          "logprob": -0.7359758019447327,
+          "bytes": [
+           67,
+           114
+          ]
+         }
+        ]
+       },
+       {
+        "token": "ackers",
+        "logprob": -0.11516569554805756,
+        "bytes": [
+         97,
+         99,
+         107,
+         101,
+         114,
+         115
+        ],
+        "top_logprobs": [
+         {
+          "token": "ackers",
+          "logprob": -0.11516569554805756,
+          "bytes": [
+           97,
+           99,
+           107,
+           101,
+           114,
+           115
+          ]
+         }
+        ]
+       },
+       {
+        "token": " with",
+        "logprob": -0.3400140404701233,
+        "bytes": [
+         32,
+         119,
+         105,
+         116,
+         104
+        ],
+        "top_logprobs": [
+         {
+          "token": " with",
+          "logprob": -0.3400140404701233,
+          "bytes": [
+           32,
+           119,
+           105,
+           116,
+           104
+          ]
+         }
+        ]
+       },
+       {
+        "token": " cheese",
+        "logprob": -0.1460179090499878,
+        "bytes": [
+         32,
+         99,
+         104,
+         101,
+         101,
+         115,
+         101
+        ],
+        "top_logprobs": [
+         {
+          "token": " cheese",
+          "logprob": -0.1460179090499878,
+          "bytes": [
+           32,
+           99,
+           104,
+           101,
+           101,
+           115,
+           101
+          ]
+         }
+        ]
+       },
+       {
+        "token": " and",
+        "logprob": -0.016559772193431854,
+        "bytes": [
+         32,
+         97,
+         110,
+         100
+        ],
+        "top_logprobs": [
+         {
+          "token": " and",
+          "logprob": -0.016559772193431854,
+          "bytes": [
+           32,
+           97,
+           110,
+           100
+          ]
+         }
+        ]
+       },
+       {
+        "token": " tea",
+        "logprob": -0.031838394701480865,
+        "bytes": [
+         32,
+         116,
+         101,
+         97
+        ],
+        "top_logprobs": [
+         {
+          "token": " tea",
+          "logprob": -0.031838394701480865,
+          "bytes": [
+           32,
+           116,
+           101,
+           97
+          ]
+         }
+        ]
+       },
+       {
+        "token": ".",
+        "logprob": -2.3841855067985307e-07,
+        "bytes": [
+         46
+        ],
+        "top_logprobs": [
+         {
+          "token": ".",
+          "logprob": -2.3841855067985307e-07,
+          "bytes": [
+           46
+          ]
+         }
+        ]
+       }
+      ],
+      "refusal": null
+     }
+    }
+   ],
+   "usage": {
+    "prompt_tokens": 104,
+    "completion_tokens": 8,
+    "total_tokens": 112,
+    "prompt_tokens_details": null
+   },
+   "system_fingerprint": "f44352906cd8",
+   "service_tier": null
+  }
+ }
+]
