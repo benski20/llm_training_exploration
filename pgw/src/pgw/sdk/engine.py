@@ -101,6 +101,10 @@ NATIVE_ENV: dict[str, str] = {
     # own generator: the same tokens, logprobs and generator states). tests/sdk/test_concurrency_cpu.py
     "PGW_SYNC_MULTI": "1",
     "PGW_TRIP_NATIVE_MULTI": "1",
+    # a decode step of several answers runs its decoder layers in the native decode driver (one native call per
+    # stretch of trips, one lane multi call per trip; same requests, rows, bytes, checks and outputs):
+    # tests/engine/test_decode_native_multi.py, tests/sdk/test_concurrency_cpu.py
+    "PGW_DECODE_NATIVE_MULTI": "1",
     "PGW_SAMPLE_THREADS": "auto",
 }
 

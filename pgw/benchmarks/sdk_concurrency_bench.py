@@ -161,7 +161,7 @@ def _client(args: argparse.Namespace, wid: int) -> None:
         nd0 = list(nd.totals) if nd is not None else None
         from pgw.maskstore import store as _mstore
 
-        lc0 = dict(_mstore.LEASE_COUNTS)
+        lc0 = dict(getattr(_mstore, "LEASE_COUNTS", {}))
         cpu0, wall0, epoch0 = _thread_cpu(), time.perf_counter(), time.time()
         res: list[dict[str, Any]] = []
         errs: list[str] = []
@@ -198,7 +198,7 @@ def _client(args: argparse.Namespace, wid: int) -> None:
             "lane_fallbacks": (ls.fallbacks - l0[1]) if ls is not None else 0,
             "lane_fallback_reasons": dict(ls.fallback_reasons) if ls is not None else {},
             # the generator's steps and the native decode driver's calls and trips (one or several answers)
-            "leases": {k: v - lc0.get(k, 0) for k, v in _mstore.LEASE_COUNTS.items()},
+            "leases": {k: v - lc0.get(k, 0) for k, v in getattr(_mstore, "LEASE_COUNTS", {}).items()},
             "sched": {k: sc1.get(k, 0) - sc0.get(k, 0) for k in sc1 if sc1.get(k, 0) != sc0.get(k, 0)},
             "native_decode": ([b - a for a, b in zip(nd0 or [0] * len(nd1), nd1, strict=True)]
                               if nd1 is not None else None),

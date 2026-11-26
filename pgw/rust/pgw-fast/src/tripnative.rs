@@ -1339,7 +1339,7 @@ impl<T> RawMut<T> {
 }
 
 /// Runs `f(i)` for `i in 0..n` on the process pool when `parallel`, else in order on this thread.
-fn run_items(n: usize, parallel: bool, f: &(dyn Fn(usize) + Sync)) -> bool {
+pub(crate) fn run_items(n: usize, parallel: bool, f: &(dyn Fn(usize) + Sync)) -> bool {
     if parallel && n > 1 {
         crate::prepare::pool::global().run(n, f)
     } else {

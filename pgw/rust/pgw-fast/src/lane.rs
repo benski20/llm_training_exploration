@@ -1445,6 +1445,29 @@ mod chan {
         pub(crate) fn max_rows_raw(&self) -> u16 {
             self.max_rows
         }
+
+        /// One lane-format-2 `multi` call for crate callers (the native decode driver's several-answer
+        /// passes, `decode.rs`): [`Channel::trip_multi`] under the channel's lock. Call without the GIL.
+        /// Any error closes the channel (as does a closing status).
+        #[allow(clippy::too_many_arguments)]
+        pub(crate) fn trip_multi_raw(
+            &self,
+            ring: u16,
+            items: &[(u32, u16)],
+            request_id: [u8; 16],
+            deadline_ms: u32,
+            bodies: &[&[u8]],
+            out: &mut [u8],
+            timeout: Duration,
+        ) -> Result<(u8, u32), LaneError> {
+            self.inner.lock().unwrap_or_else(|p| p.into_inner()).trip_multi(ring, items, request_id, deadline_ms,
+                                                                             bodies, out, timeout)
+        }
+
+        /// True when the connection runs over the shm segment (no multi calls there).
+        pub(crate) fn is_shm_raw(&self) -> bool {
+            self.inner.lock().unwrap_or_else(|p| p.into_inner()).transport() == "shm"
+        }
     }
 
     #[pymethods]

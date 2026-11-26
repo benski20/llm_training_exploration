@@ -1176,11 +1176,15 @@ class LaneComputeClient:
         return lane, ch, gen, int(ring_ix), timeout
 
     def driver_release(self, lane: Any, ch: Any, gen: int, *, trips: int = 0, sent: int = 0, received: int = 0,
-                       last_rtt_s: float | None = None, status: int = 0, error: str | None = None) -> None:
+                       last_rtt_s: float | None = None, status: int = 0, error: str | None = None,
+                       multi_items: int = 0) -> None:
         """Give a :meth:`driver_channel` channel back with the driver's lane statistics; ``status``/``error``:
         the trip the lane did not serve (a refusal status, or a channel error that closed the channel), counted
         and acted on exactly as :meth:`trip_ticket` does."""
         self.lane_stats.trips += int(trips)
+        if multi_items:  # the native decode driver's several-answer passes (lane multi calls)
+            self.lane_stats.multi_trips += int(trips)
+            self.lane_stats.multi_items += int(multi_items)
         self.lane_stats.bytes_sent += int(sent)
         self.lane_stats.bytes_received += int(received)
         if last_rtt_s is not None and (trips or status or error):

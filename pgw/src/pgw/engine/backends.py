@@ -1958,8 +1958,8 @@ class MaskedBackend(LinearBackend):
             kw: dict[str, Any] = {}
             if self.prime_check:  # prime-field extents are leased only to a gateway that runs their check
                 kw["prime_ok"] = True
-            if ahead:
-                kw["tag"] = (sound, bool(self.prime_check))
+            if ahead:  # the policy a lease prepared ahead was verified under (attached only under the same)
+                kw["tag"] = (float(self.min_soundness_bits), bool(self.prime_check))
             lease = res.trip_lease(lid, t, verify, float(meta.wnorm or 0.0), **kw)
             if lease is None:
                 return None
