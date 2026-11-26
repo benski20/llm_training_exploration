@@ -371,3 +371,48 @@ def test_sampled_alarm_stops_the_next_payload(qwen_pack: InMemoryPack, store_tem
     # the same trip carried the alarm and the same payloads had left when it stopped traffic (with
     # noise_async_sampled the statistics run beside the sampled trip's own send and are joined before the next)
     assert got[0] == got[1]
+
+
+def test_sampled_trips_stay_on_the_native_lane(qwen_pack: InMemoryPack, store_template: Path,  # noqa: F811
+                                               monkeypatch: pytest.MonkeyPatch,
+                                               ref_native: dict[str, torch.Tensor]) -> None:
+    """Inline statistics with the sampled trip held in the driver (``DECODE_HOLD``, default on): the driver
+    prepares the sampled trip and keeps it, its statistics run in Python before anything of it leaves, and the
+    next call sends the held payload on the native lane (no hand-back, no Python send or finish). Same bytes in
+    the same order, same request ids, same logits, same noise statistics as the hand-back path
+    (``PGW_DECODE_NATIVE_HOLD=0``) and as without the driver."""
+    from pgw.wire.lane import native_channel_class
+
+    if native_channel_class() is None or not getattr(native.fast, "DECODE_HOLD", 0):
+        pytest.skip("pgw_fast without the native lane channel or the held trip")
+    runs = []
+    for driver, hold in ((False, "1"), (True, "0"), (True, "1")):
+        monkeypatch.setenv("PGW_DECODE_NATIVE_HOLD", hold)
+        handbacks: list[int] = []
+        real = dn.NativeDecode._handback
+
+        def spy(self: Any, *a: Any, _real: Any = real, _n: list[int] = handbacks) -> Any:
+            _n.append(1)
+            return _real(self, *a)
+
+        monkeypatch.setattr(dn.NativeDecode, "_handback", spy)
+        with tempfile.TemporaryDirectory(prefix="pgwd") as d:
+            lane = _Lane(qwen_pack, d)
+            try:
+                out, _, stats, (_passes, snap) = _run(qwen_pack, store_template, monkeypatch, driver,
+                                                      client=lane.client)
+                payloads = lane.payloads()
+                regular = [x.numpy().tobytes() for _, x in lane.local.received]
+            finally:
+                lane.client.close()
+        monkeypatch.setattr(dn.NativeDecode, "_handback", real)
+        _same(ref_native, out)
+        assert snap["integrity_failures"] == 0
+        assert stats[1] > 0  # sampled calls happened
+        runs.append((payloads, regular, stats, len(handbacks)))
+    (p0, r0, s0, _), (p1, r1, s1, h1), (p2, r2, s2, h2) = runs
+    assert p1 == p0 and p2 == p0  # the same bytes on the lane, same order (a held trip is sent once)
+    assert r1 == r0 and r2 == r0
+    assert s1 == s0 and s2 == s0  # same noise draws and statistics
+    assert h1 > 0  # without the hold: each sampled decode trip came back to Python
+    assert h2 == 0  # with it: none did

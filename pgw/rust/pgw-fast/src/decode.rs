@@ -36,6 +36,8 @@ use std::time::{Duration, Instant};
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<DecodeDriver>()?;
     m.add_function(pyo3::wrap_pyfunction!(decode_phase_ns, m)?)?;
+    // DecodeDriver.run takes flag bit 3 (hold a prepared trip; code 8) and resumes it on the next run
+    m.add("DECODE_HOLD", 1u32)?;
     Ok(())
 }
 
@@ -64,6 +66,9 @@ fn verr(msg: impl Into<String>) -> PyErr {
 const F_CHECK: u8 = 1;
 const F_SAMPLED: u8 = 2;
 const F_DEFER: u8 = 4;
+/// Hold the trip after its prepare (with its sampled values): Python runs the noise statistics, then a
+/// later :meth:`DecodeDriver.run` from this trip sends the held payload (see [`Held`]).
+const F_HOLD: u8 = 8;
 
 /// Return codes of [`DecodeDriver::run`].
 const DONE: u8 = 0;
@@ -74,6 +79,7 @@ const DUPLICATE: u8 = 4;
 const DEFERRED_FAILED: u8 = 5;
 const NOT_READY: u8 = 6;
 const FINISH_ERROR: u8 = 7;
+const HELD: u8 = 8;
 
 struct DupCfg {
     cols: Vec<i64>,
@@ -114,10 +120,25 @@ struct Pass {
     reply: Vec<u8>,
     payload: Vec<u8>,
     keys: Vec<u64>,
+    /// A trip prepared and held (``F_HOLD``): its payload is `payload`.
+    held: Option<Held>,
+}
+
+/// A prepared trip kept in the driver between two runs (inline noise statistics): the ticket (rows taken,
+/// pads derived), its request id; the payload stays in [`Pass::payload`]. The next run from `pos` sends
+/// exactly these bytes with this id (no second prepare: one draw of rows, one request).
+struct Held {
+    pos: usize,
+    ticket: TripTicket,
+    rid: [u8; 16],
 }
 
 impl Pass {
     fn wipe(&mut self) {
+        if let Some(mut h) = self.held.take() {
+            h.ticket.wipe_all();
+            h.rid.fill(0);
+        }
         wipe(&mut self.h);
         wipe(&mut self.h2);
         wipe(&mut self.x);
@@ -159,6 +180,7 @@ enum Outcome {
     Deferred(u8, usize),
     NotReady,
     FinishErr(String),
+    Held,
 }
 
 /// The native decode driver of one model (see the module docs). Not thread-safe across passes: one
@@ -340,59 +362,80 @@ fn run_loop<T: crate::attn::Kv>(
         }
         let t0 = Instant::now();
         let nb = (tr.lease.k_bits() / 8) as usize;
-        p.payload.resize(t * n * nb, 0);
-        let sampled_now = tr.flags & F_SAMPLED != 0;
-        let (mut xh, mut xq) = if sampled_now { (vec![0i64; t * n], vec![0i64; t * n]) } else { (Vec::new(), Vec::new()) };
-        let groups = lin.dup.as_ref().map_or(0, |d| d.groups);
-        p.keys.resize(t * groups, 0);
-        let dup_in = lin.dup.as_ref().map(|d| DupIn { cols: &d.cols, shift: d.shift, mult: &d.mult, groups: d.groups, per: d.per });
-        let uw = if tr.flags & F_CHECK != 0 { tr.uw } else { None };
-        let split_p = if lin.split_p >= 2 { lin.split_p } else { 0 };
-        let got = tr.lease.prepare_core(
-            &p.x[..t * n],
-            t,
-            uw,
-            lin.threads_p,
-            split_p,
-            PrepIo { payload: &mut p.payload, xh: &mut xh, xq: &mut xq, keys: &mut p.keys },
-            dup_in.as_ref(),
-        );
-        let mut ticket = match got {
-            Ok(Some(tk)) => tk,
-            Ok(None) => return Outcome::NotReady,
-            Err(CoreErr::NonFinite) => {
-                return Outcome::Prepare("nonfinite", "non-finite activation values cannot be quantized".into())
+        let resumed = match p.held.take() {
+            Some(h) if h.pos == pos && p.payload.len() == t * n * nb => Some(h),
+            Some(mut h) => {
+                // never reached through run() (it checks the position first): fail closed
+                h.ticket.wipe_all();
+                wipe(&mut p.payload);
+                return Outcome::Prepare("invalid", "held trip out of step".into());
             }
-            Err(CoreErr::Prep(e)) => {
-                return match e {
-                    crate::prepare::PrepareError::Overflow(msg) => Outcome::Prepare("overflow", msg),
-                    crate::prepare::PrepareError::Invalid(msg) => Outcome::Prepare("invalid", msg),
+            None => None,
+        };
+        let (mut ticket, rid) = if let Some(h) = resumed {
+            (h.ticket, h.rid)
+        } else {
+            p.payload.resize(t * n * nb, 0);
+            let sampled_now = tr.flags & F_SAMPLED != 0;
+            let (mut xh, mut xq) = if sampled_now { (vec![0i64; t * n], vec![0i64; t * n]) } else { (Vec::new(), Vec::new()) };
+            let groups = lin.dup.as_ref().map_or(0, |d| d.groups);
+            p.keys.resize(t * groups, 0);
+            let dup_in = lin.dup.as_ref().map(|d| DupIn { cols: &d.cols, shift: d.shift, mult: &d.mult, groups: d.groups, per: d.per });
+            let uw = if tr.flags & F_CHECK != 0 { tr.uw } else { None };
+            let split_p = if lin.split_p >= 2 { lin.split_p } else { 0 };
+            let got = tr.lease.prepare_core(
+                &p.x[..t * n],
+                t,
+                uw,
+                lin.threads_p,
+                split_p,
+                PrepIo { payload: &mut p.payload, xh: &mut xh, xq: &mut xq, keys: &mut p.keys },
+                dup_in.as_ref(),
+            );
+            let mut ticket = match got {
+                Ok(Some(tk)) => tk,
+                Ok(None) => return Outcome::NotReady,
+                Err(CoreErr::NonFinite) => {
+                    return Outcome::Prepare("nonfinite", "non-finite activation values cannot be quantized".into())
+                }
+                Err(CoreErr::Prep(e)) => {
+                    return match e {
+                        crate::prepare::PrepareError::Overflow(msg) => Outcome::Prepare("overflow", msg),
+                        crate::prepare::PrepareError::Invalid(msg) => Outcome::Prepare("invalid", msg),
+                    }
+                }
+                Err(CoreErr::Msg(msg)) => return Outcome::Prepare("invalid", msg),
+            };
+            // the monitor's every-call check, before the payload leaves
+            if let (Some(d), Some(hist)) = (lin.dup.as_ref(), dup_hist) {
+                let dups = hist.record_raw(&p.keys[..t * d.groups], t, d.groups, d.limit);
+                st.dup_rows += t as u64;
+                if dups > 0 {
+                    st.dups += dups as u64;
+                    ticket.wipe_all();
+                    wipe(&mut xq);
+                    wipe(&mut xh);
+                    return Outcome::Duplicate(dups, t);
                 }
             }
-            Err(CoreErr::Msg(msg)) => return Outcome::Prepare("invalid", msg),
-        };
-        // the monitor's every-call check, before the payload leaves
-        if let (Some(d), Some(hist)) = (lin.dup.as_ref(), dup_hist) {
-            let dups = hist.record_raw(&p.keys[..t * d.groups], t, d.groups, d.limit);
-            st.dup_rows += t as u64;
-            if dups > 0 {
-                st.dups += dups as u64;
-                ticket.wipe_all();
-                wipe(&mut xq);
-                wipe(&mut xh);
-                return Outcome::Duplicate(dups, t);
+            if sampled_now {
+                sampled.push((pos, xh, xq));
             }
-        }
-        if sampled_now {
-            sampled.push((pos, xh, xq));
-        }
-        let mut rid = tr.rid;
-        rid[6] = (rid[6] & 0x0F) | 0x40;
-        rid[8] = (rid[8] & 0x3F) | 0x80;
+            let mut rid = tr.rid;
+            rid[6] = (rid[6] & 0x0F) | 0x40;
+            rid[8] = (rid[8] & 0x3F) | 0x80;
+            let t1 = Instant::now();
+            st.local_ns += ns(t1 - t0);
+            phase_add(pos % 4, ns(t1 - t0));
+            phase_add(12 + pos % 4, 1);
+            if tr.flags & F_HOLD != 0 {
+                // the payload stays in `p.payload`; nothing has left
+                p.held = Some(Held { pos, ticket, rid });
+                return Outcome::Held;
+            }
+            (ticket, rid)
+        };
         let t1 = Instant::now();
-        st.local_ns += ns(t1 - t0);
-        phase_add(pos % 4, ns(t1 - t0));
-        phase_add(12 + pos % 4, 1);
         let lane = match lane {
             Some(l) => l,
             None => {
@@ -755,6 +798,10 @@ impl DecodeDriver {
             return Err(verr("end must be after pos (and the injected trip) and within the pass"));
         }
         let first = start_pos + usize::from(inject.is_some());
+        if self.pass.held.as_ref().is_some_and(|h| h.pos != first || inject.is_some()) {
+            self.pass.wipe();
+            return Err(verr("a held trip must be the first trip of the next run"));
+        }
         let count = end.saturating_sub(first);
         if leases.len() < count || flags.len() < count || rids.len() < 16 * count {
             return Err(verr("leases/flags/rids must cover every trip to end"));
@@ -929,8 +976,9 @@ impl DecodeDriver {
             Outcome::Deferred(s, bad) => (DEFERRED_FAILED, (s, bad).into_pyobject(py)?.into_any().unbind()),
             Outcome::NotReady => (NOT_READY, py.None()),
             Outcome::FinishErr(msg) => (FINISH_ERROR, msg.into_pyobject(py)?.into_any().unbind()),
+            Outcome::Held => (HELD, py.None()),
         };
-        if code != DONE && code != HANDBACK {
+        if code != DONE && code != HANDBACK && code != HELD {
             self.pass.wipe(); // the pass is over (Python raises)
         }
         Ok((code, info, stats_t.into_any().unbind(), samp.into_any().unbind()))

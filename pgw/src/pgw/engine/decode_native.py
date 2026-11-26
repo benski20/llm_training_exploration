@@ -83,6 +83,12 @@ class NativeDecode:
         self._lane_ix: tuple[int, Any] | None = None
         #: Draws of trips a call did not reach (after a hand-back): used by the next call of the pass.
         self._left_flags: dict[int, int] = {}
+        #: Inline statistics of a sampled trip with the trip held in the driver (``DECODE_HOLD``): the driver
+        #: keeps the prepared trip, its statistics run here, and the next call sends it on the native lane.
+        self.native_hold = bool(getattr(fast, "DECODE_HOLD", 0)) and os.environ.get(
+            "PGW_DECODE_NATIVE_HOLD", "1").strip().lower() not in ("0", "false", "no", "off")
+        #: ``(trip index, lease)`` of the trip held in the driver (prepared, statistics run, not sent).
+        self._held: tuple[int, Any] | None = None
         #: [driver calls, trips run natively, native local ns (prepare + finish + float ops), lane ns, run CPU s]
         self.totals = [0, 0, 0, 0, 0.0]
 
@@ -168,6 +174,7 @@ class NativeDecode:
         drv = self.drv
         hn = h.detach().numpy() if h.is_contiguous() else np.ascontiguousarray(h.detach().numpy())
         self._left_flags = {}
+        self._held = None
         drv.begin(hn, 0, start, normed)
         ok = False
         try:
@@ -180,8 +187,9 @@ class NativeDecode:
             drv.end(h_out.numpy(), None)
             ok = True
         finally:
+            self._held = None
             if not ok:
-                drv.abort()
+                drv.abort()  # zeroes a held trip too (its payload never leaves)
         st.hs = [h_out]
 
     def _call(self, res: Any, sess: Any, t: int, end: int, kc: Any, vc: Any, cos: Any, sin: Any,
@@ -210,8 +218,17 @@ class NativeDecode:
         flags = bytearray()
         left = self._left_flags
         self._left_flags = {}
+        held = self._held
+        self._held = None
+        native_hold = inline_stats and self.native_hold
         for idx in range(first, end):
             lid, meta = self.lids[idx], self.metas[idx]
+            if held is not None and held[0] == idx:
+                # the trip the driver holds (prepared before its statistics ran): its lease and draws as
+                # drawn then; the driver sends the held payload (no second prepare, no second draw)
+                leases.append(held[1])
+                flags.append(left.pop(idx) & ~(2 | 8))
+                continue
             lease = be._trip_lease_for(res, leases_map, lid, meta, t)
             if lease is None:  # this trip takes the ordinary path (after the driver ran the ones before it)
                 no_lease = idx
@@ -241,6 +258,8 @@ class NativeDecode:
                 # statistics run before its payload leaves: an alarm stops that payload, as on the per-trip path
                 end = idx + 1
                 hold = inline_stats
+                if native_hold:
+                    flags[-1] |= 8  # the driver keeps the prepared trip (code 8); sent by the next call
                 break
         self._left_flags = left  # draws of trips past this call's end (after a hand-back), for the next call
         if no_lease is not None and end == first and inject is None:
@@ -295,6 +314,16 @@ class NativeDecode:
         if noise is not None and dup_rows and not dups:
             noise.record_native_dups(int(dup_rows), 0)
         self._sampled(sampled_vals)
+        if code == 8:
+            # held after its prepare: its statistics ran just above, before anything of it left; an alarm
+            # stops it here (run() aborts the pass, which zeroes the held payload), as on the per-trip path
+            j = int(drv.pos)
+            if noise is not None and getattr(noise, "fail_closed", False) and getattr(noise, "alarmed", False):
+                raise IntegrityError("outbound-noise monitor alarm: masked traffic blocked until an admin reset",
+                                     details={"reasons": list(noise.report().reasons[-4:])})
+            self._held = (j, leases[j - first])
+            self._left_flags[j] = flags[j - first] & ~8
+            return None
         if code == 0:
             return self._ordinary_trip(sess, no_lease) if no_lease is not None else None
         if code == 1:
