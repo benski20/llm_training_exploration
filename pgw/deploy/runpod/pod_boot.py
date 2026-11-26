@@ -9,7 +9,7 @@ Provider boot (as root, the container's PID 1 under tini; the service itself run
 1. Volume ``PGW_RUNPOD_DATA`` (default ``/workspace/pgw``): ``pki/`` (the service CA and the client-issuing CA,
    created once and kept, so SDK keys, which pin the CA, survive pod restarts; the server certificate is re-issued
    at every boot for the pod's current public address), ``state/`` (tenant tokens, accounts database), ``packs/``
-   (built once from the pinned Hugging Face revisions with ``pgw pack``), ``logs/``.
+   (built once from the pinned Hugging Face revisions, shard by shard: the same pack as ``pgw pack``), ``logs/``.
 2. ``pgw service serve`` with production settings (:func:`service_env`): TLS end to end on 8443, the native trip
    lane over TLS 1.3 on 8444 (advertised under RunPod's public port mapping), accounts (SDK keys) on, the admin API
    on only when the launcher passed the SHA-256 of a bootstrap admin token, and the provider tuning of
@@ -390,9 +390,33 @@ def _pack_format(dst: Path) -> int | None:
     return v if isinstance(v, int) else None
 
 
-def ensure_pack(model: str, packs: Path, hf_home: Path, *, uid: int | None = None) -> Path:
-    """``packs/<model>`` built once from the pinned revision (``pgw pack``), as the service user; rebuilt once when
-    the volume holds a pack of an older format (the pinned fingerprints are of :data:`PACK_FORMAT_VERSION`)."""
+#: The shard-wise packer (``pgw.modelpack.shardwise``: one checkpoint shard on disk at a time, plus one prefetched;
+#: byte-identical to ``pgw pack``'s ``pack_checkpoint``, tests/modelpack/test_shardwise.py), run as the service user.
+#: Peak volume: the pack plus ~2 shards (~8.5 GB) instead of the pack plus the whole bfloat16 checkpoint (15 / 65 /
+#: 145 GB at 7B / 32B / 72B). ``PGW_RUNPOD_PACKER=whole`` falls back to ``pgw pack``.
+SHARDWISE_PACK = (
+    "import json, sys\n"
+    "from pgw.modelpack.shardwise import stream_pack_checkpoint\n"
+    "repo, out, name, rev, work = sys.argv[1:6]\n"
+    "r = stream_pack_checkpoint(repo, out, work_dir=work, name=name, revision=rev or None, prefetch=1,\n"
+    "                           overwrite=True, progress=lambda m: print('  ' + m, flush=True))\n"
+    "print('packed', name, 'fingerprint', r.fingerprint, json.dumps(r.stats, default=str), flush=True)\n")
+
+
+def pack_command(model: str, tmp: Path, work: Path, packer: str) -> list[str]:
+    """The packing subprocess for ``model`` into ``tmp`` (``work``: the shard-wise packer's scratch)."""
+    repo, rev = MODELS[model]
+    if packer == "whole":
+        return [sys.executable, "-m", "pgw.cli", "pack", repo, str(tmp), "--name", model, "--revision", rev, "-q"]
+    if packer != "shardwise":
+        raise BootError(f"PGW_RUNPOD_PACKER={packer!r}: use shardwise or whole")
+    return [sys.executable, "-c", SHARDWISE_PACK, repo, str(tmp), model, rev, str(work)]
+
+
+def ensure_pack(model: str, packs: Path, hf_home: Path, *, uid: int | None = None, packer: str | None = None) -> Path:
+    """``packs/<model>`` built once from the pinned revision (shard by shard by default, :data:`SHARDWISE_PACK`), as
+    the service user; rebuilt once when the volume holds a pack of an older format (the pinned fingerprints are of
+    :data:`PACK_FORMAT_VERSION`)."""
     repo, rev = MODELS[model]
     dst = packs / model
     if (dst / "manifest.json").exists():
@@ -409,8 +433,10 @@ def ensure_pack(model: str, packs: Path, hf_home: Path, *, uid: int | None = Non
         if os.environ.get(k):
             env[k] = os.environ[k]
     t0 = time.time()
-    subprocess.run([sys.executable, "-m", "pgw.cli", "pack", repo, str(tmp), "--name", model, "--revision", rev,  # noqa: S603
-                    "-q"], env=env, check=True, preexec_fn=_demote(uid))
+    packer = packer or os.environ.get("PGW_RUNPOD_PACKER") or "shardwise"
+    work = packs / f".{model}.work"  # resumable scratch of the shard-wise packer (removed after a successful run)
+    subprocess.run(pack_command(model, tmp, work, packer), env=env, check=True, preexec_fn=_demote(uid))  # noqa: S603
+    shutil.rmtree(work, ignore_errors=True)
     if dst.exists():  # an older-format pack: replaced only once the new one is complete
         old = packs / f".{model}.old"
         shutil.rmtree(old, ignore_errors=True)

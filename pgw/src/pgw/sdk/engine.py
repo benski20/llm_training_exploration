@@ -440,11 +440,12 @@ class Engine:
     # ---- models --------------------------------------------------------------------------------
     async def list_models(self) -> list[str]:
         """Models the provider serves to this key and this release supports."""
-        from pgw.sdk.options import SUPPORTED_MODELS
+        from pgw.sdk.options import PREVIEW_ENV, SUPPORTED_MODELS, preview_models
 
         s = await self.ensure_session()
         names = [str(m.get("name", "")).lower() for m in s.models]
-        return [n for n in SUPPORTED_MODELS if n in names]
+        preview = preview_models() if os.environ.get(PREVIEW_ENV, "").strip() else ()
+        return [n for n in (*SUPPORTED_MODELS, *preview) if n in names]
 
     async def ensure_model(self, model: str) -> ModelHandle:
         """The model's handle, started (enroll, provision, connect, factory) on first use.

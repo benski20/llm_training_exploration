@@ -75,32 +75,50 @@ MODELS_SHORT = {"7b": "qwen2.5-7b", "32b": "qwen2.5-32b", "72b": "qwen2.5-72b"}
 
 #: The sessions of the runbook, in priority order. ``minutes``: the planned wall time of the steps; the TTL adds
 #: ``SETUP_MIN`` (pod start + job_setup.sh) and a margin. ``client_vcpus`` 0: no client pod.
+#: The client CPU switches of the 2026-11-26 rounds (several-answer trips, sampling: on in the SDK's NATIVE_ENV by
+#: setdefault, so an explicit 0 wins): the ``native_off`` rerun of ``conc_16`` measures what they bought.
+CLIENT_ROUNDS_OFF = {"PGW_SYNC_MULTI": "0", "PGW_TRIP_NATIVE_MULTI": "0", "PGW_DECODE_NATIVE_MULTI": "0",
+                     "PGW_TRIP_LEASE_AHEAD": "0", "PGW_SAMPLE_THREADS": "0", "PGW_NATIVE_MULTINOMIAL": "0"}
+#: The client mask cost switches of round 3 (each restores the previous path): ``factory_e2e`` runs on and off.
+MASK_ROUND3_OFF = {"PGW_FAST_CHACHA512": "0", "PGW_FACTORY_R_REUSE": "0", "PGW_PKS_WIRE_FUSED": "0",
+                   "PGW_PKS_OUT_REUSE": "0"}
+#: ``factory_e2e``: one-core client mask CPU per slot at real shapes (benchmarks/pks_factory_e2e.py) on the client pod
+#: while the GPU pod packs and loads its model (the client is idle then): (model, slots, switches).
+FACTORY_E2E_RUNS = [(m, 1024, "on") for m in ("7b", "32b", "72b")] + [(m, 1024, "off") for m in ("7b", "32b", "72b")] \
+    + [(m, 256, "on") for m in ("32b", "72b")]  # 256: one group per request (the 8 GB default stock at 32B / 72B)
+
 SESSIONS: dict[str, dict[str, Any]] = {
     "perf": {
         "what": "provider_perf_session on one H100 (memory, device time, GEMV table, local lane, maskgen incl. pks-v3 "
-                "device path + fused kernels + wire forms) and lane_nic over the real NIC to a same-DC CPU pod",
-        "gpu": H100, "gpu_count": 1, "client_vcpus": 16, "volume_gb": 60, "client_disk_gb": 30, "minutes": 105,
-        "steps": [{"kind": "perf", "phases": "env,memory,device_time,gemv_table,lane_local,maskgen",
-                   "models": "qwen2.5-7b,qwen2.5-32b,qwen2.5-72b", "budget_min": 85},
+                "device path + fused kernels + wire forms + per-stage times for memplan) and lane_nic over the real "
+                "NIC to a same-DC CPU pod",
+        "gpu": H100, "gpu_count": 1, "client_vcpus": 16, "volume_gb": 20, "client_disk_gb": 30, "minutes": 110,
+        "steps": [{"kind": "perf", "phases": "env,memory,device_time,gemv_table,lane_local,maskgen,pks_stages",
+                   "models": "qwen2.5-7b,qwen2.5-32b,qwen2.5-72b", "budget_min": 88},
                   {"kind": "lane_nic", "presets": "7b,72b", "nic_minutes": 8}]},
     "sdk7b": {
         "what": "the client library end to end at 7B from a same-DC CPU pod: setup, TTFT, tok/s, trips/token, client "
-                "CPU with speculation off / lookup / draft_head, then N = 1 / 4 / 16 concurrent streams",
-        "gpu": H100, "gpu_count": 1, "client_vcpus": 32, "volume_gb": 120, "client_disk_gb": 80, "minutes": 95,
-        "steps": [{"kind": "sdk", "model": "qwen2.5-7b-instruct", "spec": "off,lookup,draft_head", "conc": "1,4,16",
-                   "tokens": 128, "mask_store_gb": 24}]},
+                "CPU with speculation off / lookup / draft_head (the shipped head), N = 1 / 4 / 16 concurrent "
+                "streams, the prefix cache off / on, N = 16 with the client CPU rounds off; client mask CPU per slot "
+                "at 7B / 32B / 72B shapes while the provider packs",
+        "gpu": H100, "gpu_count": 1, "client_vcpus": 32, "volume_gb": 40, "client_disk_gb": 70, "minutes": 105,
+        "steps": [{"kind": "factory_e2e"},
+                  {"kind": "sdk", "model": "qwen2.5-7b-instruct", "spec": "off,lookup,draft_head", "conc": "1,4,16",
+                   "tokens": 128, "mask_store_gb": 24, "stages": "setup,spec,conc,prefix",
+                   "reruns": [{"name": "native_off", "stages": "conc", "conc": "16", "env": CLIENT_ROUNDS_OFF}]}]},
     "sdk32b": {
         "what": "32B on one H100: provider memory / device time / maskgen at 32B, then the client library end to end "
-                "at 32B (spec off / lookup, N = 1 / 4)",
-        "gpu": H100, "gpu_count": 1, "client_vcpus": 32, "volume_gb": 200, "client_disk_gb": 150, "minutes": 140,
+                "at 32B (measurement-only preview of the pinned model; spec off / lookup, N = 1 / 4)",
+        "gpu": H100, "gpu_count": 1, "client_vcpus": 32, "volume_gb": 80, "client_disk_gb": 140, "minutes": 140,
         "steps": [{"kind": "perf", "phases": "env,memory,device_time,maskgen", "models": "qwen2.5-32b",
                    "budget_min": 35},
+                  {"kind": "factory_e2e"},
                   {"kind": "sdk", "model": "qwen2.5-32b-instruct", "spec": "off,lookup", "conc": "1,4",
                    "tokens": 64, "mask_store_gb": 60}]},
     "72b": {
         "what": "72B on two H100s: memory at TP 1 and per-trip device time at TP 1 and 2, maskgen at 72B "
                 "(H200 alternative: --gpu 'NVIDIA H200' --gpu-count 1, TP 1 only)",
-        "gpu": H100, "gpu_count": 2, "client_vcpus": 0, "volume_gb": 60, "client_disk_gb": 0, "minutes": 70,
+        "gpu": H100, "gpu_count": 2, "client_vcpus": 0, "volume_gb": 20, "client_disk_gb": 0, "minutes": 70,
         "steps": [{"kind": "perf", "phases": "env,memory,device_time,maskgen", "models": "qwen2.5-72b",
                    "budget_min": 60}]},
 }
@@ -257,6 +275,37 @@ def cmd_check_key(args: argparse.Namespace, api: RunPodAPI) -> int:
     return 0
 
 
+def check_sdk_steps(steps: list[dict[str, Any]]) -> list[str]:
+    """Refuse, before any pod exists, an sdk step the client library would refuse only after the provider's download
+    and pack: a model without a baked pin, an unpinned provider model, or a ``draft_head`` mode without a head. A
+    pinned model outside ``SUPPORTED_MODELS`` runs as the measurement-only preview (``--preview``). Returns notes."""
+    sdk = [s for s in steps if s["kind"] == "sdk"]
+    if not sdk:
+        return []
+    sys.path.insert(0, str(PGW / "src"))
+    from pgw.sdk.draft_heads import PINNED_DRAFT_HEADS
+    from pgw.sdk.options import SUPPORTED_MODELS
+    from pgw.sdk.provisioning import PINNED_MODELS
+
+    notes = []
+    for s in sdk:
+        m = s["model"]
+        pin = PINNED_MODELS.get(m)
+        if pin is None or not pin.fingerprint:
+            raise SystemExit(f"sdk step {m}: no baked pin in PINNED_MODELS; the client would refuse it")
+        if m not in pod_boot.MODELS or pod_boot.MODELS[m][1] != pin.revision:
+            raise SystemExit(f"sdk step {m}: the provider (pod_boot.MODELS) does not pack the pinned commit "
+                             f"{pin.revision[:12]}")
+        if m not in SUPPORTED_MODELS:
+            notes.append(f"sdk {m}: pinned, not supported: measurement-only preview (PGW_SDK_PREVIEW_MODELS), "
+                         f"verified against the baked pin {pin.fingerprint[:12]}...")
+        if "draft_head" in s.get("spec", "") and not s.get("draft_head"):
+            if m not in PINNED_DRAFT_HEADS:
+                raise SystemExit(f"sdk step {m}: draft_head has no shipped head; pass --extra <head file>")
+            notes.append(f"sdk {m}: draft_head uses the shipped pinned head {PINNED_DRAFT_HEADS[m].file}")
+    return notes
+
+
 def cmd_launch(args: argparse.Namespace, api: RunPodAPI | None) -> int:
     cfg = json.loads(json.dumps(SESSIONS[args.session]))
     if args.gpu:
@@ -265,9 +314,18 @@ def cmd_launch(args: argparse.Namespace, api: RunPodAPI | None) -> int:
         cfg["gpu_count"] = args.gpu_count
     if args.no_client:
         cfg["client_vcpus"] = 0
-    if any(s["kind"] in ("lane_nic", "sdk") for s in cfg["steps"]) and not cfg["client_vcpus"]:
-        raise SystemExit("this session needs its client pod (lane_nic / sdk steps)")
-    ttl = args.ttl_min or session_minutes(args.session, cfg)
+    if any(s["kind"] in ("lane_nic", "sdk", "factory_e2e") for s in cfg["steps"]) and not cfg["client_vcpus"]:
+        raise SystemExit("this session needs its client pod (lane_nic / sdk / factory_e2e steps)")
+    extras = [Path(e).resolve() for e in args.extra]
+    for e in extras:
+        if not e.is_file():
+            raise SystemExit(f"--extra {e}: no such file")
+    for s in cfg["steps"]:  # --extra overrides the shipped draft head
+        if s["kind"] == "sdk" and extras and "draft_head" in s.get("spec", ""):
+            s["draft_head"] = f"extras/{extras[0].name}"
+    for line in check_sdk_steps(cfg["steps"]):
+        print(f"  {line}")
+    ttl =args.ttl_min or session_minutes(args.session, cfg)
     if api is not None and args.price_per_hour is None:
         price_h, src = launch.gpu_price(cfg["gpu"], community=False, gpu_count=cfg["gpu_count"], api=api)
     elif args.price_per_hour is not None:
@@ -291,16 +349,9 @@ def cmd_launch(args: argparse.Namespace, api: RunPodAPI | None) -> int:
     if args.session in st["sessions"] and not args.dry_run:  # a rerun: the earlier run keeps counting in the budget
         old = st["sessions"].pop(args.session)
         st["sessions"][f"{args.session}@{int(old.get('launched_at', 0))}"] = old
-    extras = [Path(e).resolve() for e in args.extra]
-    for e in extras:
-        if not e.is_file():
-            raise SystemExit(f"--extra {e}: no such file")
     bundle, sha = build_bundle(launch.STATE_DIR / f"bundle-{args.session}.tar.gz", extras)
     job_token, pair_token = secrets.token_urlsafe(32), secrets.token_urlsafe(32)
     steps = cfg["steps"]
-    for s in steps:
-        if s["kind"] == "sdk" and extras and "draft_head" in s.get("spec", ""):
-            s["draft_head"] = f"extras/{extras[0].name}"
     stop_at = time.time() + ttl * 60.0
     common = {"PGW_JOB_BOOT": boot_payload(), "PGW_JOB_TOKEN_SHA256": hashlib.sha256(job_token.encode()).hexdigest(),
               "PGW_JOB_BUNDLE_SHA256": sha, "PGW_JOB_PLAN": json.dumps(steps), "PGW_JOB_SESSION": args.session}
@@ -476,12 +527,14 @@ def _progress(res: Path, **kw: Any) -> None:
     os.replace(tmp, p)
 
 
-def _run(cmd: list[str], log: Path, env: dict[str, str] | None = None, timeout: float | None = None) -> int:
+def _run(cmd: list[str], log: Path, env: dict[str, str] | None = None, timeout: float | None = None,
+         stdout: Path | None = None, cpus: set[int] | None = None) -> int:
     print(f"$ {' '.join(shlex.quote(c) for c in cmd)}", flush=True)
-    with log.open("ab") as f:
+    pin = (lambda: os.sched_setaffinity(0, cpus)) if cpus else None
+    with log.open("ab") as f, (stdout.open("ab") if stdout is not None else f) as so:  # type: ignore[attr-defined]
         try:
-            return subprocess.run(cmd, cwd=PGW, env=env, stdout=f, stderr=subprocess.STDOUT,  # noqa: S603
-                                  timeout=timeout).returncode
+            return subprocess.run(cmd, cwd=PGW, env=env, stdout=so, stderr=f,  # noqa: S603
+                                  timeout=timeout, preexec_fn=pin).returncode
         except subprocess.TimeoutExpired:
             return -9
 
@@ -615,6 +668,50 @@ def cpu_lane_nic(step: dict[str, Any], res: Path, py: str) -> int:
     return rc
 
 
+def maskgen_progress_sampler(stem: Path, stop: threading.Event, *, interval_s: float = 2.0,
+                             url: str | None = None) -> None:
+    """The provider's maskgen progress (metrics port ``/readyz``, ``maskgen_progress``: operator totals, no tenant
+    names) every ``interval_s`` while it serves: ``<stem>.jsonl`` (samples that changed) and ``<stem>.json`` (the
+    worst seen: oldest running item, slowest item, bound, any stall), to check the maskgen watchdog's 30 s bound
+    (``PGW_SERVICE_MASKGEN_STALL_S``, 4x the slowest recent item) against real item times."""
+    url = url or f"http://127.0.0.1:{pod_boot.METRICS_PORT}/readyz"
+    worst: dict[str, Any] = {"samples": 0, "stalled_samples": 0, "oldest_running_s": 0.0, "oldest_waiting_s": 0.0,
+                             "slowest_item_s": 0.0, "bound_s": None, "max_running": 0, "max_waiting": 0,
+                             "done": 0, "failed": 0}
+    last = None
+    while not stop.wait(interval_s):
+        try:
+            with urllib.request.urlopen(url, timeout=5) as r:  # noqa: S310 - loopback, plain metrics port
+                body = json.loads(r.read())
+        except (urllib.error.URLError, OSError, ValueError) as exc:
+            if isinstance(exc, urllib.error.HTTPError):  # 503 while loading: the body still has the details
+                try:
+                    body = json.loads(exc.read())
+                except ValueError:
+                    continue
+            else:
+                continue
+        details = body.get("details", body) if isinstance(body, dict) else {}
+        prog = details.get("maskgen_progress") if isinstance(details, dict) else None
+        if not isinstance(prog, dict):
+            continue
+        worst["samples"] += 1
+        worst["stalled_samples"] += int(bool(prog.get("stalled")))
+        for k in ("oldest_running_s", "oldest_waiting_s", "slowest_item_s"):
+            if isinstance(prog.get(k), int | float):
+                worst[k] = max(worst[k], float(prog[k]))
+        worst["max_running"] = max(worst["max_running"], int(prog.get("running") or 0))
+        worst["max_waiting"] = max(worst["max_waiting"], int(prog.get("waiting") or 0))
+        worst["bound_s"] = prog.get("bound_s")
+        worst["done"], worst["failed"] = int(prog.get("done") or 0), int(prog.get("failed") or 0)
+        key = json.dumps(prog, sort_keys=True)
+        if key != last:
+            with stem.with_suffix(".jsonl").open("a") as f:
+                f.write(json.dumps({"t": round(time.time(), 1), "maskgen": details.get("maskgen"), **prog}) + "\n")
+            last = key
+        stem.with_suffix(".json").write_text(json.dumps(worst, indent=1))
+
+
 def gpu_sdk(step: dict[str, Any], res: Path, py: str) -> int:
     """The provider (pod_boot) serving one model; a test org + SDK key created here over loopback (attested, pinned);
     the client pod gets URL, CA fingerprint, key and pack fingerprint through the pair-token peer channel."""
@@ -625,10 +722,15 @@ def gpu_sdk(step: dict[str, Any], res: Path, py: str) -> int:
     env.update(PGW_RUNPOD_MODELS=model, PGW_RUNPOD_DATA=str(data), PGW_RUNPOD_KEY_ENV="test",
                PGW_RUNPOD_ADMIN_TOKEN_SHA256=hashlib.sha256(admin.encode()).hexdigest(),
                PGW_RUNPOD_STOP_AT=os.environ.get("PGW_JOB_STOP_AT", ""),
-               PGW_RUNPOD_SERVICE_ENV=json.dumps(step.get("service_env", {})))
+               PGW_RUNPOD_SERVICE_ENV=json.dumps(step.get("service_env", {})),
+               PGW_RUNPOD_PACKER=step.get("packer", "shardwise"))  # "whole": pgw pack (whole checkpoint on disk)
     logf = (res / f"provider-{model}.log").open("ab")
     prov = subprocess.Popen([py, "deploy/runpod/pod_boot.py"], cwd=PGW, env=env, stdout=logf,  # noqa: S603
                             stderr=subprocess.STDOUT)
+    stop = threading.Event()
+    sampler = threading.Thread(target=maskgen_progress_sampler, args=(res / f"maskgen_progress-{model}", stop),
+                               daemon=True)
+    sampler.start()
     try:
         url = "https://127.0.0.1:8443"
         launch.wait_for_ready(url, timeout_s=max(300.0, (minutes_left() - 20) * 60))
@@ -646,6 +748,8 @@ def gpu_sdk(step: dict[str, Any], res: Path, py: str) -> int:
         print(f"sdk {model}: client {'done' if ok else 'did not finish before the TTL'}", flush=True)
         return 0 if ok else 1
     finally:
+        stop.set()
+        sampler.join(timeout=10)
         prov.terminate()
         try:
             prov.wait(timeout=60)
@@ -669,22 +773,67 @@ def cpu_sdk(step: dict[str, Any], res: Path, py: str) -> int:
         env.pop(k)
     _run([py, "deploy/runpod/rtt_probe.py", info["url"], "--ca-sha256", info["ca_sha256"], "-n", "200"],
          res / f"rtt-{model}.log", env=env, timeout=300)
+    from pgw.sdk.options import SUPPORTED_MODELS
     from pgw.sdk.provisioning import PINNED_MODELS
 
-    cmd = [py, "deploy/runpod/sdk_remote_bench.py", "--model", model, "--spec", step["spec"], "--conc", step["conc"],
-           "--tokens", str(step.get("tokens", 128)), "--mask-store-gb", str(step.get("mask_store_gb", 24)),
-           "--out", str(res / f"sdk-{model}"), "--cache", "/workspace/pgw-client"]
-    if step.get("draft_head"):
-        cmd += ["--draft-head", step["draft_head"]]
-    if model not in PINNED_MODELS:  # measurement-only pin from the provider itself (stated in the results)
-        cmd += ["--fingerprint", info["fingerprint"]]
+    pin = PINNED_MODELS[model].fingerprint  # checked at launch: every sdk model has a baked pin
+    if info.get("fingerprint") != pin:  # the client refuses this provider (FingerprintMismatchError): a finding
+        print(f"sdk {model}: WARNING the provider's pack {str(info.get('fingerprint'))[:16]}... is not the baked pin "
+              f"{str(pin)[:16]}...; the client library will refuse it", flush=True)
+    base = [py, "deploy/runpod/sdk_remote_bench.py", "--model", model, "--tokens", str(step.get("tokens", 128)),
+            "--mask-store-gb", str(step.get("mask_store_gb", 24)), "--cache", "/workspace/pgw-client"]
+    if step.get("draft_head"):  # an override (--extra); else the head the library ships pinned for the model
+        base += ["--draft-head", step["draft_head"]]
+    if model not in SUPPORTED_MODELS:  # pinned, not supported yet: the measurement-only preview (still pin-checked)
+        base += ["--preview"]
+    cmd = [*base, "--spec", step["spec"], "--conc", step["conc"], "--stages", step.get("stages", "setup,spec,conc"),
+           "--out", str(res / f"sdk-{model}")]
     rc = _run(cmd, res / f"sdk-{model}.log", env=env, timeout=max(60.0, (minutes_left() - 3) * 60))
+    for rr in step.get("reruns", []):  # the same cache and stock, another process with other process-wide switches
+        if minutes_left() < 10:
+            print(f"sdk {model} {rr['name']}: skipped ({minutes_left():.0f} min left)", flush=True)
+            break
+        cmd = [*base, "--spec", "off", "--conc", rr.get("conc", step["conc"]), "--stages", rr["stages"],
+               "--out", str(res / f"sdk-{model}-{rr['name']}")]
+        rc |= _run(cmd, res / f"sdk-{model}-{rr['name']}.log", env={**env, **rr.get("env", {})},
+                   timeout=max(60.0, (minutes_left() - 3) * 60))
     peer_put_remote(f"sdk-{model}.done", str(rc).encode())
     return rc
 
 
+def cpu_factory_e2e(step: dict[str, Any], res: Path, py: str) -> int:
+    """Client mask CPU per slot on one core of this (server) CPU at 7B / 32B / 72B decoder-layer shapes
+    (``benchmarks/pks_factory_e2e.py``), round-3 switches on and off, 1024- and 256-slot segments; runs while the GPU
+    pod is still packing and loading, so it costs no GPU time. ``<res>/factory_e2e.jsonl``, one JSON line per run."""
+    out = res / "factory_e2e.jsonl"
+    env = {k: v for k, v in os.environ.items() if not k.startswith("PGW_JOB_")}
+    env["PYTHONPATH"] = f"{PGW / 'src'}:{PGW}"
+    core = {max(os.sched_getaffinity(0))}
+    rc = 0
+    for model, slots, sw in step.get("runs") or FACTORY_E2E_RUNS:
+        if minutes_left() < 15:
+            break
+        with out.open("a") as f:
+            f.write(json.dumps({"run": {"model": model, "slots": slots, "switches": sw, "core": sorted(core),
+                                        "cpu_model": _cpu_model()}}) + "\n")
+        rc |= _run([py, "benchmarks/pks_factory_e2e.py", "--model", model, "--slots", str(slots), "--segments", "3",
+                    "--prefault-gb", "2", "--tmpdir", str(res.parent)], res / "factory_e2e.log",
+                   env={**env, **(MASK_ROUND3_OFF if sw == "off" else {})}, timeout=900, stdout=out, cpus=core)
+    return rc
+
+
+def _cpu_model() -> str:
+    try:
+        for line in Path("/proc/cpuinfo").read_text().splitlines():
+            if line.startswith("model name"):
+                return line.split(":", 1)[1].strip()
+    except OSError:
+        pass
+    return "?"
+
+
 POD_STEPS = {("gpu", "perf"): gpu_perf, ("gpu", "lane_nic"): gpu_lane_nic, ("cpu", "lane_nic"): cpu_lane_nic,
-             ("gpu", "sdk"): gpu_sdk, ("cpu", "sdk"): cpu_sdk}
+             ("gpu", "sdk"): gpu_sdk, ("cpu", "sdk"): cpu_sdk, ("cpu", "factory_e2e"): cpu_factory_e2e}
 
 
 def cmd_pod(args: argparse.Namespace) -> int:

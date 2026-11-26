@@ -29,13 +29,20 @@ Phases (``--phases``, default all, in this order):
                  (``PGW_SERVICE_PKS_DEVICE_HINT``) at 512/1024/2048 MB work budgets with the key switch's NTTs
                  as ``PGW_SERVICE_PKS_GPU_NTT=auto`` picks them (the fused Triton kernels after their self-test),
                  and at 512 MB with the eager torch NTTs: seconds, peak memory, the NTT in use, byte-identical
-                 replies, next to ``memplan.pks_item_seconds``'s estimates (torch and fused NTTs).
-``lane_nic``     ``benchmarks/lane_nic_bench.py serve`` for ``--nic-minutes`` (7B, then 72B widths): run the printed
+                 replies, next to ``memplan.pks_item_seconds``'s estimates (torch and fused NTTs; per stage in
+                 ``model_stages_s``, ``measured_over_model``), the ``r2`` configuration (round 2: reply keys
+                 unpacked on the host, one-thread upload staging), and two items at once on the device
+                 (``device_conc2``: each item's seconds against the maskgen watchdog's 30 s bound).
+``pks_stages``   ``benchmarks/pks_ntt_bench.py --sections exact_new,stages,round3``: the device item's per-stage seconds
+                 (before / after) scaled to a 1024-slot cycle per model, device reply keys, staged-upload GB/s:
+                 the inputs for refitting ``memplan``'s H100 ``PksRates`` and device-wire terms.
+``lane_nic``    ``benchmarks/lane_nic_bench.py serve`` for ``--nic-minutes`` (7B, then 72B widths): run the printed
                  ``client`` command in the client pod (``launch.py --client-pod``, same data center) meanwhile; it
                  reports the lane's fixed cost per trip over the real NIC and throughput at 1-64 connections.
 
 Order and budget: ``env`` 1 min, ``memory`` ~20 min (72B: ~67 GB of random weights), ``device_time`` ~12 min,
-``gemv_table`` ~6 min, ``lane_local`` ~10 min, ``maskgen`` ~30 min, ``lane_nic`` 2 x ``--nic-minutes``. About 95 min
+``gemv_table`` ~6 min, ``lane_local`` ~10 min, ``maskgen`` ~25 min, ``pks_stages`` ~6 min, ``lane_nic`` 2 x
+``--nic-minutes``. About 100 min
 of one H100 (~$3 at ~$2.5/h Secure Cloud) plus the client CPU pod. The decisions each number feeds are in
 ``STATUS.md`` (2026-11-26 provider performance audit).
 
@@ -59,8 +66,9 @@ from pathlib import Path
 from typing import Any
 
 PGW = Path(__file__).resolve().parents[2]
-PHASES = ("env", "memory", "device_time", "gemv_table", "lane_local", "maskgen", "lane_nic")
-MINUTES = {"env": 1, "memory": 20, "device_time": 12, "gemv_table": 6, "lane_local": 10, "maskgen": 25, "lane_nic": 0}
+PHASES = ("env", "memory", "device_time", "gemv_table", "lane_local", "maskgen", "pks_stages", "lane_nic")
+MINUTES = {"env": 1, "memory": 20, "device_time": 12, "gemv_table": 6, "lane_local": 10, "maskgen": 25, "pks_stages": 6,
+           "lane_nic": 0}
 
 
 def _log(out: Path, phase: str, msg: str) -> None:
@@ -415,6 +423,10 @@ def phase_pks_items(models: list[str], cpu: bool, cols: int = 1024, work_mbs: tu
                 replies[tag] = y
             for k in (*PKS_ENV, "PGW_SERVICE_PKS_GPU_WORK_MB"):
                 os.environ.pop(k, None)
+            # two items at once on one device (the service's default PGW_SERVICE_MASKGEN_CONCURRENCY on CUDA): each
+            # item's running time, which the maskgen watchdog bounds (max(PGW_SERVICE_MASKGEN_STALL_S = 30 s, 4x
+            # the slowest recent item))
+            res["device_conc2"] = _concurrent_items(PKSProvider, kern, key, item, seed, replies)
             res["identical"] = len(set(replies.values())) == 1
             res["model_estimate_s"] = {p: round(sum(memplan.pks_item_seconds(m, n, cols, p).values()), 3)
                                        for p in ("miss", "hit", "device")}
@@ -424,11 +436,56 @@ def phase_pks_items(models: list[str], cpu: bool, cols: int = 1024, work_mbs: tu
                 sum(memplan.pks_item_seconds(m, n, cols, "device", ntt="fused", kernels="r2").values()), 3)
             res["model_estimate_s"]["device_prev"] = round(
                 sum(memplan.pks_item_seconds(m, n, cols, "device", ntt="fused", kernels="ntt").values()), 3)
+            # memplan's per-stage terms of the default device item (the device-wire model under-predicted whole T4
+            # items 1.6-1.9x): with pks_stages.json's measured stages, what to refit in PksRates
+            res["model_stages_s"] = {k: round(v, 4) for k, v in
+                                     memplan.pks_item_seconds(m, n, cols, "device", ntt="fused").items()}
+            dflt = res.get(f"device_{work_mbs[0]}mb", {}).get("s")
+            if dflt and res["model_estimate_s"]["device_fused"]:
+                res["measured_over_model"] = round(dflt / res["model_estimate_s"]["device_fused"], 2)
             out[f"{model}:{key}"] = res
             del kern
             if dev.type == "cuda":
                 torch.cuda.empty_cache()
     return out
+
+
+def _concurrent_items(provider_cls: Any, kern: Any, key: str, item: Any, seed: bytes, replies: dict[str, bytes],
+                      n: int = 2) -> dict[str, Any]:
+    """``n`` items of ``kern`` at once on one provider (default kernels), each in its own thread as the service
+    runs them: per-item seconds (what the maskgen watchdog's running age sees) and the bound they imply."""
+    import threading
+
+    pv = provider_cls(mode="device")
+    pv.use_device("fp", kern, key)
+    bytes(pv.run_item("fp", kern, item, seed))  # warm-up
+    secs: list[float] = [0.0] * n
+    outs: list[bytes] = [b""] * n
+    errs: list[str] = []
+
+    def one(i: int) -> None:
+        t0 = time.perf_counter()
+        try:
+            outs[i] = bytes(pv.run_item("fp", kern, item, seed))
+        except Exception as exc:  # recorded
+            errs.append(f"{type(exc).__name__}: {str(exc)[:200]}")
+        secs[i] = time.perf_counter() - t0
+
+    t0 = time.perf_counter()
+    ts = [threading.Thread(target=one, args=(i,)) for i in range(n)]
+    for t in ts:
+        t.start()
+    for t in ts:
+        t.join()
+    wall = time.perf_counter() - t0
+    for i, y in enumerate(outs):
+        if y:
+            replies[f"device_conc2_{i}"] = y
+    slowest = max(secs)
+    stall_s = float(os.environ.get("PGW_SERVICE_MASKGEN_STALL_S") or 30.0)
+    return {"items": n, "item_s": [round(s, 3) for s in secs], "wall_s": round(wall, 3),
+            "items_per_s": round(n / wall, 3) if wall > 0 else None, "errors": errs,
+            "watchdog_bound_s": round(max(stall_s, 4 * slowest), 1), "headroom_x": round(stall_s / slowest, 1)}
 
 
 # ---- driver ------------------------------------------------------------------------------------------------
@@ -527,6 +584,15 @@ def main() -> int:
                 except Exception as exc:  # e.g. an OOM: that is a finding
                     r["pks_v3"] = {"error": f"{type(exc).__name__}: {str(exc)[:500]}"}
                 (out / "maskgen_pks_v3.json").write_text(json.dumps(r["pks_v3"], indent=1))
+        elif p == "pks_stages":
+            # per-stage seconds of the device item (ring rows, upload + wire unpack, planes, GEMMs, switch, key switch,
+            # reply copy + pack; before / after) scaled to a 1024-slot cycle per model, the reply keys on the device
+            # and the staged uploads (GB/s), and the fused kernels' exactness: what memplan's PksRates and its
+            # device-wire terms are refitted from (they under-predicted whole T4 items 1.6-1.9x)
+            r = _run(out, p, [py, "benchmarks/pks_ntt_bench.py", "--json", str(out / "pks_stages.json"),
+                              "--sections", "exact_new,stages,round3", "--models", a.models,
+                              "--budget-s", str(int(MINUTES[p] * 60))] + (["--cpu"] if a.cpu else []),
+                     MINUTES[p], a.dry_run)
         else:  # lane_nic
             if not a.host:
                 _log(out, p, "skipped: --host (the pod's public IP) is needed for the certificate")

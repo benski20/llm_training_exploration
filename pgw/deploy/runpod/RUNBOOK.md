@@ -3,8 +3,9 @@
 For a fresh Claude Code session in this repository whose environment injects the RunPod API key for
 `rest.runpod.io` and `api.runpod.io` through its egress proxy. It measures, in priority order, what the
 2026-11-26 audits could only estimate on CPU, under **$60 in total by default**, and leaves no pod running.
-Written and dry-run 2026-11-26 (integration sweep); nothing here has run against RunPod yet. The pieces that
-could not be exercised without RunPod are listed in [Unverified](#unverified-check-these-first).
+Written and dry-run 2026-11-26 (integration sweep), made launch-ready against the rest of that day's changes the
+same evening (STATUS.md, "RunPod runbook launch-readiness"); nothing here has run against RunPod yet. The pieces
+that could not be exercised without RunPod are listed in [Unverified](#unverified-check-these-first).
 
 ## How the session reaches the pods
 
@@ -18,7 +19,8 @@ weakening anything:
 * The start command runs `pod_job.py` (stdlib, passed zlib+base64 in the pod env). It arms the **TTL self-stop
   first**, then serves a control port 8888, which RunPod's proxy publishes as
   `https://<pod id>-8888.proxy.runpod.net` (port 443, a host name: allowed).
-* The session uploads the **code bundle** (`pgw/` as git sees it, ~14 MB). The pod accepts it only if its
+* The session uploads the **code bundle** (`pgw/` as git sees it, ~29 MB with the shipped draft heads). The pod
+  accepts it only if its
   SHA-256 equals `PGW_JOB_BUNDLE_SHA256`, fixed in the pod spec at creation, and extracts it with tarfile's
   `data` filter. Then `job_setup.sh` installs the hash-locked requirements and builds the three native
   extensions with the pinned Rust toolchain (rustup-init checked by SHA-256), and `jobs.py pod` runs the steps.
@@ -41,17 +43,23 @@ python deploy/runpod/jobs.py plan         # sessions, minutes, $ at table prices
 for s in perf sdk7b sdk32b 72b; do
   python deploy/runpod/jobs.py launch $s --dc EU-RO-1 --max-usd 15 --dry-run | tail -1   # "nothing created, nothing spent"
 done
-python deploy/runpod/provider_perf_session.py --dry-run --out /tmp/perf-plan   # the H100 plan, commands, minutes
+mkdir -p /tmp/perf-plan && python deploy/runpod/provider_perf_session.py --dry-run --out /tmp/perf-plan   # plan
 JOB_SETUP_DRY_RUN=1 bash deploy/runpod/job_setup.sh gpu
-python -m pytest tests/deploy/test_runpod.py tests/deploy/test_runpod_jobs.py -q -p no:cacheprovider   # ~2.5 min
+python -m pytest tests/deploy/test_runpod.py tests/deploy/test_runpod_jobs.py tests/sdk/test_preview_models.py \
+    -q -p no:cacheprovider   # ~3 min
 ```
 
 `tests/deploy/test_runpod_jobs.py` runs a whole two-pod `lane_nic` session on loopback (both `pod_job.py`
-processes, the bundle upload, the peer channel, the lane bench serving and driving) and the client SDK bench's
-CPU smoke run. If anything fails here, stop: do not launch.
+processes, the bundle upload, the peer channel, the lane bench serving and driving), the client SDK bench's CPU
+smoke run (speculation off / lookup / draft_head, N = 1 / 2, the prefix cache off / on), its preview smoke (the
+tiny pack served as `qwen2.5-32b-instruct` through `--preview`), the `factory_e2e` step on and off, the maskgen
+progress sampler and the launch-time checks of the sdk steps. `tests/sdk/test_preview_models.py`: the preview
+opt-in accepts a pinned model, refuses an unpinned one, is off by default, and never replaces a pin. If anything
+fails here, stop: do not launch.
 
-Optional, for `speculation="draft_head"` in session 2: a trained 7B draft head file (the draft-head workstream's
-artefact). Without it, that mode is skipped and recorded under `notes` in the results.
+`speculation="draft_head"` in session 2 uses the 7B head the library ships pinned (`pgw.sdk.draft_heads`,
+`qwen2.5-7b-instruct-d384-v16384-r2.pgwhead`, SHA-256 checked at load); no file is needed. `--extra <head file>`
+overrides it (shipped as `extras/<name>`); the results' `spec_draft_head.draft_head` names the head used.
 
 ## 1. Key check (read-only)
 
@@ -116,13 +124,13 @@ python deploy/runpod/jobs.py stop <session> --terminate
 ### 1. `perf`: provider on one H100, lane over a real NIC (highest priority)
 
 ```bash
-python deploy/runpod/jobs.py launch perf --dc <DC> --max-usd 9
+python deploy/runpod/jobs.py launch perf --dc <DC> --max-usd 10
 ```
 
-* Pods: 1 x H100 SXM (Secure), 16-vCPU CPU client pod, TTL 130 min. **Wall ~105 min + setup; ~$8.1** (table
-  prices; `launch` prints the live estimate).
-* GPU steps: `provider_perf_session.py --phases env,memory,device_time,gemv_table,lane_local,maskgen --models
-  qwen2.5-7b,qwen2.5-32b,qwen2.5-72b` (budget 85 min). Then the `lane_nic` phase: the lane bench serves 7B
+* Pods: 1 x H100 SXM (Secure, 20 GB volume: random weights, no checkpoint), 16-vCPU CPU client pod, TTL 135 min.
+  **Wall ~110 min + setup; ~$8.4** (table prices; `launch` prints the live estimate).
+* GPU steps: `provider_perf_session.py --phases env,memory,device_time,gemv_table,lane_local,maskgen,pks_stages
+  --models qwen2.5-7b,qwen2.5-32b,qwen2.5-72b` (budget 88 min). Then the `lane_nic` phase: the lane bench serves 7B
   and then 72B layer widths on 8444, with a transport-only stub on 8443, for 8 min each.
 * Client steps: fetch each lane bench info file from the peer channel and run `lane_nic_bench.py client --conc
   1,4,16,64 --iters 400` against the GPU pod's public IP and RunPod's mapped ports. The throwaway tickets are
@@ -131,35 +139,58 @@ python deploy/runpod/jobs.py launch perf --dc <DC> --max-usd 9
   `memory_allocated` and peak per stage against `memplan`, start-up seconds per stage),
   `device_time.json`, `gemv_table.json`, `lane_local_{7b,72b}.json`, `maskgen.json` (wire v2 fused, 1/4/16
   groups, 1/2/4 concurrent), and `maskgen_pks_v3.json`. The last one covers the pks-v3 cache miss, hit and
-  device path at 512/1024/2048 MB work budgets, and the fused kernels as `auto` picks them, against `fwd4`
-  (4-prime forward), `r2` (reply keys unpacked on the host, one-thread upload staging), `prev` (fused NTT only)
-  and plain `torch`, with byte-identity and `memplan`'s estimates.
+  device path at 512/1024/2048 MB work budgets, and the fused kernels as `auto` picks them (since round 3: reply
+  keys unpacked on the device, `PGW_SERVICE_PKS_GPU_KEYS`, and uploads staged by the host thread pool), against
+  `fwd4` (4-prime forward), `r2` (`PGW_SERVICE_PKS_GPU_KEYS=torch` + `PGW_SERVICE_PKS_HOST_THREADS=1`: exactly the
+  round-2 path, checked against `pks_gpu`'s switches), `prev` (fused NTT only) and plain `torch`, with
+  byte-identity, `memplan`'s estimates (whole item and per stage, `model_stages_s`; `measured_over_model`), and
+  `device_conc2`: two items at once on the device, as the service runs them (each item's seconds against the
+  maskgen watchdog's 30 s bound: `headroom_x`).
+  `pks_stages.json` (`benchmarks/pks_ntt_bench.py --sections exact_new,stages,round3`): the device item's per-stage
+  seconds before / after, scaled to a 1024-slot cycle per model (the key is called `t4_cycle` in the bench; it is
+  this GPU's), device reply keys against the host unpack, staged-upload GB/s against one thread.
   `cpu/results/lane_nic_{7b,72b}_client.json` gives trip p50/p90/p99, `compute_us`, RTT, `transport_us`,
   `lane_fixed_us` and throughput at 1-64 connections.
 * Decisions it feeds:
   * lane spin, zero-copy and coalesce defaults (`lane_fixed_us` against the 0.13 ms estimate);
   * the pks-v3 `auto` threshold and work budget;
+  * `memplan`'s H100 `PksRates` and device-wire terms (the T4 model under-predicts device-wire items 1.6-1.9x);
+  * round 3 on H100: device reply keys and staged uploads against `r2`;
   * fused kernels on by default on H100 (`fwd4` on or off);
   * the maskgen byte budget (`PGW_SERVICE_MASKGEN_DEVICE_MB`);
   * whether 72B fits one H100 in practice (planned headroom 8.5 GiB) or needs TP 2;
   * the H100 GEMV launch table.
 
-### 2. `sdk7b`: the client library end to end at 7B, speculation off / lookup / draft_head, N = 1/4/16
+### 2. `sdk7b`: the client library end to end at 7B, speculation off / lookup / draft_head, N = 1/4/16, prefix cache
 
 ```bash
-python deploy/runpod/jobs.py launch sdk7b --dc <DC> --max-usd 10 [--extra /path/to/draft_head_7b.pt]
+python deploy/runpod/jobs.py launch sdk7b --dc <DC> --max-usd 11 [--extra /path/to/other_head.pgwhead]
 ```
 
-* Pods: 1 x H100 SXM, 32-vCPU client pod (80 GB disk), TTL 120 min. **Wall ~95 min + setup; ~$8.8.**
-* GPU: `pod_boot.py` packs Qwen2.5-7B-Instruct at the pinned commit (download + pack, ~10-20 min) and serves it
-  with the RunPod provider tuning: TCP+TLS lane, masked head, maskgen v3. The test org and SDK key are created
-  over loopback (attested).
-* Client:
+* Pods: 1 x H100 SXM (40 GB volume), 32-vCPU client pod (70 GB disk), TTL 130 min. **Wall ~105 min + setup;
+  ~$9.5.**
+* GPU: `pod_boot.py` packs Qwen2.5-7B-Instruct at the pinned commit shard by shard (`pgw.modelpack.shardwise`,
+  one shard prefetched: the same pack as `pgw pack`, ~8.5 GB of scratch instead of the 15 GB checkpoint;
+  `"packer": "whole"` in the step falls back to `pgw pack`; ~10-20 min) and serves it with the RunPod provider tuning: TCP+TLS lane,
+  masked head, maskgen v3. The test org and SDK key are created over loopback (attested). While it serves, the
+  provider's maskgen progress is read from its metrics port every 2 s (`maskgen_progress-<model>.{json,jsonl}`).
+* Client, in order:
+  * `factory_e2e` (while the GPU pod still downloads and packs, so it costs no GPU time; ~5 min):
+    `benchmarks/pks_factory_e2e.py` on one core of the client pod's server CPU at 7B / 32B / 72B decoder-layer
+    shapes, 1024-slot segments with the round-3 switches on and off (`PGW_FAST_CHACHA512`, `PGW_FACTORY_R_REUSE`,
+    `PGW_PKS_WIRE_FUSED`, `PGW_PKS_OUT_REUSE` = 0), and 256-slot segments at 32B / 72B (one group per request: what
+    the 8 GB default stock gives there). `factory_e2e.jsonl` (CPU model, ms per slot, slots/s per core);
   * `rtt_probe.py` (200 round trips over pinned TLS);
   * `sdk_remote_bench.py --model qwen2.5-7b-instruct --spec off,lookup,draft_head --conc 1,4,16 --tokens 128
-    --mask-store-gb 24`;
-  * stages: `setup`; `spec_off`, `spec_lookup` and `spec_draft_head`, each on an open-chat and a copy-heavy
-    code-edit prompt; `conc_1`, `conc_4` and `conc_16`;
+    --mask-store-gb 24 --stages setup,spec,conc,prefix` (24 GB: ~3,900 slots of 6.2 MB, 1024-slot segments);
+  * stages: `setup`; `spec_off`, `spec_lookup` and `spec_draft_head` (the shipped pinned head), each on an
+    open-chat and a copy-heavy code-edit prompt; `conc_1`, `conc_4` and `conc_16` (every client CPU switch of the
+    two concurrency rounds on, the SDK default); `prefix`: `prefix_cache=False` then `True` on a system prompt +
+    4 turns + a second conversation with the same system prompt, 16 tokens per answer (~5 min);
+  * `native_off` (a second process on the same cache and stock, ~5 min): `conc_16` with `PGW_SYNC_MULTI`,
+    `PGW_TRIP_NATIVE_MULTI`, `PGW_DECODE_NATIVE_MULTI`, `PGW_TRIP_LEASE_AHEAD`, `PGW_SAMPLE_THREADS` and
+    `PGW_NATIVE_MULTINOMIAL` = 0 (the conc stage is greedy, so the two sampling switches do not act there; the
+    other four do);
   * pin: the library's baked 7B pin, so the provider's pack is checked as for a customer.
 * Outputs (`cpu/results/sdk-qwen2.5-7b-instruct/results.json`):
   * setup: warm-up and first-answer seconds, plus the client CPU they took;
@@ -167,31 +198,49 @@ python deploy/runpod/jobs.py launch sdk7b --dc <DC> --max-usd 10 [--extra /path/
     provider's `compute_us` per trip, the lane trip and the wait beyond compute, and client / factory CPU per
     token, box cores busy;
   * every mode checked bit-identical to `off`;
-  * per N: aggregate and per-stream tok/s, TTFT p50/p95, errors, bit-identity with the prompt alone.
-  * `status.jsonl` (the client's status every 30 s) and `rtt-*.log`.
+  * per N: aggregate and per-stream tok/s, TTFT p50/p95, errors, bit-identity with the prompt alone, and
+    `refs_sha256` of the answers alone (equal in `sdk-...-native_off/results.json` when the switches change
+    nothing but speed);
+  * `prefix`: per turn TTFT off / on, cached tokens, prompt-pass rows and mask slots off / on, every answer
+    bit-identical, the cache's counters;
+  * `status.jsonl` (the client's status every 30 s; `maskgen_stalled_samples` counts the client watchdog's
+    stalls: expected 0) and `rtt-*.log`.
+  * `gpu/results/maskgen_progress-qwen2.5-7b-instruct.json`: the provider's worst maskgen item ages while the
+    client's factory ran (`oldest_running_s`, `slowest_item_s`, `bound_s`, `stalled_samples`; expected 0).
 * Decisions it feeds:
   * the pilot's tok/s claim at 7B (docs/sdk/models.md, pilot-handoff);
   * whether `lookup` (or `draft_head`) becomes a recommended setting for copy-heavy workloads (tokens per pass at
     7B);
-  * client sizing (docs/sdk/scaling.md: factory CPU per slot at 7B on real cores, streams per process);
+  * client sizing (docs/sdk/scaling.md: factory CPU per slot at 7B / 32B / 72B on a server core, 1024- against
+    256-slot segments, what round 3 bought there; streams per process; what the concurrency rounds bought at
+    N = 16 against a GPU provider);
+  * whether `prefix_cache=True` is worth recommending for multi-turn use (TTFT and masks at 7B);
   * the `round_trip_model.py --sdk` constants (section 4).
 
-### 3. `sdk32b`: 32B on one H100
+### 3. `sdk32b`: 32B on one H100 (measurement-only preview of the pinned model)
 
 ```bash
-python deploy/runpod/jobs.py launch sdk32b --dc <DC> --max-usd 13
+python deploy/runpod/jobs.py launch sdk32b --dc <DC> --max-usd 14
 ```
 
-* Pods: 1 x H100 SXM (200 GB volume), 32-vCPU client pod (150 GB disk), TTL 165 min. **Wall ~140 min + setup;
+* Pods: 1 x H100 SXM (80 GB volume), 32-vCPU client pod (140 GB disk), TTL 165 min. **Wall ~140 min + setup;
   ~$12.1.**
 * GPU:
-  * `provider_perf_session.py --phases env,memory,device_time,maskgen --models qwen2.5-32b` (35 min);
-  * then `pod_boot.py` packs Qwen2.5-32B-Instruct (~65 GB download) and serves it.
-* Client: `sdk_remote_bench.py --spec off,lookup --conc 1,4 --tokens 64 --mask-store-gb 60`.
-  * **32B has no baked pin yet.** The client is given the provider's own pack fingerprint (`--fingerprint`,
-    recorded in the results' `args`). This is a measurement-only override and checks nothing against a pin.
-  * If the shard-wise packer work has baked the 32B pin by then (`PINNED_MODELS` has
-    `qwen2.5-32b-instruct`), the pin is used instead, automatically.
+  * `provider_perf_session.py --phases env,memory,device_time,maskgen --models qwen2.5-32b` (35 min; maskgen
+    includes `device_conc2` at 32B);
+  * then `pod_boot.py` packs Qwen2.5-32B-Instruct at the pinned commit shard by shard (65 GB downloaded, one shard
+    + one prefetched on disk next to the 34 GB pack: peak ~43 GB instead of ~100 GB) and serves it; maskgen
+    progress sampled from the metrics port as in session 2.
+* Client: `factory_e2e` first (as in session 2, while the provider packs: a second sample of the same CPU type),
+  then `sdk_remote_bench.py --preview --spec off,lookup --conc 1,4 --tokens 64 --mask-store-gb 60` (60 GB:
+  ~3,100 slots of 19.2 MB, so 1024-slot segments; at the 8 GB default it would be 416 slots, one 256-slot group per
+  request).
+  * 32B is pinned (`PINNED_MODELS`: `a4cf6ba9ac2b...` at the provider's commit `5ede1c97`) but not in
+    `SUPPORTED_MODELS`. `--preview` enables it through `PGW_SDK_PREVIEW_MODELS` (measurement-only, off by default,
+    only for models with a baked pin): the provider's pack is verified against the baked pin exactly as for a
+    supported model, and `model_fingerprints` cannot replace it. Without the opt-in the client refuses the model
+    with `UnsupportedModelError` (after the provider's 65 GB download; `jobs.py launch` checks the step up front).
+  * No draft head ships for 32B (draft_head is not in this session's modes).
 * Decisions it feeds:
   * the 32B client burden (setup time on 32 vCPUs, factory CPU per slot, disk);
   * 32B tok/s on one H100;
@@ -206,27 +255,32 @@ python deploy/runpod/jobs.py launch 72b --dc <DC> --max-usd 11
 python deploy/runpod/jobs.py launch 72b --dc <DC> --max-usd 8 --gpu "NVIDIA H200" --gpu-count 1
 ```
 
-* Pods: 2 x H100 SXM, no client pod, TTL 95 min. **Wall ~70 min + setup; ~$9.8.** (H200: ~$6.5.)
+* Pods: 2 x H100 SXM (20 GB volume: random weights), no client pod, TTL 95 min. **Wall ~70 min + setup; ~$9.8.**
+  (H200: ~$6.5.)
 * GPU: `provider_perf_session.py --phases env,memory,device_time,maskgen --models qwen2.5-72b`. Memory is
   measured at TP 1 on the first GPU; `device_time` runs at TP 1 and 2 when two GPUs are present; maskgen at
-  72B widths.
+  72B widths, including `device_conc2` (two 72B items at once: the per-item seconds the maskgen watchdog bounds;
+  no provider service runs at 72B in this plan, so this is the 72B check of the 30 s bound).
 * Decisions it feeds:
   * 72B on one H100 (7.3-8.5 GiB planned headroom) or TP 2;
   * the TP 2 gather overhead per trip (`TP2_GATHER_MS`, an estimate today);
   * multi-GPU maskgen balance;
+  * the maskgen watchdog's default bound at 72B (`PGW_SDK_MASKGEN_STALL_S` / `PGW_SERVICE_MASKGEN_STALL_S`);
   * the H200 as the single-GPU 72B option.
 
 ### 5. Concurrency N = 1 / 4 / 16
 
-Already part of session 2 (`conc_1`, `conc_4`, `conc_16`, the last stages, so a stop loses them first). For a
-rerun of only that part, at the end and only if budget remains:
+Already part of session 2 (`conc_1`, `conc_4`, `conc_16`, after the spec stages; `prefix` and `native_off` come
+after them, so a stop loses those first). For a rerun of only the concurrency part, at the end and only if budget
+remains:
 
 ```bash
 python deploy/runpod/jobs.py launch sdk7b --dc <DC> --max-usd 10   # after `stop sdk7b`; same session name
 ```
 
-Before relaunching, edit `SESSIONS["sdk7b"]["steps"][0]` in `jobs.py` to `"spec": "off"` and
-`"conc": "1,4,16"` (~60 min, ~$6). If you do, record the edit in the commit message.
+Before relaunching, edit `SESSIONS["sdk7b"]["steps"]` in `jobs.py`: drop the `factory_e2e` step and set the sdk
+step's `"spec": "off"`, `"stages": "setup,conc"` and `"conc": "1,4,16"` (~60 min, ~$6). If you do, record the
+edit in the commit message.
 
 ## 4. Budget
 
@@ -235,15 +289,18 @@ watchdog grace; `launch` recomputes with RunPod's live price):
 
 | # | session | GPU | client | wall (min) | TTL (min) | est. $ | feeds |
 |---|---|---|---|---|---|---|---|
-| 1 | perf | 1 x H100 SXM | 16 vCPU | 105 | 130 | 8.09 | memplan, pks-v3 device path and fused kernels, lane over NIC |
-| 2 | sdk7b | 1 x H100 SXM | 32 vCPU | 95 | 120 | 8.83 | 7B TTFT, tok/s, trips/token, client CPU, speculation, N = 1/4/16 |
-| 3 | sdk32b | 1 x H100 SXM | 32 vCPU | 140 | 165 | 12.11 | 32B provider and client end to end |
-| 4 | 72b | 2 x H100 SXM | - | 70 | 95 | 9.79 | 72B memory TP 1, device time TP 1/2, maskgen |
-| | **total** | | | | | **38.82** | default cap `--budget-usd 60` |
+| 1 | perf | 1 x H100 SXM | 16 vCPU | 110 | 135 | 8.38 | memplan (incl. per-stage pks-v3 times), pks-v3 device path, round 3 vs `r2`, fused kernels, item concurrency, lane over NIC |
+| 2 | sdk7b | 1 x H100 SXM | 32 vCPU | 105 | 130 | 9.52 | 7B TTFT, tok/s, trips/token, client CPU, speculation (shipped head), N = 1/4/16, prefix cache, concurrency rounds on/off, mask CPU per slot 7B-72B, maskgen progress |
+| 3 | sdk32b | 1 x H100 SXM | 32 vCPU | 140 | 165 | 12.06 | 32B provider and client end to end (preview opt-in, pin-checked), maskgen progress at 32B |
+| 4 | 72b | 2 x H100 SXM | - | 70 | 95 | 9.78 | 72B memory TP 1, device time TP 1/2, maskgen, 72B item time vs the watchdog bound |
+| | **total** | | | | | **39.74** | default cap `--budget-usd 60` |
 
 Prices: H100 SXM $2.99/h Secure (the `launch.py` table, 2026-11), CPU $0.04 per vCPU-hour, storage
-$0.10/GB-month. A session stopped as soon as it is done costs about its wall time, not its TTL (about $28 for all
-four). The $60 cap leaves room for one retry of one session; the stop rule stops at $55.
+$0.10/GB-month (volumes now sized for the shard-wise packer: 20 / 40 / 80 / 20 GB; storage is cents either way).
+A session stopped as soon as it is done costs about its wall time plus setup, not its TTL: about $31 for all four
+at the planned wall times, ~$36 with ~15 min of setup each (before the added stages: ~$30 / ~$35 counted the same
+way, $38.82 at full TTL: +$0.9; `factory_e2e` runs while the GPU pod packs and adds nothing). The $60 cap leaves room for one retry of
+one session ($39.74 + $12.06 = $51.80); the stop rule stops at $55.
 
 ## 5. Results and model updates
 
@@ -266,6 +323,15 @@ next to the constant:
     the way `T4_RATES` was fitted from `results/kaggle/pks-ntt-t4-r2`, rename the rates "H100 SXM (measured)",
     and keep `python -m pgw.service.memplan --pks-throughput` within ~25 % of the measured items
     (`tests/service/test_pks_fused.py` has the T4 version of that check).
+  * The device-wire terms (the T4 model under-predicts whole device-wire items 1.6-1.9x, STATUS round 3): put
+    `pks_stages.json`'s measured per-stage seconds (`stages.unit_s`, `after_*` columns: ring rows, upload, wire
+    unpack, planes, GEMMs, switch + recombination, key switch, reply copy and pack) next to
+    `maskgen_pks_v3.json`'s `model_stages_s` for the same item; refit the stage(s) that carry the gap (on the T4
+    the candidates are the device unpack / pack and the recombination, not the GEMMs), then check
+    `measured_over_model` comes within ~25 % at 7B / 32B / 72B. The `round3` section gives the staged-upload rate
+    (`pool_gbps`) for the host copy pool (modelled at 17 GB/s) and the device reply-key unpack time.
+  * `r2` against `auto` (`maskgen_pks_v3.json`): what round 3 (device reply keys, staged uploads) buys on an
+    H100, measured, to replace the estimate in STATUS (450 / 135 / 81 slots/s at 7B / 32B / 72B).
   * The `auto` threshold of `PGW_SERVICE_PKS_DEVICE_HINT`, `PGW_SERVICE_PKS_GPU_WORK_MB` and
     `PGW_SERVICE_PKS_GPU_FWD4`: change a default only if the session shows it (byte-identical replies are a
     precondition).
@@ -282,9 +348,18 @@ next to the constant:
     chat), replacing the 0.5B values.
   * Then check that `python benchmarks/round_trip_model.py --sdk` reproduces the measured 7B ms per token at the
     measured RTT within ~10 %, and update `tests/benchmarks/test_round_trip_model.py` if its pinned outputs move.
+* **The maskgen watchdog** (`PGW_SDK_MASKGEN_STALL_S` / `PGW_SERVICE_MASKGEN_STALL_S`, 30 s, at least 4x the
+  slowest recent item): from `maskgen_progress-*.json` (32B and 7B through the service: `slowest_item_s`,
+  `oldest_running_s`, `stalled_samples` must be 0) and `device_conc2` (72B in process: `item_s`, `headroom_x`).
+  Keep 30 s if the slowest 72B item at two per device is under ~7.5 s (4x stays below the floor); otherwise
+  raise the floor and say so in STATUS. Any `stalled_samples` or client `maskgen_stalled_samples` on a healthy
+  provider is a false positive: a finding.
 * **Docs**:
   * `docs/sdk/models.md` "for reference" speeds and resource table;
-  * `docs/sdk/scaling.md` sizing (factory ms per slot on the client pod's cores);
+  * `docs/sdk/scaling.md` sizing: factory ms per slot per server core at 7B / 32B / 72B (`factory_e2e.jsonl`, against
+    this box's 39.5 / 127-137 / 220-240 ms), the 256- against 1024-slot segment cost, round 3 on / off; the
+    concurrency rounds at N = 16 against a GPU provider (`conc_16` against `native_off`);
+  * `docs/sdk/configuration.md` "Prefix cache": the 7B TTFT and masks off / on;
   * pilot-handoff's first-run estimate if the 7B setup differs.
 * **`STATUS.md`**: a new dated section with the commands run, the numbers, the decisions taken, and what each
   session cost (from `status`).
@@ -313,13 +388,42 @@ Exercised here only against a fake API or on loopback (no RunPod call was made w
 * **The GraphQL `myself { clientBalance currentSpendPerHr spendLimit }` query.** If it is refused, `check-key`
   says so and still lists the pods. Then use the RunPod console's balance for the stop rule.
 * **RunPod's HTTPS proxy for port 8888** (`https://<pod>-8888.proxy.runpod.net`): first answer after ~1-3 min (CUDA
-  image: apt installs python3 first); uploads of ~14 MB within its 100 s request limit.
+  image: apt installs python3 first); uploads of the ~29 MB bundle (the draft heads are in it now) within its
+  100 s request limit (needs ~3 Mbit/s; if the PUT times out, `jobs.py upload <session>` retries).
 * **Pod-scoped `RUNPOD_API_KEY` in the pods** (the TTL self-stop). The watchdog is the second guard; `status`
   shows the live state.
 * **`cpu5c` CPU pods with 16/32 vCPUs in the chosen data center.** `--cpu-flavor` changes the flavour; a refused
-  client pod terminates the GPU pod at once.
+  client pod terminates the GPU pod at once. The CPU model is recorded in `factory_e2e.jsonl`; the per-core figures
+  only compare with this repo's (AVX-512 IFMA box) if it has AVX-512.
 * **CUDA 13 hosts** (torch 2.15.0+cu132): `allowedCudaVersions` asks for them; `job_setup.sh` prints
   `cuda True|False`.
+* **The shard-wise packer against the hub on the GPU pod** (`pod_boot.SHARDWISE_PACK`): exercised here on a local
+  tiny checkpoint (same fingerprint and files as `pgw pack`, `tests/deploy/test_runpod.py`) and on Kaggle at 14B to
+  72B (hash-only / 14B written), not on a RunPod volume. First things to look at in `jobs.py log sdk7b gpu`: the
+  `packed <model> fingerprint ...` line, which must equal the baked pin (7B `f7c6fb4f...`, 32B `a4cf6ba9...`);
+  `cpu_sdk` prints a WARNING when the published fingerprint differs (the client then refuses the provider: a
+  finding, stop). `"packer": "whole"` in the sdk step (`PGW_RUNPOD_PACKER`) falls back to `pgw pack` with the old
+  disk peak (raise `volume_gb` first: 7B 40 -> 60, 32B 80 -> 140).
+* **The provider's metrics port** (`127.0.0.1:9090/readyz`, plain HTTP inside the GPU pod): read by the maskgen
+  progress sampler; `maskgen_progress-<model>.json` must show `samples` > 0. If it stays empty, the service's
+  metrics listener is not up (the measurement is lost, nothing else is affected).
+* **The 32B preview end to end**: the opt-in is unit-tested and smoke-tested on the tiny model served as
+  `qwen2.5-32b-instruct`; real 32B client setup (37 GB download from the provider, the local hint build, a
+  60 GB stock) has not run anywhere. `setup.warmup_s` in the results is the number to look at first.
+
+### First things to check live (in this order)
+
+1. `check-key` answers and shows no pod; the balance is at least $70.
+2. Session 1 `launch`: both control ports answer within 20 min and the bundle PUT returns 200.
+3. `jobs.py log perf gpu`: `job_setup.sh` ends with `native ok; torch 2.15.0+cu132 cuda True`.
+4. `perf/env`: `gemv_self_check: true`; `maskgen_pks_v3.json`: `identical: true` for every linear (stop rule 4
+   otherwise), `fused_status` with `keys` and `wire` `fused`.
+5. Session 2: `provider-qwen2.5-7b-instruct.log` has the `packed ... fingerprint f7c6fb4f...` line;
+   `sdk-qwen2.5-7b-instruct/results.json` `setup` stage present and every `bit_identical*` true;
+   `maskgen_progress-qwen2.5-7b-instruct.json` `samples` > 0 and `stalled_samples` 0.
+6. Session 3: `--preview` noted in the results' `notes`; no `UnsupportedModelError` or
+   `FingerprintMismatchError` in `sdk-qwen2.5-32b-instruct.log`.
+7. After each session: `stop --terminate`, then `teardown-check`.
 
 ## Files
 

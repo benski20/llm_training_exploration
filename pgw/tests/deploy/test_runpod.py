@@ -287,7 +287,7 @@ def test_ensure_pack_rebuilds_older_format(tmp_path: Path, monkeypatch: pytest.M
 
     def fake_run(cmd: list[str], **kw: Any) -> None:
         runs.append(cmd)
-        out = Path(cmd[cmd.index("pack") + 2])
+        out = next(Path(c) for c in cmd if c.endswith(".partial"))
         out.mkdir(parents=True)
         (out / "manifest.json").write_text(json.dumps({"format": "pgw-modelpack", "version": PACK_VERSION}))
 
@@ -304,6 +304,34 @@ def test_ensure_pack_rebuilds_older_format(tmp_path: Path, monkeypatch: pytest.M
     assert not (dst / "plain.safetensors").exists() and not (packs / f".{model}.old").exists()
     pod_boot.ensure_pack(model, packs, tmp_path / "hf")
     assert len(runs) == 1  # current format: reused
+    assert runs[0][1] == "-c" and runs[0][2] == pod_boot.SHARDWISE_PACK  # shard-wise by default
+    assert pod_boot.pack_command(model, packs / "x.partial", packs / "w", "whole")[1:4] == ["-m", "pgw.cli", "pack"]
+    with pytest.raises(pod_boot.BootError):
+        pod_boot.pack_command(model, packs / "x.partial", packs / "w", "other")
+
+
+def test_shardwise_pack_command_equals_pgw_pack(tmp_path: Path) -> None:
+    """The boot's shard-wise packing subprocess writes the pack ``pgw pack`` writes (same fingerprint and files):
+    the client library's pins hold for either."""
+    import subprocess
+
+    from pgw.modelpack import ModelPack, pack_checkpoint
+    from tests.conftest import _save_tiny
+
+    src = _save_tiny(tmp_path / "hf", "qwen2", seed=0)
+    model = pod_boot.SDK_MODELS[0]
+    whole = tmp_path / "whole"
+    pack_checkpoint(src, whole, name=model)
+    cmd = pod_boot.pack_command(model, tmp_path / "shard.partial", tmp_path / "work", "shardwise")
+    cmd[3] = str(src)  # a local checkpoint instead of the hub repo
+    cmd[6] = ""  # no revision for a local directory
+    env = {**os.environ, "PYTHONPATH": os.pathsep.join(sys.path)}
+    r = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=600)  # noqa: S603
+    assert r.returncode == 0, r.stderr[-2000:]
+    with ModelPack.open(whole) as a, ModelPack.open(tmp_path / "shard.partial", verify="full") as b:
+        assert a.fingerprint == b.fingerprint
+    assert sorted(p.name for p in whole.iterdir()) == sorted(p.name for p in (tmp_path / "shard.partial").iterdir())
+    assert not (tmp_path / "work").exists()
 
 
 def test_service_env_tuning_and_isolation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

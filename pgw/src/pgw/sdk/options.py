@@ -19,7 +19,8 @@ from typing import Any, Literal
 
 from pgw.sdk.errors import UnsupportedModelError
 
-__all__ = ["SUPPORTED_MODELS", "SDKOptions", "canonical_model", "default_mask_workers"]
+__all__ = ["PREVIEW_ENV", "SUPPORTED_MODELS", "SDKOptions", "canonical_model", "default_mask_workers",
+           "preview_models"]
 
 #: Models of this release (provider names). Anything else is refused with a clear message.
 SUPPORTED_MODELS: tuple[str, ...] = (
@@ -29,18 +30,59 @@ SUPPORTED_MODELS: tuple[str, ...] = (
     "qwen2.5-7b-instruct",
 )
 
+#: Measurement-only PREVIEW of models that this release pins (``pgw.sdk.provisioning.PINNED_MODELS``, with a baked
+#: fingerprint) but does not support: a comma list of model names, off (empty) by default. It is not a support
+#: statement (sizing, defaults and docs are untested for these models); it exists so that the pinned 14B / 32B / 72B
+#: models can be measured end to end. It relaxes no check: the provider's pack is verified against the baked pin
+#: exactly as for a supported model, ``model_fingerprints`` cannot replace a preview model's pin, and a listed name
+#: without a baked pin is refused.
+PREVIEW_ENV = "PGW_SDK_PREVIEW_MODELS"
+
+
+def _model_key(name: str) -> str:
+    return re.sub(r"^(qwen/)", "", name.strip().lower())
+
+
+def preview_models(raw: str | None = None) -> tuple[str, ...]:
+    """The preview models :data:`PREVIEW_ENV` (or ``raw``) enables: listed, pinned with a baked fingerprint and not
+    already supported.
+
+    Raises:
+        UnsupportedModelError: a listed name has no baked pin.
+    """
+    from pgw.sdk.provisioning import PINNED_MODELS
+
+    text = os.environ.get(PREVIEW_ENV, "") if raw is None else raw
+    out: list[str] = []
+    for item in text.split(","):
+        n = _model_key(item)
+        if not n or n in SUPPORTED_MODELS or n in out:
+            continue
+        pin = PINNED_MODELS.get(n)
+        if pin is None or not pin.fingerprint:
+            pinned = ", ".join(m for m, p in PINNED_MODELS.items() if p.fingerprint and m not in SUPPORTED_MODELS)
+            raise UnsupportedModelError(
+                f"{PREVIEW_ENV}: {item.strip()!r} has no baked pin in this release and cannot be previewed "
+                f"(pinned preview candidates: {pinned or 'none'})", details={"model": item.strip()})
+        out.append(n)
+    return tuple(out)
+
 
 def canonical_model(name: str) -> str:
     """``"Qwen/Qwen2.5-7B-Instruct"`` / ``"qwen2.5-7b-instruct"`` -> ``"qwen2.5-7b-instruct"``.
 
+    A pinned model outside :data:`SUPPORTED_MODELS` is accepted only while :data:`PREVIEW_ENV` lists it
+    (measurement-only preview, off by default: :func:`preview_models`).
+
     Raises:
-        UnsupportedModelError: not one of :data:`SUPPORTED_MODELS`.
+        UnsupportedModelError: not one of :data:`SUPPORTED_MODELS` nor an enabled preview model.
     """
     if not isinstance(name, str) or not name.strip():
         raise UnsupportedModelError("model is required (supported: " + ", ".join(SUPPORTED_MODELS) + ")")
-    n = name.strip().lower()
-    n = re.sub(r"^(qwen/)", "", n)
+    n = _model_key(name)
     if n in SUPPORTED_MODELS:
+        return n
+    if os.environ.get(PREVIEW_ENV, "").strip() and n in preview_models():
         return n
     raise UnsupportedModelError(
         f"model {name!r} is not supported by this release of pgw (supported: {', '.join(SUPPORTED_MODELS)})",
@@ -293,9 +335,13 @@ class SDKOptions:
                              "int8 weights otherwise)")
         if not 2 <= int(self.check_stock_segments) <= 4096:
             raise ValueError("check_stock_segments must be between 2 and 4096")
+        preview = preview_models() if os.environ.get(PREVIEW_ENV, "").strip() else ()
         for m, fp in (self.model_fingerprints or {}).items():
             if not isinstance(fp, str) or not re.fullmatch(r"[0-9a-f]{64}", fp.lower()):
                 raise ValueError(f"model_fingerprints[{m!r}] must be 64 hex digits")
+            if _model_key(str(m)) in preview:
+                raise ValueError(f"model_fingerprints[{m!r}]: a preview model ({PREVIEW_ENV}) is verified against "
+                                 "its baked pin only")
         if self.masked_head not in ("auto", "on", "off"):
             raise ValueError("masked_head must be 'auto', 'on' or 'off'")
         if self.mask_workers is not None and not 1 <= self.mask_workers <= 64:

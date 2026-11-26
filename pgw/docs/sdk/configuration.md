@@ -106,6 +106,7 @@ silently ignored.
 | `PGW_MASK_ADMISSION` | `entitled` | `mask_admission` |
 | `PGW_FACTORY_STALL_S` | `120` | `factory_stall_s` |
 | `PGW_SDK_MASKGEN_STALL_S` | `30` | `maskgen_stall_s` (`0`: the maskgen watchdog is off) |
+| `PGW_SDK_PREVIEW_MODELS` | unset (off) | measurement-only preview: a comma list of pinned models outside the supported list (e.g. `qwen2.5-32b-instruct`) that the library then accepts; still verified against their baked pins ([Models](models.md#planned)) |
 
 | `PGW_DRAFT_HEAD_URL` | unset | a mirror to fetch the pinned draft heads from when the installed package does not carry them (`<url>/<file>`; checked against the pinned SHA-256 before use) |
 | `PGW_MASK_STORE_GB` | `8` | `mask_store_gb` |

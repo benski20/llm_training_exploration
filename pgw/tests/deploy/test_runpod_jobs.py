@@ -347,11 +347,107 @@ def test_lane_nic_session_two_pods_on_cpu(tmp_path: Path, monkeypatch: pytest.Mo
 def test_sdk_remote_bench_cpu_smoke(tmp_path: Path) -> None:
     out = tmp_path / "sdkr"
     env = {**os.environ, "PYTHONPATH": f"{PGW / 'src'}:{PGW}"}
-    r = subprocess.run([sys.executable, str(RUNPOD_DIR / "sdk_remote_bench.py"), "--smoke", "--spec", "off,lookup",  # noqa: S603
+    r = subprocess.run([sys.executable, str(RUNPOD_DIR / "sdk_remote_bench.py"), "--smoke",  # noqa: S603
+                        "--spec", "off,lookup,draft_head", "--stages", "setup,spec,conc,prefix",
                         "--conc", "1,2", "--tokens", "8", "--conc-tokens", "8", "--runs", "1", "--mask-store-gb", "1",
                         "--out", str(out)], env=env, capture_output=True, text=True, timeout=900)
     assert r.returncode == 0, r.stdout[-3000:] + r.stderr[-3000:]
     res = json.loads((out / "results.json").read_text())
-    assert set(res["stages"]) == {"setup", "spec_off", "spec_lookup", "conc_1", "conc_2"}
+    assert set(res["stages"]) == {"setup", "spec_off", "spec_lookup", "spec_draft_head", "conc_1", "conc_2", "prefix"}
     assert res["stages"]["spec_lookup"]["edit"]["bit_identical_to_off"]
+    assert res["stages"]["spec_draft_head"]["chat"]["bit_identical_to_off"]
+    assert res["stages"]["spec_draft_head"]["draft_head"]["source"] == "--draft-head"  # the smoke's tiny head
     assert res["stages"]["conc_2"]["bit_identical"] and res["stages"]["conc_2"]["errors"] == 0
+    pre = res["stages"]["prefix"]
+    assert pre["bit_identical"] and pre["masks_on"] < pre["masks_off"] and pre["prompt_rows_on"] < pre["prompt_rows_off"]
+
+
+@pytest.mark.slow
+def test_sdk_remote_bench_preview_smoke(tmp_path: Path) -> None:
+    """``--preview`` with a pinned, unsupported model name (the tiny pack served under it): the run gets through the
+    client step that used to raise ``UnsupportedModelError`` after the provider's download."""
+    out = tmp_path / "sdkr"
+    env = {k: v for k, v in os.environ.items() if k != "PGW_SDK_PREVIEW_MODELS"}
+    env["PYTHONPATH"] = f"{PGW / 'src'}:{PGW}"
+    r = subprocess.run([sys.executable, str(RUNPOD_DIR / "sdk_remote_bench.py"), "--smoke", "--preview",  # noqa: S603
+                        "--model", "qwen2.5-32b-instruct", "--spec", "off", "--stages", "setup,conc", "--conc", "1",
+                        "--tokens", "8", "--conc-tokens", "8", "--runs", "1", "--mask-store-gb", "1",
+                        "--out", str(out)], env=env, capture_output=True, text=True, timeout=900)
+    assert r.returncode == 0, r.stdout[-3000:] + r.stderr[-3000:]
+    res = json.loads((out / "results.json").read_text())
+    assert res["model"] == "qwen2.5-32b-instruct" and not res["errors"]
+    assert res["stages"]["conc_1"]["bit_identical"] and any("preview" in n for n in res["notes"])
+
+
+def test_sdk_steps_are_checked_before_any_pod() -> None:
+    notes = jobs.check_sdk_steps(jobs.SESSIONS["sdk32b"]["steps"])
+    assert any("preview" in n for n in notes)  # 32B: pinned, not supported
+    assert any("shipped pinned head" in n for n in jobs.check_sdk_steps(jobs.SESSIONS["sdk7b"]["steps"]))
+    with pytest.raises(SystemExit, match="no baked pin"):
+        jobs.check_sdk_steps([{"kind": "sdk", "model": "qwen2.5-110b-instruct", "spec": "off"}])
+    with pytest.raises(SystemExit, match="no shipped head"):
+        jobs.check_sdk_steps([{"kind": "sdk", "model": "qwen2.5-32b-instruct", "spec": "off,draft_head"}])
+    assert jobs.check_sdk_steps([{"kind": "sdk", "model": "qwen2.5-32b-instruct", "spec": "draft_head",
+                                  "draft_head": "extras/h.pt"}])  # an --extra head overrides
+
+
+def test_session_disks_fit_the_shardwise_pack() -> None:
+    """Volumes sized for the shard-wise packer (the pack plus ~2 shards of scratch, not the whole checkpoint) and the
+    client cache plus its mask stock (docs/sdk/scaling.md)."""
+    pack_gb = {"qwen2.5-7b-instruct": 9, "qwen2.5-32b-instruct": 34}
+    cache_gb = {"qwen2.5-7b-instruct": 13.3, "qwen2.5-32b-instruct": 44.8}
+    for cfg in jobs.SESSIONS.values():
+        for s in cfg["steps"]:
+            if s["kind"] == "sdk":
+                assert cfg["volume_gb"] >= pack_gb[s["model"]] + 9 + 10  # + scratch + bundle / native build / logs
+                assert cfg["client_disk_gb"] >= cache_gb[s["model"]] + s["mask_store_gb"] + 10
+
+
+def test_maskgen_progress_sampler_records_the_worst(tmp_path: Path) -> None:
+    import http.server
+    import threading
+
+    views = iter([{"waiting": 1, "running": 2, "oldest_running_s": 0.4, "slowest_item_s": 0.3, "bound_s": 30.0,
+                   "stalled": False, "done": 5, "failed": 0},
+                  {"waiting": 0, "running": 1, "oldest_running_s": 1.5, "slowest_item_s": 0.9, "bound_s": 30.0,
+                   "stalled": False, "done": 9, "failed": 0}])
+
+    class H(http.server.BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            try:
+                body = json.dumps({"ready": True, "details": {"maskgen": "ok", "maskgen_progress": next(views)}})
+            except StopIteration:
+                body = json.dumps({"ready": True, "details": {}})
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(body.encode())
+
+        def log_message(self, *a: Any) -> None:
+            pass
+
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    stop = threading.Event()
+    th = threading.Thread(target=jobs.maskgen_progress_sampler, args=(tmp_path / "mp", stop),
+                          kwargs={"interval_s": 0.05, "url": f"http://127.0.0.1:{srv.server_address[1]}/readyz"})
+    th.start()
+    time.sleep(0.6)
+    stop.set()
+    th.join()
+    srv.shutdown()
+    worst = json.loads((tmp_path / "mp.json").read_text())
+    assert worst["samples"] == 2 and worst["oldest_running_s"] == 1.5 and worst["slowest_item_s"] == 0.9
+    assert worst["max_running"] == 2 and worst["done"] == 9 and worst["stalled_samples"] == 0
+    assert len((tmp_path / "mp.jsonl").read_text().splitlines()) == 2
+
+
+def test_factory_e2e_step_runs_on_and_off(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("PGW_JOB_STOP_AT", raising=False)
+    res = tmp_path / "results"
+    res.mkdir()
+    rc = jobs.cpu_factory_e2e({"runs": [["0.5b", 64, "on"], ["0.5b", 64, "off"]]}, res, sys.executable)
+    assert rc == 0, (res / "factory_e2e.log").read_text()[-3000:]
+    lines = [json.loads(x) for x in (res / "factory_e2e.jsonl").read_text().splitlines()]
+    runs = [x for x in lines if "layer_cpu_ms_per_slot" in x]
+    assert len(runs) == 2 and runs[0]["wire_fused"] is True and runs[1]["wire_fused"] is False
+    assert all(x["run"]["cpu_model"] for x in lines if "run" in x)

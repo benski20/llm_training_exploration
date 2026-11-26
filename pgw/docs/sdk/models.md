@@ -87,3 +87,9 @@ generation keeping up. A small pilot machine will be slower.
 
 Larger Qwen2.5 models (14B, 32B, 72B; their fingerprints are already pinned, above) and other open-weight
 families are planned. Tell us which models matter to you.
+
+For measurements only, a pinned model that is not supported yet can be enabled with
+`PGW_SDK_PREVIEW_MODELS=qwen2.5-32b-instruct` (a comma list; off by default). This is a **preview, not support**:
+sizing, defaults and these docs are not checked for those models. It relaxes no check: the provider's pack must
+match the baked pin above, `model_fingerprints` cannot replace a preview model's pin, and a model without a baked
+pin is refused even when listed.

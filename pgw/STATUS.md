@@ -19,8 +19,8 @@ SLA pilot. Three reasons:
 
 How to read this file: the verdict above is the v0.1.0 release view (2026-11-17). Workstreams append dated
 sections. The 2026-11-25 sections follow this summary. The 2026-11-19 to 2026-11-23 updates come next, then the
-release report's numbered sections (1-6). The **2026-11-26 sections are at the end**, ending with the client mask
-CPU per slot, round 3. A note in *italics* marks a statement that a later section superseded.
+release report's numbered sections (1-6). The **2026-11-26 sections are at the end**, ending with the RunPod
+runbook's launch-readiness pass. A note in *italics* marks a statement that a later section superseded.
 
 **What the product is now.** The client library (`pip install pgw-sdk`, `from pgw import OpenAI`) runs the gateway
 in the application's process against our provider service. Defaults:
@@ -46,7 +46,8 @@ Opt-in:
 * the weight-free factory (`factory_weights="stream"`).
 
 Pack format 2 (bf16 plain tensors, exact) is the default. Fingerprints for 0.5B, 1.5B, 3B and 7B are baked in
-(`PINNED_MODELS`).
+(`PINNED_MODELS`), and for 14B / 32B / 72B ahead of support (usable for measurements only through
+`PGW_SDK_PREVIEW_MODELS`, off by default).
 
 On the provider, the pks-v3 hint is recomputed per item on the device. This runs as fused Triton kernels after
 bit-exact self-tests, with the 4-prime forward NTT off by default. Since the third round the reply keys are
@@ -73,12 +74,16 @@ counted the same way; last section: upload and reply written in place, AVX-512 k
 * the SDK's TTFT, tok/s and trips per token against a remote GPU provider;
 * 32B and 72B at all.
 
-`deploy/runpod/RUNBOOK.md` measures all of these in four sessions under $60 (`deploy/runpod/jobs.py`).
+`deploy/runpod/RUNBOOK.md` measures all of these in four sessions under $60 (`deploy/runpod/jobs.py`; $39.74 at
+full TTL, ~$31-36 stopped when done), launch-ready since the last 2026-11-26 section: 32B runs through the
+measurement-only preview opt-in `PGW_SDK_PREVIEW_MODELS` (pinned models only, still pin-checked; `SUPPORTED_MODELS`
+unchanged), the shipped draft head is used by default, and the day's provider device paths, the maskgen watchdog's
+bound, the client CPU rounds, the prefix cache and the client mask cost per server core have stages of their own.
 
 **Open:**
 * the external cryptographic review of pks-v3 and the external audit of the Rust `unsafe` code;
-* 32B/72B pins, which need the shard-wise public-check packer (in progress);
-* a trained 7B draft head (in progress);
+* whether 14B / 32B / 72B join `SUPPORTED_MODELS` (a product decision; their pins and the shard-wise packer ship);
+* a draft head for 32B / 72B (0.5B and 7B ship);
 * provider images rebuilt and pushed with torch 2.15.0;
 * HSM/KMS/TPM never run on real services;
 * the per-token latency target. The model gives 7B at about 17 tok/s at RTT 0.2 ms without speculation; to be
@@ -4128,3 +4133,113 @@ per slot at 72B); the request `bytes` is a fresh allocation per call (httpx take
 copies and TLS are not in these figures; with the default 8 GB stock, 32B / 72B segments are one 256-slot group per
 request, which pays the public `a`'s forward NTTs per group (~6 ns more per input value and slot): a larger
 `mask_store_gb`; the NTT kernels' bound (a run with hardware counters on a bare-metal AMX box).
+
+## 2026-11-26: RunPod runbook launch-readiness (blockers fixed, stages for the day's changes; not run on RunPod)
+
+Scope: `deploy/runpod/RUNBOOK.md` and its scripts were written before the day's later merges and have not run
+against RunPod. Goal: no session fails midway after paying for its setup, and every change of the day gets a
+measurement, within the $60 cap (stop at $55). No RunPod call (no key here), no external compute.
+
+**Blockers fixed.**
+1. **`sdk32b` would have died at the client step** after the ~65 GB download and pack: `canonical_model`
+   refuses `qwen2.5-32b-instruct` (`SUPPORTED_MODELS` is 0.5B-7B), and the bench's `--fingerprint` did not get
+   past that check (since the 32B pin shipped, `jobs.py` no longer even passed it). New, **measurement-only and
+   off by default**: `PGW_SDK_PREVIEW_MODELS` (`pgw.sdk.options.preview_models`), a comma list of models that are
+   in `PINNED_MODELS` **with a baked fingerprint** and not supported; `canonical_model` and `list_models` then
+   accept them. Nothing about verification changes: the provider's pack is checked against the baked pin as for a
+   supported model, `model_fingerprints` cannot replace a preview model's pin (`SDKOptions.validate`), and a listed
+   name without a baked pin is refused. `SUPPORTED_MODELS` is unchanged (adding 14B-72B is a product decision).
+   Documented as a preview in `docs/sdk/models.md` and the env table of `docs/sdk/configuration.md`.
+   `sdk_remote_bench.py --preview` sets it for `--model` (recorded in the results' `notes`); `--fingerprint` is
+   gone. `jobs.py launch` now checks every sdk step before any pod exists: a baked pin, the provider packing the
+   pinned commit (`pod_boot.MODELS`), a head for `draft_head`; `cpu_sdk` warns when the provider's published pack
+   fingerprint is not the pin.
+2. **`--spec draft_head` without `--draft-head`**: the bench skipped the mode (and `stage_spec` would have crashed
+   on `Path(None)`); now the head the library ships pinned (`pgw.sdk.draft_heads`, the `-r2` files) is used by
+   default, `--draft-head` / `jobs.py --extra` override it, a missing override file fails at start, a model with no
+   shipped head (32B) skips the mode with a note, and the results name the head (`spec_draft_head.draft_head`).
+   The smoke run builds a random head of the tiny model's shape (the shipped heads are for the real shapes).
+3. **Provider disk**: `pod_boot.ensure_pack` packed with `pgw pack` (`pack_checkpoint`: the whole bfloat16
+   checkpoint on the volume, ~100 GB peak at 32B). It now runs the shard-wise packer
+   (`pgw.modelpack.shardwise.stream_pack_checkpoint`, one shard + one prefetched, as the service user, resumable
+   scratch `packs/.<model>.work`); the same pack (`tests/deploy/test_runpod.py`: same fingerprint and files as
+   `pack_checkpoint` on the tiny checkpoint). `"packer": "whole"` in an sdk step falls back.
+
+**Stages added** (short stages in the existing sessions; no new session):
+* `perf`: phase `pks_stages` (`benchmarks/pks_ntt_bench.py --sections exact_new,stages,round3`, ~6 min): the device
+  item's per-stage seconds before / after scaled to a 1024-slot cycle, device reply keys against the host unpack
+  and the staged-upload rate, to refit `memplan`'s H100 `PksRates` and its device-wire terms (the T4 model
+  under-predicts device-wire items 1.6-1.9x); `maskgen_pks_v3.json` now also has `memplan`'s per-stage terms
+  (`model_stages_s`) and `measured_over_model` per item. The `r2` comparison config was checked against
+  `pks_gpu`'s switches: `PGW_SERVICE_PKS_GPU_KEYS=torch` (host unpack) + `PGW_SERVICE_PKS_HOST_THREADS=1` (one-thread
+  staging; both read per call) is exactly the round-2 path; correct as it was.
+* Maskgen watchdog bound: `device_conc2` in every maskgen phase (two items at once on one device, as the service
+  runs them; each item's seconds, `watchdog_bound_s`, `headroom_x` against 30 s): 7B / 32B / 72B in `perf`, 32B in
+  `sdk32b`, 72B in `72b` (no service runs at 72B in this plan). Where a provider serves (`sdk7b`, `sdk32b`), the GPU
+  pod samples the metrics port's `/readyz` `maskgen_progress` every 2 s while the client's factory runs
+  (`maskgen_progress-<model>.{json,jsonl}`: worst oldest running item, slowest item, bound, stalled samples); the
+  client side counts `maskgen_stalled` status samples (`maskgen_stalled_samples`, expected 0).
+* `sdk7b`: `prefix` stage (`prefix_cache=False` then `True` on a system prompt + 4 turns + a second conversation,
+  16 tokens per answer, every answer compared: TTFT per turn, cached tokens, prompt-pass rows, mask slots; ~5 min);
+  `native_off` (a second process on the same cache, `conc_16` with `PGW_SYNC_MULTI`, `PGW_TRIP_NATIVE_MULTI`,
+  `PGW_DECODE_NATIVE_MULTI`, `PGW_TRIP_LEASE_AHEAD`, `PGW_SAMPLE_THREADS`, `PGW_NATIVE_MULTINOMIAL` = 0; the conc
+  stage is greedy, so the sampling pair does not act there; `refs_sha256` compares the answers across the two
+  processes; ~5 min). The 7B N = 1/4/16 stages measure the rounds on their defaults as before.
+* `factory_e2e` on the client pod of `sdk7b` and `sdk32b`, before the sdk step, i.e. while the GPU pod downloads
+  and packs (no GPU time): `benchmarks/pks_factory_e2e.py` on one pinned core at 7B / 32B / 72B layer shapes,
+  1024-slot segments with the round-3 switches on and off (`PGW_FAST_CHACHA512`, `PGW_FACTORY_R_REUSE`,
+  `PGW_PKS_WIRE_FUSED`, `PGW_PKS_OUT_REUSE`), and 256-slot segments at 32B / 72B; one JSON line per run with the CPU
+  model.
+
+**Sizes.** Mask stocks (slot bytes 6.17 / 19.2 MB at 7B / 32B, `docs/sdk/scaling.md`): `sdk7b` 24 GB = ~3,900
+slots, `sdk32b` 60 GB = ~3,100 slots: both give 1024-slot segments (32B at the 8 GB default would be 416 slots,
+one 256-slot group per request, which `factory_e2e` measures separately); the bench waits for at most 3,000
+slots, below both targets. Disks, with the shard-wise packer (scratch ~8.5 GB): GPU volumes 60 / 120 / 200 / 60 ->
+**20 / 40 / 80 / 20 GB** (perf and 72b use random weights; 7B pack ~9 GB, 32B ~34 GB); client disks: `sdk7b` 80 ->
+70 GB (cache 13.3 + stock 24 + venv and native build), `sdk32b` 150 -> 140 GB (cache 44.8 + stock 60). Storage is
+cents either way; smaller volumes are easier to place. The bundle is now ~29 MB (the shipped draft heads), under
+`pod_job.py`'s 96 MB limit; RunPod's 100 s proxy limit needs ~3 Mbit/s for it.
+
+**Budget** (`jobs.py plan`, table prices, Secure Cloud, full TTL + watchdog grace):
+
+| # | session | GPU | client | wall (min) | TTL (min) | est. $ | change |
+|---|---|---|---|---|---|---|---|
+| 1 | perf | 1 x H100 SXM | 16 vCPU | 110 | 135 | 8.38 | +5 min: `pks_stages` |
+| 2 | sdk7b | 1 x H100 SXM | 32 vCPU | 105 | 130 | 9.52 | +10 min: `prefix`, `native_off` (`factory_e2e` overlaps the pack) |
+| 3 | sdk32b | 1 x H100 SXM | 32 vCPU | 140 | 165 | 12.06 | preview opt-in; smaller disks |
+| 4 | 72b | 2 x H100 SXM | - | 70 | 95 | 9.78 | smaller volume |
+| | **total** | | | | | **39.74** | was 38.82 |
+
+Stopped when done: ~$31 at the planned wall times, ~$36 with ~15 min of setup per session (the old plan, counted
+the same way: ~$30 / ~$35; the runbook had said ~$28). One
+retry of the costliest session still fits the cap ($51.80 < $55).
+
+**Verified offline** (this box, 4 vCPUs):
+* `jobs.py plan` and `jobs.py launch <s> --dc EU-RO-1 --max-usd 15 --dry-run` for `perf`, `sdk7b`, `sdk32b`, `72b`:
+  all "nothing created, nothing spent"; `sdk32b` prints the preview note with the pin `a4cf6ba9ac2b...`, `sdk7b` the
+  shipped head.
+* `provider_perf_session.py --dry-run`: 8 phases, ~100 min, writes only into the given `--out`.
+* `sdk_remote_bench.py --smoke --spec off,lookup,draft_head --stages setup,spec,conc,prefix --conc 1,2`: every
+  stage, every mode bit-identical to `off`, `conc_2` bit-identical, prefix 629 -> 254 mask slots and 539 -> 164
+  prompt rows, every answer identical. `--smoke --preview --model qwen2.5-32b-instruct` (the tiny pack served under
+  the 32B name): through setup, spec and conc, the preview noted. Both are tests now (`tests/deploy/
+  test_runpod_jobs.py`, slow).
+* `phase_pks_items` on CPU at 0.5B / 72B (tiny shapes): `identical` true with `device_conc2`'s replies included;
+  `pks_ntt_bench.py --cpu --sections exact_new,stages,round3`: all exact; `pks_factory_e2e.py` with the round-3
+  switches on / off (7B, 256 slots: 37.9 / 52.8 ms per slot, `wire_fused` true / false).
+* New tests: `tests/sdk/test_preview_models.py` (7: off by default, a pinned model accepted, an unpinned one and a pin
+  without a fingerprint refused, a supported name in the list ignored, no pin replacement, the provisioner's pin);
+  `tests/deploy/test_runpod_jobs.py` (+6: the launch-time sdk checks, disk sizes, the maskgen progress sampler
+  against a fake metrics port, `factory_e2e` on / off, the preview smoke; the smoke extended);
+  `tests/deploy/test_runpod.py` (+1: the boot's shard-wise command = `pgw pack`).
+* Directory runs, absolute `PYTHONPATH`, one at a time: tests/sdk (serial) 213 passed, 1 opt-in skip (11 min);
+  tests/deploy (`-n 2`) 146 passed, 1 skip, 1 failed: `test_lane_nic_session_two_pods_on_cpu`, timing on this
+  4-vCPU box (the CPU-emulated lane bench's 90 s serve window ends during the client's 64-connection level; its log
+  shows every earlier level complete; it also fails alone; nothing in the lane path changed);
+  tests/docs: only the 18 known environment-only `test_numbers` failures (`PGW_SDK_PREVIEW_MODELS` added to the
+  documented-switch list). ruff clean on the changed files. mypy not run (this box's mypy lacks the pydantic plugin).
+
+**Only checkable live** (also in the runbook's "First things to check live"): the RunPod API fields, proxy and
+pod-scoped key (unchanged from the integration sweep); the bundle upload at ~29 MB; the shard-wise packer against
+the hub on a RunPod volume and its fingerprint equal to the pins; the metrics port sampler on a real service; the
+real 32B client setup (37 GB from the provider, local hint, 60 GB stock); every number.

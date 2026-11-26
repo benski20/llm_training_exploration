@@ -120,6 +120,7 @@ _NON_FIELD_ENV = {
     "PGW_FACTORY_STALL_S",  # SDKOptions.factory_stall_s (pgw.sdk.factory: stalled-factory deadline)
     "PGW_SDK_FACTORY_HANG_S",  # pgw.sdk.factory: hung factory child deadline (supervisor knob)
     "PGW_SDK_MASKGEN_STALL_S",  # SDKOptions.maskgen_stall_s (pgw.sdk.factory: the maskgen watchdog)
+    "PGW_SDK_PREVIEW_MODELS",  # pgw.sdk.options.preview_models: measurement-only preview of pinned models
     "PGW_PKS_ISA",  # pgw_pks (Rust): caps the ISA of the pks-v3 and check-vector kernels
     "PGW_MASK_ADMISSION",  # SDKOptions.mask_admission
     "PGW_PKS_COMPACT",  # pks-v3 compact output switch read by pgw.hemask.pks_backend
