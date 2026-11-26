@@ -429,11 +429,12 @@ provision(model, *, session: pgw.sdk.session.Session, cache_dir: Path, progress:
 
 * **Pins.** The provider's catalog is never trusted alone. `PINNED_MODELS` pins every supported model to its public
   checkpoint (repo, commit = `deploy/runpod/pod_boot.MODELS`) and, where derived for the release, its pack
-  fingerprint (0.5B `915e55c1...`, 1.5B `81bb7adc...`: `scripts/pin_model_fingerprints.py`, i.e. `pgw pack <repo>
-  --revision <commit> --name <model>` with default parameters, from the public checkpoints in the local HF cache;
-  the 0.5B pin is re-derived and checked by `tests/sdk/test_e2e_product.py` when the checkpoint is cached). A
-  provider serving another fingerprint is refused (`FingerprintMismatchError`) before any download. 3B / 7B have no
-  baked fingerprint yet (their checkpoints were not available offline at integration): the entry's
+  fingerprint (0.5B `915e55c1...`, 1.5B `81bb7adc...`, 3B `a8e7bac9...`, 7B `d3db0ca8...`:
+  `scripts/pin_model_fingerprints.py`, i.e. `pgw pack <repo> --revision <commit> --name <model>` with default
+  parameters; 3B / 7B derived on a Kaggle CPU kernel, where 0.5B / 1.5B re-derived to the integration box's values;
+  the 0.5B pin is also re-derived and checked by `tests/sdk/test_e2e_product.py` when the checkpoint is cached). A
+  provider serving another fingerprint is refused (`FingerprintMismatchError`) before any download. A pin without a
+  fingerprint (a future model; every release model has one) is checked on first use instead: the entry's
   `hf_repo`/`revision` must equal the pin, and the first provisioning runs `provision(source="hf", hf_repo=...,
   hf_revision=...)`, which packs the public checkpoint locally and requires the provider's fingerprint; the result
   is remembered in `models/<fp16>/public-check.json`. `SDKOptions.model_fingerprints` adds or replaces pins (custom

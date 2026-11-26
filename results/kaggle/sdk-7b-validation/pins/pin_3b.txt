@@ -1,0 +1,12 @@
+{"qwen2.5-3b-instruct": {"hf_repo": "Qwen/Qwen2.5-3B-Instruct", "revision": "aa8e72537993ba99e69dfaafa59ed015b17504d1", "fingerprint": "a8e7bac934d82f6435fe9385bd1eb3cfdf1a68f4ff415829e49a3dd4f23bcd23", "baked": null, "matches": null}}
+
+---stderr---
+
+Fetching 9 files:   0%|          | 0/9 [00:00<?, ?it/s]Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+
+Fetching 9 files:  11%|█         | 1/9 [00:00<00:01,  6.92it/s]
+Fetching 9 files:  67%|██████▋   | 6/9 [00:00<00:00, 25.69it/s]
+Fetching 9 files:  78%|███████▊  | 7/9 [00:20<00:00, 25.69it/s]
+Fetching 9 files:  89%|████████▉ | 8/9 [00:33<00:05,  5.51s/it]
+Fetching 9 files: 100%|██████████| 9/9 [00:33<00:00,  3.68s/it]
+/bin/sh: 1: Bad substitution
