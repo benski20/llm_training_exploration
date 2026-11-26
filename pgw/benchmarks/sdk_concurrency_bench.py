@@ -155,6 +155,13 @@ def _client(args: argparse.Namespace, wid: int) -> None:
         s0 = be.stats.snapshot()
         ls = getattr(h.runtime.client, "lane_stats", None)
         l0 = (ls.trips, ls.fallbacks) if ls is not None else (0, 0)
+        gen = getattr(h.runtime, "generator", None)
+        sc0 = dict(getattr(gen, "sched_stats", {}) or {})
+        nd = getattr(h.runtime.model, "_native_decode", None) if getattr(h.runtime, "model", None) else None
+        nd0 = list(nd.totals) if nd is not None else None
+        from pgw.maskstore import store as _mstore
+
+        lc0 = dict(_mstore.LEASE_COUNTS)
         cpu0, wall0, epoch0 = _thread_cpu(), time.perf_counter(), time.time()
         res: list[dict[str, Any]] = []
         errs: list[str] = []
@@ -173,6 +180,9 @@ def _client(args: argparse.Namespace, wid: int) -> None:
         wall = time.perf_counter() - wall0
         cpu1, s1 = _thread_cpu(), be.stats.snapshot()
         same = all(r["lp"] == refs[r["i"] % len(PROMPTS)] for r in res)
+        sc1 = dict(getattr(gen, "sched_stats", {}) or {})
+        nd = getattr(h.runtime.model, "_native_decode", None) if getattr(h.runtime, "model", None) else None
+        nd1 = list(nd.totals) if nd is not None else None
         print(json.dumps({
             "worker": wid, "n": n, "streams": len(mine), "errors": errs[:3], "n_errors": len(errs),
             "bit_identical": same, "wall_s": wall, "epoch0": epoch0, "epoch1": time.time(),
@@ -187,6 +197,11 @@ def _client(args: argparse.Namespace, wid: int) -> None:
             "lane_trips": (ls.trips - l0[0]) if ls is not None else 0,
             "lane_fallbacks": (ls.fallbacks - l0[1]) if ls is not None else 0,
             "lane_fallback_reasons": dict(ls.fallback_reasons) if ls is not None else {},
+            # the generator's steps and the native decode driver's calls and trips (one or several answers)
+            "leases": {k: v - lc0.get(k, 0) for k, v in _mstore.LEASE_COUNTS.items()},
+            "sched": {k: sc1.get(k, 0) - sc0.get(k, 0) for k in sc1 if sc1.get(k, 0) != sc0.get(k, 0)},
+            "native_decode": ([b - a for a, b in zip(nd0 or [0] * len(nd1), nd1, strict=True)]
+                              if nd1 is not None else None),
         }), flush=True)
         barrier(f"done{n}")
     c.close()
@@ -307,6 +322,16 @@ def main() -> None:
                                                 sorted(cpu.items(), key=lambda kv: -kv[1])[:8]},
                        "client_cpu_util": {k: round(v / wall, 2) for k, v in
                                            sorted(cpu.items(), key=lambda kv: -kv[1])[:8]}}
+                sched: dict[str, float] = {}
+                for r in rs:
+                    for k, v in (r.get("sched") or {}).items():
+                        sched[k] = sched.get(k, 0) + v
+                lvl["sched"] = sched
+                lvl["leases"] = {k: sum((r.get("leases") or {}).get(k, 0) for r in rs)
+                                 for k in rs[0].get("leases", {})}
+                nds = [r["native_decode"] for r in rs if r.get("native_decode")]
+                if nds:  # [driver calls, trips, native local ns, lane ns, run CPU s]
+                    lvl["native_decode"] = [round(sum(x), 3) for x in zip(*nds, strict=True)]
                 lvl["provider_cpu_util"] = round(pcpu / wall, 2)
                 lvl["provider_cpu_s_per_tok"] = round(pcpu / max(1, toks), 5)
                 lvl["factory_cpu_util"] = round(fcpu / wall, 2)

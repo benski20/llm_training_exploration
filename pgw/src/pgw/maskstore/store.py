@@ -483,6 +483,12 @@ class MaskReservation:
         self._ahead: dict[tuple[int, str], tuple[int, Any]] = {}  # (first chunk, future of {chunk: buf})
         #: The gateway's per-linear lease cache (``MaskedBackend``'s native per-trip path reads it).
         self.trip_leases = self._lease
+        #: linear key -> ``(lease, tag, post)``: the next trip lease, prepared ahead (:meth:`lease_ahead`),
+        #: unattached (hands out nothing until :meth:`trip_lease` attaches it at its first row).
+        self._next: dict[str, tuple[Any, Any, tuple[int, int, int]]] = {}
+        #: Leases prepared ahead / attached from ahead (statistics).
+        self.leases_ahead = 0
+        self.leases_ahead_used = 0
 
     def __repr__(self) -> str:
         return (
@@ -576,7 +582,7 @@ class MaskReservation:
             raise ConfigError(f"rows must be a positive int, got {rows!r}")
         with self._lock:
             self._alive()
-            if self._lease:
+            if self._lease or self._next:
                 self._settle_locked(key)
             start = self._cursor[key]
             if start + rows > self._slots:
@@ -613,7 +619,7 @@ class MaskReservation:
             raise ConfigError(f"rows must be a positive int, got {max_rows!r}")
         with self._lock:
             self._alive()
-            if self._lease:
+            if self._lease or self._next:
                 self._settle_locked(key)
             start = self._cursor[key]
             if start >= self._slots:
@@ -639,7 +645,7 @@ class MaskReservation:
         Never zeroes a buffer a pending job reads: replaced chunk buffers go to ``deferred`` and
         extent-end cleanups to ``ends`` (both run after the native call)."""
         self._alive()
-        if self._lease:
+        if self._lease or self._next:
             self._settle_locked(key)
         start = self._cursor[key]
         if start >= self._slots:
@@ -698,7 +704,7 @@ class MaskReservation:
 
     def _claim_needs_slow_locked(self, key: str, max_rows: int) -> bool:
         """Whether :meth:`_claim_plan_locked` would take ``key``'s next rows by the ordinary path."""
-        if self._lease:
+        if self._lease or self._next:
             self._settle_locked(key)
         start = self._cursor[key]
         if start >= self._slots:
@@ -734,14 +740,17 @@ class MaskReservation:
         lease = self._lease.get(key) if self._lease else None
         return self._cursor[key] if lease is None else int(lease.cursor)
 
-    def _settle_locked(self, key: str) -> None:
-        """Detach ``key``'s lease (if any) and store its cursor: another path takes rows next."""
+    def _settle_locked(self, key: str, keep_next: bool = False) -> None:
+        """Detach ``key``'s lease (if any) and store its cursor: another path takes rows next (a lease prepared
+        ahead is closed too, unless ``keep_next``: :meth:`trip_lease` checks it against the cursor)."""
         lease = self._lease.pop(key, None)
         if lease is not None:
             self._cursor[key] = int(lease.detach())
+        if not keep_next and self._next:
+            self._drop_next_locked(key)
 
     def trip_lease(self, lid: LinearId | str, rows: int, verify: Callable[[Any], None] | None = None,
-                   wnorm: float = 0.0, *, strict: bool = True, prime_ok: bool = False) -> Any:
+                   wnorm: float = 0.0, *, strict: bool = True, prime_ok: bool = False, tag: Any = None) -> Any:
         """A native trip lease serving the next ``rows`` (or more) rows of ``lid`` (``pgw_fast.TripLease``).
 
         The lease covers the rows from the cursor to the end of the current decrypted ``W r`` chunk (never
@@ -755,6 +764,10 @@ class MaskReservation:
         native extension): the caller then takes the ordinary path. With ``strict``, fewer than ``rows``
         rows left raises :class:`MaskExhaustedError` (nothing consumed), as the gateway's pre-check does;
         otherwise that returns ``None`` too.
+
+        With :data:`TRIP_LEASE_AHEAD`, the lease :meth:`lease_ahead` prepared for exactly the cursor's row (made
+        under the same ``tag``: the caller's soundness policy, verified then) is attached instead of a new one
+        (same rows, same values; it handed nothing out before); any other one is closed (zeroed).
         """
         key = self._key(lid)
         with self._lock:
@@ -763,106 +776,203 @@ class MaskReservation:
             if lease is not None:
                 if lease.ready(rows):
                     return lease
-                self._settle_locked(key)
+                self._settle_locked(key, keep_next=True)
             start = self._cursor[key]
             if self._slots - start < rows:
+                self._drop_next_locked(key)
                 if not strict:
                     return None
                 raise MaskExhaustedError("session mask reservation exhausted",
                                          details={"linear": key, "needed": rows, "remaining": self._slots - start})
-            if not _native_lease or self._checks == 0 or self.ring.k % 8 or self.ring.k > 56:
+            nxt = self._next.pop(key, None) if self._next else None
+            if nxt is not None:
+                ahead_lease, ahead_tag, ahead_post = nxt
+                if (tag is not None and ahead_tag == tag and int(ahead_lease.start_row) == start
+                        and ahead_lease.ready(rows)):
+                    # prepared ahead for exactly this row: it never handed out a row (the cursor is here)
+                    self._lease[key] = ahead_lease
+                    self.leases_ahead_used += 1
+                    LEASE_COUNTS["ahead_used"] += 1
+                    self._post_lease_locked(key, ahead_post)
+                    return ahead_lease
+                ahead_lease.close()  # another row, policy or size: zeroed; its rows stay with the cursor
+                LEASE_COUNTS["ahead_dropped"] += 1
+            got = self._new_lease_locked(key, start, rows, verify, wnorm, prime_ok)
+            if got is None:
                 return None
-            ei = self._cursor_extent(key, start)
-            ex = self._extents[ei]
-            seg = ex.seg
-            if not isinstance(seg, SegmentFile):  # in-memory ring segments: the ordinary path
-                return None
-            cf = getattr(seg.header, "check_field", None)
-            check_mod = 0
-            if cf is not None:
-                # prime-field check extents (check_field="p31"): leased only to a caller that runs the
-                # prime check (``prime_ok``; the lease verifies every checked row synchronously, before its
-                # result is used); otherwise the ordinary path (which refuses them when the gateway does
-                # not accept the format)
-                if cf != CHECK_FIELD_P31 or not prime_ok or self.ring.k not in (8, 16, 24, 32):
-                    return None
-                check_mod = P31
-            lin = self._linears[key][1]
-            li = ex.li[key]
-            slot0 = ex.ext.start + (start - ex.first_row)
-            cs = seg.header.chunk_slots
-            j = slot0 // cs
-            in_chunk = slot0 - j * cs
-            layout = seg.layout
-            ext_left = ex.end_row - start
-            first = min(ext_left, layout.chunk_rows(j) - in_chunk)
-            # rows to lease: the rest of the current chunk, then whole chunks while the lease holds at
-            # most TRIP_LEASE_BYTES of W r (and TRIP_LEASE_ROWS rows), never past the extent
-            row_bytes = lin.out_features * layout.bpe
-            want = max(first, min(ext_left, TRIP_LEASE_ROWS, max(1, TRIP_LEASE_BYTES // max(1, row_bytes))))
-            if max(want, first) < rows:
-                return None
-            chk = self._compact_locked(key, ei)
-            if verify is not None:
-                verify(chk)  # raises before anything is handed out
-            self._drop_stage_locked(key)  # staged rows were never handed out: the lease derives them
-            chunks: list[tuple[bytearray, int, int]] = []
-            cached = self._chunk_cache.pop((ei, lin.id), None)
-            pre: dict[int, bytearray] = {}
-            try:
-                if self._ahead:
-                    pre = self._ahead_take_locked(ei, key, j)  # waits for the helper; its errors raise here
-                got, jj, off = 0, j, in_chunk
-                while got < want:
-                    if cached is not None and cached[0] == jj:
-                        buf = cached[1]
-                    else:
-                        reuse = None
-                        if cached is not None:
-                            reuse = cached[1]
-                            _zero(reuse)
-                        got_ahead = pre.pop(jj, None) if pre else None
-                        if got_ahead is not None:
-                            buf = got_ahead
-                        elif TRIP_DECRYPT_AHEAD:
-                            buf = _open_chunk(seg, layout.wr_chunk(li, jj))
-                        else:
-                            buf = _decrypt_buf(seg, layout.wr_chunk(li, jj), reuse)
-                    cached = None
-                    take = min(want - got, layout.chunk_rows(jj) - off)
-                    chunks.append((buf, off, take))
-                    got += take
-                    jj, off = jj + 1, 0
-                if cached is not None:
-                    _zero(cached[1])
-                for b in pre.values():  # decrypted ahead but not part of this lease (never handed out)
-                    _zero(b)
-                pre.clear()
-                rkey = self._rkey_cache.get((ei, key))
-                if rkey is None:
-                    seed, _ = ex.secrets()
-                    rkey = self._rkey_cache[(ei, key)] = bytearray(SeedExpander(seed).stream_key("r", key))
-                ring = self.ring
-                lease = native.fast.TripLease(rkey, lin.in_features, lin.out_features, ring.k, ring.a,
-                                              int(ring.cap or 0), float(wnorm), slot0, chunks, start,
-                                              chk[1], chk[2], TRIP_R_AHEAD, check_mod)
-            except BaseException:
-                for b, _, _ in chunks:
-                    _zero(b)
-                for b in pre.values():
-                    _zero(b)
-                raise
-            n = sum(c[2] for c in chunks)
-            if slot0 + n >= ex.ext.start + ex.ext.count:  # the lease reaches the extent's end
-                done = self._rkey_cache.pop((ei, key), None)
-                if done is not None:
-                    _zero(done)
-                if TRIP_DECRYPT_AHEAD and ei + 1 < len(self._extents):
-                    self._ahead_first_locked(key, ei + 1)
-            elif TRIP_DECRYPT_AHEAD:
-                self._ahead_schedule_locked(ei, key, slot0 + n)  # the next lease's chunks
+            lease, post = got
+            LEASE_COUNTS["inline"] += 1
             self._lease[key] = lease
+            self._post_lease_locked(key, post)
             return lease
+
+    def _new_lease_locked(self, key: str, start: int, rows: int, verify: Callable[[Any], None] | None,
+                          wnorm: float, prime_ok: bool) -> tuple[Any, tuple[int, int, int]] | None:
+        """A new, unattached trip lease of ``key`` from reservation row ``start`` (lock held) and what
+        :meth:`_post_lease_locked` needs once it is attached, or ``None`` when no lease can serve ``rows`` rows
+        there. ``verify`` sees the extent's checks first (it raises before anything exists)."""
+        if not _native_lease or self._checks == 0 or self.ring.k % 8 or self.ring.k > 56:
+            return None
+        ei = self._cursor_extent(key, start)
+        ex = self._extents[ei]
+        seg = ex.seg
+        if not isinstance(seg, SegmentFile):  # in-memory ring segments: the ordinary path
+            return None
+        cf = getattr(seg.header, "check_field", None)
+        check_mod = 0
+        if cf is not None:
+            # prime-field check extents (check_field="p31"): leased only to a caller that runs the
+            # prime check (``prime_ok``; the lease verifies every checked row synchronously, before its
+            # result is used); otherwise the ordinary path (which refuses them when the gateway does
+            # not accept the format)
+            if cf != CHECK_FIELD_P31 or not prime_ok or self.ring.k not in (8, 16, 24, 32):
+                return None
+            check_mod = P31
+        lin = self._linears[key][1]
+        li = ex.li[key]
+        slot0 = ex.ext.start + (start - ex.first_row)
+        cs = seg.header.chunk_slots
+        j = slot0 // cs
+        in_chunk = slot0 - j * cs
+        layout = seg.layout
+        ext_left = ex.end_row - start
+        first = min(ext_left, layout.chunk_rows(j) - in_chunk)
+        # rows to lease: the rest of the current chunk, then whole chunks while the lease holds at
+        # most TRIP_LEASE_BYTES of W r (and TRIP_LEASE_ROWS rows), never past the extent
+        row_bytes = lin.out_features * layout.bpe
+        want = max(first, min(ext_left, TRIP_LEASE_ROWS, max(1, TRIP_LEASE_BYTES // max(1, row_bytes))))
+        if max(want, first) < rows:
+            return None
+        chk = self._compact_locked(key, ei)
+        if verify is not None:
+            verify(chk)  # raises before anything is handed out
+        self._drop_stage_locked(key)  # staged rows were never handed out: the lease derives them
+        chunks: list[tuple[bytearray, int, int]] = []
+        cached = self._chunk_cache.pop((ei, lin.id), None)
+        pre: dict[int, bytearray] = {}
+        try:
+            if self._ahead:
+                pre = self._ahead_take_locked(ei, key, j)  # waits for the helper; its errors raise here
+            got, jj, off = 0, j, in_chunk
+            while got < want:
+                if cached is not None and cached[0] == jj:
+                    buf = cached[1]
+                else:
+                    reuse = None
+                    if cached is not None:
+                        reuse = cached[1]
+                        _zero(reuse)
+                    got_ahead = pre.pop(jj, None) if pre else None
+                    if got_ahead is not None:
+                        buf = got_ahead
+                    elif TRIP_DECRYPT_AHEAD:
+                        buf = _open_chunk(seg, layout.wr_chunk(li, jj))
+                    else:
+                        buf = _decrypt_buf(seg, layout.wr_chunk(li, jj), reuse)
+                cached = None
+                take = min(want - got, layout.chunk_rows(jj) - off)
+                chunks.append((buf, off, take))
+                got += take
+                jj, off = jj + 1, 0
+            if cached is not None:
+                _zero(cached[1])
+            for b in pre.values():  # decrypted ahead but not part of this lease (never handed out)
+                _zero(b)
+            pre.clear()
+            rkey = self._rkey_cache.get((ei, key))
+            if rkey is None:
+                seed, _ = ex.secrets()
+                rkey = self._rkey_cache[(ei, key)] = bytearray(SeedExpander(seed).stream_key("r", key))
+            ring = self.ring
+            lease = native.fast.TripLease(rkey, lin.in_features, lin.out_features, ring.k, ring.a,
+                                          int(ring.cap or 0), float(wnorm), slot0, chunks, start,
+                                          chk[1], chk[2], TRIP_R_AHEAD, check_mod)
+        except BaseException:
+            for b, _, _ in chunks:
+                _zero(b)
+            for b in pre.values():
+                _zero(b)
+            raise
+        n = sum(c[2] for c in chunks)
+        end = ex.ext.start + ex.ext.count
+        if slot0 + n >= end:  # the lease reaches the extent's end
+            done = self._rkey_cache.pop((ei, key), None)
+            if done is not None:
+                _zero(done)
+        return lease, (ei, slot0 + n, end)
+
+    def _post_lease_locked(self, key: str, post: tuple[int, int, int]) -> None:
+        """Once a lease of ``key`` is attached (lock held): decrypt ahead the chunks of the lease after it."""
+        if not TRIP_DECRYPT_AHEAD:
+            return
+        ei, slot_end, ext_end = post
+        if slot_end >= ext_end:
+            if ei + 1 < len(self._extents):
+                self._ahead_first_locked(key, ei + 1)
+        else:
+            self._ahead_schedule_locked(ei, key, slot_end)  # the next lease's chunks
+
+    # ---- trip leases prepared ahead (PGW_TRIP_LEASE_AHEAD) -----------------------------------------
+    def _drop_next_locked(self, key: str) -> None:
+        nxt = self._next.pop(key, None) if self._next else None
+        if nxt is not None:
+            nxt[0].close()  # never attached: it handed out nothing; key zeroized, chunks zeroed
+
+    def lease_ahead(self, lid: LinearId | str, rows: int, verify: Callable[[Any], None] | None = None,
+                    wnorm: float = 0.0, *, prime_ok: bool = False, tag: Any = None) -> int:
+        """Prepare, off the caller's critical path, the trip lease :meth:`trip_lease` attaches next for ``lid``
+        (:data:`TRIP_LEASE_AHEAD`; run on the lease-ahead thread). Returns 1 if one was prepared, 0 if not
+        (closed, staged rows, one already prepared, too few rows, no lease possible, an error), -1 when the
+        lease after the attached one would start past this reservation's rows (the caller may try the next
+        part).
+
+        The lease starts where the attached lease ends (or at the cursor without one): rows this reservation
+        already holds, so nothing is reserved, taken or counted, and the cursor does not move. It stays
+        unattached and hands out no row until :meth:`trip_lease` attaches it, which it does only if its first
+        row is then the cursor's and ``tag`` (the caller's soundness policy; ``verify`` runs here, before the
+        lease exists) is the same; otherwise it is closed (key zeroized, chunks zeroed), as at :meth:`close`.
+        Its ``W r`` chunks are the ones decrypted ahead (waited for without the lock); the chunks of the lease
+        after it are decrypted ahead only once it is attached, so a linear holds at most as much ``W r``
+        plaintext as without it. Errors (a soundness or authentication failure) are left to
+        :meth:`trip_lease`, which meets them again and raises.
+        """
+        key = self._key(lid)
+        if tag is None or not TRIP_LEASE_AHEAD:
+            return 0
+        wait = None
+        for attempt in (0, 1):
+            with self._lock:
+                if self._closed or key in self._stage or key in self._next:
+                    return 0
+                lease = self._lease.get(key)
+                if lease is not None and lease.closed:
+                    return 0
+                start = int(lease.start_row) + int(lease.rows) if lease is not None else self._cursor[key]
+                if start >= self._slots:
+                    return -1
+                if self._slots - start < rows:
+                    return 0
+                if attempt == 0 and self._ahead:
+                    hit = self._ahead.get((self._cursor_extent(key, start), key))
+                    if hit is not None and not hit[1].done():
+                        wait = hit[1]  # the helper is decrypting the chunks: wait without the lock
+                if wait is None or attempt == 1:
+                    try:
+                        got = self._new_lease_locked(key, start, rows, verify, wnorm, prime_ok)
+                    except Exception as exc:  # trip_lease meets it again and raises there (fail closed)
+                        log.debug("trip lease ahead skipped: %s", type(exc).__name__)
+                        return 0
+                    if got is None:
+                        return 0
+                    self._next[key] = (got[0], tag, got[1])
+                    self.leases_ahead += 1
+                    LEASE_COUNTS["ahead"] += 1
+                    return 1
+            try:
+                wait.result()
+            except Exception:  # its error is raised by the lease that needs the chunk
+                return 0
+        return 0  # pragma: no cover - the loop returns
 
     # ---- W r chunks decrypted ahead (PGW_TRIP_DECRYPT_AHEAD) --------------------------------------
     def _ahead_schedule_locked(self, ei: int, key: str, slot: int) -> None:
@@ -907,7 +1017,7 @@ class MaskReservation:
             return
         key = self._key(lid)
         with self._lock:
-            if self._closed or key in self._lease or key in self._stage:
+            if self._closed or key in self._lease or key in self._stage or key in self._next:
                 return
             cur = self._cursor[key]
             if cur >= self._slots:
@@ -953,7 +1063,7 @@ class MaskReservation:
         if not isinstance(rows, int) or isinstance(rows, bool) or rows <= 0:
             return 0
         with self._lock:
-            if self._closed or key in self._stage or key in self._lease:
+            if self._closed or key in self._stage or key in self._lease or key in self._next:
                 return 0  # a native trip lease serves this linear (its rows are derived per trip)
             start = self._cursor[key]
             if start >= self._slots:
@@ -1248,6 +1358,10 @@ class MaskReservation:
             for lk, lease in self._lease.items():
                 self._cursor[lk] = int(lease.close())
             self._lease.clear()
+            # Leases prepared ahead, never attached: no row was handed out (the cursors are not theirs).
+            for nl, _, _ in self._next.values():
+                nl.close()
+            self._next.clear()
             for _, buf in self._chunk_cache.values():
                 _zero(buf)
             self._chunk_cache.clear()
@@ -1348,6 +1462,16 @@ TRIP_R_AHEAD = os.environ.get("PGW_TRIP_R_AHEAD", "1").strip().lower() not in ("
 #: (the rows stay single use: a lease takes each row once) or zeroed (close, a different chunk needed, a
 #: failure). Authentication failures raise when the lease needs the chunk (fail closed, as inline).
 TRIP_DECRYPT_AHEAD = os.environ.get("PGW_TRIP_DECRYPT_AHEAD", "0").strip().lower() in ("1", "true", "yes", "on")
+#: The next trip lease of a linear is prepared ahead on the lease-ahead thread (``PGW_TRIP_LEASE_AHEAD``, default
+#: off; needs ``PGW_TRIP_NATIVE`` and :data:`TRIP_DECRYPT_AHEAD`; the SDK turns it on): the ``W r`` chunks
+#: decrypted ahead, the extent's soundness check and the native ``TripLease`` built off the plaintext thread
+#: (:meth:`MaskReservation.lease_ahead`). The lease covers rows the reservation already holds (nothing reserved,
+#: nothing taken, the cursor unmoved), hands out no row until :meth:`MaskReservation.trip_lease` attaches it at its
+#: first row, and is closed (zeroed) otherwise and at close. Same rows, values and outputs (timing only).
+TRIP_LEASE_AHEAD = os.environ.get("PGW_TRIP_LEASE_AHEAD", "0").strip().lower() in ("1", "true", "yes", "on")
+#: Process-wide trip lease counts (statistics, benchmarks): made inline on the caller's thread, prepared ahead,
+#: attached from ahead, prepared ahead and closed unused for another row or policy (closed at close: not counted).
+LEASE_COUNTS = {"inline": 0, "ahead": 0, "ahead_used": 0, "ahead_dropped": 0}
 _native_open = native.native_available("chunk_open_into")
 _AHEAD_POOL: Any = None
 _AHEAD_POOL_LOCK = threading.Lock()

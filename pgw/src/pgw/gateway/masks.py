@@ -344,6 +344,8 @@ class WindowedReservation:
         self.charged = 0
         #: linear key -> the current part's native trip lease (``PGW_TRIP_NATIVE``; see :meth:`trip_lease`).
         self.trip_leases: dict[str, Any] = {}
+        #: linear key -> the arguments of its last :meth:`lease_ahead` that found no next part yet
+        self._lease_wait: dict[str, tuple[Any, ...]] = {}
         self.chunked = bool(chunked)
         #: chunked mode: background closes of retired parts (joined by :meth:`close`)
         self._retiring: list[Any] = []
@@ -542,6 +544,7 @@ class WindowedReservation:
                 part.close()
             if added is not None:
                 _decrypt_first_leases(added)
+                self._lease_ahead_part(added)
 
         t = threading.Thread(target=run, name="pgw-mask-ahead", daemon=True)
         self._ahead_thread = t
@@ -618,7 +621,7 @@ class WindowedReservation:
         return None if self.public else self._step_key
 
     def trip_lease(self, lid: LinearId | str, rows: int, verify: Any = None, wnorm: float = 0.0, *,
-                   prime_ok: bool = False) -> Any:
+                   prime_ok: bool = False, tag: Any = None) -> Any:
         """:meth:`ensure` (exactly as before a take), then the current part's native trip lease
         (``MaskReservation.trip_lease``), cached in :attr:`trip_leases`; ``None``: the ordinary path.
 
@@ -632,7 +635,12 @@ class WindowedReservation:
             part = self._parts[i]
             nxt = self._parts[i + 1] if i + 1 < len(self._parts) else None
         fn = getattr(part, "trip_lease", None)
-        lease = None if fn is None else fn(lid, rows, verify, wnorm, strict=False, prime_ok=prime_ok)
+        if fn is None:
+            lease = None
+        elif tag is not None:
+            lease = fn(lid, rows, verify, wnorm, strict=False, prime_ok=prime_ok, tag=tag)
+        else:
+            lease = fn(lid, rows, verify, wnorm, strict=False, prime_ok=prime_ok)
         key = self._k(lid)
         if lease is None:
             self.trip_leases.pop(key, None)
@@ -642,6 +650,53 @@ class WindowedReservation:
             if ahead is not None and int(lease.left) >= int(part.remaining(lid)):
                 ahead(lid)
         return lease
+
+    def lease_ahead(self, lid: LinearId | str, rows: int, verify: Any = None, wnorm: float = 0.0, *,
+                    prime_ok: bool = False, tag: Any = None) -> int:
+        """``MaskReservation.lease_ahead`` (``PGW_TRIP_LEASE_AHEAD``) of the current part, or of the next part
+        already reserved when the attached lease covers the rest of the current one. Never reserves (no
+        :meth:`ensure`, no extension): the lease covers rows this session already holds, so the admission
+        accounting is unchanged; a lease prepared ahead hands out nothing until :meth:`trip_lease` attaches it."""
+        key = self._k(lid)
+        with self._lock:
+            if self._closed:
+                return 0
+            i = self._current_index(lid)
+            parts = self._parts[i:i + 2]
+            self._lease_wait.pop(key, None)
+        for part in parts:
+            fn = getattr(part, "lease_ahead", None)
+            if fn is None:
+                return 0
+            got = int(fn(lid, rows, verify, wnorm, prime_ok=prime_ok, tag=tag))
+            if got != -1:
+                return got
+        if len(parts) == 1:
+            # the next part is not reserved yet: its first lease is prepared when the part arrives (the
+            # background extension, :meth:`_lease_ahead_part`), never by reserving here
+            with self._lock:
+                if not self._closed:
+                    self._lease_wait[key] = (lid, rows, verify, wnorm, prime_ok, tag)
+        return 0
+
+    def _lease_ahead_part(self, part: Any) -> None:
+        """Prepare the first lease of a part the background extension just added, for every linear whose
+        attached lease reaches the end of the part before (:meth:`lease_ahead` found no next part). Runs on the
+        extension's thread, after the part's chunks were queued for decryption ahead; timing only."""
+        with self._lock:
+            if self._closed or not self._lease_wait:
+                return
+            waiting = list(self._lease_wait.values())
+            self._lease_wait.clear()
+        fn = getattr(part, "lease_ahead", None)
+        if fn is None:
+            return
+        for lid, rows, verify, wnorm, prime_ok, tag in waiting:
+            try:
+                fn(lid, rows, verify, wnorm, prime_ok=prime_ok, tag=tag)
+            except Exception as exc:  # e.g. the part closed meanwhile; the lease path decides
+                log.debug("lease ahead of a new part skipped: %s", type(exc).__name__)
+                return
 
     def prefetch(self, lid: LinearId | str, rows: int) -> int:
         """``MaskReservation.prefetch`` of the current part (never another part, never an extension)."""
