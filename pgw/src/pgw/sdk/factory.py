@@ -563,10 +563,12 @@ class FactoryProcess:
         since = now - self._mg_at
         running, waiting = int(t.get("running") or 0), int(t.get("waiting") or 0)
         oldest = t.get("oldest_running_s")
-        age = float(oldest) + since if running and isinstance(oldest, int | float) else None
+        age: float | None = None
+        if running and isinstance(oldest, int | float):
+            age = float(oldest) + since
         slowest = t.get("slowest_item_s") if isinstance(t.get("slowest_item_s"), int | float) else None
-        warm = mg.get("warmup_s") if isinstance(mg.get("warmup_s"), int | float) else DEFAULT_WARMUP_S
-        bound = stall_bound(self.maskgen_stall_s, slowest, bool(t.get("cold")), float(warm))
+        warm = float(mg["warmup_s"]) if isinstance(mg.get("warmup_s"), int | float) else DEFAULT_WARMUP_S
+        bound = stall_bound(self.maskgen_stall_s, slowest, bool(t.get("cold")), warm)
         view = {"running": running, "waiting": waiting, "oldest_running_s": None if age is None else round(age, 1),
                 "slowest_item_s": slowest, "bound_s": round(bound, 1), "done": t.get("done"),
                 "provider": mg.get("maskgen"), "checked_s_ago": round(since, 1)}

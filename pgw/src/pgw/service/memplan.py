@@ -35,7 +35,7 @@ import json
 import sys
 from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
-from typing import Literal
+from typing import Any, Literal
 
 from pgw.core.ringmm import (
     EAGER_WORK_BYTES,
@@ -779,7 +779,8 @@ def max_fitting(model: str, gpu: str, cfg: MemConfig, field_name: str, candidate
     """The largest of ``candidates`` for ``cfg.<field_name>`` with which the plan fits (``None``: none)."""
     best = None
     for c in sorted(candidates):
-        if plan_model(model, gpu, replace(cfg, **{field_name: c})).fits:
+        kw: dict[str, Any] = {field_name: c}
+        if plan_model(model, gpu, replace(cfg, **kw)).fits:
             best = c
     return best
 

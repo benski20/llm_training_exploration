@@ -716,7 +716,7 @@ def plan_summary(source: str | Path | ShardSource, *, work_dir: str | Path, revi
     shard_bytes_of = {f: sum(nbytes[k] for k in by_file[f]) for f in order}
     pending = list(pr.items)
     seen: set[str] = set()
-    rows = []
+    rows: list[dict[str, Any]] = []
     peak = 0
     for i, f in enumerate(order):
         seen.update(by_file[f])
@@ -885,16 +885,16 @@ def _run(src: ShardSource, out_dir: Path | None, work: Path, *, name: str | None
     # ---- manifest, in the order pack_checkpoint builds it
     tens: dict[str, TensorEntry] = {}
     entries: list[LinearEntry] = []
-    for p in plans:
-        d = state.done[f"linear:{p.lid.key}"]
-        for tp in p.tensor_plans():
-            tens[tp.name] = TensorEntry(file=_shard_name(p.shard, n_shards), dtype=tp.dtype,  # type: ignore[arg-type]
-                                        shape=tp.shape, sha256=d["sha256"][tp.name])
-        entries.append(_linear_entry(p, int(d["norm"])))
+    for lp in plans:
+        ld = state.done[f"linear:{lp.lid.key}"]
+        for tp in lp.tensor_plans():
+            tens[tp.name] = TensorEntry(file=_shard_name(lp.shard, n_shards), dtype=tp.dtype,
+                                        shape=tp.shape, sha256=ld["sha256"][tp.name])
+        entries.append(_linear_entry(lp, int(ld["norm"])))
     for tp in pplans:
-        d = state.done[f"plain:{tp.name}"]
-        tens[tp.name] = TensorEntry(file=PLAIN_FILE, dtype=tp.dtype, shape=tp.shape,  # type: ignore[arg-type]
-                                    sha256=d["sha256"][tp.name])
+        pd = state.done[f"plain:{tp.name}"]
+        tens[tp.name] = TensorEntry(file=PLAIN_FILE, dtype=tp.dtype, shape=tp.shape,
+                                    sha256=pd["sha256"][tp.name])
     if out_dir is not None:
         shutil.rmtree(part_out / TOKENIZER_DIR, ignore_errors=True)
         tok = _copy_tokenizer(meta, part_out)
@@ -961,12 +961,12 @@ def _do_item(it: _Item, avail: _Tensors, writers: Mapping[str, SafetensorsRandom
                 raise ShapeError(f"{tp.name}: planned {tp.dtype}{list(tp.shape)}, got {_dt_name(t)}{list(t.shape)}")
             out.append((tp.name, t))
     else:
-        tp, hf = it.plain, it.hf
-        assert tp is not None and hf is not None
-        t = _check_float(hf, avail.get(hf)).to(_torch_dtype(tp.dtype))
+        ptp, hf = it.plain, it.hf
+        assert ptp is not None and hf is not None
+        t = _check_float(hf, avail.get(hf)).to(_torch_dtype(ptp.dtype))
         if not bool(torch.isfinite(t).all()):
-            raise ConfigError(f"{hf}: values overflow plain_dtype {tp.dtype}", details={"tensor": hf})
-        out.append((tp.name, t))
+            raise ConfigError(f"{hf}: values overflow plain_dtype {ptp.dtype}", details={"tensor": hf})
+        out.append((ptp.name, t))
     w = writers.get(it.out_file)
     digests = {n: (w.write(n, t) if w is not None else tensor_sha256(t)) for n, t in out}
     if w is not None:

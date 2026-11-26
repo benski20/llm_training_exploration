@@ -85,7 +85,7 @@ _S = 64
 _H = NR // _S
 
 
-def _tw_t(w: np.ndarray | torch.Tensor, length: int) -> torch.Tensor:
+def _tw_t(w: torch.Tensor, length: int) -> torch.Tensor:
     """Twiddles ``w[nb + b]`` of the stage of ``length`` (``nb = NR / 2 length`` blocks ``b = hi G + g``) laid
     out ``(G, 1, H)`` for the transposed layout (``G = _S / 2 length``)."""
     g = _S // (2 * length)
@@ -456,8 +456,8 @@ def _keyswitch_t(hs_t: torch.Tensor, ops_t: _Keys | torch.Tensor, y_t: torch.Ten
             from pgw.service import pks_ntt
 
             u32 = keys.u32()
-            return FWD4.run(dev, lambda: pks_ntt.keyswitch(hs_t, u32, y_t, fwd4=True),
-                            lambda: pks_ntt.keyswitch(hs_t, u32, y_t))  # type: ignore[no-any-return]
+            return FWD4.run(dev, lambda: pks_ntt.keyswitch(hs_t, u32, y_t, fwd4=True),  # type: ignore[no-any-return]
+                            lambda: pks_ntt.keyswitch(hs_t, u32, y_t))
         except Exception as e:
             if ntt_mode() == "fused":
                 raise

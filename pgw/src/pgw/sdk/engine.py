@@ -1004,10 +1004,11 @@ class Engine:
                         ticket = asyncio.Event()
                         waiters.append(ticket)
                     fac = h.factory
-                    if fac is not None and getattr(fac.plan, "demand_file", None) is not None and self.options.factory:
+                    demand = getattr(fac.plan, "demand_file", None) if fac is not None else None
+                    if demand is not None and self.options.factory:
                         # the factory refills only below its low-water mark: ask it for what this request waits for
                         want = int(exc.details.get("entitled") or exc.details.get("needed") or 0)
-                        write_demand(fac.plan.demand_file, want + int(exc.details.get("promised") or 0))
+                        write_demand(demand, want + int(exc.details.get("promised") or 0))
                     broken = fac is not None and fac.owner and fac.failures >= 3 and fac.last_error
                     if not broken:
                         await self._raise_if_stalled(h, rid, exc)

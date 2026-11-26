@@ -474,7 +474,7 @@ def prime_vecmat(u: torch.Tensor, w8: torch.Tensor) -> torch.Tensor:
 
     uu = np.ascontiguousarray(u.to(torch.int64).numpy().astype(np.uint64))
     try:
-        if uu.size and int(uu.max()) >= P31:
+        if uu.size and int(np.max(uu)) >= P31:
             raise ShapeError("prime-field check vectors must be in [0, 2^31 - 1)")
         out = nat.vecmat_p31(uu, np.ascontiguousarray(w8.numpy()), _vecmat_threads())
     finally:

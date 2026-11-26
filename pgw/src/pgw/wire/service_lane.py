@@ -269,7 +269,7 @@ class ServiceLaneOpener:
             ttl_ms = max(1, int(float(d.get("ttl_s", 30.0)) * 1000))
             # lane format 2 (multi frames): only when the service lists it; a format-1 ticket has no "versions"
             versions = d.get("versions", [_VERSION])
-            multi: dict[str, int] = {}
+            multi: dict[str, Any] = {}
             if isinstance(versions, list) and _VERSION_MULTI in [int(v) for v in versions]:
                 multi = {"max_items": max(0, min(_MAX_ITEMS, int(d.get("max_items", 0)))),
                          "max_multi_rows": max(0, min(_MAX_MULTI_ROWS, int(d.get("max_multi_rows", 0))))}

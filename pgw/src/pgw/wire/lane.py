@@ -986,9 +986,9 @@ class LaneComputeClient:
             r = int(it.rows)
             m = self._lane_m(lane, it.linear)
             n_out = r * m * nb
-            results.append(ComputeResult(it.linear, r, view[off:off + n_out]))
+            results.append(ComputeResult(it.linear, r, view[off:off + n_out]))  # type: ignore[arg-type]
             off += n_out
-        return ComputeResponse(request.request_id, tuple(results),  # type: ignore[arg-type]
+        return ComputeResponse(request.request_id, tuple(results),
                                ServerTiming(0.0, compute_us / 1000.0, sum(rows)))
 
     @staticmethod
