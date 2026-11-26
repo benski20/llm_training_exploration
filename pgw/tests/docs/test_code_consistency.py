@@ -142,6 +142,10 @@ _NON_FIELD_ENV = {
     "PGW_LANE_WAIT_PREFETCH",
     "PGW_LANE_MULTI",  # lane format 2 multi calls (pgw.wire.service_lane.build_lane_client; NATIVE_ENV sets it)
     "PGW_SERVICE_LANE_MULTI",  # lane format 2 offer of the service lane (pgw.service.lane._multi_items)
+    "PGW_SYNC_MULTI",  # several-answer decode passes on the plaintext thread (MaskedBackend; NATIVE_ENV sets it)
+    "PGW_TRIP_NATIVE_MULTI",  # one native lease per answer in a shared trip (MaskedBackend; NATIVE_ENV sets it)
+    "PGW_SAMPLE_THREADS",  # sampling threads per step (pgw.engine.generate.Generator; NATIVE_ENV sets it)
+    "PGW_NATIVE_MULTINOMIAL",  # exact native torch.multinomial (pgw.engine.sampling; default on)
     "PGW_NATIVE",  # native-extension switch read by pgw.core.native, pgw.hemask.ntt, pgw.hemask.pks_native
     "PGW_NTT",  # native NTT switch read by pgw.hemask.ntt
     "PGW_PKS_NATIVE",  # native pks-v3 switch read by pgw.hemask.pks_native

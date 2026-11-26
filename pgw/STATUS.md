@@ -27,6 +27,9 @@ in the application's process against our provider service. Defaults:
 * pks-v3 masks with the hint built locally (`pgw sdk prepare` does it ahead of time);
 * the masked LM head on the provider;
 * the native TCP+TLS trip lane, with lane format 2: several answers of one step in one call;
+* for several answers per step: one synchronous pass, one native lease per answer with batched native prepare /
+  finish, sampling on a thread pool, and an exact native `torch.multinomial` (section "client CPU at many concurrent
+  streams" at the end);
 * the p31 check on every trip;
 * cross-process mask admission (`SharedLedger`);
 * stall detection of the mask factory (`factory_stall_s`), and the maskgen watchdog for a provider whose GPU stops
@@ -3780,3 +3783,93 @@ Open: alpha ~0.48 is the MLP head's level (EAGLE's ~0.8 needs attention over pas
 faster generator than HF generate on T4s. The training prompts include Alpaca (CC BY-NC 4.0): retrain without it
 (`--mix 0.8,0,0.2`) if that licence matters for the shipped heads. Kaggle: the 7B head kernel started 3 s after
 another agent's CPU pin kernel (both checked idle before pushing).
+
+## 2026-11-26: client CPU at many concurrent streams (several-answer trips, sampling; exact)
+
+Scope: item 3 of docs/sdk/scaling.md ("gateway CPU, one core per process"): at tiny-16 the client's plaintext thread
+was the limit after lane format 2. Profiled with `benchmarks/sdk_concurrency_bench.py`, `benchmarks/sdk_trip_profile.py`,
+py-spy (`--gil`, `--native`) and per-function timers, tiny and 0.5B at N = 1/4/8/16 (4-vCPU box shared with other
+jobs, CPU provider on the same box).
+
+**Profile (before).** tiny N=16, per trip (7.5 ms wall, 22 rows): mask prepare 2.2 ms wall / 1.9 ms CPU (the batch
+path's Python per item: `_take`, soundness and noise checks, one `trip_prepare_into` per item), lane + provider
+3.2 ms, finish 0.5, model step 0.5. The plaintext thread held the GIL only ~18 % of the time: a pass of more than
+8 rows ran as split hops, four thread hand-offs per trip (plaintext thread -> event loop -> executor thread for the
+lane call -> event loop -> plaintext thread), so the limit was serial latency per trip, not GIL saturation.
+0.5B N=8: plaintext thread 48 ms CPU per token (N=1: ~33): per answer and trip ~165 us prepare (W r chunk decrypt and
+lease creation ~80, kernels 33-85, Python ~20), ~50 us finish; sampling 6.3 ms per answer per step, all on the
+plaintext thread, of which `torch.multinomial` (one exponential draw + `log1p` per vocabulary entry) ~3.9 ms.
+N=1 0.5B (native decode driver): prepare / finish / float ops 163 / 96 / 43 us per layer, lane I/O 67 us per trip,
+sampling 5.5-6 ms per sampled token (temperature > 0, logprobs).
+
+**Changes** (each exact; the SDK turns them on in `NATIVE_ENV`, the gateway keeps them off unless set):
+- **Synchronous several-answer passes** (`PGW_SYNC_MULTI`; `MaskedBackend.sync_trip_ok`, `LaneComputeClient.multi_rows`):
+  a decode pass of up to 64 rows that one lane multi call serves runs as one call on the plaintext thread over
+  `forward_many`, as passes of <= 8 rows already did. Same calls, order, rows and requests as the split-hop path.
+- **Leased several-answer trips** (`PGW_TRIP_NATIVE_MULTI`; `MaskedBackend._prepare_trip_leases`, `_finish_leases`):
+  a trip of several one-chunk calls takes one native lease per answer instead of the batch path's Python takes.
+  Shapes, finite values and every lease (window `ensure`, exhaustion and soundness checks) are resolved before any row
+  is taken; then the Freivalds and noise-sampling draws in call order, one `pgw_fast.trip_prepare_many` (GIL released;
+  items on the native pool above 32k elements), the noise monitor's every-call checks (or a sampled call's statistics)
+  in call order before the request exists; after the reply one `trip_finish_many` (deferred checks submitted first,
+  in order), statuses handled in item order. Same rows, payload bytes, item order, request-id format, checks and
+  outputs. On a failure inside the batch, rows already taken for later items stay consumed (burned, never reused; as
+  `_native_many`); a lease that cannot serve a call sends the whole trip down the batch path before any row is taken.
+- **Parallel sampling** (`PGW_SAMPLE_THREADS`, SDK `auto` = cores, at most 8; `Generator._sample_parallel`): the
+  answers of a step whose vocabulary has >= 4096 entries sample on a thread pool (no drafts, no fixed speculation
+  rows). Each answer has its own sampler, generator and logits: same tokens, logprobs, alternatives, generator states.
+- **Native multinomial** (`pgw_fast.torch_multinomial1`, `rust/pgw-fast/src/sampling.rs`, `sampling.multinomial1`):
+  `torch.multinomial(p, 1, g)` reproduced exactly: torch's MT19937 state read from `g.get_state()`, the same
+  `random64` draws and `u = (r & (2^53-1)) 2^-53`, `q = (float)(-log1p(-u))`, `argmax(p / q)` (first maximum, NaN
+  wins); `log1p` runs only for elements whose bound `p / u` can reach the best exact score (1e-5 margin). The same
+  index and generator state byte for byte; checked against `torch.multinomial` once per process before first use
+  (`PGW_NATIVE_MULTINOMIAL=0` turns it off; inputs torch rejects go to torch). On by default (exact by test and by the
+  start-up check). 152k entries: 3.9 -> 1.6 ms.
+
+Privacy and integrity: what the provider sees per trip is unchanged (same trips, items, rows, bytes and request-id
+format; a request alone has the same provider-metered trips and rows with the switches on and off, with and without
+strict speculation: test). Masking, Freivalds (ring and p31), range checks, duplicate-row checks and the inline noise
+statistics run per answer as before, all before the payload leaves; a wrong result in any item fails the trip.
+
+Measured (`sdk_concurrency_bench.py`, streamed sampled chats, every answer bit-identical to the same request alone;
+before = branch head `ffa52f9`, after = this change; two interleaved pairs, ranges):
+
+| model | N | tokens/s before / after | client CPU ms/token before / after | plaintext thread ms/token |
+|---|---|---|---|---|
+| tiny | 1 | 44-46 / 45 | 3.8-4.1 / 3.9-4.2 | 2.5-2.8 / 2.7-2.8 |
+| tiny | 4 | 117-119 / 128-130 | 4.0-4.1 / 2.7-2.8 | 2.8 / 2.2 |
+| tiny | 16 | 215-223 / 279-282 | 3.2-3.3 / 1.9-2.1 | 1.8-1.9 / 1.4-1.6 |
+| 0.5B | 1 | 2.8 / 2.9 | 65-72 / 69-70 | 44-49 / 46-47 |
+| 0.5B | 4 | 5.5-5.7 / 6.2-6.3 | 79-88 / 68-72 | 51-55 / 43-46 |
+| 0.5B | 16 | 7.3-8.1 / 9.3-10.1 | 64-74 / 55-59 | 38-42 / 32-35 |
+
+(0.5B: 24 tokens per answer, so client CPU per token includes the prompt pass; the CPU provider on the same 4 vCPUs
+saturates.) N=1 per sampled token (`Sampler.sample`, 152k vocabulary, one core, same tokens and logprobs): temperature
+0.8 + logprobs 5.5-6.1 -> 3.1-3.3 ms CPU; with top-p 0.9 10.0-10.9 -> 7.5-8.8 (the top-p sort remains); greedy
+unchanged (0.3). Same tokens and logprobs hash before/after (`sdk_trip_profile.py` 0.5B N=1 greedy; tiny N=1/4/16 and
+0.5B N=4/8 sampled).
+
+Not changed (measured): lease creation (W r chunk decrypt + ~90 us Python, every 16 rows per linear and answer) and
+window extensions stay on the plaintext thread for several-answer trips (the single-answer driver has decrypt-ahead);
+the top-p filter's full sort (the softmax denominator is summed over the whole sorted array: a partial sort changes
+bits); the native decode driver still takes one answer (several answers run the Python per-trip loop with the batched
+native calls above); the inline noise statistics stay in Python.
+
+Tests: tests/engine/test_trip_native_multi.py 10 (multi == batch path == plain, payloads byte-identical in order, noise
+statistics equal; sync / async / native pool / per-lease fallback; a tampered item fails; a non-finite value takes no
+row; argument validation before any row), tests/engine/test_sampling_parallel.py 11 (native multinomial == torch for
+6 sizes x 25 states incl. ties, zeros, fresh generators; rejects untouched; `Sampler` with / without native; parallel
+== sequential sampling, async and `generate_many`; default off), tests/sdk/test_concurrency_cpu.py 2 (real provider:
+answers alone and concurrent identical with the switches on/off, provider trips and rows of a request unchanged,
+strict speculation unchanged, the new paths ran); `cargo test -p pgw-fast --lib` 87 (MT19937 reference outputs,
+pruned == exhaustive race over 200 cases, rejects, state round trip). Directories, one at a time with the rebuilt
+`pgw_fast` in `src/`: tests/native 357; tests/engine 1181 + 15 skips (one failure first: a test spy of
+`Generator._consume` with two arguments; the call now passes the third only when it has one); tests/wire 334;
+tests/gateway 283 + 1 crashed xdist worker (`test_source_dtype_gateway`, 2 passed alone); tests/service 600 + 80
+CUDA skips; tests/sdk 188 + 1 opt-in skip (serial, 12 min); tests/docs: 18 failures in `test_numbers` (research
+logs missing from the checkout, as before), the four new variables added to the documented-switch list. mypy `src`:
+the same error set as the branch head.
+
+Open: several-answer passes in the native decode driver (one native call per pass for all answers: the remaining
+per-trip Python loop); lease creation ahead of need for several-answer trips (decrypt off the plaintext thread);
+a GPU-provider run, where the client's per-trip work is the larger share of a trip.

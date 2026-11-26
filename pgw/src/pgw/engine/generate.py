@@ -6,6 +6,7 @@ import asyncio
 import contextlib
 import logging
 import math
+import os
 import secrets
 import threading
 import time
@@ -1913,12 +1914,17 @@ class Generator:
         st.held = ""
         return buf, False
 
-    def _consume(self, st: _SeqState, logits: torch.Tensor) -> TokenEvent:
-        """Sample from ``logits`` and update the state; returns the event to stream."""
+    def _consume(self, st: _SeqState, logits: torch.Tensor,
+                 pre: tuple[int, float | None, Any] | None = None) -> TokenEvent:
+        """Sample from ``logits`` (or take ``pre``, the same sample drawn by :meth:`_sample_parallel`) and update
+        the state; returns the event to stream."""
         if st.t_first is None:
             st.t_first = time.perf_counter()
-        tok, lp = st.sampler.sample(logits, st.generated)
-        top = st.sampler.last_top_logprobs
+        if pre is None:
+            tok, lp = st.sampler.sample(logits, st.generated)
+            top = st.sampler.last_top_logprobs
+        else:
+            tok, lp, top = pre
         st.generated.append(tok)
         if tok in st.stop_ids:
             st.held += st.decoder.flush() if st.decoder is not None else ""
@@ -2445,14 +2451,16 @@ class Generator:
             for i in range(0, len(owing), self.max_batch):
                 self._step_sync(owing[i : i + self.max_batch])
 
-    def _consume_step(self, st: _SeqState, logits: torch.Tensor) -> list[TokenEvent]:
+    def _consume_step(self, st: _SeqState, logits: torch.Tensor,
+                      pre: tuple[int, float | None, Any] | None = None) -> list[TokenEvent]:
         """Emit this step's tokens: one, or (speculative) every draft the sampler agrees with plus one."""
-        events = self._consume_step_inner(st, logits)
+        events = self._consume_step_inner(st, logits, pre)
         if st.sink is not None and st.done and st.finish in (FinishReason.STOP, FinishReason.LENGTH):
             st.sink.finishing()  # before the last event is out: the next turn waits for the commit
         return events
 
-    def _consume_step_inner(self, st: _SeqState, logits: torch.Tensor) -> list[TokenEvent]:
+    def _consume_step_inner(self, st: _SeqState, logits: torch.Tensor,
+                            pre: tuple[int, float | None, Any] | None = None) -> list[TokenEvent]:
         if self.spec_rows is not None:
             return self._consume_fixed(st, logits)
         pending = st.pending
@@ -2461,7 +2469,7 @@ class Generator:
         if not st.drafts:
             if self.spec_tokens:
                 st.ctx.extend(pending)
-            return [self._consume(st, logits)]
+            return [self._consume(st, logits) if pre is None else self._consume(st, logits, pre)]
         drafts = st.drafts
         base = st.cache.length - n_in
         events: list[TokenEvent] = []
@@ -2490,7 +2498,7 @@ class Generator:
         warm = [st for st in states if self._needs_draft_prefill(st)]
         logits = self.model.forward_batch(self._inputs(states))
         self._draft_prefill(warm)
-        return [self._consume_step(st, lg) for st, lg in zip(states, logits, strict=True)]
+        return self._consume_batch(states, logits)
 
     def stream(
         self,
@@ -2761,7 +2769,71 @@ class Generator:
                     st.queue.put_nowait(ev)
 
     def _consume_batch(self, batch: Sequence[_SeqState], logits: Sequence[torch.Tensor]) -> list[list[TokenEvent]]:
-        return [self._consume_step(st, lg) for st, lg in zip(batch, logits, strict=True)]
+        pre = self._sample_parallel(batch, logits)
+        if pre is None:
+            return [self._consume_step(st, lg) for st, lg in zip(batch, logits, strict=True)]
+        return [self._consume_step(st, lg, p) for st, lg, p in zip(batch, logits, pre, strict=True)]
+
+    #: Sampling threads for a step of several answers (``PGW_SAMPLE_THREADS``; default 0 = off, the SDK sets
+    #: ``auto`` = the CPU count, at most 8): each answer's ``Sampler.sample`` (penalties, filters, softmax, the
+    #: draw from its own generator, logprobs) runs on a pool thread, torch and the native helpers releasing the
+    #: GIL. Every answer has its own sampler, generator and logits, so its token, logprob, alternatives and
+    #: generator state are those of the sequential loop; the events are then built in order as before.
+    #: Only for a step whose answers each sample once from a vocabulary of at least
+    #: :attr:`sample_parallel_min_vocab` entries (no drafts, no fixed speculation rows).
+    sample_parallel_min_vocab = 4096
+
+    def _sample_threads(self) -> int:
+        n = getattr(self, "_sample_n", None)
+        if n is None:
+            raw = os.environ.get("PGW_SAMPLE_THREADS", "0").strip().lower()
+            if raw in ("auto", "on", "true", "yes"):
+                n = min(8, os.cpu_count() or 1)
+            else:
+                try:
+                    n = max(0, int(raw or 0))
+                except ValueError:
+                    n = 0
+            self._sample_n = n
+        return n
+
+    def _sample_parallel(self, batch: Sequence[_SeqState],
+                         logits: Sequence[torch.Tensor]) -> list[tuple[int, float | None, Any]] | None:
+        """The samples of a step drawn on the sampling pool (see :attr:`sample_parallel_min_vocab`), or ``None``
+        (the caller samples in order)."""
+        if len(batch) < 2 or self.spec_rows is not None:
+            return None
+        threads = self._sample_threads()
+        if threads < 2:
+            return None
+        for st, lg in zip(batch, logits, strict=True):
+            if st.drafts or lg.ndim != 1 or lg.numel() < self.sample_parallel_min_vocab:
+                return None
+        pool = getattr(self, "_sample_pool", None)
+        if pool is None:
+            from concurrent.futures import ThreadPoolExecutor
+
+            pool = self._sample_pool = ThreadPoolExecutor(max_workers=threads, thread_name_prefix="pgw-sample")
+
+        def one(st: _SeqState, lg: torch.Tensor) -> tuple[int, float | None, Any]:
+            tok, lp = st.sampler.sample(lg, st.generated)
+            return tok, lp, st.sampler.last_top_logprobs
+
+        futs = [pool.submit(one, st, lg) for st, lg in zip(batch[1:], logits[1:], strict=True)]
+        out: list[tuple[int, float | None, Any]] = []
+        err: BaseException | None = None
+        try:
+            out.append(one(batch[0], logits[0]))  # the first on this thread
+        except BaseException as exc:
+            err = exc
+        for f in futs:  # every draw finishes before anything is raised (no sampler is left mid-draw)
+            try:
+                out.append(f.result())
+            except BaseException as exc:
+                err = err or exc
+        if err is not None:
+            raise err
+        return out
 
     async def _run_plain(self, fn: Callable[..., Any], *args: Any) -> Any:
         """Sampling/detokenization off the event loop (on the model's plaintext thread when it has one)."""

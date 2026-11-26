@@ -92,6 +92,13 @@ NATIVE_ENV: dict[str, str] = {
     # several answers in one batched trip: one lane-format-2 multi call when the service offers it (same items,
     # bytes and request id as the stream channel's request; tests/sdk/test_lane_multi.py)
     "PGW_LANE_MULTI": "1",
+    # concurrent answers (docs/sdk/scaling.md): a decode step of several answers runs as one synchronous pass on
+    # the plaintext thread when one multi call serves it (same calls and requests); its trips take one native
+    # lease per answer (same rows, bytes, checks and outputs); the answers sample on a thread pool (each with its
+    # own generator: the same tokens, logprobs and generator states). tests/sdk/test_concurrency_cpu.py
+    "PGW_SYNC_MULTI": "1",
+    "PGW_TRIP_NATIVE_MULTI": "1",
+    "PGW_SAMPLE_THREADS": "auto",
 }
 
 #: The ring of the proven stack (K32: p31 checks and pks-v3 need it).

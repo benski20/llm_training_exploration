@@ -915,11 +915,18 @@ class _Prepared:
     #: (finished by ``_finish_lease``) and whether its Freivalds output half is deferred.
     ticket: Any = None
     defer: bool = False
+    #: Prepared by the native per-trip path for several calls (:attr:`MaskedBackend.trip_native_multi`): one
+    #: ``pgw_fast.TripTicket`` per call (one item each, in call order) and whether each one's check is deferred.
+    tickets: list[Any] | None = None
+    defers: list[bool] = field(default_factory=list)
 
     def wipe(self) -> None:
         """Zero the ``W r`` buffers (secret-derived) of every chunk; idempotent."""
         if self.ticket is not None:
             self.ticket.wipe()
+        if self.tickets is not None:
+            for tk in self.tickets:
+                tk.wipe()
         for fx in self.fixed:
             fx.wipe()
         for ch in self.chunks:
@@ -1126,6 +1133,13 @@ class MaskedBackend(LinearBackend):
             _env_flag("PGW_SYNC_TRIPS", lane_client) if sync_trips is None else bool(sync_trips))
         #: Largest pass (rows over all sequences) :meth:`sync_trip_ok` accepts (the lane's row limit).
         self.sync_trip_max_rows = 8
+        #: ``PGW_SYNC_MULTI`` (default off; on in the SDK): :meth:`sync_trip_ok` also accepts a larger pass
+        #: (the decode step of concurrent answers, at most :attr:`sync_multi_max_rows` rows) when the lane client
+        #: serves it as one multi call (``multi_rows()``, lane format 2). The pass then runs wholly on the
+        #: plaintext thread over :meth:`forward_many` (no event-loop and executor hand-offs per trip). Same
+        #: calls, rows, order and requests as the split-hop path, so the same masks, bytes and outputs.
+        self.sync_multi = self.sync_trips and _env_flag("PGW_SYNC_MULTI", False)
+        self.sync_multi_max_rows = 64
         #: Preferred blocks per pipelined prefill round trip (for ``TransformerModel.pipeline_blocks``):
         #: the TripEngine prepares and finishes each block on the native pool, so 4 blocks overlap
         #: masking, compute and verification better than halves. Rows are independent: same bits.
@@ -1209,6 +1223,11 @@ class MaskedBackend(LinearBackend):
         #: ordinary fallback with the same request.
         self.decode_native = (self.trip_native and _env_flag("PGW_DECODE_NATIVE", False)
                               and native_available("DecodeDriver"))
+        #: With :attr:`trip_native` (``PGW_TRIP_NATIVE_MULTI``, default off; on in the SDK): a trip of several
+        #: one-chunk calls (the decode step of concurrent answers) takes one lease per call
+        #: (:meth:`_prepare_trip_leases`) instead of the batch path's Python takes. Same rows in the same order,
+        #: same draws, payload bytes, items and request-id format, the same checks on every row, same outputs.
+        self.trip_native_multi = self.trip_native and _env_flag("PGW_TRIP_NATIVE_MULTI", False)
         self._verifiers: dict[tuple[str, int], Any] = {}
         #: id(lease) -> (min_soundness_bits, size of the soundness cache) when its extent was verified
         self._lease_sound: dict[int, tuple[float, int]] = {}
@@ -1504,6 +1523,10 @@ class MaskedBackend(LinearBackend):
                 prep = self._prepare_padded(calls)
                 real = [c for c in calls if not _is_dummy(c)]
         else:
+            if self.trip_native_multi and len(calls) > 1 and self._use_trip(calls):
+                prep_m = self._prepare_trip_leases(calls)
+                if prep_m is not None:  # leased trips: the leases' parts are decrypted ahead (no prefetch)
+                    return prep_m
             prep = self._prepare_core(calls)
             real = calls  # type: ignore[assignment]
         if self.mask_prefetch:
@@ -2036,6 +2059,349 @@ class MaskedBackend(LinearBackend):
         prep.reservations = (res,)
         return prep
 
+    def _prepare_trip_leases(self, calls: Sequence[LinearCall]) -> _Prepared | None:
+        """:meth:`_prepare_trip` for a trip of several one-chunk calls (one per session and linear: the decode
+        step of concurrent answers) on the native per-trip path (:attr:`trip_native_multi`), or ``None``
+        (nothing taken, nothing drawn): the caller then takes :meth:`_prepare_trip`.
+
+        Same order and the same request as :meth:`_prepare_trip`: shapes and finite activations of every call
+        are checked, and every call's lease is resolved (in ``trip_lease``: the window's ``ensure`` / the
+        exhaustion pre-check and the extent's soundness check) before any row is taken; then, call by call,
+        the Freivalds draw, the noise-sampling draw and ``lease.prepare`` (the same rows, ``r``, payload
+        bytes and scales as ``trip_prepare_into``), the noise monitor's every-call check (or, for a sampled
+        call, its statistics inline) before the next call is prepared. One item per call, in call order, one
+        uuid4-format request id. Each call's ``ticket.finish`` gives :meth:`_finish_trip`'s outputs, statuses
+        and deferred checks (:meth:`_finish_leases`)."""
+        t0 = time.perf_counter()
+        if len(calls) < 2:
+            return None
+        max_item = int(self.max_rows_per_item)
+        reservations: list[Any] = []
+        metas: list[_MaskedMeta] = []
+        seen: set[tuple[int, str]] = set()
+        mget = self._meta.get
+        for c in calls:
+            x = c.x
+            if c.meta or x.ndim != 2:
+                return None
+            t = int(x.shape[0])
+            if not 0 < t <= max_item:
+                return None
+            res = self._reservation(c)
+            if getattr(res, "trip_leases", None) is None:
+                return None
+            meta: _MaskedMeta = mget(c.id)
+            if x.shape[1] != meta.in_features:
+                raise ShapeError(f"{c.id}: x must be (T, {meta.in_features}), got {tuple(x.shape)}")
+            key = (id(res), c.id.key)
+            if key in seen:  # two calls of one session and linear: rows taken in order by the batch path
+                return None
+            seen.add(key)
+            reservations.append(res)
+            metas.append(meta)
+        xs: list[np.ndarray] = []
+        for c in calls:
+            x = c.x
+            if x.dtype != torch.float32 or x.device.type != "cpu":
+                x = x.to("cpu", torch.float32)
+            xn = x.detach().numpy()
+            if not xn.flags.c_contiguous:
+                xn = np.ascontiguousarray(xn)
+            xs.append(xn)
+        for xn in xs:  # as _prepare_trip: no row of any session is taken for a batch with a non-finite value
+            if xn.size and not np.isfinite(xn).all():
+                raise RingOverflowError("non-finite activation values cannot be quantized")
+        leases: list[Any] = []
+        for c, res, meta, xn in zip(calls, reservations, metas, xs, strict=True):
+            lease = self._trip_lease_for(res, res.trip_leases, c.id, meta, int(xn.shape[0]))
+            if lease is None:  # no row taken yet (leases only reserve): the batch path serves the whole trip
+                return None
+            leases.append(lease)
+        noise = self.noise_monitor
+        plan_call = guard_packed = guard_keys = dup_params = None
+        if noise is not None:
+            plan_call = getattr(noise, "plan_call", None)
+            guard_packed = getattr(noise, "guard_packed", None)
+            if plan_call is None or guard_packed is None:
+                plan_call = guard_packed = None
+            else:
+                guard_keys = getattr(noise, "guard_packed_keys", None)
+                dup_params = getattr(noise, "packed_dup_params", None)
+        pool_min = int(self.trip_pool_min_elems)
+        split = int(self.trip_split)
+        split_min = int(self.trip_split_min_elems)
+        tickets: list[Any] = []
+        defers: list[bool] = []
+        items: list[Any] = []
+        from pgw.wire.messages import ComputeItem, ComputeRequest
+
+        if split < 2 and native.native_available("trip_prepare_many"):
+            return self._prepare_trip_leases_many(calls, reservations, metas, xs, leases, t0)
+        try:
+            for c, lease, meta, xn in zip(calls, leases, metas, xs, strict=True):
+                t = int(xn.shape[0])
+                n = meta.in_features
+                lid = c.id
+                check = self._should_check()
+                sampled = bool(plan_call()) if plan_call is not None else noise is not None
+                defer = check and not lease.field and self._defer_ok(lid)
+                threads = 0 if t * n >= pool_min else 1
+                dup = None
+                if guard_packed is not None and not sampled and guard_keys is not None and dup_params is not None:
+                    dup = dup_params(n)  # the every-call fingerprints, computed inside lease.prepare (same keys)
+                try:
+                    if split >= 2 and t * n >= split_min:
+                        got = lease.prepare(xn, check, sampled, threads, dup, split)
+                    else:
+                        got = lease.prepare(xn, check, sampled, threads, dup)
+                except ValueError as exc:
+                    msg = str(exc)
+                    if msg.startswith(("ring_overflow", "nonfinite")):
+                        raise RingOverflowError(msg.split(":", 1)[-1].strip()) from exc
+                    raise ShapeError(msg) from exc
+                if got is None:  # pragma: no cover - ready() was checked under the GIL just before
+                    raise MaskReuseError("mask lease could not serve a call it reported ready for")
+                payload, ticket, xh, xq, keys = got
+                tickets.append(ticket)
+                defers.append(defer)
+                try:
+                    if noise is not None:
+                        if guard_packed is not None and not sampled:
+                            if keys is not None:
+                                guard_keys(keys, t)  # type: ignore[misc]  # every-call checks (duplicate rows)
+                            else:
+                                guard_packed(payload, t, n)
+                        elif xh is not None:
+                            if plan_call is not None:
+                                noise.guard(torch.from_numpy(xh), torch.from_numpy(xq), planned=True)  # type: ignore[attr-defined]
+                            else:
+                                noise.guard(torch.from_numpy(xh), torch.from_numpy(xq))  # type: ignore[attr-defined]
+                finally:
+                    if xq is not None:
+                        xq.fill(0)
+                    if xh is not None:
+                        xh.fill(0)
+                items.append(ComputeItem(lid.key, t, payload))
+        except BaseException:
+            for tk in tickets:
+                tk.wipe()
+            raise
+        request = ComputeRequest(
+            request_id=_uuid4_hex(),  # uuid4 format, as on every path
+            fingerprint=self.fingerprint,
+            ring=self.ring.name,
+            items=tuple(items),
+            deadline_ms=self.deadline_ms,
+        )
+        prep = _Prepared(tuple(calls), [], [], metas, request, time.perf_counter() - t0)
+        prep.trip = True
+        prep.tickets = tickets
+        prep.defers = defers
+        prep.reservations = tuple(reservations)
+        return prep
+
+    #: Rows x features of a several-answer trip from which ``trip_prepare_many`` / ``trip_finish_many`` spread its
+    #: items over the native pool (below: in order on the calling thread, still one GIL release).
+    trip_many_parallel_elems = 1 << 15
+
+    def _prepare_trip_leases_many(self, calls: Sequence[LinearCall], reservations: list[Any],
+                                  metas: list[_MaskedMeta], xs: list[np.ndarray], leases: list[Any],
+                                  t0: float) -> _Prepared:
+        """:meth:`_prepare_trip_leases` after the leases with one ``pgw_fast.trip_prepare_many`` call: the
+        Freivalds and noise-sampling draws of every call first, in call order (the same sequence as the per-call
+        loop), then every item prepared in one native call (each lease takes its own rows: the same rows, ``r``,
+        payload bytes and scales in any schedule), then the noise monitor's every-call checks (or a sampled call's
+        statistics) in call order, all before the request exists. On failure every ticket of the trip is wiped
+        (rows already taken stay consumed; nothing was sent)."""
+        noise = self.noise_monitor
+        plan_call = guard_packed = guard_keys = dup_params = None
+        if noise is not None:
+            plan_call = getattr(noise, "plan_call", None)
+            guard_packed = getattr(noise, "guard_packed", None)
+            if plan_call is None or guard_packed is None:
+                plan_call = guard_packed = None
+            else:
+                guard_keys = getattr(noise, "guard_packed_keys", None)
+                dup_params = getattr(noise, "packed_dup_params", None)
+        flags = bytearray()
+        defers: list[bool] = []
+        dups: list[Any] = []
+        for c, lease, meta in zip(calls, leases, metas, strict=True):
+            check = self._should_check()
+            sampled = bool(plan_call()) if plan_call is not None else noise is not None
+            defers.append(check and not lease.field and self._defer_ok(c.id))
+            flags.append((1 if check else 0) | (2 if sampled else 0))
+            dup = None
+            if guard_packed is not None and not sampled and guard_keys is not None and dup_params is not None:
+                dup = dup_params(meta.in_features)
+            dups.append(dup)
+        try:
+            got = native.fast.trip_prepare_many(leases, xs, bytes(flags), dups, int(self.trip_many_parallel_elems))
+        except ValueError as exc:
+            msg = str(exc)
+            if msg.startswith("not_ready"):
+                raise MaskReuseError("mask lease could not serve a call it reported ready for") from exc
+            if msg.startswith(("ring_overflow", "nonfinite")):
+                raise RingOverflowError(msg.split(":", 1)[-1].strip()) from exc
+            raise ShapeError(msg) from exc
+        from pgw.wire.messages import ComputeItem, ComputeRequest
+
+        tickets = [g[1] for g in got]
+        items: list[Any] = []
+        try:
+            for c, meta, f, (payload, _tk, xh, xq, keys) in zip(calls, metas, flags, got, strict=True):
+                t = int(c.x.shape[0])
+                try:
+                    if noise is not None:
+                        if guard_packed is not None and not f & 2:
+                            if keys is not None:
+                                guard_keys(keys, t)  # type: ignore[misc]  # every-call checks (duplicate rows)
+                            else:
+                                guard_packed(payload, t, meta.in_features)
+                        elif xh is not None:
+                            if plan_call is not None:
+                                noise.guard(torch.from_numpy(xh), torch.from_numpy(xq), planned=True)  # type: ignore[attr-defined]
+                            else:
+                                noise.guard(torch.from_numpy(xh), torch.from_numpy(xq))  # type: ignore[attr-defined]
+                finally:
+                    if xq is not None:
+                        xq.fill(0)
+                    if xh is not None:
+                        xh.fill(0)
+                items.append(ComputeItem(c.id.key, t, payload))
+        except BaseException:
+            for tk in tickets:
+                tk.wipe()
+            for g in got:  # the statistics of later sampled calls never ran: zero their copies too
+                for a in (g[2], g[3]):
+                    if a is not None:
+                        a.fill(0)
+            raise
+        request = ComputeRequest(
+            request_id=_uuid4_hex(),  # uuid4 format, as on every path
+            fingerprint=self.fingerprint,
+            ring=self.ring.name,
+            items=tuple(items),
+            deadline_ms=self.deadline_ms,
+        )
+        prep = _Prepared(tuple(calls), [], [], metas, request, time.perf_counter() - t0)
+        prep.trip = True
+        prep.tickets = tickets
+        prep.defers = defers
+        prep.reservations = tuple(reservations)
+        return prep
+
+    def _finish_leases(self, prep: _Prepared, response: Any, remote_s: float) -> list[torch.Tensor]:
+        """:meth:`_finish` (:meth:`_finish_trip`) for a trip of :meth:`_prepare_trip_leases`: the same response
+        checks, one ``ticket.finish`` per item in item order (Freivalds when drawn, synchronously or deferred to
+        the helper thread; unmask, range check, rescale, ``W r`` zeroed), the same statuses, pending checks,
+        statistics and integrity reporting."""
+        t0 = time.perf_counter()
+        req = prep.request
+        tickets = prep.tickets or []
+        outs: list[torch.Tensor] = []
+        bytes_down = checked = skipped = 0
+        rows_total = 0
+        submitted: list[tuple[int, Any]] = []
+        pool_min = int(self.trip_pool_min_elems)
+        split = int(self.trip_split)
+        split_min = int(self.trip_split_min_elems)
+        try:
+            if getattr(response, "request_id", None) != req.request_id:
+                raise ProtocolError("compute response id does not match the request")
+            results = tuple(response.items)
+            if len(results) != len(tickets):
+                raise ProtocolError(f"compute response has {len(results)} items, expected {len(tickets)}")
+            for i, (call, _meta, tk, item) in enumerate(zip(prep.calls, prep.metas, tickets, results, strict=True)):
+                lid = call.id
+                rows = int(tk.rows)
+                if item.linear != lid.key or int(item.rows) != rows:
+                    raise ProtocolError(
+                        "compute response item does not match the request",
+                        details={"expected": lid.key, "got": str(item.linear)},
+                    )
+                y = item.y_hat
+                bytes_down += len(y)
+                if tk.checked:
+                    if not prep.defers[i]:
+                        checked += 1
+                else:
+                    skipped += 1
+            fin: list[Any] | None = None
+            if split < 2 and native.native_available("trip_finish_many"):
+                # every item in one native call (the deferred checks submitted first, in item order; the kernels
+                # on the native pool when the outputs are large): the same outputs and statuses as one finish per
+                # item; the statuses are then handled in item order below, as with separate calls
+                ys, scs, bss, bds = [], [], [], []
+                for call, meta, item in zip(prep.calls, prep.metas, results, strict=True):
+                    y = item.y_hat
+                    ys.append(y if isinstance(y, bytes) else np.frombuffer(y, dtype=np.uint8))
+                    scale, bias, bound = self._consts(call.id, meta)
+                    scs.append(scale)
+                    bss.append(bias)
+                    bds.append(int(bound))
+                try:
+                    fin = native.fast.trip_finish_many(tickets, ys, scs, bss, bds, list(prep.defers),
+                                                       int(self.trip_many_parallel_elems))
+                except ValueError as exc:
+                    raise ProtocolError(f"compute response item is malformed: {exc}") from exc
+            for i, (call, meta, tk, item) in enumerate(zip(prep.calls, prep.metas, tickets, results, strict=True)):
+                lid = call.id
+                rows = int(tk.rows)
+                rows_total += rows
+                scale, bias, bound = self._consts(lid, meta)
+                if fin is not None:
+                    status, bad, out, pending = fin[i]
+                else:
+                    y = item.y_hat
+                    yb = y if isinstance(y, bytes) else np.frombuffer(y, dtype=np.uint8)
+                    m = meta.out_features
+                    threads = 0 if rows * m >= pool_min else 1
+                    try:
+                        if split >= 2 and rows * m >= split_min:
+                            status, bad, out, pending = tk.finish(yb, scale, bias, bound, prep.defers[i], threads,
+                                                                  split)
+                        else:
+                            status, bad, out, pending = tk.finish(yb, scale, bias, bound, prep.defers[i], threads)
+                    except ValueError as exc:
+                        raise ProtocolError(f"compute response item is malformed: {exc}") from exc
+                if status:
+                    if pending is not None:  # its verdict no longer matters: wait (it reads y_hat and u)
+                        pending.wait()
+                    for _, p in submitted:  # this request fails: no later check of it can matter either
+                        p.wait()
+                    if fin is not None:  # the later items' checks were submitted too
+                        for later in fin[i + 1:]:
+                            if later[3] is not None:
+                                later[3].wait()
+                    self._raise_status(status, bad, lid, rows, bound)
+                if pending is not None:
+                    submitted.append((i, pending))
+                y_out = torch.from_numpy(out)
+                dev = call.x.device
+                outs.append(y_out if dev.type == "cpu" else y_out.to(dev))
+            if submitted:
+                entries = [_PendingCheck(prep.reservations, p, prep.calls[i].id, int(tickets[i].rows), req.request_id)
+                           for i, p in submitted]
+                with self._pending_lock:
+                    self._pending.extend(entries)
+                self.stats.add(deferred_checks=len(entries))
+        except IntegrityError as exc:
+            self.stats.add(integrity_failures=1)
+            log.error("integrity check failed: request=%s code=%s details=%s", req.request_id, exc.code, exc.details)
+            if self.on_integrity_failure is not None:
+                try:
+                    self.on_integrity_failure(exc)
+                except Exception:  # pragma: no cover - callback must not mask the error
+                    log.exception("on_integrity_failure callback raised")
+            raise
+        finally:
+            prep.wipe()
+        bytes_up = sum(len(it.x_hat) for it in req.items)
+        self.stats.add_many(len(prep.calls), rows_total, 1, bytes_up, bytes_down, checked, skipped, remote_s,
+                            prep.t_prepare + time.perf_counter() - t0, 0 < rows_total <= self.decode_max_rows)
+        return outs
+
     def _noise_submit_xq(self, noise: Any, xh: np.ndarray, xq: np.ndarray) -> None:
         """:meth:`_noise_submit` with ``xq`` already computed (owned here: wiped after the inspection)."""
         def run() -> None:
@@ -2361,7 +2727,15 @@ class MaskedBackend(LinearBackend):
         plaintext-thread call over :meth:`forward_many`. Yes for decode-sized passes when synchronous
         trips are on (a trip-lane client and the TripEngine). :meth:`forward_many` never touches the
         caller's event loop (the client's ``compute_sync`` runs on the lane or its private loop)."""
-        return bool(self.sync_trips) and 0 < int(rows) <= int(self.sync_trip_max_rows)
+        rows = int(rows)
+        if not self.sync_trips or rows <= 0:
+            return False
+        if rows <= int(self.sync_trip_max_rows):
+            return True
+        if not self.sync_multi:
+            return False
+        cap = getattr(self.client, "multi_rows", None)
+        return callable(cap) and rows <= min(int(cap()), int(self.sync_multi_max_rows))
 
     # ---- speculation padding rows -------------------------------------------------------------------
     def _random_r(self, rows: int, n: int) -> np.ndarray:
@@ -4110,6 +4484,8 @@ class MaskedBackend(LinearBackend):
     def _finish(self, prep: _Prepared, response: Any, remote_s: float) -> list[torch.Tensor]:
         if prep.ticket is not None:
             return self._finish_lease(prep, response, remote_s)
+        if prep.tickets is not None:
+            return self._finish_leases(prep, response, remote_s)
         if prep.one:
             return self._finish_one(prep, response, remote_s)
         t0 = time.perf_counter()

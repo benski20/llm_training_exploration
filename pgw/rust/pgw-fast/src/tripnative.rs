@@ -49,6 +49,8 @@ use zeroize::{Zeroize, Zeroizing};
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<TripLease>()?;
     m.add_class::<TripTicket>()?;
+    m.add_function(pyo3::wrap_pyfunction!(trip_prepare_many, m)?)?;
+    m.add_function(pyo3::wrap_pyfunction!(trip_finish_many, m)?)?;
     Ok(())
 }
 
@@ -1308,4 +1310,509 @@ impl TripTicket {
             }
         }
     }
+}
+
+
+// ---- several leases in one call (a trip of several answers, PGW_TRIP_NATIVE_MULTI) -------------------
+
+/// A raw mutable slice handed to one pool unit (each unit owns its item's buffers exclusively).
+#[derive(Clone, Copy)]
+struct RawMut<T>(*mut T, usize);
+// SAFETY: every item's buffers are written by exactly one unit, and the submitting call outlives the units.
+unsafe impl<T> Send for RawMut<T> {}
+unsafe impl<T> Sync for RawMut<T> {}
+
+impl<T> RawMut<T> {
+    fn of(s: &mut [T]) -> Self {
+        RawMut(s.as_mut_ptr(), s.len())
+    }
+    fn none() -> Self {
+        RawMut(std::ptr::null_mut(), 0)
+    }
+    /// SAFETY: the caller is the only user of the slice for the returned lifetime.
+    unsafe fn get<'a>(self) -> &'a mut [T] {
+        if self.1 == 0 {
+            return &mut [];
+        }
+        std::slice::from_raw_parts_mut(self.0, self.1)
+    }
+}
+
+/// Runs `f(i)` for `i in 0..n` on the process pool when `parallel`, else in order on this thread.
+fn run_items(n: usize, parallel: bool, f: &(dyn Fn(usize) + Sync)) -> bool {
+    if parallel && n > 1 {
+        crate::prepare::pool::global().run(n, f)
+    } else {
+        let mut ok = true;
+        for i in 0..n {
+            ok &= std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(i))).is_ok();
+        }
+        ok
+    }
+}
+
+type PrepItem<'py> = (
+    Bound<'py, PyBytes>,
+    TripTicket,
+    Option<Bound<'py, PyArray2<i64>>>,
+    Option<Bound<'py, PyArray2<i64>>>,
+    Option<Bound<'py, PyArray2<u64>>>,
+);
+
+type DupArg<'py> = Option<(Bound<'py, PyArray1<i64>>, u32, Bound<'py, PyArray1<u64>>, usize, usize)>;
+
+/// One item of [`trip_prepare_many`] between validation and the GIL-free prepare.
+struct PrepJob<'a> {
+    lease: &'a TripLease,
+    xs: &'a [f32],
+    t: usize,
+    uw: Option<Src<'a>>,
+    dup: Option<DupIn<'a>>,
+    payload: RawMut<u8>,
+    xh: RawMut<i64>,
+    xq: RawMut<i64>,
+    keys: RawMut<u64>,
+}
+// SAFETY: the shared parts are read-only slices and the lease (its state is behind a mutex); the raw buffers
+// are written by this job's unit only.
+unsafe impl Sync for PrepJob<'_> {}
+unsafe impl Send for PrepJob<'_> {}
+
+/// :meth:`TripLease.prepare` for several leases in one call (one item each, in order): ``leases[i]`` prepares
+/// ``xs[i]`` (float32 ``(t, n)``) with ``flags[i]`` (bit 0: the Freivalds check was drawn, bit 1: the noise monitor
+/// sampled the call) and ``dups[i]`` (the fingerprint parameters, or ``None``). Every item is validated first;
+/// then the items are prepared with the GIL released, on the process pool when the work is at least
+/// ``min_parallel`` elements (``sum t * n``) and there are several items, else in order. Items are independent
+/// (each lease takes its own rows), so the bytes are those of the per-lease calls in any schedule.
+///
+/// Returns ``prepare``'s tuples in order. A failure (non-finite values, ring overflow, a lease that cannot
+/// serve its call: ``not_ready``) raises ``ValueError`` with ``prepare``'s message for the first failing item
+/// after every item ran; then every ticket of the call is wiped (rows taken stay consumed: nothing is sent).
+#[pyfunction]
+#[pyo3(signature = (leases, xs, flags, dups, min_parallel = 1 << 15))]
+fn trip_prepare_many<'py>(
+    py: Python<'py>,
+    leases: Vec<PyRef<'py, TripLease>>,
+    xs: Vec<Bound<'py, PyAny>>,
+    flags: &[u8],
+    dups: Vec<DupArg<'py>>,
+    min_parallel: usize,
+) -> PyResult<Vec<PrepItem<'py>>> {
+    let n_items = leases.len();
+    if xs.len() != n_items || flags.len() != n_items || dups.len() != n_items {
+        return Err(verr("leases, xs, flags and dups must have the same length"));
+    }
+    {
+        let mut ptrs: Vec<usize> = leases.iter().map(|l| &**l as *const TripLease as usize).collect();
+        ptrs.sort_unstable();
+        ptrs.dedup();
+        if ptrs.len() != n_items {
+            return Err(verr("a lease appears twice"));
+        }
+    }
+    // ---- validate and allocate (GIL held) ----
+    let mut xas = Vec::with_capacity(n_items);
+    for (x, lease) in xs.iter().zip(&leases) {
+        let xa = x
+            .downcast::<PyArray2<f32>>()
+            .map_err(|_| verr("x must be a 2-D float32 numpy array"))?
+            .try_readonly()
+            .map_err(|e| verr(format!("x: {e}")))?;
+        if !xa.is_c_contiguous() || xa.shape()[1] != lease.n || xa.shape()[0] == 0 {
+            return Err(verr(format!("x must be C-contiguous (t, {}), got {:?}", lease.n, xa.shape())));
+        }
+        xas.push(xa);
+    }
+    let mut uwas = Vec::with_capacity(n_items);
+    for (lease, &f) in leases.iter().zip(flags) {
+        uwas.push(if f & 1 != 0 { Some(RoRing::extract(lease.uw.bind(py), "uw", lease.prm.k)?) } else { None });
+    }
+    let mut dup_ro = Vec::with_capacity(n_items);
+    for (d, lease) in dups.iter().zip(&leases) {
+        dup_ro.push(match d {
+            Some((cols, shift, mult, groups, per)) => {
+                let ca = cols.try_readonly().map_err(|e| verr(format!("cols: {e}")))?;
+                let ma = mult.try_readonly().map_err(|e| verr(format!("mult: {e}")))?;
+                {
+                    let cs = ca.as_slice().map_err(|_| verr("cols must be contiguous"))?;
+                    let ms = ma.as_slice().map_err(|_| verr("mult must be contiguous"))?;
+                    if !DupIn::valid(cs, *shift, ms, *groups, *per, lease.n) {
+                        return Err(verr("bad fingerprint parameters"));
+                    }
+                }
+                Some((ca, *shift, ma, *groups, *per))
+            }
+            None => None,
+        });
+    }
+    let mut payloads: Vec<Bound<'py, PyBytes>> = Vec::with_capacity(n_items);
+    let mut xhs = Vec::with_capacity(n_items);
+    let mut xqs = Vec::with_capacity(n_items);
+    let mut keyss = Vec::with_capacity(n_items);
+    let mut jobs: Vec<PrepJob<'_>> = Vec::with_capacity(n_items);
+    let mut work = 0usize;
+    for i in 0..n_items {
+        let lease: &TripLease = &leases[i];
+        let n = lease.n;
+        let xsl = xas[i].as_slice().map_err(|e| verr(e.to_string()))?;
+        let t = xsl.len() / n;
+        work += t * n;
+        let nb = (lease.prm.k / 8) as usize;
+        let plen = t * n * nb;
+        // SAFETY: a fresh, unshared bytes object of `plen` bytes; filled before anyone sees it.
+        let payload: Bound<'py, PyBytes> = unsafe {
+            let p = pyo3::ffi::PyBytes_FromStringAndSize(std::ptr::null(), plen as pyo3::ffi::Py_ssize_t);
+            Bound::from_owned_ptr_or_err(py, p)?.downcast_into_unchecked()
+        };
+        let pl = RawMut(payload.as_bytes().as_ptr() as *mut u8, plen);
+        let sampled = flags[i] & 2 != 0;
+        let (xh, xq) = if sampled {
+            (Some(PyArray2::<i64>::zeros(py, [t, n], false)), Some(PyArray2::<i64>::zeros(py, [t, n], false)))
+        } else {
+            (None, None)
+        };
+        let keys = dup_ro[i].as_ref().map(|(_, _, _, groups, _)| PyArray2::<u64>::zeros(py, [t, *groups], false));
+        // SAFETY (all three): fresh arrays, not shared with Python code until returned.
+        let xh_s = match &xh {
+            Some(a) => RawMut::of(unsafe { a.as_slice_mut() }.map_err(|e| verr(e.to_string()))?),
+            None => RawMut::none(),
+        };
+        let xq_s = match &xq {
+            Some(a) => RawMut::of(unsafe { a.as_slice_mut() }.map_err(|e| verr(e.to_string()))?),
+            None => RawMut::none(),
+        };
+        let keys_s = match &keys {
+            Some(a) => RawMut::of(unsafe { a.as_slice_mut() }.map_err(|e| verr(e.to_string()))?),
+            None => RawMut::none(),
+        };
+        let uw = match &uwas[i] {
+            Some(a) => Some(a.src("uw")?.0),
+            None => None,
+        };
+        let dup = match &dup_ro[i] {
+            Some((ca, shift, ma, groups, per)) => Some(DupIn {
+                cols: ca.as_slice().map_err(|e| verr(e.to_string()))?,
+                shift: *shift,
+                mult: ma.as_slice().map_err(|e| verr(e.to_string()))?,
+                groups: *groups,
+                per: *per,
+            }),
+            None => None,
+        };
+        jobs.push(PrepJob { lease, xs: xsl, t, uw, dup, payload: pl, xh: xh_s, xq: xq_s, keys: keys_s });
+        payloads.push(payload);
+        xhs.push(xh);
+        xqs.push(xq);
+        keyss.push(keys);
+    }
+    // ---- prepare every item (GIL released) ----
+    type PrepRes = Option<Result<Option<TripTicket>, CoreErr>>;
+    let slots: Vec<Mutex<PrepRes>> = (0..n_items).map(|_| Mutex::new(None)).collect();
+    let parallel = work >= min_parallel;
+    let ok = {
+        let jobs = &jobs;
+        let slots = &slots;
+        py.allow_threads(move || {
+            let unit = |i: usize| {
+                let j = &jobs[i];
+                // SAFETY: item i's buffers are used by this unit only.
+                let io =
+                    unsafe { PrepIo { payload: j.payload.get(), xh: j.xh.get(), xq: j.xq.get(), keys: j.keys.get() } };
+                let r = j.lease.prepare_core(j.xs, j.t, j.uw, 1, 0, io, j.dup.as_ref());
+                *slots[i].lock().unwrap_or_else(|e| e.into_inner()) = Some(r);
+            };
+            run_items(n_items, parallel, &unit)
+        })
+    };
+    drop(jobs);
+    let mut results: Vec<PrepRes> = slots.into_iter().map(|m| m.into_inner().unwrap_or_else(|e| e.into_inner())).collect();
+    let mut err: Option<PyErr> =
+        if ok { None } else { Some(PyRuntimeError::new_err("trip_prepare_many: internal error in a prepare worker")) };
+    if err.is_none() {
+        for r in results.iter_mut() {
+            match r {
+                Some(Ok(Some(_))) => continue,
+                Some(Ok(None)) => err = Some(verr("not_ready: a lease could not serve its call")),
+                Some(Err(_)) => {
+                    if let Some(Err(e)) = r.take() {
+                        err = Some(e.into_py());
+                    }
+                }
+                None => err = Some(PyRuntimeError::new_err("trip_prepare_many: an item did not run")),
+            }
+            break;
+        }
+    }
+    if let Some(e) = err {
+        for r in results.iter_mut() {
+            if let Some(Ok(Some(tk))) = r {
+                tk.wipe_all();
+            }
+        }
+        for p in &payloads {
+            let b = p.as_bytes();
+            // SAFETY: never returned; zeroed before it is dropped.
+            unsafe { zero_bytes(b.as_ptr() as *mut u8, b.len()) };
+        }
+        return Err(e);
+    }
+    let mut out = Vec::with_capacity(n_items);
+    for (i, r) in results.into_iter().enumerate() {
+        let Some(Ok(Some(mut tk))) = r else { unreachable!("checked above") };
+        if flags[i] & 1 != 0 {
+            tk.u = Some(leases[i].u.clone_ref(py));
+        }
+        out.push((payloads[i].clone(), tk, xhs[i].take(), xqs[i].take(), keyss[i].take()));
+    }
+    Ok(out)
+}
+
+type FinItem<'py> = (u8, usize, Bound<'py, PyArray2<f32>>, Option<crate::trip::TripCheck>);
+
+/// One item of [`trip_finish_many`] between the per-ticket setup and the GIL-free kernel.
+struct FinJob<'a> {
+    tk: RawMut<TripTicket>,
+    ys: &'a [u8],
+    u: Option<Src<'a>>,
+    sc: &'a [f32],
+    bs: Option<&'a [f32]>,
+    bound: u64,
+    /// `None`: settled before the kernel (reservation closed: status 3).
+    mode: Option<FinishMode>,
+    out: RawMut<f32>,
+}
+// SAFETY: read-only shared slices; the ticket and the output are touched by this job's unit only.
+unsafe impl Sync for FinJob<'_> {}
+unsafe impl Send for FinJob<'_> {}
+
+/// :meth:`TripTicket.finish` for several tickets in one call: ``tickets[i]`` finishes with ``y_hats[i]`` (bytes or
+/// a uint8 array), ``scales[i]``, ``biases[i]``, ``bounds[i]`` and ``defers[i]``. The deferred checks are submitted
+/// first, in order (as ``finish`` does before its kernel); then the finish kernels run with the GIL released, on
+/// the process pool when the outputs are at least ``min_parallel`` elements in all, else in order. Returns
+/// ``finish``'s tuples in order (one status per item: the caller handles them in order, as for separate calls).
+/// A malformed argument raises before any ticket is touched; a later error wipes every ticket of the call.
+#[pyfunction]
+#[pyo3(signature = (tickets, y_hats, scales, biases, bounds, defers, min_parallel = 1 << 15))]
+#[allow(clippy::too_many_arguments)]
+fn trip_finish_many<'py>(
+    py: Python<'py>,
+    tickets: Vec<Bound<'py, TripTicket>>,
+    y_hats: Vec<Bound<'py, PyAny>>,
+    scales: Vec<Bound<'py, PyAny>>,
+    biases: Vec<Option<Bound<'py, PyAny>>>,
+    bounds: Vec<u64>,
+    defers: Vec<bool>,
+    min_parallel: usize,
+) -> PyResult<Vec<FinItem<'py>>> {
+    let n_items = tickets.len();
+    if y_hats.len() != n_items
+        || scales.len() != n_items
+        || biases.len() != n_items
+        || bounds.len() != n_items
+        || defers.len() != n_items
+    {
+        return Err(verr("tickets, y_hats, scales, biases, bounds and defers must have the same length"));
+    }
+    let mut refs: Vec<PyRefMut<'py, TripTicket>> = Vec::with_capacity(n_items);
+    for t in &tickets {
+        refs.push(t.try_borrow_mut().map_err(|_| verr("a ticket appears twice or is in use"))?);
+    }
+    // ---- validate every argument before any ticket changes ----
+    let mut scs = Vec::with_capacity(n_items);
+    let mut bss = Vec::with_capacity(n_items);
+    for i in 0..n_items {
+        let tk = &refs[i];
+        if tk.done {
+            return Err(verr("trip ticket already finished or wiped (single use)"));
+        }
+        let m = tk.m;
+        let sc = scales[i]
+            .downcast::<PyArray1<f32>>()
+            .map_err(|_| verr("scale must be a 1-D float32 array"))?
+            .try_readonly()
+            .map_err(|e| verr(format!("scale: {e}")))?;
+        let bs = match &biases[i] {
+            Some(b) => Some(
+                b.downcast::<PyArray1<f32>>()
+                    .map_err(|_| verr("bias must be a 1-D float32 array"))?
+                    .try_readonly()
+                    .map_err(|e| verr(format!("bias: {e}")))?,
+            ),
+            None => None,
+        };
+        if sc.len() != m || bs.as_ref().is_some_and(|b| b.len() != m) {
+            return Err(verr(format!("scale/bias must have {m} entries")));
+        }
+        scs.push(sc);
+        bss.push(bs);
+        let y = &y_hats[i];
+        if y.downcast::<PyBytes>().is_err() {
+            match y.downcast::<PyArrayDyn<u8>>() {
+                Ok(a) if a.is_c_contiguous() => {}
+                Ok(_) => return Err(verr("y_hat must be C-contiguous")),
+                Err(_) => return Err(verr("y_hat must be bytes or a uint8 numpy array")),
+            }
+        }
+    }
+    let mut ys: Vec<&[u8]> = Vec::with_capacity(n_items);
+    for y in &y_hats {
+        if let Ok(b) = y.downcast::<PyBytes>() {
+            ys.push(b.as_bytes());
+        } else {
+            let a = y.downcast::<PyArrayDyn<u8>>().map_err(|_| verr("y_hat"))?;
+            // SAFETY: read-only use while the array (kept alive by `y_hats`) is not written by us.
+            ys.push(unsafe { a.as_slice() }.map_err(|e| verr(e.to_string()))?);
+        }
+    }
+    // ---- per ticket, as `finish` before its kernel: closed reservations, lengths, deferred submissions ----
+    let mut outs: Vec<Bound<'py, PyArray2<f32>>> = Vec::with_capacity(n_items);
+    let mut pendings: Vec<Option<crate::trip::TripCheck>> = Vec::with_capacity(n_items);
+    let mut modes: Vec<Option<FinishMode>> = Vec::with_capacity(n_items);
+    let mut uas: Vec<Option<RoRing<'py>>> = Vec::with_capacity(n_items);
+    let mut first_err: Option<PyErr> = None;
+    for i in 0..n_items {
+        let tk = &mut refs[i];
+        let (rows, m, k) = (tk.rows, tk.m, tk.k);
+        let nb = (k / 8) as usize;
+        let bad_len = ys[i].len() != rows * m * nb;
+        if first_err.is_some() || tk.core.closed() || bad_len {
+            if first_err.is_none() && bad_len {
+                first_err =
+                    Some(verr(format!("ring payload has {} bytes, expected {}", ys[i].len(), rows * m * nb)));
+            }
+            tk.wipe_all();
+            outs.push(PyArray2::<f32>::zeros(py, [rows, m], false));
+            pendings.push(None);
+            modes.push(None);
+            uas.push(None);
+            continue;
+        }
+        // SAFETY: every element is written by the finish kernel (outputs, or zeros on any failure).
+        outs.push(unsafe { PyArray2::<f32>::new(py, [rows, m], false) });
+        let c = tk.c;
+        let ua = match &tk.u {
+            Some(u) => match RoRing::extract(u.bind(py), "u", k) {
+                Ok(a) => Some(a),
+                Err(e) => {
+                    tk.wipe_all();
+                    first_err = Some(e);
+                    pendings.push(None);
+                    modes.push(None);
+                    uas.push(None);
+                    continue;
+                }
+            },
+            None => None,
+        };
+        let prime = c > 0 && check_iface::sync_only(tk.field);
+        let defer = defers[i] && !prime;
+        let mut mode = FinishMode::Sync;
+        let mut pending = None;
+        if c > 0 && defer {
+            let u = tk.u.as_ref().map(|u| u.bind(py).clone());
+            if let Some(u) = u {
+                let mut rhs = std::mem::take(&mut tk.rhs);
+                match check_iface::submit(py, &y_hats[i], &u, &mut rhs, rows, c, k) {
+                    Ok(p) => {
+                        pending = Some(p);
+                        mode = FinishMode::Submitted;
+                    }
+                    Err(e) => {
+                        wipe(&mut rhs);
+                        tk.wipe_all();
+                        first_err = Some(e);
+                        pendings.push(None);
+                        modes.push(None);
+                        uas.push(None);
+                        continue;
+                    }
+                }
+            }
+        }
+        pendings.push(pending);
+        modes.push(Some(mode));
+        uas.push(ua);
+    }
+    if let Some(e) = first_err {
+        for tk in refs.iter_mut() {
+            tk.wipe_all();
+        }
+        drop(pendings); // a submitted check holds its own copies
+        return Err(e);
+    }
+    // ---- the finish kernels (GIL released) ----
+    let mut jobs: Vec<FinJob<'_>> = Vec::with_capacity(n_items);
+    let mut work = 0usize;
+    for i in 0..n_items {
+        let u = match &uas[i] {
+            Some(a) => Some(a.src("u")?.0),
+            None => None,
+        };
+        // SAFETY: a fresh array, not shared with Python until returned.
+        let os = unsafe { outs[i].as_slice_mut() }.map_err(|e| verr(e.to_string()))?;
+        work += os.len();
+        let tkp: &mut TripTicket = &mut refs[i];
+        jobs.push(FinJob {
+            tk: RawMut(tkp as *mut TripTicket, 1),
+            ys: ys[i],
+            u,
+            sc: scs[i].as_slice().map_err(|e| verr(e.to_string()))?,
+            bs: match &bss[i] {
+                Some(b) => Some(b.as_slice().map_err(|e| verr(e.to_string()))?),
+                None => None,
+            },
+            bound: bounds[i],
+            mode: modes[i],
+            out: RawMut::of(os),
+        });
+    }
+    type FinRes = Option<Result<(u8, usize), FinishErr>>;
+    let slots: Vec<Mutex<FinRes>> = (0..n_items).map(|_| Mutex::new(None)).collect();
+    let parallel = work >= min_parallel;
+    let ok = {
+        let jobs = &jobs;
+        let slots = &slots;
+        py.allow_threads(move || {
+            let unit = |i: usize| {
+                let j = &jobs[i];
+                let r = match j.mode {
+                    None => Ok((3u8, 0usize)),
+                    Some(mode) => {
+                        // SAFETY: ticket i and its output are used by this unit only; `refs` outlives the call.
+                        let (tk, os) = unsafe { (&mut *j.tk.0, j.out.get()) };
+                        tk.finish_core(j.ys, j.u, j.sc, j.bs, j.bound, mode, 1, 0, os).map(|(s, b, _)| (s, b))
+                    }
+                };
+                *slots[i].lock().unwrap_or_else(|e| e.into_inner()) = Some(r);
+            };
+            run_items(n_items, parallel, &unit)
+        })
+    };
+    drop(jobs);
+    for tk in refs.iter_mut() {
+        tk.u = None;
+    }
+    let mut res = Vec::with_capacity(n_items);
+    let mut err: Option<PyErr> =
+        if ok { None } else { Some(PyRuntimeError::new_err("trip_finish_many: internal error in a finish worker")) };
+    for ((slot, out), pending) in slots.into_iter().zip(outs).zip(pendings) {
+        match slot.into_inner().unwrap_or_else(|e| e.into_inner()) {
+            Some(Ok((status, bad))) => res.push((status, bad, out, pending)),
+            Some(Err(FinishErr::Msg(m))) => {
+                err.get_or_insert_with(|| verr(m));
+            }
+            Some(Err(FinishErr::Internal)) | None => {
+                err.get_or_insert_with(|| {
+                    PyRuntimeError::new_err("trip_finish_many: internal error in a finish worker (outputs zeroed)")
+                });
+            }
+        }
+    }
+    if let Some(e) = err {
+        for tk in refs.iter_mut() {
+            tk.wipe_all();
+        }
+        return Err(e);
+    }
+    Ok(res)
 }
