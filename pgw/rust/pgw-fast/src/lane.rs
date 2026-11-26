@@ -533,6 +533,11 @@ mod chan {
             }
             match self.est.iter().find(|e| e.linear == linear && e.rows == rows) {
                 None => self.spin_auto.max(self.spin),
+                // A reply expected after the cap (a slow provider: a CPU GEMM, a far link) is not spun
+                // for: a spin to the cap would almost never hit and only takes a core from the rest of
+                // the process (measured: 400 us of CPU per trip, no hit, against a CPU provider). The
+                // estimate keeps learning from blocked waits, so the spin returns when replies speed up.
+                Some(e) if e.ns > self.spin_auto.as_nanos() as u64 => Duration::ZERO,
                 Some(e) => {
                     let want = Duration::from_nanos(e.ns + e.ns / 4 + 20_000);
                     want.clamp(self.spin.min(self.spin_auto), self.spin_auto.max(self.spin))
@@ -1459,6 +1464,40 @@ mod chan {
         s.set_read_timeout(Some(timeout))?;
         s.set_write_timeout(Some(timeout))?;
         Ok(s)
+    }
+
+    #[cfg(test)]
+    mod spin_tests {
+        use super::*;
+
+        #[test]
+        fn adaptive_spin_skips_replies_beyond_the_cap() {
+            let (a, _b) = UnixStream::pair().unwrap();
+            let mut ch = Channel::new(Conn::Uds(a), Duration::from_micros(50));
+            ch.set_spin_auto(Duration::from_micros(400));
+            // unknown key: the cap
+            assert_eq!(ch.spin_for(1, 1), Duration::from_micros(400));
+            // a fast reply: 1.25 x + 20 us, at least the fixed spin
+            ch.learn(1, 1, Duration::from_micros(100));
+            assert_eq!(ch.spin_for(1, 1), Duration::from_micros(145));
+            ch.est[0].ns = 10_000;
+            assert_eq!(ch.spin_for(1, 1), Duration::from_micros(50));
+            // expected just inside the cap: spun up to the cap, as before
+            ch.est[0].ns = 380_000;
+            assert_eq!(ch.spin_for(1, 1), Duration::from_micros(400));
+            // expected after the cap: no spin (blocking wait at once)
+            ch.est[0].ns = 401_000;
+            assert_eq!(ch.spin_for(1, 1), Duration::ZERO);
+            // blocked waits keep teaching the estimate: faster replies bring the spin back
+            for _ in 0..16 {
+                ch.learn(1, 1, Duration::from_micros(150));
+            }
+            assert!(ch.spin_for(1, 1) > Duration::ZERO);
+            // other keys are independent; the fixed spin (no auto) is unchanged
+            assert_eq!(ch.spin_for(2, 1), Duration::from_micros(400));
+            ch.set_spin_auto(Duration::ZERO);
+            assert_eq!(ch.spin_for(1, 1), Duration::from_micros(50));
+        }
     }
 }
 
