@@ -252,9 +252,12 @@ def create_platform_app(accounts: AccountsClient | None, settings: PlatformSetti
         return html(request, page_, title=title, status=status)
 
     async def form(request: Request) -> dict[str, list[str]]:
-        body = await request.body()
-        if len(body) > _MAX_FORM:
-            raise AccountsError("Form too large.", kind="invalid")
+        from pgw.core.http_body import read_limited
+
+        try:
+            body = await read_limited(request, _MAX_FORM, what="form")  # bounded also for chunked bodies
+        except PGWError as exc:
+            raise AccountsError("Form too large.", kind="invalid") from exc
         try:
             return parse_qs(body.decode("utf-8", "replace"), keep_blank_values=True, max_num_fields=64)
         except ValueError as exc:

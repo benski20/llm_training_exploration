@@ -1886,3 +1886,40 @@ segments. Opt-in: `resume` (used by `pgw sdk prepare`). Tests: tests/hemask, tes
 (1013 passed, 96 skipped; one SDK unit expectation fixed after the run). Open: an exact AVX2 int8 GEMM (~2x there),
 a shard-at-a-time public-check packer (the `source="hf"` path keeps 15 / 65 / 145 GB of bf16 checkpoint), a
 row-block masked-head derivation, baked 32B/72B pins.
+
+## 2026-11-26: security review before the client pilot (SDK + provider)
+
+Adversarial review of the SDK, the provider endpoints, the console, the images and the RunPod launcher. Every
+finding with evidence and status: `research/reviews/security-review-2026-11.md`. No scheme, parameter or output
+change.
+
+- **Fixed (high):** S2, the CA pin covered only the first certificate of the CA reply while the whole reply became the
+  trust store. An on-path attacker at first enrollment could append its own CA and receive the SDK key. Now the
+  reply must hold exactly the pinned certificate (SDK, gateway enrollment codes, RunPod launcher).
+- **Fixed (medium):**
+  - S1: unauthenticated chunked bodies were buffered without a bound (`pgw.core.http_body.read_limited` on every
+    JSON/form route).
+  - S3: the request report revealed prefix-cache reuse; it now reports the prompt rows actually sent.
+  - S4: with strict speculation, the report's latency revealed the real pass count; it is no longer sent.
+  - S5: public `/readyz` showed other tenants' load; the load figures are only on the metrics port now.
+- **Fixed (low):**
+  - S6: client-certificate CN collisions across tenants are refused.
+  - S7: a cached session's CA is re-checked against the key's pin.
+  - S8: per-key report rate limit (`accounts_report_records_per_s`, 429; the client keeps the batch).
+  - S9: client-side error-code allow-list.
+- **Open:**
+  - S10: provisioning ignores key scope and quotas.
+  - S11 (decision): persist the SDK integrity breaker.
+  - S12 (decision): stop reporting requests that never reached the provider.
+  - S13: bounded bodies on the customer gateway's routes.
+  - S14: hash the rustup installer.
+  - S15: external review of the Rust `unsafe` code.
+  - S20: measure real vs dummy strict-pass timing.
+- Tests:
+  - New: `tests/sdk/test_security_review.py`, `tests/service/test_security_review.py`, 12 tests.
+  - Result: tests/service, sdk, enroll, platform, deploy, console and provision gave 860 passed and 78 skipped.
+  - 2 failures are not caused by this change:
+    - `test_e2e_cpu.py::test_integrity_failure_raises_and_blocks` needs its module's earlier tests (it fails under
+      xdist; it passes in order).
+    - `test_console_build.py::test_wheel_contains_the_console` globs `pgw-*.whl` while the distribution is
+      `pgw-sdk`.

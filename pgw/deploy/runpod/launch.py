@@ -258,7 +258,8 @@ def attested_ca(url: str, admin_token: str, *, client: Any = None) -> str:
     CA (``POST /pgw/v1/admin/attest``; nothing secret is sent). Raises SystemExit on any mismatch."""
     import httpx
 
-    from pgw.enroll.service import ca_fingerprint
+    from pgw.core.errors import ConfigError
+    from pgw.enroll.service import pinned_ca
     from pgw.service.accounts import attest_mac
 
     h = client or httpx.Client(verify=False, timeout=30.0, trust_env=False)  # noqa: S501 - checked below
@@ -274,8 +275,11 @@ def attested_ca(url: str, admin_token: str, *, client: Any = None) -> str:
         if not any(hmac.compare_digest(want, str(m)) for m in a.get("macs") or []):
             raise SystemExit("attestation failed: the endpoint does not know this launch's admin token (an "
                              "interception, or another pod). Nothing secret was sent; stop the pod and check")
-        pem = h.get(f"{url}/pgw/v1/enroll/ca").text
-        if not hmac.compare_digest(ca_fingerprint(pem).hex(), ca_hex):
+        try:  # exactly one certificate, and only it is trusted (nothing an interceptor appends)
+            fp, pem = pinned_ca(h.get(f"{url}/pgw/v1/enroll/ca").text)
+        except ConfigError as exc:
+            raise SystemExit(f"attestation failed: invalid CA reply ({exc.message})") from exc
+        if not hmac.compare_digest(fp.hex(), ca_hex):
             raise SystemExit("attestation failed: the CA served does not match the attested fingerprint")
         return pem
     finally:

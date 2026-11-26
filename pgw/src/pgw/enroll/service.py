@@ -44,7 +44,7 @@ from pgw.enroll.store import EnrollmentRecord, EnrollmentRejectedError, Enrollme
 
 __all__ = [
     "ENROLL_CA_PATH", "ENROLL_PATH", "ENROLL_RENEW_PATH", "EnrollmentService", "add_enroll_routes", "ca_fingerprint",
-    "load_ca_pem", "sign_client_csr",
+    "load_ca_pem", "pinned_ca", "sign_client_csr",
 ]
 
 log = logging.getLogger(__name__)
@@ -77,6 +77,30 @@ def load_ca_pem(path: Path) -> str:
     from cryptography.hazmat.primitives import serialization
 
     return certs[0].public_bytes(serialization.Encoding.PEM).decode("ascii")
+
+
+def pinned_ca(pem: str | bytes) -> tuple[bytes, str]:
+    """``(SHA-256 of the DER, canonical PEM)`` of a CA reply that must hold exactly one certificate.
+
+    A client that checks only the first certificate of a reply against its pin and then trusts the whole text
+    (``ssl.create_default_context(cadata=...)``) would also trust any certificate an on-path attacker appends
+    (security review 2026-11, S2). Callers trust the returned PEM only, which holds the pinned certificate alone.
+
+    Raises:
+        ConfigError: no certificate, or more than one.
+    """
+    from cryptography import x509
+    from cryptography.hazmat.primitives import serialization
+
+    data = pem.encode("ascii", "replace") if isinstance(pem, str) else pem
+    try:
+        certs = x509.load_pem_x509_certificates(data)
+    except ValueError as exc:
+        raise ConfigError("not a PEM certificate") from exc
+    if len(certs) != 1:
+        raise ConfigError(f"expected exactly one CA certificate, got {len(certs)}")
+    der = certs[0].public_bytes(serialization.Encoding.DER)
+    return hashlib.sha256(der).digest(), certs[0].public_bytes(serialization.Encoding.PEM).decode("ascii")
 
 
 def ca_fingerprint(pem: str | bytes) -> bytes:
@@ -382,6 +406,14 @@ class EnrollmentService:
         """
         s = self.settings
         sign = csr is not None and s.client_issuing_ca_cert_file is not None
+        if sign and self.authenticator is not None:
+            # CN = pgw-gw.<tenant>.<name>, cut at 64 characters: tenants with dots or long ids can produce the same
+            # CN (tenant "a" + name "b.c" and tenant "a.b" + name "c"). Mapping it again would hand the other
+            # tenant's certificates this identity (security review 2026-11, S6): refuse before issuing anything.
+            owner = self.authenticator.tenant_for_subject(f"pgw-gw.{tenant}.{name}"[:64])
+            if owner is not None and owner != tenant:
+                raise PGWError("this installation name cannot be used for this tenant; choose another name",
+                               code=ErrorCode.PERMISSION_DENIED)
         # Without a client certificate the token is marked token-only: it stays usable when the
         # service requires mTLS for compute (require_client_cert_for_compute).
         token, trec = _issue_token(tenant, Path(s.tokens_file), token_only=not sign)
@@ -524,6 +556,7 @@ def add_enroll_routes(app: Any, settings: Any, authenticator: Any, models: Calla
     from starlette.responses import JSONResponse, PlainTextResponse, Response
 
     from pgw.core.client_ip import client_ip
+    from pgw.core.http_body import read_limited
 
     svc = EnrollmentService(settings, authenticator, models)
 
@@ -546,12 +579,7 @@ def add_enroll_routes(app: Any, settings: Any, authenticator: Any, models: Calla
     async def post_enroll(request: Request) -> Response:
         client = client_ip(request)
         try:
-            length = request.headers.get("content-length")
-            if length is not None and (not length.isdigit() or int(length) > _MAX_BODY):
-                raise PGWError("request body too large", code=ErrorCode.PAYLOAD_TOO_LARGE)
-            raw = await request.body()
-            if len(raw) > _MAX_BODY:
-                raise PGWError("request body too large", code=ErrorCode.PAYLOAD_TOO_LARGE)
+            raw = await read_limited(request, _MAX_BODY)  # bounded also for chunked bodies
             try:
                 body = json.loads(raw)
             except ValueError as exc:
@@ -570,12 +598,7 @@ def add_enroll_routes(app: Any, settings: Any, authenticator: Any, models: Calla
 
         client = client_ip(request)
         try:
-            length = request.headers.get("content-length")
-            if length is not None and (not length.isdigit() or int(length) > _MAX_BODY):
-                raise PGWError("request body too large", code=ErrorCode.PAYLOAD_TOO_LARGE)
-            raw = await request.body()
-            if len(raw) > _MAX_BODY:
-                raise PGWError("request body too large", code=ErrorCode.PAYLOAD_TOO_LARGE)
+            raw = await read_limited(request, _MAX_BODY)  # bounded also for chunked bodies
             try:
                 body = json.loads(raw)
             except ValueError as exc:

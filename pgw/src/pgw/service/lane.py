@@ -1020,9 +1020,9 @@ def add_lane_routes(app: Any, state: Any) -> None:
             identity = await _maybe_await(handler.authenticate(request.headers.get("authorization"),
                                                                _client_cert_subject(request.scope)))
             handler.precheck()
-            raw = await request.body()
-            if len(raw) > 4096:
-                raise ProtocolError("lane/open body too large")
+            from pgw.core.http_body import read_limited
+
+            raw = await read_limited(request, 4096, what="lane/open body")
             try:
                 req = json.loads(raw or b"{}")
             except ValueError as exc:

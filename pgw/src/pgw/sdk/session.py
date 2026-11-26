@@ -141,6 +141,12 @@ def load_session(key: SdkKey, layout: CacheLayout) -> Session | None:
             or meta.get("ca_fingerprint") != (key.ca_fingerprint_hex if key.pinned else None)
             or not p["token"].is_file()):
         return None
+    if key.pinned and not _ca_file_matches(p["ca"], key.ca_sha256):
+        # a missing or replaced CA file must not fall back to the system trust store (or trust another CA):
+        # enroll again, which fetches the CA and checks it against the key's pin
+        log.warning("the cached provider CA of SDK key %s is missing or does not match the key's pin; enrolling "
+                    "again", key.key_id_hex)
+        return None
     has_cert = bool(meta.get("client_cert")) and p["client_cert"].is_file() and p["client_key"].is_file()
     return Session(
         key_id=key.key_id_hex, service_url=key.service_url, tenant=str(meta.get("tenant", "")), dir=d,
@@ -148,6 +154,19 @@ def load_session(key: SdkKey, layout: CacheLayout) -> Session | None:
         client_cert_file=p["client_cert"] if has_cert else None, client_key_file=p["client_key"] if has_cert else None,
         models=list(meta.get("models") or []), lane=meta.get("lane"), enrolled_at=float(meta.get("enrolled_at", 0)),
         ca_fingerprint=meta.get("ca_fingerprint"))
+
+
+def _ca_file_matches(path: Path, pin: bytes) -> bool:
+    """Whether ``path`` holds exactly one certificate, the one ``pin`` names."""
+    import hmac
+
+    from pgw.enroll.service import pinned_ca
+
+    try:
+        fp, _ = pinned_ca(path.read_text(encoding="ascii"))
+    except (OSError, ValueError, ConfigError):
+        return False
+    return hmac.compare_digest(fp, pin)
 
 
 def ensure_session(key: SdkKey, layout: CacheLayout, *, force: bool = False, transport: Any = None,

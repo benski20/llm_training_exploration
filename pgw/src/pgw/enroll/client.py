@@ -99,7 +99,7 @@ def _fetch_pinned_ca(code: EnrollmentCode, transport: Any, timeout: float) -> st
     """The service CA (PEM) whose SHA-256 equals the code's pin; ``None`` for an unpinned loopback code."""
     import httpx
 
-    from pgw.enroll.service import ca_fingerprint
+    from pgw.enroll.service import pinned_ca
 
     # Unverified on purpose: the certificate is checked against the pin below before any secret is sent.
     try:
@@ -114,11 +114,11 @@ def _fetch_pinned_ca(code: EnrollmentCode, transport: Any, timeout: float) -> st
     if r.status_code != 200:
         raise EnrollmentError(f"the compute service does not offer enrollment (HTTP {r.status_code}); ask your "
                               "provider to enable it", code=ErrorCode.BACKEND_UNAVAILABLE)
-    pem = r.text
-    try:
-        fp = ca_fingerprint(pem)
+    try:  # exactly one certificate: only the pinned one is ever trusted (nothing appended to it)
+        fp, pem = pinned_ca(r.text)
     except ConfigError as exc:
-        raise EnrollmentError("the compute service sent an invalid CA certificate", code=ErrorCode.INTEGRITY) from exc
+        raise EnrollmentError("the compute service sent an invalid CA certificate reply (it must hold exactly one "
+                              "certificate)", code=ErrorCode.INTEGRITY) from exc
     if code.pinned and not hmac.compare_digest(fp, code.ca_sha256):
         raise EnrollmentError(
             "the compute service's certificate authority does not match the enrollment code. The connection may "

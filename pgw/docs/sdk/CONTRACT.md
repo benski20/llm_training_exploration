@@ -179,6 +179,13 @@ already sees these counts and timings in the masked traffic (rows per trip, trip
 attributes them to requests. `checks_ok` is the client's statement that every integrity check of the request
 passed: the provider cannot check a result itself, so the console labels it "checked client-side".
 
+What the library puts in a record is limited to what the provider observes anyway (`pgw.sdk.reports.build_record`,
+security review 2026-11): `prompt_tokens` counts only the prompt tokens sent to the provider (tokens reused from the
+conversation's prefix cache are not counted), `latency_ms` is `null` with strict speculation (the answer returns
+before the dummy passes), and `error_code` is one of the library's public codes (else `internal`). The provider
+limits reports per SDK key (`PGW_SERVICE_ACCOUNTS_REPORT_RECORDS_PER_S`, default 20 records/s, burst 4096); over it
+the reply is 429 and the library keeps the batch for its next send.
+
 ### A4. Admin API (provider agent; off unless `PGW_SERVICE_ACCOUNTS_ADMIN_API=true`; for the console agent)
 
 `Authorization: Bearer <admin token>` (`pgwa-...`, created with `pgw service admin-token create [--org ORG]` and

@@ -253,6 +253,11 @@ class ServiceSettings(PGWSettings):
         "status, the client's integrity verdict; reported by the client library, never any content) is kept; "
         "0 = do not record it",
     )
+    accounts_report_records_per_s: float = Field(
+        20.0, gt=0, description="Request records per second one SDK key may report (POST /pgw/v1/sdk/report; burst "
+        "4096): bounds how fast one tenant can grow the request log; more is refused with 429 and the client keeps "
+        "the records for its next send",
+    )
     sdk_enrolls_per_key_per_hour: int = Field(
         60, ge=1, description="Successful POST /pgw/v1/sdk/enroll calls per SDK key per hour (each one makes a new "
         "installation); failed attempts are limited per address by enrollment_rate_limit_per_minute",

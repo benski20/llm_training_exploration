@@ -429,9 +429,9 @@ def add_provision_routes(app: Any, state: Any) -> None:
     async def hint_create(request: Request) -> Response:
         try:
             ident = await auth(request)
-            raw = await request.body()
-            if len(raw) > 1 << 16:
-                raise ProtocolError("provision/hint body too large")
+            from pgw.core.http_body import read_limited
+
+            raw = await read_limited(request, 1 << 16, what="provision/hint body")
             try:
                 req = json.loads(raw or b"{}")
             except ValueError as exc:

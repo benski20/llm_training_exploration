@@ -117,6 +117,7 @@ _USAGE_FIELDS = ("trips", "rows", "tokens", "maskgen_cols", "maskgen_requests", 
 #: usage columns added after schema 1 (client-reported request counts; added to older databases at open)
 _REPORT_FIELDS = ("requests", "prompt_tokens", "completion_tokens", "errors", "checks_ok")
 _REPORT_MAX_ITEMS = 256
+_REPORT_BURST = 4096
 _ERROR_CODE_RE = re.compile(r"^[a-z0-9_.-]{1,64}$")
 _LIMIT_FIELDS = ("daily_token_quota", "rows_per_s", "burst_rows", "max_installations")
 
@@ -763,6 +764,7 @@ class Accounts:
         self._day = day_of(clock())
         self._db_today: dict[str, tuple[float, int]] = {}  # key_hex -> (tokens, trips) flushed today
         self._lane_models: dict[str, set[str]] = {}
+        self._report_buckets: dict[str, Any] = {}  # key_hex -> TokenBucket of reported records
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self.refresh_s = float(getattr(settings, "accounts_refresh_s", 2.0))
@@ -1043,6 +1045,18 @@ class Accounts:
         items = body.get("requests") if isinstance(body, dict) else None
         if not isinstance(items, list) or len(items) > _REPORT_MAX_ITEMS:
             raise PGWError(f"requests must be a list of at most {_REPORT_MAX_ITEMS} records", code=ErrorCode.PROTOCOL)
+        if items:  # per key: one tenant cannot grow the request log (and the usage rows) without bound
+            with self._lock:
+                bucket = self._report_buckets.get(st.rec.key_hex)
+                if bucket is None:
+                    from pgw.service.handler import TokenBucket
+
+                    rate = float(getattr(self.settings, "accounts_report_records_per_s", 20.0))
+                    bucket = self._report_buckets[st.rec.key_hex] = TokenBucket(rate, _REPORT_BURST)
+                wait = bucket.take(len(items))
+            if wait > 0:
+                raise RateLimitedError("too many request reports from this SDK key; send them later",
+                                       details={"retry_after_s": round(wait, 3), "limit": "sdk_report"})
         rows: list[tuple[Any, ...]] = []
         for it in items:
             r = _parse_report(it, now)
@@ -1253,12 +1267,9 @@ def _json_error(exc: PGWError) -> Any:
 
 
 async def _read_json(request: Any) -> Any:
-    length = request.headers.get("content-length")
-    if length is not None and (not length.isdigit() or int(length) > _MAX_BODY):
-        raise PGWError("request body too large", code=ErrorCode.PAYLOAD_TOO_LARGE)
-    raw = await request.body()
-    if len(raw) > _MAX_BODY:
-        raise PGWError("request body too large", code=ErrorCode.PAYLOAD_TOO_LARGE)
+    from pgw.core.http_body import read_limited
+
+    raw = await read_limited(request, _MAX_BODY)  # stops at the limit (chunked bodies have no Content-Length)
     if not raw:
         return {}
     try:

@@ -97,8 +97,12 @@ class ServiceState:
             self._device_checked_at = now
         return self._device_ok
 
-    async def readiness(self) -> tuple[bool, dict[str, Any]]:
-        """``(ready, details)`` for ``/readyz``."""
+    async def readiness(self, *, public: bool = False) -> tuple[bool, dict[str, Any]]:
+        """``(ready, details)`` for ``/readyz``.
+
+        ``public`` (the main listener, reachable by every tenant and without credentials): no load figures
+        (in-flight requests, queued rows, lane connections). Polled often, they show when other tenants send work
+        and how many rows (security review 2026-11, S5); the metrics port keeps them."""
         details: dict[str, Any] = {
             "loaded": self.loaded,
             "draining": self.draining,
@@ -114,6 +118,11 @@ class ServiceState:
             details["error"] = self.load_error
         if self.lane is not None:
             details["lane"] = self.lane.status()
+        if public:
+            details.pop("inflight", None)
+            details.pop("queued_rows", None)
+            if isinstance(details.get("lane"), dict):
+                details["lane"] = {k: v for k, v in details["lane"].items() if k != "connections"}
         ready = self.loaded and not self.draining and len(self.registry) > 0 and self.batcher.running
         if self.loaded:
             dev = await self.device_ok()
@@ -301,7 +310,7 @@ def create_app(
         return PlainTextResponse("ok")
 
     async def readyz(request: Request) -> Response:
-        ready, details = await state.readiness()
+        ready, details = await state.readiness(public=True)
         return JSONResponse({"ready": ready, **details}, status_code=200 if ready else 503)
 
     async def metrics_route(request: Request) -> Response:

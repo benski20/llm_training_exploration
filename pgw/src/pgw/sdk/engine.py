@@ -693,13 +693,15 @@ class Engine:
             if code == "cancelled" and time.monotonic() - t0 >= 0.98 * self._budget(timeout_s):
                 code = "deadline_exceeded"  # the request's budget ran out (asyncio.timeout cancels the generator)
             if self.reporter is not None and "model" in meta:
-                self.reporter.add({
-                    "ts": started, "model": meta["model"], "status": status, "error_code": code,
-                    "prompt_tokens": int(meta.get("prompt_tokens", 0)),
-                    "completion_tokens": int(meta.get("completion_tokens", 0)),
-                    "latency_ms": round((time.monotonic() - t0) * 1000.0, 3),
-                    "ttft_ms": round((first - t0) * 1000.0, 3) if first is not None else None,
-                    "stream": bool(meta.get("stream")), "checks_ok": status == "ok"})
+                from pgw.sdk.reports import build_record
+
+                self.reporter.add(build_record(
+                    ts=started, model=meta["model"], status=status, error_code=code,
+                    prompt_tokens=int(meta.get("prompt_tokens", 0)), cached_tokens=int(meta.get("cached_tokens", 0)),
+                    completion_tokens=int(meta.get("completion_tokens", 0)),
+                    latency_ms=round((time.monotonic() - t0) * 1000.0, 3),
+                    ttft_ms=round((first - t0) * 1000.0, 3) if first is not None else None,
+                    stream=bool(meta.get("stream")), speculation=self.options.speculation != "off"))
 
     async def _chat_events(self, req: Any, *, conversation: str | None = None,
                            meta: dict[str, Any] | None = None,
