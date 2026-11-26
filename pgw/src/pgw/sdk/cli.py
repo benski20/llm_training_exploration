@@ -115,6 +115,14 @@ def _print_status(rep: dict[str, Any]) -> None:
             click.echo(f"  factory {fp}: halted={f.get('halted')}  provider_integrity_failures="
                        f"{f.get('provider_integrity_failures', 0)}  last run {_age(f.get('last_run_at'))}"
                        + (f"  last error: {f['last_error']}" if f.get("last_error") else ""))
+            cs = f.get("check_stock")
+            if cs and "stocks" not in cs:
+                click.echo(f"    factory_weights=stream: check stock {cs.get('segments', 0)}/"
+                           f"{cs.get('target_segments', '?')}"
+                           f" segment sets, {cs.get('private_sets', 0)}/{cs.get('target_private_sets', '?')} private "
+                           f"sets, {cs.get('passes', 0)} weight pass(es), last {_age(cs.get('last_pass_at'))}"
+                           + (" (refilling)" if cs.get("refilling") else "")
+                           + (f"  last pass error: {cs['last_pass_error']}" if cs.get("last_pass_error") else ""))
         stock = s.get("mask_stock")
         if stock:
             if "error" in stock:
@@ -292,9 +300,12 @@ def clear_halt_cmd(model: str, key_id: str | None, state_dir: Path | None, note:
               help="As the client's masked_head option (default auto); use the clients' setting")
 @click.option("--pin", "pins", multiple=True, metavar="MODEL=FINGERPRINT",
               help="Extra fingerprint pin, as the client's model_fingerprints (repeatable)")
+@click.option("--factory-weights", type=click.Choice(["pack", "stream"]), default=None,
+              help="As the client's factory_weights option (default PGW_FACTORY_WEIGHTS or pack): 'stream' keeps no "
+              "int8 weights (no factory pack; the hint is built from the streamed weights now)")
 @click.option("--json", "as_json", is_flag=True, help="Machine-readable summary")
 def prepare_cmd(models: tuple[str, ...], cache_dir: Path | None, state_dir: Path | None, no_hint: bool, threads: int,
-                masked_head: str | None, pins: tuple[str, ...], as_json: bool) -> None:
+                masked_head: str | None, pins: tuple[str, ...], factory_weights: str | None, as_json: bool) -> None:
     """One-time setup of a model ahead of the first request: artifacts, weights and the pks-v3 hint, on every core,
     resumable (run it again after an interruption). The API key comes from PGW_API_KEY and is never printed.
 
@@ -315,7 +326,7 @@ def prepare_cmd(models: tuple[str, ...], cache_dir: Path | None, state_dir: Path
             raise click.BadParameter(f"--pin expects MODEL=FINGERPRINT, not {p!r}")
         fps[name.strip().lower()] = fp.strip().lower()
     opts = SDKOptions.from_env(cache_dir=cache_dir, state_dir=state_dir, masked_head=masked_head,
-                               model_fingerprints=fps or None)
+                               model_fingerprints=fps or None, factory_weights=factory_weights)
     last: dict[str, Any] = {"t": 0.0, "stage": ""}
 
     def say(line: str) -> None:
@@ -333,6 +344,8 @@ def prepare_cmd(models: tuple[str, ...], cache_dir: Path | None, state_dir: Path
             click.echo(f"{r['model']}: fingerprint {r['fingerprint'][:12]}, masked head {r['masked_head']}, hint "
                        f"{'ready' if r['hint_dir'] else 'not built (the factory builds it on first use)'}, "
                        f"{r['seconds']:.0f} s; pack {r.get('pack_bytes', 0) / 1e9:.2f} GB, factory pack "
-                       f"{r.get('factory_pack_bytes', 0) / 1e9:.2f} GB, hint {r.get('hint_dir_bytes', 0) / 1e9:.2f} GB")
+                       + (f"{r.get('factory_pack_bytes', 0) / 1e9:.2f} GB" if r.get("factory_weights") != "stream"
+                          else "none (factory_weights=stream)")
+                       + f", hint {r.get('hint_dir_bytes', 0) / 1e9:.2f} GB")
     if as_json:
         click.echo(json.dumps(out, indent=2))

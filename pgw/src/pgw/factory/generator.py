@@ -217,6 +217,24 @@ class _Stop:
     """Writer-queue sentinel."""
 
 
+class _ShapeStreamer:
+    """The weight streamer of a weight-free factory (``check_source``): yields every linear's id with a shape-only
+    placeholder (a ``meta`` tensor, no memory). The encrypted backend never reads ``W8``; the check material that
+    needs it comes pre-drawn from the stock (:mod:`pgw.factory.checkstock`)."""
+
+    def __init__(self, specs: list[LinearSpec], device: torch.device):
+        self.specs = list(specs)
+        self.device = device
+        self.streaming = False
+
+    def iter_device_weights(self) -> Iterator[tuple[LinearId, torch.Tensor]]:
+        for s in self.specs:
+            yield s.id, torch.empty((s.out_features, s.in_features), dtype=torch.int8, device="meta")
+
+    def close(self) -> None:
+        pass
+
+
 class _CpuRing:
     """``r`` rows of one segment on the CPU: ``SeedExpander(seed).ring_uniform_rows(n, K, slot, rows, "r", linear)``.
 
@@ -364,6 +382,8 @@ class MaskGenerator:
         native_rng: bool | None = None,
         skip_kinds: frozenset[str] | set[str] | tuple[str, ...] = (),
         check_field: str | None = None,
+        check_source: Any = None,
+        weights: str = "pack",
     ):
         self.pack = pack
         # Encrypted mask generation (pgw.hemask.HEMaskBackend, PKSMaskBackend): W8 r comes from the provider
@@ -405,6 +425,20 @@ class MaskGenerator:
         self.fingerprint: str = pack.fingerprint
         self.device = resolve_device(device)
         self.backend = resolve_backend(self.device, backend)
+        #: Weight-free factory (``factory_weights = "stream"``, opt-in): a :class:`pgw.factory.checkstock.CheckStock`
+        #: holding pre-drawn segment seeds with their ``uW`` and private self-check sets; ``W8`` is never read here.
+        #: ``weights="stream"`` (or a ``check_source``) makes the generator weight-free: it refuses to make a segment
+        #: without one (:meth:`attach_check_source`).
+        if weights not in ("pack", "stream"):
+            raise ConfigError(f"weights must be 'pack' or 'stream', not {weights!r}")
+        self.weight_free = weights == "stream" or check_source is not None
+        self.check_source: Any = None
+        self._priv_item: Any = None
+        if self.weight_free:
+            if remote is None:
+                raise ConfigError("factory_weights='stream' needs encrypted generation (local masks need W8)")
+            if streamer is None:
+                streamer = _ShapeStreamer(self.specs, self.device)  # type: ignore[assignment]
         if streamer is None:
             max_lin = max(s.out_features * s.in_features for s in self.specs)
             reserve = 2 * max_lin + (1 << 30)
@@ -446,6 +480,27 @@ class MaskGenerator:
             f" (skipping {', '.join(sorted(self.skip_kinds))})" if self.skip_kinds else "",
             slot_bytes(self.specs, self.ring) / 1e6,
         )
+        if check_source is not None:
+            self.attach_check_source(check_source)
+
+    def attach_check_source(self, src: Any) -> None:
+        """Use ``src`` (a :class:`pgw.factory.checkstock.CheckStock`) for every segment's seed and ``uW`` and every
+        private self-check set. Refuses a stock made for other linears, check format or private vector counts."""
+        if not self.weight_free:
+            raise ConfigError("attach_check_source needs a weight-free generator (weights='stream')")
+        self._bind_check_source(src)
+        self.check_source = src
+
+    def stock_linears(self) -> list[Any]:
+        """The :class:`pgw.factory.checkstock.StockLinear` list a check stock for this generator must hold."""
+        from pgw.factory.checkstock import StockLinear
+
+        return [StockLinear(s.id.key, s.out_features, s.in_features, self._private_vectors(s)) for s in self.specs]
+
+    def _source(self) -> Any:
+        if self.check_source is None:
+            raise ConfigError("this weight-free factory has no check stock attached")
+        return self.check_source
 
     # ---- properties --------------------------------------------------------------------------
     @property
@@ -616,14 +671,20 @@ class MaskGenerator:
 
     def generate(
         self, seed: bytes, slots: int, *, checks: int = 2, chunk_slots: int | None = None,
-        throttle: Throttle | None = None,
+        throttle: Throttle | None = None, check_item: Any = None,
     ) -> Iterator[GeneratedLinear]:
         """Yield chunks for every linear (canonical order, then slot order) of one segment.
 
         ``chunk_slots=None`` picks :meth:`chunk_slots_for`. The ``r`` buffers are zeroized after use;
-        ``wr`` tensors belong to the caller.
+        ``wr`` tensors belong to the caller. ``check_item``: the segment's pre-drawn seed and ``uW``
+        (:class:`pgw.factory.checkstock.SegmentItem`; required with :attr:`check_source`, whose ``seed`` must be the
+        item's); its ``uW`` is used instead of computing ``u W8``.
         """
         self._validate(seed, slots, checks, chunk_slots)
+        if self.weight_free:
+            if check_item is None or bytes(check_item.seed) != bytes(seed) or checks != self._source().checks:
+                raise ConfigError("a weight-free factory makes segments only from pre-drawn check material "
+                                  "(generate_into_store takes it from the stock)")
         chunk_slots = self.chunk_slots_for(chunk_slots)
         thr = throttle or self.throttle
         exp = SeedExpander(bytes(seed))
@@ -781,7 +842,13 @@ class MaskGenerator:
                 t0 = time.perf_counter()
                 cu: np.ndarray | None = None
                 cw: np.ndarray | None = None
-                if checks and self.check_field is not None:
+                if check_item is not None:
+                    # pre-drawn at a fingerprint-checked W8 pass (pgw.factory.checkstock): the same u (SPEC 7.3)
+                    # from this seed and the same u W8 as computed below
+                    uw = check_item.uw_tensor(lid.key)
+                    if tuple(uw.shape) != (checks, spec.in_features):
+                        raise ConfigError(f"{lid}: pre-drawn check vectors have shape {tuple(uw.shape)}")
+                elif checks and self.check_field is not None:
                     # prime-field format: u uniform in F_p (stream "u-p31"), uW = u W8 mod p (exact)
                     from pgw.core.freivalds import prime_check_vectors
 
@@ -869,6 +936,12 @@ class MaskGenerator:
         (:meth:`_wipe_private`), so the provider never learns anything about the vectors in use (an accepted
         segment tells it nothing it did not know). They never leave this process and are wiped on rotation."""
         key = spec.id.key
+        if self.weight_free:
+            # weight-free factory: a pre-drawn set (same v, same v W8), taken from the stock at worker start and
+            # after every _wipe_private, exactly when an on-demand set would be drawn
+            if self._priv_item is None:
+                self._priv_item = self._source().take_private(stop=self._stop_event())
+            return self._priv_item.check_vectors(self._source().linear(key), self.ring)  # type: ignore[no-any-return]
         cache = self.remote is not None
         if cache:
             hit = self._priv_cache.get(key)
@@ -893,6 +966,9 @@ class MaskGenerator:
 
     def _wipe_private(self) -> None:
         """Forget (and zero) every cached private check vector: the next segment draws fresh ones."""
+        item, self._priv_item = self._priv_item, None
+        if item is not None:
+            item.wipe()  # a pre-drawn set is never used again either (taken from the stock: burned)
         for cu, cw in self._priv_cache.values():
             cu.fill(0)
             cw.fill(0)
@@ -998,9 +1074,55 @@ class MaskGenerator:
             store_chunk_slots: Slots per encrypted chunk in the segment file; default sized by
                 ``store_chunk_bytes`` (bounds the decrypted masks a gateway caches per session).
         """
+        if self.weight_free:
+            return self._generate_from_stock(store, slots, checks=checks, chunk_slots=chunk_slots,
+                                             factory_id=factory_id, seed=seed, throttle=throttle,
+                                             store_chunk_slots=store_chunk_slots, store_chunk_bytes=store_chunk_bytes)
         if checks is None:
             checks = self.checks_for()
         seg_seed = bytes(seed) if seed is not None else new_seed()
+        return self._generate_segment(store, slots, seg_seed, checks=checks, chunk_slots=chunk_slots,
+                                      factory_id=factory_id, throttle=throttle, store_chunk_slots=store_chunk_slots,
+                                      store_chunk_bytes=store_chunk_bytes)
+
+    def _generate_from_stock(self, store: Any, slots: int, *, checks: int | None, chunk_slots: int | None,
+                             factory_id: str, seed: bytes | None, throttle: Throttle | None,
+                             store_chunk_slots: int | None, store_chunk_bytes: int) -> str:
+        """A segment of a weight-free factory: its seed and ``uW`` from the next pre-drawn set (consumed durably
+        before use; burned whatever happens), its private self-check set from the stock too."""
+        src = self._source()
+        if seed is not None:
+            raise ConfigError("a weight-free factory takes segment seeds from its check stock only")
+        if checks is not None and checks != src.checks:
+            raise ConfigError(f"checks={checks} but the check stock holds {src.checks} vector(s) per linear")
+        stop = self._stop_event(throttle)
+        if self._priv_item is None:  # first, so that a missing private set never burns a segment set
+            self._priv_item = src.take_private(stop=stop)
+        item = src.take_segment(stop=stop)
+        try:
+            return self._generate_segment(store, slots, bytes(item.seed), checks=src.checks, chunk_slots=chunk_slots,
+                                          factory_id=factory_id, throttle=throttle, store_chunk_slots=store_chunk_slots,
+                                          store_chunk_bytes=store_chunk_bytes, check_item=item)
+        finally:
+            item.wipe()
+
+    def _stop_event(self, throttle: Throttle | None = None) -> threading.Event | None:
+        thr = throttle or self.throttle
+        return thr.stop_event if thr is not None else None
+
+    def _bind_check_source(self, src: Any) -> None:
+        """Refuse a stock made for other linears, check format or private vector counts than this generator's."""
+        if src.fingerprint != self.fingerprint or src.ring.name != self.ring.name or \
+                (src.check_field or None) != self.check_field:
+            raise ConfigError("the check stock was made for another pack, ring or check field")
+        want = [lin.as_list() for lin in self.stock_linears()]
+        got = [lin.as_list() for lin in src.linears]
+        if want != got:
+            raise ConfigError("the check stock's linears do not match this generator's")
+
+    def _generate_segment(self, store: Any, slots: int, seg_seed: bytes, *, checks: int, chunk_slots: int | None,
+                          factory_id: str, throttle: Throttle | None, store_chunk_slots: int | None,
+                          store_chunk_bytes: int, check_item: Any = None) -> str:
         self._validate(seg_seed, slots, checks, chunk_slots)
         if slots > self.max_segment_slots():
             raise ConfigError(
@@ -1021,7 +1143,7 @@ class MaskGenerator:
             write_time = [0.0]
             try:
                 self._drive(writer, self.generate(seg_seed, slots, checks=checks, chunk_slots=chunk_slots,
-                                                  throttle=throttle), write_time)
+                                                  throttle=throttle, check_item=check_item), write_time)
                 t1 = time.perf_counter()
                 seg_id = str(writer.commit())
                 write_time[0] += time.perf_counter() - t1

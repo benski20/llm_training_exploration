@@ -53,7 +53,7 @@ from pgw.provision.pack import (
     write_safetensors_layout,
 )
 
-__all__ = ["ProvisionedModel", "find_prepared_hint", "provision", "stream_weights"]
+__all__ = ["ProvisionedModel", "StreamedWeights", "find_prepared_hint", "provision", "stream_weights", "weight_source"]
 
 log = logging.getLogger(__name__)
 
@@ -394,6 +394,67 @@ def stream_weights(pm: ProvisionedModel, session: Any, *, linears: list[str] | N
             continue
         meta = gp.load_linear_meta(e.id)
         yield LinearWeights(LinearId.parse(e.id), torch.from_numpy(w.get(e.id).copy()), meta.scale, meta.bias)
+
+
+class StreamedWeights:
+    """``W8`` per linear from an untrusted source, each checked against the pinned manifest before it is returned
+    (:class:`_Weights`), for callers that use it once and keep none of it: the weight-free factory's check-stock
+    passes (:mod:`pgw.factory.checkstock`). ``bytes`` counts the ``W8`` bytes read; :meth:`close` releases the
+    source (and deletes a locally packed public checkpoint)."""
+
+    def __init__(self, weights: _Weights, *, on_close: Callable[[], None] | None = None):
+        self._w = weights
+        self._on_close = on_close
+
+    @property
+    def bytes(self) -> int:
+        return int(self._w.bytes)
+
+    @property
+    def network_bytes(self) -> int:
+        """Bytes received from the provider (chunks of ``W8``), 0 for a local source."""
+        return int(self._w.remote.bytes) if self._w.remote is not None else 0
+
+    def get(self, key: str) -> np.ndarray:
+        return self._w.get(key)
+
+    def close(self) -> None:
+        cb, self._on_close = self._on_close, None
+        if cb is not None:
+            cb()
+
+
+def weight_source(gpack: GatewayPack, *, session: Any = None, full_dir: str | Path | None = None,
+                  hf_repo: str | None = None, hf_revision: str | None = None,
+                  work_dir: str | Path | None = None) -> StreamedWeights:
+    """Open one pass over ``W8`` for the verified gateway pack ``gpack`` (its manifest is the pinned one).
+
+    Exactly one source: ``session`` (the provider's provisioning endpoint: per-chunk and whole-object SHA-256 against
+    the manifest), ``full_dir`` (a full pack directory, e.g. a NAS: its manifest must have the pinned fingerprint and
+    each linear is hash-checked as it is loaded) or ``hf_repo`` (the public checkpoint packed under ``work_dir``; it
+    must reproduce the pinned fingerprint; deleted on :meth:`StreamedWeights.close`). The masked head's ``W8`` is
+    derived from ``gpack``'s hash-checked plain head in every case."""
+    from pgw.modelpack.loader import ModelPack
+
+    if sum(x is not None for x in (session, full_dir, hf_repo)) != 1:
+        raise ConfigError("weight_source needs exactly one of session, full_dir, hf_repo")
+    man = gpack.manifest
+    if session is not None:
+        return StreamedWeights(_Weights(man, gpack, remote=_Remote(session, gpack.fingerprint)))
+    if full_dir is not None:
+        full = ModelPack.open(full_dir, verify="fingerprint", expected_fingerprint=gpack.fingerprint)
+        return StreamedWeights(_Weights(man, gpack, full=full), on_close=full.close)
+    if work_dir is None:
+        raise ConfigError("weight_source(hf_repo=...) needs a work_dir for the locally packed checkpoint")
+    work = Path(work_dir)
+    work.mkdir(parents=True, exist_ok=True, mode=0o700)
+    full = _full_from_hf(str(hf_repo), man, gpack.fingerprint, work, name=None, revision=hf_revision, plain_dtype=None)
+
+    def done() -> None:
+        full.close()
+        shutil.rmtree(full.root, ignore_errors=True)
+
+    return StreamedWeights(_Weights(man, gpack, full=full), on_close=done)
 
 
 def _ensure_norm_sidecar(gpack: GatewayPack, weights: _Weights) -> None:

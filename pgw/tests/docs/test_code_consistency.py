@@ -114,6 +114,9 @@ _NON_FIELD_ENV = {
     "PGW_MASK_WORKERS",
     "PGW_MASK_STORE_GB",
     "PGW_SDK_LOG",
+    "PGW_FACTORY_WEIGHTS",  # SDKOptions.factory_weights (the factory child gets PGW_FACTORY_FACTORY_WEIGHTS)
+    "PGW_FACTORY_WEIGHTS_SOURCE",  # SDKOptions.factory_weights_source (= FactorySettings.weights_source)
+    "PGW_CHECK_STOCK_SEGMENTS",  # SDKOptions.check_stock_segments
     "PGW_PLATFORM_ENABLED",  # developer console on the provider (pgw.platform.PlatformSettings)
     "PGW_PLATFORM_ACCOUNTS_URL",
     "PGW_PLATFORM_ACCOUNTS_TOKEN_FILE",

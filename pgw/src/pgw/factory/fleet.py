@@ -421,6 +421,11 @@ def worker_settings(settings: Any, k: int, root: Path) -> Any:
         # One hint W8.A for the whole fleet (the classic factory's default location), not one per worker
         # state dir: building it is minutes and GBs for 7B. Workers build it one at a time (_hint_build_lock).
         upd["he_hint_dir"] = settings.he_hint_dir or Path(settings.state_dir or ".") / "hemask"
+    if getattr(settings, "factory_weights", "pack") == "stream":
+        # one check stock for the whole fleet (each worker takes its own items from it; one pass at a time)
+        from pgw.factory.runtime import check_stock_root
+
+        upd["check_stock_dir"] = check_stock_root(settings)
     if not settings.cpu_threads and n > 1:
         upd["cpu_threads"] = max(1, (os.cpu_count() or 1) // n)
     return settings.model_copy(update=upd)

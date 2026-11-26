@@ -21,7 +21,10 @@ The default provisioner is :class:`ProviderProvisioner`, a thin layer over :func
 * **Factory pack.** The gateway reads the weight-free pack (``pack_path``); the background factory needs the int8
   weights (its private check vectors ``v W8``, and the hint with ``hint="local"``), so they are kept once as a full
   pack next to it (``factory_pack_path``; about 6.5 GB at 7B, streamed from the provider and checked against the
-  fingerprint).
+  fingerprint). With ``factory_weights="stream"`` (opt-in) no factory pack is kept: the hint is built during
+  provisioning from the streamed, checked weights, and the factory pre-draws its check material from a weight pass
+  of its own whenever its stock runs low (:mod:`pgw.factory.checkstock`); a factory pack left by an earlier
+  ``"pack"`` setup is deleted.
 
 A provisioner is any callable ``provision(model, *, session, cache_dir, progress) -> object`` whose result
 :func:`adapt` reads (``fingerprint``, ``pack_path``/``pack_dir``/``path``, optional ``hint_dir``/``hint_root``,
@@ -113,6 +116,11 @@ class Provisioned:
     source: str = "provider"
     #: full pack (int8 weights) for the background factory; ``None``: ``pack_path`` is a full pack
     factory_pack_path: Path | None = None
+    #: ``"stream"``: ``pack_path`` is the weight-free gateway pack and the factory streams ``W8`` per stock pass
+    factory_weights: str = "pack"
+    #: the pinned public checkpoint (the factory's ``factory_weights_source="hf"``)
+    hf_repo: str | None = None
+    hf_revision: str | None = None
 
 
 def _first(obj: Any, *names: str) -> Any:
@@ -174,10 +182,13 @@ class ProviderProvisioner:
 
     def __init__(self, *, hint: Literal["local", "provider"] = "local",
                  fingerprints: Mapping[str, str] | None = None, pins: Mapping[str, ModelPin] | None = None,
-                 timeout_s: float = 600.0):
+                 timeout_s: float = 600.0, factory_weights: Literal["pack", "stream"] = "pack"):
         if hint not in ("local", "provider"):
             raise ConfigError("hint must be 'local' or 'provider'")
+        if factory_weights not in ("pack", "stream"):
+            raise ConfigError("factory_weights must be 'pack' or 'stream'")
         self.hint = hint
+        self.factory_weights = factory_weights
         self.fingerprints = {k.lower(): str(v).lower() for k, v in (fingerprints or {}).items()}
         self.pins = dict(PINNED_MODELS if pins is None else pins)
         self.timeout_s = timeout_s
@@ -187,7 +198,8 @@ class ProviderProvisioner:
         """The provisioner for :class:`pgw.sdk.options.SDKOptions` (``hint``, ``model_fingerprints``)."""
         return cls(hint=getattr(options, "hint", "local"),
                    fingerprints=getattr(options, "model_fingerprints", None) or None,
-                   timeout_s=max(60.0, float(getattr(options, "timeout_s", 600.0))))
+                   timeout_s=max(60.0, float(getattr(options, "timeout_s", 600.0))),
+                   factory_weights=getattr(options, "factory_weights", "pack"))
 
     def expected_fingerprint(self, model: str) -> str | None:
         """The pinned fingerprint of ``model`` (an explicit option first, then the release pin)."""
@@ -258,11 +270,14 @@ class ProviderProvisioner:
                               ca_file=session.ca_file, client_cert_file=session.client_cert_file,
                               client_key_file=session.client_key_file, timeout_s=self.timeout_s)
         hint: Literal["provider", "local", "none"] = "provider" if self.hint == "provider" else "none"
-        if build_hint and self.hint == "local":
-            hint = "local"  # prepare: the fused, resumable build now (else: the factory on first use)
+        stream = self.factory_weights == "stream"
+        if (build_hint or stream) and self.hint == "local":
+            # prepare: the fused, resumable build now (else: the factory on first use). Weight-free factory: always
+            # now, from the weights streamed for it (the factory keeps none to build it from)
+            hint = "local"
         source = "provider"
         kw: dict[str, Any] = {"session": ps, "cache_dir": root, "progress": say, "expected_fingerprint": served,
-                              "masked_head": masked_head, "factory_pack": True}
+                              "masked_head": masked_head, "factory_pack": not stream}
         if resume:
             kw["resume"] = True
         try:
@@ -288,8 +303,23 @@ class ProviderProvisioner:
                 if found is not None:
                     hint_dir, key_file = found
                     source += "+prepared-hint"
+            if stream:
+                from pgw.provision.client import FACTORY_PACK_DIR
+
+                old = Path(pm.pack_dir).parent / FACTORY_PACK_DIR
+                if old.is_dir():  # left by an earlier factory_weights="pack" setup: the point is not to keep it
+                    import shutil
+
+                    log.info("factory_weights='stream': deleting the factory pack %s (%.2f GB)", old,
+                             sum(f.stat().st_size for f in old.rglob("*") if f.is_file()) / 1e9)
+                    shutil.rmtree(old, ignore_errors=True)
+                source += "+stream"
             return Provisioned(name=model, fingerprint=pm.fingerprint, pack_path=pm.pack_dir, hint_dir=hint_dir,
-                               hint_key_file=key_file, source=source, factory_pack_path=pm.factory_pack_dir)
+                               hint_key_file=key_file, source=source,
+                               factory_pack_path=None if stream else pm.factory_pack_dir,
+                               factory_weights=self.factory_weights,
+                               hf_repo=pin.hf_repo if pin is not None else None,
+                               hf_revision=pin.revision if pin is not None else None)
         finally:
             pm.close()  # the factory opens the hint store itself
 
