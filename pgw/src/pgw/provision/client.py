@@ -908,27 +908,41 @@ class _LocalHint:
 def _full_from_hf(hf_repo: str, man_hint: Manifest | None, fp: str | None, work: Path, *,
                   name: str | None, revision: str | None, plain_dtype: str | None) -> Any:
     """Pack the public checkpoint locally (``hf_repo``: hub id or local directory) with the pinned manifest's
-    packing parameters, and require the pinned fingerprint."""
-    from pgw.modelpack import ModelPack, pack_checkpoint
+    packing parameters, and require the pinned fingerprint.
+
+    Shard by shard (:func:`pgw.modelpack.shardwise.stream_pack_checkpoint`): one checkpoint shard is downloaded,
+    packed and deleted before the next, so the peak disk is about one shard plus the int8 pack, not the whole
+    bfloat16 checkpoint (29 / 65 / 145 GB at 14B / 32B / 72B). A checkpoint already complete in the local Hugging Face
+    cache is read there. The pack is byte-identical to ``pack_checkpoint``'s; an interrupted run resumes from
+    ``<work>/hf-stream``. The result is verified in full (every byte re-hashed) and must have the pinned
+    fingerprint."""
+    from pgw.modelpack import ModelPack
+    from pgw.modelpack.shardwise import stream_pack_checkpoint
 
     if man_hint is not None:
         name = name or man_hint.name
         revision = revision or man_hint.source.revision
         plain_dtype = plain_dtype or man_hint.quant.plain_dtype
-    src: str | Path = hf_repo
-    if not Path(hf_repo).is_dir():
-        from huggingface_hub import snapshot_download
-
-        src = snapshot_download(hf_repo, revision=revision,
-                                allow_patterns=["*.json", "*.safetensors", "tokenizer*", "*.txt", "*.model"])
     out = work / "full"
     shutil.rmtree(out, ignore_errors=True)
-    pack_checkpoint(src, out, name=name, revision=revision, plain_dtype=plain_dtype or "source",  # type: ignore[arg-type]
-                    license=man_hint.source.license if man_hint is not None else None)
-    full = ModelPack.open(out, verify="full")
+    res = stream_pack_checkpoint(hf_repo, out, work_dir=work / "hf-stream", name=name, revision=revision,
+                                 plain_dtype=plain_dtype or "source",  # type: ignore[arg-type]
+                                 license=man_hint.source.license if man_hint is not None else None,
+                                 record_revision="given", overwrite=True)
+    log.info("packed the public checkpoint %s shard by shard: %d shards, %.2f GB fetched, peak scratch %.2f GB, "
+             "%.0f s", hf_repo, res.stats["shards"], res.stats["fetched_bytes"] / 1e9,
+             res.stats["peak_work_bytes"] / 1e9, res.stats["seconds"])
+    try:
+        full = ModelPack.open(out, verify="full")
+    except BaseException:
+        shutil.rmtree(out, ignore_errors=True)
+        raise
     if fp is not None and full.fingerprint != fp:
+        got = full.fingerprint
+        full.close()
+        shutil.rmtree(out, ignore_errors=True)  # not the pinned pack: nothing of it is kept (up to 75 GB at 72B)
         raise FingerprintMismatchError(
-            f"the public checkpoint {hf_repo} packs to fingerprint {full.fingerprint[:12]}, not the pinned "
+            f"the public checkpoint {hf_repo} packs to fingerprint {got[:12]}, not the pinned "
             f"{fp[:12]} (different revision or packing parameters)")
     return full
 

@@ -255,6 +255,46 @@ def _plan_linears(src: TensorSource, arch: ArchConfig, shard_bytes: int) -> list
     return plans
 
 
+def _plan_plain(
+    src: TensorSource, arch: ArchConfig, plain_dtype: PlainDType
+) -> tuple[list[TensorPlan], dict[str, str]]:
+    """The plain tensors to store (``plain.safetensors`` order) and their HF names, checked against the headers."""
+    keys = src.keys()
+    hf_plain = hf_plain_tensor_names(arch.num_layers, arch.tie_word_embeddings)
+    if not arch.tie_word_embeddings and "lm_head.weight" not in keys:
+        raise ConfigError("tie_word_embeddings is false but the checkpoint has no lm_head.weight")
+    pplans: list[TensorPlan] = []
+    for pname, hf in hf_plain.items():
+        if hf not in keys:
+            raise ConfigError(f"checkpoint is missing {hf}", details={"tensor": hf})
+        dt = _plain_storage_dtype(plain_dtype, pname, src.dtype(hf))
+        want = (arch.vocab_size, arch.hidden_size) if pname in _PLAIN_FLOAT_NAMES else (arch.hidden_size,)
+        if src.shape(hf) != want:
+            raise ShapeError(f"{hf}: shape {list(src.shape(hf))} != expected {list(want)} from config.json")
+        pplans.append(TensorPlan(pname, dt, want))
+    return pplans, hf_plain
+
+
+def _linear_entry(p: _LinearPlan, norm_sq: int) -> LinearEntry:
+    """The manifest entry of a written linear group."""
+    k = f"linears.{p.lid.key}"
+    row = 0
+    lparts = []
+    for pname, _, _, rows in p.parts:
+        lparts.append(LinearPart(name=pname, row_start=row, rows=rows))
+        row += rows
+    return LinearEntry(
+        id=p.lid.key,
+        out_features=p.m,
+        in_features=p.n,
+        weight=f"{k}.weight",
+        scale=f"{k}.scale",
+        bias=f"{k}.bias" if p.has_bias else None,
+        parts=tuple(lparts),
+        row_norm_sq_max=norm_sq,
+    )
+
+
 def _check_float(name: str, t: torch.Tensor) -> torch.Tensor:
     """Reject non-floating or non-finite checkpoint tensors (NaN/Inf would quantize to garbage)."""
     if not t.is_floating_point():
@@ -352,42 +392,13 @@ def _write_pack(
                 ):
                     digest = w.write(tname, t)
                     tensors[tname] = TensorEntry(file=fn, dtype=_dt_name(t), shape=tuple(t.shape), sha256=digest)
-                k = f"linears.{p.lid.key}"
-                row = 0
-                lparts = []
-                for pname, _, _, rows in p.parts:
-                    lparts.append(LinearPart(name=pname, row_start=row, rows=rows))
-                    row += rows
-                entries.append(
-                    LinearEntry(
-                        id=p.lid.key,
-                        out_features=p.m,
-                        in_features=p.n,
-                        weight=f"{k}.weight",
-                        scale=f"{k}.scale",
-                        bias=f"{k}.bias" if p.has_bias else None,
-                        parts=tuple(lparts),
-                        row_norm_sq_max=norm_sq,
-                    )
-                )
+                entries.append(_linear_entry(p, norm_sq))
                 if progress:
                     progress(p.lid.key)
         log.info("wrote %s (%d linear groups)", fn, len(shard_plans))
 
     # plain tensors
-    keys = src.keys()
-    hf_plain = hf_plain_tensor_names(arch.num_layers, arch.tie_word_embeddings)
-    if not arch.tie_word_embeddings and "lm_head.weight" not in keys:
-        raise ConfigError("tie_word_embeddings is false but the checkpoint has no lm_head.weight")
-    pplans: list[TensorPlan] = []
-    for pname, hf in hf_plain.items():
-        if hf not in keys:
-            raise ConfigError(f"checkpoint is missing {hf}", details={"tensor": hf})
-        dt = _plain_storage_dtype(plain_dtype, pname, src.dtype(hf))
-        want = (arch.vocab_size, arch.hidden_size) if pname in _PLAIN_FLOAT_NAMES else (arch.hidden_size,)
-        if src.shape(hf) != want:
-            raise ShapeError(f"{hf}: shape {list(src.shape(hf))} != expected {list(want)} from config.json")
-        pplans.append(TensorPlan(pname, dt, want))
+    pplans, hf_plain = _plan_plain(src, arch, plain_dtype)
     with SafetensorsStreamWriter(out / PLAIN_FILE, pplans, metadata=meta) as w:
         for tp in pplans:
             hf = hf_plain[tp.name]

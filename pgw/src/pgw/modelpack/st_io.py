@@ -31,10 +31,12 @@ from pgw.core.errors import ConfigError, ShapeError
 __all__ = [
     "DTYPE_BYTES",
     "PackDType",
+    "SafetensorsRandomWriter",
     "SafetensorsStreamWriter",
     "StHeaderEntry",
     "TensorPlan",
     "hash_tensor_ranges",
+    "planned_layout",
     "read_safetensors_header",
     "tensor_bytes",
     "tensor_sha256",
@@ -127,6 +129,33 @@ class StHeaderEntry:
         return self.end - self.begin
 
 
+def planned_layout(
+    file_name: str, plans: list[TensorPlan], metadata: Mapping[str, str] | None
+) -> tuple[bytes, dict[str, int], int]:
+    """The fixed layout of a planned safetensors file: ``(header bytes, absolute offset per tensor, file size)``.
+
+    The header is canonical JSON (sorted keys, no spaces) padded to 8 bytes, tensors in plan order; the same plans
+    and metadata always give the same bytes (both writers below use it)."""
+    names = [p.name for p in plans]
+    if len(set(names)) != len(names):
+        raise ConfigError(f"duplicate tensor names in shard {file_name}")
+    header: dict[str, object] = {}
+    if metadata:
+        header["__metadata__"] = {str(k): str(v) for k, v in metadata.items()}
+    off = 0
+    rel: dict[str, int] = {}
+    for p in plans:
+        if p.dtype not in _DTYPES:
+            raise ConfigError(f"unsupported dtype {p.dtype!r} for tensor {p.name}")
+        header[p.name] = {"dtype": _DTYPES[p.dtype][0], "shape": list(p.shape), "data_offsets": [off, off + p.nbytes]}
+        rel[p.name] = off
+        off += p.nbytes
+    hb = json.dumps(header, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    hb += b" " * ((-len(hb)) % 8)  # 8-byte alignment of the data section
+    base = 8 + len(hb)
+    return hb, {k: base + v for k, v in rel.items()}, base + off
+
+
 class SafetensorsStreamWriter:
     """Write a safetensors file whose layout is fixed up front, streaming tensor data in order.
 
@@ -143,24 +172,9 @@ class SafetensorsStreamWriter:
     def __init__(self, path: str | Path, plans: Iterable[TensorPlan], metadata: Mapping[str, str] | None = None):
         self.path = Path(path)
         self.plans = list(plans)
-        names = [p.name for p in self.plans]
-        if len(set(names)) != len(names):
-            raise ConfigError(f"duplicate tensor names in shard {self.path.name}")
-        header: dict[str, object] = {}
-        if metadata:
-            header["__metadata__"] = {str(k): str(v) for k, v in metadata.items()}
-        off = 0
-        for p in self.plans:
-            if p.dtype not in _DTYPES:
-                raise ConfigError(f"unsupported dtype {p.dtype!r} for tensor {p.name}")
-            header[p.name] = {
-                "dtype": _DTYPES[p.dtype][0], "shape": list(p.shape), "data_offsets": [off, off + p.nbytes]
-            }
-            off += p.nbytes
-        hb = json.dumps(header, separators=(",", ":"), sort_keys=True).encode("utf-8")
-        hb += b" " * ((-len(hb)) % 8)  # 8-byte alignment of the data section
+        hb, _, total = planned_layout(self.path.name, self.plans, metadata)
         self._header = hb
-        self.total_bytes = 8 + len(hb) + off
+        self.total_bytes = total
         self._idx = 0
         self._f: BinaryIO | None = None
 
@@ -207,6 +221,80 @@ class SafetensorsStreamWriter:
             f.close()
             if exc_type is not None or self._idx != len(self.plans):
                 self.path.unlink(missing_ok=True)
+
+
+class SafetensorsRandomWriter:
+    """A planned safetensors file (same layout and bytes as :class:`SafetensorsStreamWriter`) whose tensors are
+    written in any order, possibly across processes: the shard-wise packer fills each tensor when its checkpoint
+    shard is present and resumes an interrupted run in the same file.
+
+    ``open()`` creates the file (header + sparse data section of the planned size), or with ``reuse=True`` keeps an
+    existing file whose header and size are exactly the planned ones (tensors already written stay; the caller
+    knows which, from its own fsynced state). :meth:`write` returns the SHA-256 of the bytes written; :meth:`sync`
+    fsyncs. Nothing here decides completeness: the caller records what was written.
+    """
+
+    def __init__(self, path: str | Path, plans: Iterable[TensorPlan], metadata: Mapping[str, str] | None = None):
+        self.path = Path(path)
+        self.plans = {p.name: p for p in plans}
+        self._header, self._offsets, self.total_bytes = planned_layout(self.path.name, list(self.plans.values()),
+                                                                       metadata)
+        self._fd: int | None = None
+
+    def open(self, *, reuse: bool = False) -> SafetensorsRandomWriter:
+        """Open (create, or with ``reuse`` keep a matching existing file)."""
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        if reuse and self.path.is_file() and self.path.stat().st_size == self.total_bytes:
+            fd = os.open(self.path, os.O_RDWR)
+            want = struct.pack("<Q", len(self._header)) + self._header
+            if os.pread(fd, len(want), 0) == want:
+                self._fd = fd
+                return self
+            os.close(fd)
+        fd = os.open(self.path, os.O_RDWR | os.O_CREAT | os.O_TRUNC, 0o644)
+        try:
+            os.pwrite(fd, struct.pack("<Q", len(self._header)) + self._header, 0)
+            os.ftruncate(fd, self.total_bytes)
+        except BaseException:
+            os.close(fd)
+            raise
+        self._fd = fd
+        return self
+
+    def write(self, name: str, t: torch.Tensor) -> str:
+        """Write planned tensor ``name`` at its offset; returns the hex SHA-256 of its bytes."""
+        if self._fd is None:
+            raise ConfigError("SafetensorsRandomWriter used before open()")
+        p = self.plans.get(name)
+        if p is None:
+            raise ConfigError(f"unexpected tensor {name!r} for {self.path.name}")
+        if pack_dtype_of(t) != p.dtype or tuple(t.shape) != p.shape:
+            raise ShapeError(
+                f"{name}: planned {p.dtype}{list(p.shape)}, got {pack_dtype_of(t)}{list(t.shape)}",
+                details={"tensor": name},
+            )
+        data = tensor_bytes(t)
+        off, view, done = self._offsets[name], data, 0
+        while done < len(view):
+            n = os.pwrite(self._fd, view[done : done + (256 << 20)], off + done)
+            if n <= 0:  # pragma: no cover - pwrite raises on errors
+                raise OSError(f"short write to {self.path.name}")
+            done += n
+        return hashlib.sha256(data).hexdigest()
+
+    def sync(self) -> None:
+        """fsync the file."""
+        if self._fd is not None:
+            os.fsync(self._fd)
+
+    def close(self) -> None:
+        """fsync and close."""
+        fd, self._fd = self._fd, None
+        if fd is not None:
+            try:
+                os.fsync(fd)
+            finally:
+                os.close(fd)
 
 
 def read_safetensors_header(path: str | Path) -> tuple[dict[str, StHeaderEntry], dict[str, str]]:
