@@ -166,7 +166,7 @@ class PackBuildJob(_Job):
 
             self.out_dir.parent.mkdir(parents=True, exist_ok=True)
             man = pack_checkpoint(src, self.out_dir, name=m.get("pack_name") or m["name"], revision=m.get("revision"),
-                                  plain_dtype=m.get("plain_dtype") or "float32", license=m.get("license"),
+                                  plain_dtype=m.get("plain_dtype") or "source", license=m.get("license"),
                                   overwrite=True, progress=progress)
             self.update(phase="verifying", message="Checking the model fingerprint against the service")
             with ModelPack.open(self.out_dir, verify="full") as p:

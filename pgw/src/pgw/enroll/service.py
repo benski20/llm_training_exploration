@@ -535,7 +535,7 @@ def _issue_token(tenant: str, tokens_file: Path, *, token_only: bool) -> tuple[s
 
 def _manifest_meta(pack_path: Any) -> dict[str, Any]:
     """Pack-build parameters a gateway needs to rebuild the identical pack from the open weights."""
-    meta: dict[str, Any] = {"hf_repo": None, "revision": None, "license": None, "plain_dtype": "float32"}
+    meta: dict[str, Any] = {"hf_repo": None, "revision": None, "license": None, "plain_dtype": "source"}
     if pack_path is None:
         return meta
     try:
@@ -544,7 +544,7 @@ def _manifest_meta(pack_path: Any) -> dict[str, Any]:
         return meta
     src = man.get("source") or {}
     meta.update(hf_repo=src.get("repo"), revision=src.get("revision"), license=src.get("license"),
-                plain_dtype=(man.get("quant") or {}).get("plain_dtype", "float32"))
+                plain_dtype=(man.get("quant") or {}).get("plain_dtype", "source"))
     if man.get("name"):
         meta["pack_name"] = man["name"]
     return meta

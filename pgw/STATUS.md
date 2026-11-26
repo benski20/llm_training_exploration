@@ -2001,5 +2001,10 @@ time, which is exact, so storing the bf16 bytes and widening at load gives the s
     reproduce the v1 pin.
   - `tests/deploy/test_runpod.py::test_ensure_pack_rebuilds_older_format`.
   - Runs (one dir at a time, `PYTHONPATH=src:.`): modelpack 107 passed; provision 46 passed / 1 skipped; core 560 /
-    28 skipped; cli 209 / 3 skipped; enroll 9; deploy/test_runpod 15. `tests/sdk` needs an absolute PYTHONPATH:
-    otherwise its factory subprocess imports the main checkout's pgw, which reads format 1 only.
+    28 skipped; cli 209 / 3 skipped; enroll 9; deploy/test_runpod 15; gateway masked / masked-head / setup /
+    setup-reuse / enroll-client / source-dtype 54 passed (0.5B case run separately: passed); console all but the
+    known `test_wheel_contains_the_console`; sdk file by file (a whole-dir run was OOM-killed on the shared box)
+    105 passed / 1 skipped. `tests/sdk` needs an absolute PYTHONPATH: otherwise its factory subprocess imports the
+    main checkout's pgw, which reads format 1 only.
+  - The setup wizard's pack job and the enrollment metadata now default a missing `plain_dtype` to `"source"` (they
+    used `"float32"`, which would rebuild format 1 and miss a format-2 service fingerprint).
