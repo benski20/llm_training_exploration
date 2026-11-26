@@ -13,8 +13,37 @@
 //! AES-256-GCM with the segment DEK, nonce `chunk_nonce(prefix, i) = prefix(4) || u64be(i)`,
 //! AAD `chunk_aad(digest, i) = SHA-256(header JSON) || u32be(i)`, 16-byte tag after the ciphertext.
 //! Plaintext only ever lives in per-thread scratch buffers that are zeroized on drop; the key is
-//! held in zeroizing memory and the cipher state (`aes-gcm` with `zeroize`) is wiped on drop.
+//! held in zeroizing memory and the cipher state is wiped on drop (below).
 //! Work is spread over threads (one chunk at a time per thread) with the GIL released.
+//!
+//! # AES-256-GCM implementation: AWS-LC (`aws-lc-rs`)
+//!
+//! Since 2026-11-26 the cipher is AWS-LC's `EVP_aead_aes_256_gcm` through `aws_lc_rs::aead::LessSafeKey`
+//! (before: RustCrypto `aes-gcm` 0.11). AES-256-GCM with a given key, nonce, AAD and plaintext has exactly
+//! one output, so the at-rest bytes do not change: the tests below seal and open across both
+//! implementations, `tests/native/test_writer.py` compares with `cryptography`'s AESGCM and
+//! `tests/native/test_aead_compat.py` with a file written by the RustCrypto build. AWS-LC picks at run time its stitched VAES + VPCLMULQDQ
+//! (AVX-512 / AVX2), AES-NI + PCLMULQDQ or ARMv8 AES + PMULL code; one core here: 13 GB/s against 2.8.
+//!
+//! Wipe on drop (verified in aws-lc-sys 0.47.0 / aws-lc-rs 1.19.0 sources):
+//! * The round keys and the GHASH key table (`struct aead_aes_gcm_ctx`: `ks`, `gcm_key`) live inside the
+//!   `EVP_AEAD_CTX` (`state`), which aws-lc-rs allocates with `OPENSSL_malloc` (`aead/aead_ctx.rs`,
+//!   `build_context`) and owns as `LcPtr<EVP_AEAD_CTX>`, whose `Drop` calls `EVP_AEAD_CTX_free`
+//!   (`ptr.rs`). That calls the AEAD's `cleanup` and `OPENSSL_free(ctx)` (`crypto/fipsmodule/cipher/
+//!   aead.c`), and `OPENSSL_free` runs `OPENSSL_cleanse(ptr, size + OPENSSL_MALLOC_PREFIX)` over the
+//!   whole allocation before `free` (`crypto/mem.c`; this crate installs no AWS-LC memory hooks, the only
+//!   path that skips it). Tests `aws_lc_free_cleanses_the_key_schedule` and
+//!   `dropped_key_leaves_no_key_schedule` read the freed context back.
+//! * The DEK passed in is borrowed (no copy here; callers hold it in `Zeroizing`).
+//! * Per call AWS-LC copies the GHASH key table and the per-message `E_K(J0)` into a stack
+//!   `GCM128_CONTEXT` that it does not clear (RustCrypto's per-message GHASH state was likewise a stack
+//!   value). The round keys themselves are only read through a pointer. Every thread that ran the cipher
+//!   overwrites the stack below its frame with zeros when it is done ([`scrub_stack`]), so no such copy
+//!   outlives the `seal_*` / `chunk_open_into` call that made it.
+//!
+//! Constant time: AES and GHASH run on the AES-NI / VAES / ARMv8 AES and carry-less multiply instructions
+//! (without them, on AWS-LC's constant-time vpaes / bitsliced AES and `gcm_nohw`; no table lookups), the
+//! tag is compared with `CRYPTO_memcmp`, and a failed open zeroes the output here.
 
 use std::fs::File;
 use std::io;
@@ -24,8 +53,7 @@ use std::os::unix::fs::FileExt;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Mutex;
 
-use aes_gcm::aead::AeadInOut;
-use aes_gcm::{Aes256Gcm, Key, KeyInit, Nonce};
+use aws_lc_rs::aead::{Aad, LessSafeKey, Nonce, UnboundKey, AES_256_GCM};
 use numpy::{PyArray2, PyArrayMethods, PyUntypedArrayMethods};
 use pyo3::buffer::PyBuffer;
 use pyo3::exceptions::{PyTypeError, PyValueError};
@@ -74,19 +102,61 @@ pub struct Job {
     pub len: usize,
 }
 
+/// Stack bytes [`scrub_stack`] overwrites: far more than the deepest AWS-LC seal / open frame (its
+/// `GCM128_CONTEXT` is under 1 KiB, the assembly keeps its state in registers).
+const SCRUB_STACK_BYTES: usize = 16 << 10;
+
+/// Overwrite `SCRUB_STACK_BYTES` of the stack below the caller's frame with zeros: the region the
+/// cipher calls just made used, which may still hold copies of the GHASH key table and `E_K(J0)`
+/// (module docs). Call it from the frame that called the cipher, after the last call.
+#[inline(never)]
+pub fn scrub_stack() {
+    let mut buf = [0u8; SCRUB_STACK_BYTES];
+    zeroize::Zeroize::zeroize(&mut buf[..]); // volatile writes: not optimised away
+    std::hint::black_box(&buf);
+}
+
+/// The AES-256-GCM key schedule (AWS-LC context; wiped on drop, module docs).
+pub fn aead_key(key: &[u8; 32]) -> LessSafeKey {
+    // `UnboundKey::new` only fails for a key of the wrong length (32 is checked by the type). The key
+    // is borrowed: no copy of the DEK is made here.
+    LessSafeKey::new(UnboundKey::new(&AES_256_GCM, key).expect("AES-256 key is 32 bytes"))
+}
+
+/// A chunk failed authentication (corrupt or tampered ciphertext, tag, nonce, AAD or key).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AuthFailed;
+
+/// Authenticate and decrypt `buf` (ciphertext without the tag) in place. On failure `buf` is zeroed
+/// (no unauthenticated plaintext is left) and [`AuthFailed`] returned.
+pub fn open_in_place(
+    aead: &LessSafeKey,
+    nonce: [u8; 12],
+    aad: &[u8],
+    tag: &[u8; TAG_BYTES],
+    buf: &mut [u8],
+) -> Result<(), AuthFailed> {
+    let ok = aead.open_in_place_separate_tag(Nonce::assume_unique_for_key(nonce), Aad::from(aad), tag, buf).is_ok();
+    if !ok {
+        // zero whatever is in the buffer (ciphertext or a partial decryption)
+        zeroize::Zeroize::zeroize(buf);
+        return Err(AuthFailed);
+    }
+    Ok(())
+}
+
 /// AES-256-GCM with the segment's nonce and AAD scheme.
 pub struct Sealer {
-    aead: Aes256Gcm,
+    aead: LessSafeKey,
     prefix: [u8; NONCE_PREFIX_BYTES],
     digest: [u8; DIGEST_BYTES],
 }
 
 impl Sealer {
     pub fn new(key: &[u8; 32], prefix: [u8; NONCE_PREFIX_BYTES], digest: [u8; DIGEST_BYTES]) -> Self {
-        // Borrow the key as `&Key` (a reference cast, no copy) so no unzeroized stack copy of the
-        // DEK is left behind; the caller holds it in `Zeroizing`.
-        let key: &Key<Aes256Gcm> = key.into();
-        Self { aead: Aes256Gcm::new(key), prefix, digest }
+        // The key is borrowed (no unzeroized copy of the DEK is left behind); the caller holds it
+        // in `Zeroizing`.
+        Self { aead: aead_key(key), prefix, digest }
     }
 
     /// `chunk_nonce(prefix, index)`.
@@ -111,9 +181,13 @@ impl Sealer {
         let (plain, tag_out) = buf.split_at_mut(n);
         let tag = self
             .aead
-            .encrypt_inout_detached(&Nonce::from(self.nonce(u64::from(index))), &self.aad(index), plain.into())
+            .seal_in_place_separate_tag(
+                Nonce::assume_unique_for_key(self.nonce(u64::from(index))),
+                Aad::from(&self.aad(index)),
+                plain,
+            )
             .map_err(|_| WriteError::Crypto)?;
-        tag_out.copy_from_slice(&tag);
+        tag_out.copy_from_slice(tag.as_ref());
         Ok(())
     }
 }
@@ -153,7 +227,7 @@ pub fn run_jobs(
     let next = AtomicUsize::new(0);
     let stop = AtomicBool::new(false);
     let first_err: Mutex<Option<WriteError>> = Mutex::new(None);
-    let worker = || {
+    let work = || {
         let mut scratch = Zeroizing::new(vec![0u8; scratch_len]);
         loop {
             if stop.load(Ordering::Relaxed) {
@@ -174,6 +248,11 @@ pub fn run_jobs(
                 return;
             }
         }
+    };
+    // Each thread clears the stack its cipher calls used once it is done (module docs).
+    let worker = || {
+        work();
+        scrub_stack();
     };
     if threads <= 1 {
         worker();
@@ -202,9 +281,14 @@ pub trait RingElem: Copy + Send + Sync {
     fn bad_bits(self, mask: u64) -> u64;
     /// The value as u64 (only called on checked values).
     fn bits(self) -> u64;
+    /// From this `k` on every value of the type is canonical (`bad_bits` is always 0), so the range
+    /// check has nothing to find: `u32` / `i32` (low 32 bits) at `k >= 32`, `u64` at 64; `i64` never
+    /// (its negative values are out of range at every `k`).
+    const ALWAYS_IN_RANGE_FROM_K: u32;
 }
 
 impl RingElem for i64 {
+    const ALWAYS_IN_RANGE_FROM_K: u32 = u32::MAX;
     #[inline(always)]
     fn bad_bits(self, mask: u64) -> u64 {
         (self as u64) & (!mask | (1u64 << 63))
@@ -216,6 +300,7 @@ impl RingElem for i64 {
 }
 
 impl RingElem for u64 {
+    const ALWAYS_IN_RANGE_FROM_K: u32 = 64;
     #[inline(always)]
     fn bad_bits(self, mask: u64) -> u64 {
         self & !mask
@@ -228,6 +313,7 @@ impl RingElem for u64 {
 
 /// `int32` holds the low 32 bits of the element (compact GPU form, `K <= 32`), like `pack_ring`.
 impl RingElem for i32 {
+    const ALWAYS_IN_RANGE_FROM_K: u32 = 32;
     #[inline(always)]
     fn bad_bits(self, mask: u64) -> u64 {
         u64::from(self as u32) & !mask
@@ -239,6 +325,7 @@ impl RingElem for i32 {
 }
 
 impl RingElem for u32 {
+    const ALWAYS_IN_RANGE_FROM_K: u32 = 32;
     #[inline(always)]
     fn bad_bits(self, mask: u64) -> u64 {
         u64::from(self) & !mask
@@ -260,6 +347,10 @@ pub fn ring_mask(k: u32) -> u64 {
 
 /// True if every element lies in `[0, 2^k)` (parallel for large inputs).
 pub fn all_in_range<T: RingElem>(vals: &[T], k: u32, threads: usize) -> bool {
+    if k >= T::ALWAYS_IN_RANGE_FROM_K {
+        // e.g. the compact uint32 / int32 `W r` at K = 32: no value can fail, skip the pass over memory
+        return true;
+    }
     let mask = ring_mask(k);
     let check = |s: &[T]| s.iter().fold(0u64, |a, &v| a | v.bad_bits(mask)) == 0;
     let bytes = std::mem::size_of_val(vals);
@@ -531,7 +622,7 @@ fn chunk_open_into(
     let aad = aad.to_vec();
     let n = cipher_len - TAG_BYTES;
     let ptr = out.data() as usize;
-    let res: Result<(), Result<io::Error, ()>> = py.allow_threads(|| {
+    let res: Result<(), Result<io::Error, AuthFailed>> = py.allow_threads(|| {
         // SAFETY: `out` is a bytearray of exactly `n` bytes that nobody else touches during the call
         // (documented contract); it is not resized while the GIL is released by us.
         let buf = unsafe { std::slice::from_raw_parts_mut(ptr as *mut u8, n) };
@@ -543,23 +634,19 @@ fn chunk_open_into(
             buf.fill(0);
             return Err(Ok(e));
         }
-        let key: &Key<Aes256Gcm> = (&*kb).into();
-        let aead = Aes256Gcm::new(key);
-        let ok = aead.decrypt_inout_detached(&Nonce::from(nonce), &aad, buf.into(), (&tag).into()).is_ok();
-        if !ok {
-            // SAFETY-free: zero whatever is in the buffer (ciphertext or a partial decryption)
-            for b in buf.iter_mut() {
-                // SAFETY: in-bounds write through a valid &mut
-                unsafe { std::ptr::write_volatile(b, 0) };
-            }
-            return Err(Err(()));
-        }
-        Ok(())
+        // The key schedule lives in `aead` (wiped when it drops at the end of the block); the stack the
+        // cipher used is cleared after it (module docs).
+        let r = {
+            let aead = aead_key(&kb);
+            open_in_place(&aead, nonce, &aad, &tag, buf).map_err(Err)
+        };
+        scrub_stack();
+        r
     });
     match res {
         Ok(()) => Ok(()),
         Err(Ok(e)) => Err(PyOSError::new_err(format!("chunk read failed: {e}"))),
-        Err(Err(())) => Err(PyValueError::new_err("auth: chunk failed authentication (corrupt or tampered)")),
+        Err(Err(AuthFailed)) => Err(PyValueError::new_err("auth: chunk failed authentication (corrupt or tampered)")),
     }
 }
 
@@ -573,28 +660,284 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aes_gcm::aead::Aead;
-    use aes_gcm::aead::Payload;
+    // RustCrypto AES-GCM: the implementation of this module before 2026-11-26 ("old"), as reference.
+    use aes_gcm::aead::{Aead, AeadInOut, Payload};
+    use aes_gcm::{Aes256Gcm, Key, KeyInit};
+
+    const KEY: [u8; 32] = [
+        0x60, 0x3d, 0xeb, 0x10, 0x15, 0xca, 0x71, 0xbe, 0x2b, 0x73, 0xae, 0xf0, 0x85, 0x7d, 0x77, 0x81, 0x1f, 0x35,
+        0x2c, 0x07, 0x3b, 0x61, 0x08, 0xd7, 0x2d, 0x98, 0x10, 0xa3, 0x09, 0x14, 0xdf, 0xf4,
+    ];
+    /// Plaintext lengths: empty, partial / whole / several blocks, the 4- and 8-block strides of the
+    /// assembly, and around 1 MiB (the store's chunk size).
+    const LENS: [usize; 17] = [0, 1, 15, 16, 17, 31, 63, 64, 65, 127, 128, 129, 255, 256, 4097, 65_536, (1 << 20) + 5];
 
     fn sealer() -> Sealer {
-        let key: [u8; 32] = core::array::from_fn(|i| i as u8);
-        Sealer::new(&key, [1, 2, 3, 4], [7u8; 32])
+        Sealer::new(&KEY, [1, 2, 3, 4], [7u8; 32])
+    }
+
+    fn old() -> Aes256Gcm {
+        Aes256Gcm::new(&Key::<Aes256Gcm>::from(KEY))
+    }
+
+    fn plain(n: usize, seed: u32) -> Vec<u8> {
+        (0..n as u32).map(|i| (i.wrapping_mul(2_654_435_761).wrapping_add(seed) >> 13) as u8).collect()
+    }
+
+    /// `ciphertext || tag` of `p` under chunk `index`, new implementation.
+    fn seal_new(s: &Sealer, index: u32, p: &[u8]) -> Vec<u8> {
+        let mut buf = p.to_vec();
+        buf.extend_from_slice(&[0u8; TAG_BYTES]);
+        s.seal_in_place(index, &mut buf).unwrap();
+        buf
+    }
+
+    fn open_new(s: &Sealer, index: u32, ct: &[u8]) -> Result<Vec<u8>, Vec<u8>> {
+        let (c, t) = ct.split_at(ct.len() - TAG_BYTES);
+        let mut buf = c.to_vec();
+        let tag: [u8; TAG_BYTES] = t.try_into().unwrap();
+        match open_in_place(&s.aead, s.nonce(u64::from(index)), &s.aad(index), &tag, &mut buf) {
+            Ok(()) => Ok(buf),
+            Err(AuthFailed) => Err(buf),
+        }
     }
 
     #[test]
-    fn seal_matches_aead_api() {
+    fn seal_matches_old_implementation() {
         let s = sealer();
-        let key: [u8; 32] = core::array::from_fn(|i| i as u8);
-        let plain: Vec<u8> = (0..1000u32).map(|i| (i * 7) as u8).collect();
-        let mut buf = plain.clone();
-        buf.extend_from_slice(&[0u8; TAG_BYTES]);
-        s.seal_in_place(5, &mut buf).unwrap();
-        let want = Aes256Gcm::new(&Key::<Aes256Gcm>::from(key))
-            .encrypt(&Nonce::from(s.nonce(5)), Payload { msg: &plain, aad: &s.aad(5) })
-            .unwrap();
-        assert_eq!(buf, want);
+        for (i, &n) in LENS.iter().enumerate() {
+            let index = [0u32, 1, 5, 0x0102_0304, u32::MAX][i % 5];
+            let p = plain(n, i as u32);
+            let want = old()
+                .encrypt(&aes_gcm::Nonce::from(s.nonce(u64::from(index))), Payload { msg: &p, aad: &s.aad(index) })
+                .unwrap();
+            assert_eq!(seal_new(&s, index, &p), want, "len {n}");
+        }
         assert_eq!(&s.nonce(5)[..], &[1, 2, 3, 4, 0, 0, 0, 0, 0, 0, 0, 5]);
         assert_eq!(&s.aad(0x0102_0304)[32..], &[1, 2, 3, 4]);
+    }
+
+    /// Test case 14 of the GCM specification (McGrew & Viega): K = 0^256, IV = 0^96, P = 0^128, no AAD.
+    #[test]
+    fn known_answer() {
+        let aead = aead_key(&[0u8; 32]);
+        let mut buf = [0u8; 16];
+        let tag =
+            aead.seal_in_place_separate_tag(Nonce::assume_unique_for_key([0u8; 12]), Aad::empty(), &mut buf).unwrap();
+        let hex = |b: &[u8]| b.iter().map(|x| format!("{x:02x}")).collect::<String>();
+        assert_eq!(hex(&buf), "cea7403d4d606b6e074ec5d3baf39d18");
+        assert_eq!(hex(tag.as_ref()), "d0d1c8a799996bf0265b98b5d48ab919");
+    }
+
+    #[test]
+    fn old_and_new_open_each_others_chunks() {
+        let s = sealer();
+        for (i, &n) in LENS.iter().enumerate() {
+            let index = i as u32 * 977;
+            let p = plain(n, 99 + i as u32);
+            let nonce = aes_gcm::Nonce::from(s.nonce(u64::from(index)));
+            // old -> new
+            let ct_old = old().encrypt(&nonce, Payload { msg: &p, aad: &s.aad(index) }).unwrap();
+            assert_eq!(open_new(&s, index, &ct_old).unwrap(), p, "old -> new, len {n}");
+            // new -> old (detached in-place API, as the old chunk_open_into)
+            let ct_new = seal_new(&s, index, &p);
+            let (c, t) = ct_new.split_at(n);
+            let mut buf = c.to_vec();
+            let tag = aes_gcm::Tag::from(<[u8; TAG_BYTES]>::try_from(t).unwrap());
+            old().decrypt_inout_detached(&nonce, &s.aad(index), (&mut buf[..]).into(), &tag).unwrap();
+            assert_eq!(buf, p, "new -> old, len {n}");
+        }
+    }
+
+    #[test]
+    fn tampering_fails_and_zeroes_the_output() {
+        let s = sealer();
+        let index = 7u32;
+        for &n in &[0usize, 1, 16, 1000, 65_537] {
+            let p = plain(n, 3);
+            let ct = seal_new(&s, index, &p);
+            assert_eq!(open_new(&s, index, &ct).unwrap(), p);
+            let mut cases: Vec<(String, Vec<u8>, u32, Sealer)> = Vec::new();
+            for &pos in &[0usize, n / 2, n.saturating_sub(1), n, n + 15] {
+                if pos < ct.len() {
+                    let mut c = ct.clone();
+                    c[pos] ^= 0x01;
+                    cases.push((format!("bit flip at {pos}"), c, index, sealer()));
+                }
+            }
+            cases.push(("other chunk index (nonce + AAD)".into(), ct.clone(), index + 1, sealer()));
+            cases.push(("other nonce prefix".into(), ct.clone(), index, Sealer::new(&KEY, [1, 2, 3, 5], [7u8; 32])));
+            cases.push((
+                "other header digest (AAD)".into(),
+                ct.clone(),
+                index,
+                Sealer::new(&KEY, [1, 2, 3, 4], [8u8; 32]),
+            ));
+            let mut k2 = KEY;
+            k2[31] ^= 0x80;
+            cases.push(("other key".into(), ct.clone(), index, Sealer::new(&k2, [1, 2, 3, 4], [7u8; 32])));
+            if n > 0 {
+                // drop the last ciphertext byte (tag kept)
+                let mut c = ct[..n - 1].to_vec();
+                c.extend_from_slice(&ct[n..]);
+                cases.push(("truncated".into(), c, index, sealer()));
+            }
+            for (what, c, idx, s2) in cases {
+                let out = open_new(&s2, idx, &c).expect_err(&what);
+                assert!(out.iter().all(|&b| b == 0), "{what}: output not zeroed");
+            }
+        }
+    }
+
+    /// AWS-LC's free path wipes an AES-256-GCM context: the same allocation and release as aws-lc-rs'
+    /// `LcPtr<EVP_AEAD_CTX>` (`OPENSSL_malloc` + `EVP_AEAD_CTX_init`, `EVP_AEAD_CTX_free` on drop), with
+    /// the freed memory read back. AES-256 round keys 0 and 1 are the key itself, so the live context holds
+    /// the key bytes; after the free, nothing past the allocator's own list pointers (the first 16 bytes of
+    /// the chunk, i.e. the 8-byte size prefix and the context's first 8 bytes) may be non-zero.
+    #[test]
+    fn aws_lc_free_cleanses_the_key_schedule() {
+        use aws_lc_sys::{
+            EVP_AEAD_CTX_free, EVP_AEAD_CTX_init, EVP_AEAD_CTX_zero, EVP_aead_aes_256_gcm, OPENSSL_malloc, EVP_AEAD_CTX,
+        };
+        // A fresh thread: its malloc cache is its own, so no other test reuses the freed chunk meanwhile.
+        std::thread::spawn(|| {
+            let size = std::mem::size_of::<EVP_AEAD_CTX>();
+            let find = |bytes: &[u8]| bytes.windows(32).any(|w| w == KEY);
+            // SAFETY: the calls of aws-lc-rs `AeadCtx::build_context`; the context is read while live
+            // (size bytes from its start), then, once freed, through a volatile read of memory that stays
+            // mapped (a small heap chunk in this thread's cache; nothing allocates in between).
+            unsafe {
+                let ctx: *mut EVP_AEAD_CTX = OPENSSL_malloc(size).cast();
+                assert!(!ctx.is_null());
+                EVP_AEAD_CTX_zero(ctx);
+                assert_eq!(
+                    EVP_AEAD_CTX_init(ctx, EVP_aead_aes_256_gcm(), KEY.as_ptr(), 32, 16, std::ptr::null_mut()),
+                    1
+                );
+                let p = ctx.cast::<u8>();
+                let live: Vec<u8> = (0..size).map(|i| p.add(i).read_volatile()).collect();
+                assert!(find(&live), "the scan does not find the key schedule in the live context");
+                EVP_AEAD_CTX_free(ctx);
+                let freed: Vec<u8> = (0..size).map(|i| p.add(i).read_volatile()).collect();
+                assert!(!find(&freed), "key schedule left in freed memory");
+                assert!(freed[8..].iter().all(|&b| b == 0), "freed context not cleansed");
+            }
+        })
+        .join()
+        .unwrap();
+    }
+
+    /// The key this module builds (`aead_key`, a `LessSafeKey`) leaves no key schedule behind when it is
+    /// dropped, after sealing and opening. Its freed context is recovered by allocating a block of the
+    /// same size right after the drop: glibc hands the thread's most recently freed chunk of that size
+    /// back. A control run first frees a context *without* the cleanse (plain `free`) and must find the
+    /// key in the recovered block, which shows the method sees what a drop leaves.
+    #[test]
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    fn dropped_key_leaves_no_key_schedule() {
+        use aws_lc_sys::{
+            EVP_AEAD_CTX_init, EVP_AEAD_CTX_zero, EVP_aead_aes_256_gcm, OPENSSL_free, OPENSSL_malloc, EVP_AEAD_CTX,
+        };
+        std::thread::spawn(|| {
+            let size = std::mem::size_of::<EVP_AEAD_CTX>();
+            let find = |bytes: &[u8]| bytes.windows(32).any(|w| w == KEY);
+            // SAFETY: a fresh allocation of `size` bytes is read (uninitialised bytes read as u8 through
+            // volatile reads of mapped heap memory) and released with OPENSSL_free.
+            let recover = || unsafe {
+                let p: *mut u8 = OPENSSL_malloc(size).cast();
+                assert!(!p.is_null());
+                let v: Vec<u8> = (0..size).map(|i| p.add(i).read_volatile()).collect();
+                OPENSSL_free(p.cast());
+                (p as usize, v)
+            };
+            // warm up aws-lc-rs (one-time initialisation allocations)
+            drop(aead_key(&[1u8; 32]));
+            // control: a context freed without the cleanse is found again
+            // SAFETY: as aws-lc-rs' `AeadCtx::build_context`, then a raw `free` of the malloc'd block
+            // (OPENSSL_malloc's 8-byte size prefix precedes the context).
+            unsafe {
+                let ctx: *mut EVP_AEAD_CTX = OPENSSL_malloc(size).cast();
+                EVP_AEAD_CTX_zero(ctx);
+                assert_eq!(
+                    EVP_AEAD_CTX_init(ctx, EVP_aead_aes_256_gcm(), KEY.as_ptr(), 32, 16, std::ptr::null_mut()),
+                    1
+                );
+                libc::free(ctx.cast::<u8>().sub(8).cast());
+            }
+            assert!(find(&recover().1), "control: the recovered block does not show an uncleansed context");
+            // the real thing: seal and open with the key, drop it
+            let mut s = sealer();
+            let ct = seal_new(&s, 3, &plain(4096, 1));
+            open_new(&s, 3, &ct).unwrap();
+            // the words of the live key: one of them is its context pointer
+            // SAFETY: reading the bytes of a live value.
+            let words: Vec<usize> = unsafe {
+                let n = std::mem::size_of::<LessSafeKey>() / 8;
+                (0..n).map(|i| (&s.aead as *const LessSafeKey).cast::<usize>().add(i).read_unaligned()).collect()
+            };
+            s = Sealer::new(&[2u8; 32], [0; 4], [0; 32]); // drops the first key
+            let (p, freed) = recover();
+            assert!(words.contains(&p), "recovered block is not the dropped key's context");
+            assert!(!find(&freed), "key schedule left after drop");
+            assert!(freed[8..].iter().all(|&b| b == 0), "dropped context not cleansed");
+            drop(s);
+        })
+        .join()
+        .unwrap();
+    }
+
+    /// `aead_key` holds its context as aws-lc-rs' `LcPtr<EVP_AEAD_CTX>`: dropping it must go through
+    /// `EVP_AEAD_CTX_free` (the path tested above). The key and the context are owned through one
+    /// pointer: a `LessSafeKey` is a pointer plus the algorithm reference, so it holds no key bytes inline.
+    #[test]
+    fn less_safe_key_holds_no_key_bytes_inline() {
+        let k = aead_key(&KEY);
+        let n = std::mem::size_of::<LessSafeKey>();
+        // SAFETY: reading the bytes of a live value.
+        let raw = unsafe { std::slice::from_raw_parts((&k as *const LessSafeKey).cast::<u8>(), n) };
+        assert!(n <= 64, "LessSafeKey grew to {n} bytes");
+        assert!(!raw.windows(16).any(|w| w == &KEY[..16] || w == &KEY[16..]));
+    }
+
+    #[test]
+    fn run_jobs_threads_write_the_same_file() {
+        let s = sealer();
+        let data = plain(3 << 20, 11);
+        let jobs: Vec<Job> = (0..7u64)
+            .map(|i| {
+                let start = (i as usize) * 400_000;
+                Job { index: i, offset: i * (400_000 + TAG_BYTES as u64), start, len: 400_000 }
+            })
+            .collect();
+        let mut files = Vec::new();
+        for threads in [1usize, 3] {
+            let f = tempfile_in_target(threads);
+            run_jobs(
+                std::os::fd::AsRawFd::as_raw_fd(&f),
+                &s,
+                &jobs,
+                |j| j.len,
+                |j, out| out.copy_from_slice(&data[j.start..j.start + j.len]),
+                threads,
+            )
+            .unwrap();
+            let mut bytes = Vec::new();
+            std::io::Read::read_to_end(&mut &f, &mut bytes).unwrap();
+            for j in &jobs {
+                let at = j.offset as usize;
+                let ct = &bytes[at..at + j.len + TAG_BYTES];
+                assert_eq!(open_new(&s, j.index as u32, ct).unwrap(), &data[j.start..j.start + j.len]);
+            }
+            files.push(bytes);
+        }
+        assert_eq!(files[0], files[1]);
+    }
+
+    fn tempfile_in_target(tag: usize) -> File {
+        let p = std::env::temp_dir().join(format!("pgw-writer-test-{}-{tag}", std::process::id()));
+        let f = std::fs::OpenOptions::new().read(true).write(true).create(true).truncate(true).open(&p).unwrap();
+        std::fs::remove_file(&p).unwrap();
+        f
     }
 
     #[test]
@@ -606,11 +949,32 @@ mod tests {
         assert!(all_in_range(&[i64::MAX], 64, 1));
         assert!(all_in_range(&[u64::MAX], 64, 1));
         assert!(all_in_range(&[-1i32], 32, 1)); // low 32 bits: 2^32 - 1
+        assert!(!all_in_range(&[i64::MIN], 64, 1));
         assert!(!all_in_range(&[256u32], 8, 1));
         let mut big = vec![3i64; 3 << 20];
         assert!(all_in_range(&big, 8, 0));
         *big.last_mut().unwrap() = 256;
         assert!(!all_in_range(&big, 8, 4));
+    }
+
+    /// The range-check shortcut (`ALWAYS_IN_RANGE_FROM_K`) only skips checks that cannot fail.
+    #[test]
+    fn range_shortcut_is_exact() {
+        fn full<T: RingElem>(vals: &[T], k: u32) -> bool {
+            vals.iter().all(|v| v.bad_bits(ring_mask(k)) == 0)
+        }
+        fn check<T: RingElem>(extremes: &[T]) {
+            for k in (8..=64).step_by(8) {
+                if k >= T::ALWAYS_IN_RANGE_FROM_K {
+                    assert!(full(extremes, k), "k {k}");
+                }
+                assert_eq!(all_in_range(extremes, k, 1), full(extremes, k), "k {k}");
+            }
+        }
+        check(&[0u32, 1, 0x8000_0000, u32::MAX]);
+        check(&[0i32, 1, -1, i32::MIN, i32::MAX]);
+        check(&[0u64, 1, 1 << 32, 1 << 63, u64::MAX]);
+        check(&[0i64, 1, -1, i64::MIN, i64::MAX, 1 << 32]);
     }
 
     #[test]

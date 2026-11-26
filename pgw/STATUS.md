@@ -2751,3 +2751,61 @@ drops the weights. Option C of `research/reviews/weight-free-client-checks.md`. 
   the runtime chosen after provisioning, so setup streams `W8` twice. mlwe in stream mode is not supported (its hint
   is built by the factory). No monotonic counter for the stock beyond the store's own level (security note
   section 2).
+
+## 2026-11-26: mask store AES-256-GCM on AWS-LC (writer, gateway open; format unchanged)
+
+Goal: a faster AES-GCM in the factory's segment writer and the gateway's chunk open, with every security property
+kept (key schedule wiped on drop, same ciphertext bytes, same nonces, constant time). Write-up:
+`docs/sdk/scaling.md` ("The store's AES-256-GCM"); tool: `benchmarks/maskstore_aead_bench.py`.
+
+- **Root cause: RustCrypto's design, not its configuration.** `aes` 0.9 already ran its VAES AVX-512 backend and
+  `polyval` 0.7 its PCLMULQDQ backend (run-time `cpufeatures`; no RUSTFLAGS or `.cargo/config`; `-C target-cpu=native`
+  is no faster). `aes-gcm` 0.11 makes two passes (generic `ctr` at 5.5 GB/s, then GHASH as byte-reversed POLYVAL,
+  four 128-bit carry-less multiplies at a time, 6 GB/s): 2.8 GB/s on an idle core (the 1.2 GB/s quoted was under
+  load). Chunks are already ~1 MiB (64 KiB: same rate), so per-call overhead plays no part.
+- **Options, one core, 1 MiB chunks (seal / open GB/s):** RustCrypto 2.8 / 2.5; **AWS-LC via aws-lc-rs 1.19:
+  13.8 / 12.9**; OpenSSL 3.0 (`openssl` crate) 12.3 seal (libcrypto would have to be vendored into the wheel);
+  graviola 0.4 9.8 / 8.4 (zeroizes, but panics without ADX / AVX2); `ring` excluded (no key-schedule wipe).
+- **Chosen: aws-lc-rs** (`LessSafeKey`, non-FIPS, statically linked; a Unix-only dependency of pgw-fast, like the
+  writer). Wipe on drop, from the sources (aws-lc-sys 0.47.0 / aws-lc-rs 1.19.0): the round keys and GHASH table
+  live in the `EVP_AEAD_CTX` (`OPENSSL_malloc`, `aead/aead_ctx.rs`), whose `LcPtr` drop calls `EVP_AEAD_CTX_free`
+  -> `OPENSSL_free`, which `OPENSSL_cleanse`s the whole allocation (`crypto/mem.c`; no memory hooks installed).
+  Tests read the freed memory back: `aws_lc_free_cleanses_the_key_schedule` (the free path; a negative control run
+  by hand, a plain `free`, leaves the key and fails it) and `dropped_key_leaves_no_key_schedule` (the writer's own
+  `Sealer` context after use and drop, recovered by its pointer: all zero; with a built-in control showing that an
+  uncleansed context is found). AWS-LC does not clear its per-call stack copy of the GHASH table and `E_K(J0)`, so
+  every writer thread and each `chunk_open_into` now zero 16 KiB of stack below their frame after the cipher calls
+  (`scrub_stack`). Tag compare: `CRYPTO_memcmp`; a failed open zeroes the output; AES and GHASH use only the
+  AES-NI / VAES and carry-less multiply instructions.
+- **Also:** the writer's range check is skipped where it cannot fail (uint32 / int32 `W r` at K = 32, the pks-v3
+  compact form; every other type and K is still checked in full; test `range_shortcut_is_exact`). It was a separate
+  pass over the array, about 1 ms per slot at 7B.
+- **Per slot, before -> after** (ms, best of two interleaved runs, shared box under load 3-8), 0.5B / 7B / 32B / 72B:
+  writer 1.79 -> 1.19 / 6.14 -> 4.00 / 18.8 -> 11.8 / 29.4 -> 16.7; gateway open + unpack 1.05 -> 0.55 /
+  3.52 -> 1.88 / 10.8 -> 5.92 / 16.4 -> 8.89; open + retirement 1.69 -> 1.04 / 5.24 -> 3.45 / 15.4 -> 10.8 /
+  24.4 -> 15.6. The writer is now bound by the page-cache `pwrite` (3-5 GB/s) and the packing copy, not the cipher.
+- **Not changed, documented:** one fsync per segment at publish (plus the directory's): almost no factory CPU
+  (kernel writeback), twice the wall time, and needed for durability before the cursor moves. `O_DIRECT` would need
+  aligned chunks (a format change). `shred_zero_fill` stays on by default: 70 % of the retirement CPU (72B: 6.7 vs
+  2.0 ms per slot) and twice the disk writes, useful only on disks that overwrite in place; the guide's advice to
+  turn it off on SSDs stays. The default writer thread count is unchanged.
+- **Compatibility:** `tests/native/aead_golden_rustcrypto.bin` was written by the RustCrypto build. The new build
+  writes the same bytes and opens it (`tests/native/test_aead_compat.py`, which passes unchanged against both
+  builds); `cryptography` opens it and the new build's chunks, and the new reader opens `cryptography`'s. Rust
+  tests seal and open across RustCrypto and AWS-LC both ways over 17 lengths (0 to 1 MiB + 5), plus test case 14
+  of the GCM spec. Full store, both directions, checked by hand with the old `.so`: a store written by either build
+  reads back identically with the other (native open, `cryptography` open, reserve / take: same digests). Tamper
+  tests (bit flips in ciphertext and tag, another chunk index / nonce prefix / header digest / key, truncation, a
+  short read) fail closed with the output zeroed, in Rust and Python.
+- **Build / release:** aws-lc-sys builds with the `cc` crate (no cmake, Go, NASM or bindgen on Linux / macOS); the
+  extension grows from 6.3 to 7.1 MB and links no new shared library. `cargo zigbuild --target
+  x86_64-unknown-linux-gnu.2.28` (the release check's manylinux_2_28 path) builds pgw-fast with AWS-LC's assembly
+  (4.4 / 7.2 GB/s through Python, as the host build), highest symbol version GLIBC_2.28, needing only libc,
+  libpthread and libdl, and the compat and writer tests pass on that `.so`. The full `scripts/release_check.sh`
+  was not run: it builds all three extensions from the sdist plus a venv with torch, more than the 2.6-4 GB of
+  disk that was free during this work. THIRD_PARTY_NOTICES.txt is regenerated (aws-lc-rs and aws-lc-sys in, the
+  RustCrypto AEAD crates out) and `tests/packaging` checks for the new crates.
+- Tests: `cargo test -p pgw-fast --lib` 83 passed (11 in writer); tests/native 357 passed; tests/engine/test_trip_native.py
+  32 passed; tests/packaging 11 passed; tests/maskstore 245 passed, 2 failed (`test_ringbuf::test_crash_leaves_disk_untouched`,
+  `test_ringshm::test_child_process_fills_ring_and_crash_is_reaped`: their child processes fail to start in this
+  environment, and they fail the same way with the build from before this change).
