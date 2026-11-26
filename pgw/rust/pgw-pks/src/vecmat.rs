@@ -10,9 +10,12 @@
 //!   (`< 2^31`), then in 64-bit integers (`|sum| < m 2^23 < 2^63`), and reduced once at the end.
 //!
 //! Both are plain integer sums, so the result does not depend on the order of the additions: the tiles,
-//! the threads and the ISA (AVX-512 / AVX2 / portable copies of one generic body) give the same bits as
+//! the threads and the ISA (hand-written AVX-512 and AVX2 tiles, the generic body compiled for SSE4.1, NEON or
+//! the baseline; picked at run time by [`Isa::parse`], `PGW_PKS_ISA` caps it) give the same bits as
 //! the numpy / torch reference (`tests/factory/test_vecmat_native.py`). The weight is read once per tile of
 //! `T` columns with the `C` vectors' accumulators held side by side; up to 16 vectors per pass.
+
+use crate::arith::Isa;
 
 /// Rows summed in 32-bit lanes before the exact path adds them to its 64-bit sums.
 pub const FLUSH_ROWS: usize = 255;
@@ -227,35 +230,152 @@ mod x512 {
     }
 }
 
+/// AVX2 copies of [`cols_wrap`] / [`cols_exact`] for whole 8-column tiles (CPUs without AVX-512: the same
+/// integer sums in another order, so the same bits). Before 2026-11-26 AVX2 CPUs ran the generic body compiled
+/// with AVX2 enabled (auto-vectorised; 1.1-1.6x slower, `pks-bench vecmat`). Columns `[j0, j0 + 8 * tiles)`;
+/// the caller runs the rest portably.
+#[cfg(target_arch = "x86_64")]
+mod x256 {
+    use super::{FLUSH_BLOCKS, RB};
+    use std::arch::x86_64::*;
+
+    #[target_feature(enable = "avx2")]
+    #[allow(clippy::too_many_arguments)]
+    pub unsafe fn wrap<const C: usize>(x: &[u32], m: usize, w: &[i8], n: usize, j0: usize, tiles: usize,
+                                       out: &mut [u32], out_stride: usize) {
+        assert!(x.len() >= m * C && w.len() >= m * n && j0 + 8 * tiles <= n);
+        assert!(C == 0 || out.len() >= (C - 1) * out_stride + j0 + 8 * tiles);
+        let mut acc: Vec<[__m256i; C]> = vec![[_mm256_setzero_si256(); C]; tiles];
+        let (xp, wp) = (x.as_ptr(), w.as_ptr());
+        let mut i0 = 0;
+        while i0 < m {
+            let i1 = (i0 + RB).min(m);
+            for (t, at) in acc.iter_mut().enumerate() {
+                let jt = j0 + 8 * t;
+                let mut a = *at;
+                for i in i0..i1 {
+                    // SAFETY: i < m, jt + 8 <= n (asserted): 8 bytes inside `w`; i * C + c < m * C: inside `x`.
+                    let wv = _mm256_cvtepi8_epi32(_mm_loadl_epi64(wp.add(i * n + jt) as *const __m128i));
+                    for (c, ac) in a.iter_mut().enumerate() {
+                        let xv = _mm256_set1_epi32(*xp.add(i * C + c) as i32);
+                        *ac = _mm256_add_epi32(*ac, _mm256_mullo_epi32(xv, wv));
+                    }
+                }
+                *at = a;
+            }
+            i0 = i1;
+        }
+        let op = out.as_mut_ptr();
+        for (t, at) in acc.iter().enumerate() {
+            for (c, ac) in at.iter().enumerate() {
+                // SAFETY: c * out_stride + j0 + 8 t + 8 <= out.len() (asserted).
+                _mm256_storeu_si256(op.add(c * out_stride + j0 + 8 * t) as *mut __m256i, *ac);
+            }
+        }
+    }
+
+    #[target_feature(enable = "avx2")]
+    #[allow(clippy::too_many_arguments)]
+    pub unsafe fn exact<const C: usize>(x: &[i32], m: usize, w: &[i8], n: usize, j0: usize, tiles: usize,
+                                        out: &mut [i64], out_stride: usize) {
+        assert!(x.len() >= m * C && w.len() >= m * n && j0 + 8 * tiles <= n);
+        assert!(C == 0 || out.len() >= (C - 1) * out_stride + j0 + 8 * tiles);
+        let z = _mm256_setzero_si256();
+        let mut acc: Vec<[__m256i; C]> = vec![[z; C]; tiles];
+        let mut lo: Vec<[__m256i; C]> = vec![[z; C]; tiles];
+        let mut hi: Vec<[__m256i; C]> = vec![[z; C]; tiles];
+        let (xp, wp) = (x.as_ptr(), w.as_ptr());
+        let mut i0 = 0;
+        let mut blocks = 0;
+        while i0 < m {
+            let i1 = (i0 + RB).min(m);
+            for (t, at) in acc.iter_mut().enumerate() {
+                let jt = j0 + 8 * t;
+                let mut a = *at;
+                for i in i0..i1 {
+                    // SAFETY: as in `wrap`. No lane overflows: |x w| < 2^23 over at most 240 rows.
+                    let wv = _mm256_cvtepi8_epi32(_mm_loadl_epi64(wp.add(i * n + jt) as *const __m128i));
+                    for (c, ac) in a.iter_mut().enumerate() {
+                        let xv = _mm256_set1_epi32(*xp.add(i * C + c));
+                        *ac = _mm256_add_epi32(*ac, _mm256_mullo_epi32(xv, wv));
+                    }
+                }
+                *at = a;
+            }
+            i0 = i1;
+            blocks += 1;
+            if blocks == FLUSH_BLOCKS || i0 >= m {
+                for t in 0..tiles {
+                    for c in 0..C {
+                        let a = acc[t][c];
+                        lo[t][c] = _mm256_add_epi64(lo[t][c], _mm256_cvtepi32_epi64(_mm256_castsi256_si128(a)));
+                        hi[t][c] = _mm256_add_epi64(hi[t][c], _mm256_cvtepi32_epi64(_mm256_extracti128_si256::<1>(a)));
+                        acc[t][c] = z;
+                    }
+                }
+                blocks = 0;
+            }
+        }
+        let op = out.as_mut_ptr();
+        for t in 0..tiles {
+            for c in 0..C {
+                let p = op.add(c * out_stride + j0 + 8 * t);
+                // SAFETY: as in `wrap` (8 int64 per tile and vector).
+                _mm256_storeu_si256(p as *mut __m256i, lo[t][c]);
+                _mm256_storeu_si256(p.add(4) as *mut __m256i, hi[t][c]);
+            }
+        }
+    }
+}
+
+/// The ISA the vecmat kernels run with: [`Isa::parse`]`("auto")` (the CPU's best, capped by `PGW_PKS_ISA`).
+pub fn auto_isa() -> Isa {
+    Isa::parse("auto").unwrap_or(Isa::Scalar)
+}
+
 macro_rules! isa_copies {
     ($name:ident, $generic:ident, $simd:ident, $xt:ty, $ot:ty) => {
-        /// Columns `[j0, j1)` (output already offset so that column `j0` is at `out[j0]`), dispatched on the ISA.
+        /// Columns `[j0, j1)` (output already offset so that column `j0` is at `out[j0]`), dispatched on the ISA
+        /// ([`Isa::parse`] caps it at what the CPU has): AVX-512 16-column tiles, AVX2 8-column tiles; the rest, and
+        /// every other CPU, the generic body: on x86-64 without AVX2 compiled with SSE4.1 when the CPU has it
+        /// (`pmulld`: the baseline SSE2 has no 32-bit lane multiply), on aarch64 with the baseline NEON.
         #[allow(clippy::too_many_arguments)]
-        fn $name<const C: usize, const T: usize>(x: &[$xt], m: usize, w: &[i8], n: usize, j0: usize, j1: usize,
-                                                  out: &mut [$ot], out_stride: usize) {
+        fn $name<const C: usize, const T: usize>(isa: Isa, x: &[$xt], m: usize, w: &[i8], n: usize, j0: usize,
+                                                  j1: usize, out: &mut [$ot], out_stride: usize) {
             #[cfg(target_arch = "x86_64")]
             {
-                if std::is_x86_feature_detected!("avx512f") {
-                    let tiles = (j1 - j0) / 16;
-                    // SAFETY: the CPU supports AVX-512F (checked above); bounds are asserted inside.
-                    unsafe { x512::$simd::<C>(x, m, w, n, j0, tiles, out, out_stride) };
-                    if j0 + 16 * tiles < j1 {
-                        $generic::<C, T>(x, m, w, n, j0 + 16 * tiles, j1, out, out_stride);
-                    }
-                    return;
-                }
-                #[target_feature(enable = "avx2")]
+                let lanes = match isa {
+                    Isa::Avx512 | Isa::Avx512Ifma if std::is_x86_feature_detected!("avx512f") => 16,
+                    Isa::Avx512 | Isa::Avx512Ifma | Isa::Avx2 if std::is_x86_feature_detected!("avx2") => 8,
+                    _ => 0,
+                };
+                #[target_feature(enable = "sse4.1")]
                 #[allow(clippy::too_many_arguments)]
-                unsafe fn v256<const C: usize, const T: usize>(x: &[$xt], m: usize, w: &[i8], n: usize, j0: usize,
+                unsafe fn v128<const C: usize, const T: usize>(x: &[$xt], m: usize, w: &[i8], n: usize, j0: usize,
                                                                 j1: usize, out: &mut [$ot], out_stride: usize) {
                     $generic::<C, T>(x, m, w, n, j0, j1, out, out_stride)
                 }
-                if std::is_x86_feature_detected!("avx2") {
-                    // SAFETY: as above.
-                    unsafe { v256::<C, T>(x, m, w, n, j0, j1, out, out_stride) };
+                if lanes == 0 && std::is_x86_feature_detected!("sse4.1") {
+                    // SAFETY: the CPU supports SSE4.1 (checked); the generic body is safe code.
+                    unsafe { v128::<C, T>(x, m, w, n, j0, j1, out, out_stride) };
+                    return;
+                }
+                if lanes > 0 {
+                    let tiles = (j1 - j0) / lanes;
+                    if lanes == 16 {
+                        // SAFETY: the CPU supports AVX-512F (checked above); bounds are asserted inside.
+                        unsafe { x512::$simd::<C>(x, m, w, n, j0, tiles, out, out_stride) };
+                    } else {
+                        // SAFETY: the CPU supports AVX2 (checked above); bounds are asserted inside.
+                        unsafe { x256::$simd::<C>(x, m, w, n, j0, tiles, out, out_stride) };
+                    }
+                    if j0 + lanes * tiles < j1 {
+                        $generic::<C, T>(x, m, w, n, j0 + lanes * tiles, j1, out, out_stride);
+                    }
                     return;
                 }
             }
+            let _ = isa;
             $generic::<C, T>(x, m, w, n, j0, j1, out, out_stride)
         }
     };
@@ -343,13 +463,20 @@ fn check(xlen: usize, c: usize, m: usize, wlen: usize, n: usize, olen: usize) ->
 /// `out[c][j] = sum_i x[c][i] * W8[i][j] mod 2^32` for `x` `(c, m)` uint32 and `w` `(m, n)` int8 (row-major).
 pub fn vecmat_wrap32(x: &[u32], c: usize, w: &[i8], m: usize, n: usize, out: &mut [u32], threads: usize)
                      -> Result<(), ShapeError> {
+    vecmat_wrap32_isa(auto_isa(), x, c, w, m, n, out, threads)
+}
+
+/// [`vecmat_wrap32`] with the ISA given (capped at the CPU's; benchmarks and tests).
+#[allow(clippy::too_many_arguments)]
+pub fn vecmat_wrap32_isa(isa: Isa, x: &[u32], c: usize, w: &[i8], m: usize, n: usize, out: &mut [u32], threads: usize)
+                     -> Result<(), ShapeError> {
     check(x.len(), c, m, w.len(), n, out.len())?;
     let mut c0 = 0;
     while c0 < c {
         let cc = (c - c0).min(16);
         let xt = interleave(x, m, c0, cc);
         let sub = &mut out[c0 * n..(c0 + cc) * n];
-        par_cols(n, 256, threads, sub, |j0, j1, o| dispatch!(cc, isa_wrap, &xt, m, w, n, j0, j1, o, n));
+        par_cols(n, 256, threads, sub, |j0, j1, o| dispatch!(cc, isa_wrap, isa, &xt, m, w, n, j0, j1, o, n));
         c0 += cc;
     }
     Ok(())
@@ -357,6 +484,13 @@ pub fn vecmat_wrap32(x: &[u32], c: usize, w: &[i8], m: usize, n: usize, out: &mu
 
 /// `out[c][j] = sum_i u[c][i] * W8[i][j] mod (2^31 - 1)` for `u` `(c, m)` with entries in `[0, 2^31 - 1)`.
 pub fn vecmat_p31(u: &[u64], c: usize, w: &[i8], m: usize, n: usize, out: &mut [u64], threads: usize)
+                  -> Result<(), ShapeError> {
+    vecmat_p31_isa(auto_isa(), u, c, w, m, n, out, threads)
+}
+
+/// [`vecmat_p31`] with the ISA given (capped at the CPU's; benchmarks and tests).
+#[allow(clippy::too_many_arguments)]
+pub fn vecmat_p31_isa(isa: Isa, u: &[u64], c: usize, w: &[i8], m: usize, n: usize, out: &mut [u64], threads: usize)
                   -> Result<(), ShapeError> {
     check(u.len(), c, m, w.len(), n, out.len())?;
     if u.iter().any(|&v| v >= P31) {
@@ -381,7 +515,7 @@ pub fn vecmat_p31(u: &[u64], c: usize, w: &[i8], m: usize, n: usize, out: &mut [
         let cc = (cl - c0).min(16);
         let xt = interleave(&limbs, m, c0, cc);
         let sub = &mut sums[c0 * n..(c0 + cc) * n];
-        par_cols(n, 256, threads, sub, |j0, j1, o| dispatch!(cc, isa_exact, &xt, m, w, n, j0, j1, o, n));
+        par_cols(n, 256, threads, sub, |j0, j1, o| dispatch!(cc, isa_exact, isa, &xt, m, w, n, j0, j1, o, n));
         c0 += cc;
     }
     let p = P31 as i64;
@@ -421,6 +555,7 @@ impl Lo32 for u32 {
 }
 
 #[inline(always)]
+#[allow(clippy::too_many_arguments)]
 fn check_block_generic<W: Lo32, const RB: usize>(r: &[i64], n: usize, wr: &[W], m: usize, cu: &[u32], cw: &[u32],
                                          mask: u32, t0: usize, bad: &mut [u8]) {
     let mut l = [[0u32; 16]; RB];
@@ -491,11 +626,11 @@ mod c512 {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn check_block<W: Lo32, const RB: usize>(r: &[i64], n: usize, wr: &[W], m: usize, cu: &[u32], cw: &[u32], mask: u32,
+fn check_block<W: Lo32, const RB: usize>(isa: Isa, r: &[i64], n: usize, wr: &[W], m: usize, cu: &[u32], cw: &[u32], mask: u32,
                                 t0: usize, bad: &mut [u8]) {
     #[cfg(target_arch = "x86_64")]
     {
-        if std::is_x86_feature_detected!("avx512f") {
+        if matches!(isa, Isa::Avx512 | Isa::Avx512Ifma) && std::is_x86_feature_detected!("avx512f") {
             // SAFETY: the CPU supports AVX-512F (checked above); bounds are asserted inside.
             unsafe { c512::block::<W, RB>(r, n, wr, m, cu, cw, mask, t0, bad) };
             return;
@@ -506,12 +641,24 @@ fn check_block<W: Lo32, const RB: usize>(r: &[i64], n: usize, wr: &[W], m: usize
                                         mask: u32, t0: usize, bad: &mut [u8]) {
             check_block_generic::<W, RB>(r, n, wr, m, cu, cw, mask, t0, bad)
         }
-        if std::is_x86_feature_detected!("avx2") {
+        if isa >= Isa::Avx2 && std::is_x86_feature_detected!("avx2") {
             // SAFETY: as above.
             unsafe { v256::<W, RB>(r, n, wr, m, cu, cw, mask, t0, bad) };
             return;
         }
+        #[target_feature(enable = "sse4.1")]
+        #[allow(clippy::too_many_arguments)]
+        unsafe fn v128<W: Lo32, const RB: usize>(r: &[i64], n: usize, wr: &[W], m: usize, cu: &[u32], cw: &[u32],
+                                                 mask: u32, t0: usize, bad: &mut [u8]) {
+            check_block_generic::<W, RB>(r, n, wr, m, cu, cw, mask, t0, bad)
+        }
+        if std::is_x86_feature_detected!("sse4.1") {
+            // SAFETY: as above (the portable body with 32-bit lane multiplies).
+            unsafe { v128::<W, RB>(r, n, wr, m, cu, cw, mask, t0, bad) };
+            return;
+        }
     }
+    let _ = isa;
     check_block_generic::<W, RB>(r, n, wr, m, cu, cw, mask, t0, bad)
 }
 
@@ -531,6 +678,14 @@ fn pad16(v: &[u32], rows: usize, c: usize) -> Vec<u32> {
 #[allow(clippy::too_many_arguments)]
 pub fn check_rows32<W: Lo32>(r: &[i64], n: usize, wr: &[W], m: usize, cu: &[u32], cw: &[u32], c: usize, mask: u32,
                     bad: &mut [u8], threads: usize) -> Result<(), ShapeError> {
+    check_rows32_isa(auto_isa(), r, n, wr, m, cu, cw, c, mask, bad, threads)
+}
+
+/// [`check_rows32`] with the ISA given (capped at the CPU's; benchmarks and tests).
+#[allow(clippy::too_many_arguments)]
+pub fn check_rows32_isa<W: Lo32>(isa: Isa, r: &[i64], n: usize, wr: &[W], m: usize, cu: &[u32], cw: &[u32], c: usize,
+                                 mask: u32, bad: &mut [u8], threads: usize) -> Result<(), ShapeError> {
+    let isa = isa.min(Isa::detect());
     let rows = bad.len();
     if !(1..=16).contains(&c) || r.len() != rows * n || wr.len() != rows * m || cu.len() != m * c || cw.len() != n * c {
         return Err(ShapeError(format!("check_rows32: r {} / {rows} x {n}, wr {} / {rows} x {m}, cu {} / {m} x {c}, cw {} / {n} x {c}",
@@ -543,10 +698,10 @@ pub fn check_rows32<W: Lo32>(r: &[i64], n: usize, wr: &[W], m: usize, cu: &[u32]
         let one = |t0: usize, part: &mut [u8]| {
             let full = part.len() / CHECK_RB * CHECK_RB;
             for b in (0..full).step_by(CHECK_RB) {
-                check_block::<W, CHECK_RB>(r, n, wr, m, cu16, cw16, mask, t0 + b, &mut part[b..b + CHECK_RB]);
+                check_block::<W, CHECK_RB>(isa, r, n, wr, m, cu16, cw16, mask, t0 + b, &mut part[b..b + CHECK_RB]);
             }
             for t in full..part.len() {
-                check_block::<W, 1>(r, n, wr, m, cu16, cw16, mask, t0 + t, &mut part[t..=t]);
+                check_block::<W, 1>(isa, r, n, wr, m, cu16, cw16, mask, t0 + t, &mut part[t..=t]);
             }
         };
         let blocks = rows.div_ceil(CHECK_RB).max(1);
@@ -592,8 +747,9 @@ mod tests {
             for t in (0..rows).step_by(3) {
                 wr[t * m] = (wr[t * m] + (1 << 31)) & i64::from(mask); // a high-valuation error
             }
+            for isa in isas() {
             let mut bad = vec![0u8; rows];
-            check_rows32(&r, n, &wr, m, &cu, &cw, c, mask, &mut bad, 3).unwrap();
+            check_rows32_isa(isa, &r, n, &wr, m, &cu, &cw, c, mask, &mut bad, 3).unwrap();
             for t in 0..rows {
                 let mut want = false;
                 for j in 0..c {
@@ -607,7 +763,8 @@ mod tests {
                     }
                     want |= (l & u64::from(mask)) != (rr & u64::from(mask));
                 }
-                assert_eq!(bad[t] != 0, want, "row {t}");
+                assert_eq!(bad[t] != 0, want, "row {t} {isa:?}");
+            }
             }
         }
         // consistent rows pass: wr = W r for a random W, cu = v, cw = v W (mod 2^32)
@@ -623,22 +780,51 @@ mod tests {
             let (j, k) = (x / c, x % c);
             (0..m).fold(0u32, |a, i| a.wrapping_add(v[i * c + k].wrapping_mul(w[i * n + j] as u32)))
         }).collect();
+        for isa in isas() {
         let mut bad = vec![1u8; rows];
-        check_rows32(&r, n, &wr, m, &v, &vw, c, u32::MAX, &mut bad, 2).unwrap();
-        assert!(bad.iter().all(|&b| b == 0));
+        check_rows32_isa(isa, &r, n, &wr, m, &v, &vw, c, u32::MAX, &mut bad, 2).unwrap();
+        assert!(bad.iter().all(|&b| b == 0), "{isa:?}");
+        }
+    }
+
+    /// Every ISA this CPU has (the portable body, AVX2, AVX-512): each must give the reference's bits.
+    fn isas() -> Vec<Isa> {
+        [Isa::Scalar, Isa::Avx2, Isa::Avx512].into_iter().filter(|&i| i <= Isa::detect()).collect()
+    }
+
+    #[test]
+    fn every_isa_is_bit_identical() {
+        // worst cases for the 32-bit lanes of the exact path: u = p - 1 everywhere, w = -128 everywhere, m past
+        // several flushes (240 rows), n with a remainder after the 16- and 8-column tiles
+        let (c, m, n) = (3usize, 1000usize, 77usize);
+        let w = vec![-128i8; m * n];
+        let u = vec![P31 - 1; c * m];
+        let x = vec![u32::MAX; c * m];
+        let want = (((P31 - 1) as i128 * -128 * m as i128).rem_euclid(P31 as i128)) as u64;
+        let want32 = (0..m).fold(0u32, |a, _| a.wrapping_add(u32::MAX.wrapping_mul(-128i32 as u32)));
+        for isa in isas() {
+            let mut op = vec![0u64; c * n];
+            vecmat_p31_isa(isa, &u, c, &w, m, n, &mut op, 2).unwrap();
+            assert!(op.iter().all(|&v| v == want), "{isa:?}");
+            let mut o = vec![0u32; c * n];
+            vecmat_wrap32_isa(isa, &x, c, &w, m, n, &mut o, 2).unwrap();
+            assert!(o.iter().all(|&v| v == want32), "{isa:?}");
+        }
     }
 
     #[test]
     fn wrap32_and_p31_match_scalar() {
         let mut s = 7u64;
-        for &(c, m, n) in &[(1usize, 1usize, 1usize), (2, 37, 300), (14, 70, 513), (17, 9, 33), (3, 600, 257)] {
+        for &(c, m, n) in &[(1usize, 1usize, 1usize), (2, 37, 300), (14, 70, 513), (17, 9, 33), (3, 600, 257),
+                            (5, 250, 7), (16, 481, 264), (4, 33, 9)] {
             let w: Vec<i8> = (0..m * n).map(|i| if i % 7 == 0 { -128 } else if i % 11 == 0 { 127 } else { lcg(&mut s) as i8 }).collect();
             let x: Vec<u32> = (0..c * m).map(|i| if i % 5 == 0 { u32::MAX } else { lcg(&mut s) as u32 }).collect();
-            let mut o = vec![0u32; c * n];
-            vecmat_wrap32(&x, c, &w, m, n, &mut o, 3).unwrap();
             let u: Vec<u64> = (0..c * m).map(|i| if i % 5 == 0 { P31 - 1 } else { lcg(&mut s) % P31 }).collect();
+            for isa in isas() {
+            let mut o = vec![0u32; c * n];
+            vecmat_wrap32_isa(isa, &x, c, &w, m, n, &mut o, 3).unwrap();
             let mut op = vec![0u64; c * n];
-            vecmat_p31(&u, c, &w, m, n, &mut op, 2).unwrap();
+            vecmat_p31_isa(isa, &u, c, &w, m, n, &mut op, 2).unwrap();
             for k in 0..c {
                 for j in 0..n {
                     let mut a = 0u32;
@@ -647,9 +833,10 @@ mod tests {
                         a = a.wrapping_add(x[k * m + i].wrapping_mul(w[i * n + j] as i32 as u32));
                         b += i128::from(u[k * m + i]) * i128::from(w[i * n + j]);
                     }
-                    assert_eq!(o[k * n + j], a);
-                    assert_eq!(op[k * n + j] as i128, b.rem_euclid(P31 as i128));
+                    assert_eq!(o[k * n + j], a, "{isa:?}");
+                    assert_eq!(op[k * n + j] as i128, b.rem_euclid(P31 as i128), "{isa:?}");
                 }
+            }
             }
         }
     }

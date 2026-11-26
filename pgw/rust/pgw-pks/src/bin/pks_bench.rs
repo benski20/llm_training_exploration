@@ -107,6 +107,44 @@ fn main() {
             let (s, c) = time(size.clamp(1, 20), || kernel::reply_key(isa, &km, &t, &tr, &ek, &mut beta, &mut trhat).unwrap());
             println!("{{\"mode\":\"ksk\",\"isa\":\"{}\",\"ms\":{:.3},\"cpu_ms\":{:.3}}}", isa.name(), s * 1e3, c * 1e3);
         }
+        "vecmat" => {
+            // the factory's check-vector products x @ W8 (W8 `size x groups` int8): wrapping 32-bit and exact p31,
+            // `PKS_C` vectors (default 2); prints ns per weight element and vector
+            let (m, n) = (size, groups);
+            let c: usize = std::env::var("PKS_C").ok().and_then(|v| v.parse().ok()).unwrap_or(2);
+            let w: Vec<i8> = (0..m * n).map(|_| g.next() as i8).collect();
+            let x: Vec<u32> = (0..c * m).map(|_| g.next() as u32).collect();
+            let u: Vec<u64> = (0..c * m).map(|_| g.next() % pgw_pks::vecmat::P31).collect();
+            let mut o32 = vec![0u32; c * n];
+            let mut op = vec![0u64; c * n];
+            let (s0, _) = time(reps, || pgw_pks::vecmat::vecmat_wrap32_isa(isa, &x, c, &w, m, n, &mut o32, threads).unwrap());
+            let (s1, _) = time(reps, || pgw_pks::vecmat::vecmat_p31_isa(isa, &u, c, &w, m, n, &mut op, threads).unwrap());
+            let per = (m * n * c) as f64;
+            // a digest of the outputs: identical across ISAs
+            let h = o32.iter().fold(0u64, |a, &v| a.wrapping_mul(31).wrapping_add(u64::from(v)))
+                ^ op.iter().fold(0u64, |a, &v| a.wrapping_mul(37).wrapping_add(v));
+            println!(
+                "{{\"mode\":\"vecmat\",\"isa\":\"{}\",\"m\":{m},\"n\":{n},\"c\":{c},\"threads\":{threads},\"wrap32_ms\":{:.2},\"p31_ms\":{:.2},\"wrap32_ns_per_elem_vec\":{:.4},\"p31_ns_per_elem_vec\":{:.4},\"digest\":\"{h:016x}\"}}",
+                isa.name(), s0 * 1e3, s1 * 1e3, s0 * 1e9 / per, s1 * 1e9 / per
+            );
+        }
+        "checkrows" => {
+            // the factory's every-row self-check: `size` rows, m = groups outputs, n = PKS_N inputs, PKS_C vectors
+            let (rows, m) = (size, groups);
+            let n: usize = std::env::var("PKS_N").ok().and_then(|v| v.parse().ok()).unwrap_or(896);
+            let c: usize = std::env::var("PKS_C").ok().and_then(|v| v.parse().ok()).unwrap_or(2);
+            let r: Vec<i64> = (0..rows * n).map(|_| g.next() as u32 as i64).collect();
+            let wr: Vec<u32> = (0..rows * m).map(|_| g.next() as u32).collect();
+            let cu: Vec<u32> = (0..m * c).map(|_| g.next() as u32).collect();
+            let cw: Vec<u32> = (0..n * c).map(|_| g.next() as u32).collect();
+            let mut bad = vec![0u8; rows];
+            let (s, _) = time(reps, || pgw_pks::vecmat::check_rows32_isa(isa, &r, n, &wr, m, &cu, &cw, c, u32::MAX, &mut bad, threads).unwrap());
+            let nbad: usize = bad.iter().map(|&b| usize::from(b)).sum();
+            println!(
+                "{{\"mode\":\"checkrows\",\"isa\":\"{}\",\"rows\":{rows},\"m\":{m},\"n\":{n},\"c\":{c},\"threads\":{threads},\"ms\":{:.2},\"ns_per_row_elem\":{:.4},\"bad\":{nbad}}}",
+                isa.name(), s * 1e3, s * 1e9 / (rows * (m + n)) as f64
+            );
+        }
         "keyswitch" => {
             let hs: Vec<u64> = (0..size * NU).map(|_| g.next() % cx.q1).collect();
             let ops: Vec<u32> = (0..groups * 4 * RANK * NR).map(|i| (g.next() % cx.qp[(i / (RANK * NR)) % 4].p as u64) as u32).collect();
