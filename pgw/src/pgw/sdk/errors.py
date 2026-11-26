@@ -10,6 +10,7 @@ that fails its check is a hard error, and the model refuses traffic until the in
 
 from __future__ import annotations
 
+import errno
 from typing import Any
 
 from pgw.core.errors import ErrorCode, PGWError
@@ -163,6 +164,9 @@ _BY_CODE: dict[str, type[PGWAPIError]] = {
 }
 
 
+_DISK_ERRNOS = frozenset({errno.ENOSPC, errno.EDQUOT, errno.EROFS})
+
+
 def from_pgw_error(exc: BaseException, *, request_id: str | None = None) -> PGWAPIError:
     """Map an internal :class:`PGWError` (or another exception) to the library's typed error."""
     if isinstance(exc, PGWAPIError):
@@ -170,9 +174,18 @@ def from_pgw_error(exc: BaseException, *, request_id: str | None = None) -> PGWA
     if isinstance(exc, PGWError):
         cls = _BY_CODE.get(str(exc.code), InternalServerError)
         details = {k: v for k, v in exc.details.items() if isinstance(v, str | int | float | bool | None)}
-        return cls(exc.message, code=str(exc.code), request_id=request_id, details=details)
+        msg = exc.message
+        low = msg.lower()
+        if ("disk is full" in low or "no space left" in low) and "free disk space" not in low:
+            msg += " (the disk holding the pgw cache is full: free disk space there and retry)"
+        return cls(msg, code=str(exc.code), request_id=request_id, details=details)
     if isinstance(exc, TimeoutError):
         return APITimeoutError("the request timed out", request_id=request_id)
+    if isinstance(exc, OSError) and not isinstance(exc, ConnectionError) and exc.errno in _DISK_ERRNOS:
+        where = f" ({exc.filename})" if exc.filename else ""
+        return InternalServerError(f"the disk holding the pgw cache is full or read-only{where}: "
+                                   f"{exc.strerror or type(exc).__name__}. Free disk space there and retry",
+                                   request_id=request_id)
     if isinstance(exc, ConnectionError | OSError):
         return APIConnectionError(f"connection failed ({type(exc).__name__})", request_id=request_id)
     return InternalServerError(f"internal error ({type(exc).__name__})", request_id=request_id)

@@ -2,45 +2,45 @@
 
 Runs the existing factory (:mod:`pgw.factory`, settings from ``PGW_FACTORY_*`` / ``PGW_MASKSTORE_*`` set by
 :mod:`pgw.sdk.factory`) and exits when the process that started it exits: on Linux through
-``PR_SET_PDEATHSIG`` (SIGTERM; the factory aborts its current segment, nothing partial is committed), elsewhere
-through a parent-pid watch thread.
+``PR_SET_PDEATHSIG`` (SIGTERM; the factory aborts its current segment, nothing partial is committed) and a
+parent-pid watch thread, with a hard exit if the graceful stop hangs (:func:`pgw.core.proc_tuning.exit_with_parent`).
+Its fleet workers do the same with the factory process as their parent.
 """
 
 from __future__ import annotations
 
 import os
-import signal
-import sys
 import threading
 import time
+from pathlib import Path
+
+#: The child touches this file in its state directory every few seconds; the supervisor restarts a child whose
+#: heartbeat is older than its hang limit (stopped, or stuck with the interpreter lock held).
+HEARTBEAT_FILE = "heartbeat"
+HEARTBEAT_S = 5.0
 
 
-def _die_with_parent(parent: int) -> None:
-    if sys.platform.startswith("linux"):
-        try:
-            import ctypes
-
-            libc = ctypes.CDLL(None, use_errno=True)
-            libc.prctl(1, int(signal.SIGTERM), 0, 0, 0)  # PR_SET_PDEATHSIG
-        except Exception:  # pragma: no cover - platform dependent (the watch thread below still runs)
-            parent = parent or os.getppid()
-    if parent and os.getppid() != parent:  # the parent died before the prctl took effect
-        os._exit(0)
-
-    def watch() -> None:
+def _heartbeat(path: Path) -> None:
+    def beat() -> None:
         while True:
-            time.sleep(2.0)
-            if os.getppid() != parent:
-                os.kill(os.getpid(), signal.SIGTERM)
-                return
+            try:
+                path.touch(mode=0o600, exist_ok=True)
+                os.utime(path)
+            except OSError:  # a full or read-only disk is reported by the factory itself
+                pass
+            time.sleep(HEARTBEAT_S)
 
-    if parent:
-        threading.Thread(target=watch, name="pgw-parent-watch", daemon=True).start()
+    threading.Thread(target=beat, name="pgw-factory-heartbeat", daemon=True).start()
 
 
 def main() -> None:
     """Run the factory until SIGTERM (or the parent's exit)."""
-    _die_with_parent(int(os.environ.get("PGW_SDK_PARENT_PID", "0") or 0))
+    from pgw.core.proc_tuning import exit_with_parent
+
+    # SIGTERM with the parent (the factory aborts its current segment, nothing partial is committed); a hard exit
+    # if that stop does not finish within the grace period
+    exit_with_parent(int(os.environ.get("PGW_SDK_PARENT_PID", "0") or 0) or None)
+    _heartbeat(Path(os.environ.get("PGW_FACTORY_STATE_DIR", ".")) / HEARTBEAT_FILE)
     from pgw.core.log import configure_logging
 
     configure_logging(level=os.environ.get("PGW_LOG_LEVEL", "INFO"), json_lines=True)

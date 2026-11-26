@@ -24,6 +24,7 @@ import contextlib
 import json
 import logging
 import os
+import shutil
 import threading
 import time
 import uuid
@@ -46,14 +47,17 @@ from pgw.gateway.safety import BreakerOpenError
 from pgw.sdk import types as T
 from pgw.sdk.cache import CacheLayout, ensure_private_dir, file_lock
 from pgw.sdk.errors import (
+    APIConnectionError,
     APITimeoutError,
+    BadRequestError,
     IntegrityError,
+    InternalServerError,
     NotFoundError,
     NotReadyError,
     PGWAPIError,
     from_pgw_error,
 )
-from pgw.sdk.factory import FactoryPlan, FactoryProcess, read_factory_state
+from pgw.sdk.factory import FactoryPlan, FactoryProcess, read_factory_state, write_demand
 from pgw.sdk.keys import SdkKey
 from pgw.sdk.options import SDKOptions, canonical_model
 from pgw.sdk.provisioning import Provisioned, Provisioner, adapt, default_provisioner
@@ -82,6 +86,9 @@ NATIVE_ENV: dict[str, str] = {
 PREFERRED_RING = "K32A12C27"
 _RETRY_CODES = frozenset({str(ErrorCode.BACKEND_UNAVAILABLE), str(ErrorCode.DEADLINE_EXCEEDED),
                           str(ErrorCode.UNAVAILABLE)})
+_AUTH_CODES = frozenset({str(ErrorCode.UNAUTHENTICATED), str(ErrorCode.PERMISSION_DENIED)})
+#: How often the client certificate is re-checked (renewal due, or replaced by another process).
+CERT_CHECK_S = 600.0
 
 
 def _accepts(fn: Any, name: str) -> bool:
@@ -136,6 +143,9 @@ class ModelHandle:
     last_verified_at: float | None = None
     last_integrity_failure_at: float | None = None
     started_at: float | None = None
+    #: why the next request reconnects the model first (credentials refused, client certificate replaced)
+    reconnect: str | None = None
+    last_reconnect_at: float = 0.0
 
     def public(self) -> dict[str, Any]:
         """Status view (no secrets, no content)."""
@@ -202,6 +212,9 @@ class Engine:
         self._status_lock = threading.Lock()
         self._gc_stop = threading.Event()
         self._gc_thread: threading.Thread | None = None
+        #: request coroutines running on the loop (``submit``): cancelled by ``close()``, so no caller waits forever
+        self._tasks: set[asyncio.Task[Any]] = set()
+        self._cert_task: asyncio.Task[None] | None = None
         #: content-free request reports for the provider's console (``usage_reports``)
         self.reporter: Any = None
         if options.usage_reports:
@@ -232,13 +245,27 @@ class Engine:
             return self._loop
 
     def submit(self, coro: Coroutine[Any, Any, R]) -> concurrent.futures.Future[R]:
-        """Run ``coro`` on the engine loop (from any thread)."""
+        """Run ``coro`` on the engine loop (from any thread). ``close()`` cancels it if it is still running."""
         try:
             loop = self._ensure_loop()
         except BaseException:
             coro.close()
             raise
-        return asyncio.run_coroutine_threadsafe(coro, loop)
+        return asyncio.run_coroutine_threadsafe(self._tracked(coro), loop)
+
+    async def _tracked(self, coro: Coroutine[Any, Any, R]) -> R:
+        task = asyncio.current_task()
+        if task is not None:
+            self._tasks.add(task)
+        try:
+            return await coro
+        finally:
+            if task is not None:
+                self._tasks.discard(task)
+
+    def closed_error(self, request_id: str | None = None) -> PGWAPIError:
+        """The error of a request stopped because its client was closed (``close()``, interpreter exit)."""
+        return APIConnectionError("the request was stopped because the pgw client was closed", request_id=request_id)
 
     def call(self, coro: Coroutine[Any, Any, R], timeout_s: float | None = None) -> R:
         """Run ``coro`` on the engine loop and wait for its result (blocking)."""
@@ -248,6 +275,8 @@ class Engine:
         except concurrent.futures.TimeoutError as exc:
             fut.cancel()
             raise APITimeoutError("the request timed out") from exc
+        except concurrent.futures.CancelledError:
+            raise self.closed_error() from None
         except BaseException:
             if not fut.done():
                 fut.cancel()
@@ -285,6 +314,7 @@ class Engine:
             allow_dev_modes=False, allow_anonymous=False, audit_log_file=None,
             noise_monitor=True, noise_monitor_fail_closed=True, egress_allowlist=egress, require_service_tls=True,
             prime_check=self._prime_check(), pack_verify="full", mask_reservation="incremental", mask_chunk_slots=8,
+            drain_timeout_s=2.0,  # close() cancels the requests still running first
             default_max_tokens=512, max_tokens_limit=32768, maskstore_gc_interval_s=0,
             dashboard_enabled=False, console_enabled=False, setup_mode=False,
             config_dir=self.layout.session_dir(self.key.key_id_hex),
@@ -316,6 +346,23 @@ class Engine:
                                      counter_file=sdir / "masks.counter", allow_no_external_counter=False,
                                      low_water_slots=64)
         return open_store(settings)
+
+    def _store_error(self, exc: PGWError) -> PGWAPIError:
+        """The mask store cannot be opened (its database, key or rollback counter is damaged or was changed outside
+        the library). Never repaired automatically: the counter is what stops an old copy of the store from serving
+        used masks again. The message says how to start over."""
+        kid = self.key.key_id_hex
+        err = from_pgw_error(exc)
+        if _disk_full(exc.message):
+            return InternalServerError(f"the mask store of this API key cannot be opened: the disk holding "
+                                       f"{self.layout.root} is full ({exc.message}). Free disk space there and retry",
+                                       code=err.code)
+        return type(err)(
+            f"the mask store of this API key cannot be opened safely ({exc.message}). Nothing was sent. If its files "
+            "were damaged (a full disk, a crash, a partial copy of the cache), stop every process using this cache "
+            f"and delete {self.layout.masks_dir(kid)} together with masks.kek and masks.counter in "
+            f"{self.layout.session_state_dir(kid)} to start over (the stored masks are discarded; enrollment and "
+            "model files are kept)", code=err.code)
 
     def _start_gc(self, interval_s: float = 300.0) -> None:
         """Mask store housekeeping (shred consumed segments, close dead leases) in a daemon thread, at start and
@@ -356,6 +403,12 @@ class Engine:
         if h is None:
             h = self.models[name] = ModelHandle(name)
         if h.state == "ready":
+            if h.reconnect is None:
+                return h
+            t = h.start_task
+            if t is None or t.done():
+                t = h.start_task = asyncio.get_running_loop().create_task(self._reconnect(h))
+            await asyncio.shield(t)
             return h
         t = h.start_task
         if t is None or t.done():
@@ -365,6 +418,31 @@ class Engine:
             t = h.start_task = asyncio.get_running_loop().create_task(self._start_guarded(h))
         await asyncio.shield(t)
         return h
+
+    async def _reconnect(self, h: ModelHandle) -> None:
+        """Stop the model's runtime and start it again (enrolling again if the provider refuses the session): after
+        the provider refused this installation's credentials, or after a re-enrollment replaced them."""
+        async with h.lock:
+            reason, h.reconnect = h.reconnect, None
+            if reason is None or h.state != "ready":
+                return
+            log.warning("model %s: reconnecting to the provider (%s)", h.name, reason)
+            h.last_reconnect_at = time.monotonic()
+            old, fac = h.runtime, h.factory
+            h.state, h.runtime, h.factory = "new", None, None
+            h.ready_event.clear()
+            if old is not None:
+                with contextlib.suppress(Exception):
+                    await asyncio.wait_for(old.stop(), timeout=30.0)
+            if fac is not None:  # restarted with the session's new files once the model is ready again
+                await asyncio.to_thread(fac.stop)
+        await self._start_guarded(h)
+
+    def _note_auth_failure(self, h: ModelHandle, exc: PGWError) -> None:
+        """The provider refused the session's credentials during a request: the next request reconnects (and enrolls
+        again if needed; a revoked key then fails with a clear AuthenticationError). At most once per minute."""
+        if h.state == "ready" and h.reconnect is None and time.monotonic() - h.last_reconnect_at > 60.0:
+            h.reconnect = f"the provider refused the session's credentials ({exc.message})"
 
     async def _start_guarded(self, h: ModelHandle) -> None:
         async with h.lock:
@@ -419,14 +497,24 @@ class Engine:
         pkw: dict[str, Any] = {"session": session, "cache_dir": self.layout.models_dir, "progress": progress}
         if _accepts(self.provisioner, "masked_head"):
             pkw["masked_head"] = h.masked_head
-        raw = await asyncio.to_thread(self.provisioner, h.name, **pkw)
+        try:
+            raw = await asyncio.to_thread(self.provisioner, h.name, **pkw)
+        except (AuthError, PGWAPIError) as exc:
+            if str(getattr(exc, "code", "")) not in _AUTH_CODES:
+                raise
+            # the provider refused the cached session (its token or certificate is gone): enroll again once
+            session = pkw["session"] = await self.ensure_session(force=True)
+            raw = await asyncio.to_thread(self.provisioner, h.name, **pkw)
         prov = adapt(raw, model=h.name)
         if prov.fingerprint != str(entry["fingerprint"]).lower():
             raise IntegrityError(f"provisioned artifacts of {h.name!r} do not match the provider's fingerprint",
                                  details={"model": h.name})
         h.provisioned = prov
         if self.store is None:
-            self.store = await asyncio.to_thread(self._open_store)
+            try:
+                self.store = await asyncio.to_thread(self._open_store)
+            except PGWError as exc:
+                raise self._store_error(exc) from exc
             self._start_gc()
         if self._settings is None:
             self._settings = self._gateway_settings(session)
@@ -435,15 +523,32 @@ class Engine:
         cfg = self._model_config(h, session, prov)
         self._settings.validate_policy([cfg])
         h.state = "connecting"
-        for attempt in (0, 1):
+        repaired = False
+        for attempt in (0, 1, 2):
             rt = ModelRuntime(cfg, self._settings, mask_store=self.store, metrics=GatewayMetrics(enabled=False))
             try:
                 await rt.start()
             except AuthError:
-                if attempt:
+                if attempt == 2:
                     raise
                 # the provider no longer accepts the service token (rotated / revoked): enroll again once
                 session = await self.ensure_session(force=True)
+                cfg = self._model_config(h, session, prov)
+                continue
+            except PGWError as exc:
+                if repaired or rt.fingerprint or not self._in_cache(prov.pack_path):
+                    raise
+                # the cached gateway pack failed its verification before anything was sent (a damaged or partly
+                # copied cache): delete it and provision it again once; the new copy is checked the same way
+                repaired = True
+                log.warning("model %s: the cached model files are damaged (%s); downloading them again", h.name,
+                            exc.message)
+                await asyncio.to_thread(shutil.rmtree, prov.pack_path, True)
+                prov = adapt(await asyncio.to_thread(self.provisioner, h.name, **pkw), model=h.name)
+                if prov.fingerprint != str(entry["fingerprint"]).lower():
+                    raise IntegrityError(f"provisioned artifacts of {h.name!r} do not match the provider's "
+                                         "fingerprint", details={"model": h.name}) from exc
+                h.provisioned = prov
                 cfg = self._model_config(h, session, prov)
                 continue
             break
@@ -453,6 +558,13 @@ class Engine:
             self._on_ready(h)
         else:  # connecting in the background (the runtime retries): requests wait for it
             asyncio.get_running_loop().create_task(self._await_ready(h))
+
+    def _in_cache(self, path: Path) -> bool:
+        """Whether ``path`` is a provisioned artifact inside this cache (never a pack the application supplied)."""
+        try:
+            return Path(path).resolve().is_relative_to(self.layout.models_dir.resolve())
+        except OSError:
+            return False
 
     async def _await_ready(self, h: ModelHandle) -> None:
         rt = h.runtime
@@ -467,6 +579,8 @@ class Engine:
         h.state = "ready"
         h.error = None
         h.ready_event.set()
+        if self._cert_task is None or self._cert_task.done():
+            self._cert_task = asyncio.get_running_loop().create_task(self._cert_loop(), name="pgw-sdk-cert")
         if self.options.factory and h.factory is None:
             try:
                 h.factory = FactoryProcess(self._factory_plan(h)).start()
@@ -581,9 +695,10 @@ class Engine:
         if scheme == "pks-v3":
             hint_key = h.provisioned.hint_key_file or (sdir / "pks-hint.key")
         s = self.session
+        state_dir = self.layout.factory_dir(kid) / h.provisioned.fingerprint[:16]
         return FactoryPlan(
             model=h.name, pack_path=h.provisioned.factory_pack_path or h.provisioned.pack_path, ring=h.ring,
-            state_dir=self.layout.factory_dir(kid) / h.provisioned.fingerprint[:16],
+            state_dir=state_dir, demand_file=state_dir / "demand.json",
             store_root=self.layout.masks_dir(kid), kek_file=sdir / "masks.kek", counter_file=sdir / "masks.counter",
             scheme=scheme, check_field="p31" if prime else "ring", masked_head=h.masked_head,
             workers=o.workers, threads=max(1, o.mask_threads), nice=o.mask_nice, target_slots=target,
@@ -600,6 +715,83 @@ class Engine:
             return int(sum(int(s.out_features) for s in specs) * rt.ring.k // 8)
         except Exception:  # pragma: no cover - defensive
             return 4 << 20
+
+    # ---- client certificate --------------------------------------------------------------------------
+    async def _cert_loop(self) -> None:
+        """Keep the session's mTLS client certificate valid for the life of the engine: renewed at 2/3 of its
+        lifetime (``POST /pgw/v1/enroll/renew``, loaded into the live TLS contexts), enrolled again once it has
+        expired (e.g. the machine slept past it; the models then reconnect), and reloaded when another process
+        sharing the cache renewed it. Failures are retried with back-off (logged; requests keep working while the
+        current certificate is valid)."""
+        from pgw.wire.client import client_cert_validity, reload_client_cert
+
+        failures = 0
+        loaded: int | None = None
+        while True:
+            s = self.session
+            if s is None or s.client_cert_file is None or s.client_key_file is None \
+                    or not s.service_url.startswith("https://"):
+                return
+            try:
+                mtime = s.client_cert_file.stat().st_mtime_ns
+            except OSError:
+                mtime = None
+            if loaded is not None and mtime is not None and mtime != loaded:
+                with contextlib.suppress(Exception):  # another process renewed the shared pair
+                    await asyncio.to_thread(reload_client_cert, s.client_cert_file, s.client_key_file)
+            loaded = mtime
+            w = client_cert_validity(s.client_cert_file)
+            if w is None:
+                await asyncio.sleep(CERT_CHECK_S)
+                continue
+            due = w[0] + (w[1] - w[0]) * 2.0 / 3.0
+            if time.time() < due:
+                await asyncio.sleep(max(1.0, min(due - time.time(), CERT_CHECK_S)))
+                continue
+            try:
+                outcome = await asyncio.to_thread(self._renew_or_enroll, s)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                failures += 1
+                log.warning("client certificate renewal failed (attempt %d): %s", failures,
+                            getattr(exc, "message", None) or type(exc).__name__)
+                await asyncio.sleep(min(600.0, 15.0 * 2 ** min(failures, 6)))
+                continue
+            failures = 0
+            with contextlib.suppress(OSError):
+                loaded = (self.session or s).client_cert_file.stat().st_mtime_ns  # type: ignore[union-attr]
+            if outcome == "enrolled":
+                for h in self.models.values():
+                    if h.state == "ready":
+                        h.reconnect = "the session was enrolled again (its client certificate had expired)"
+            w = client_cert_validity((self.session or s).client_cert_file)  # type: ignore[arg-type]
+            if w is not None and time.time() >= w[0] + (w[1] - w[0]) * 2.0 / 3.0:
+                log.error("the new client certificate is already due by this machine's clock: the clock is wrong "
+                          "(check it, e.g. 'date -u', and enable NTP time sync)")
+                await asyncio.sleep(3600.0)
+
+    def _renew_or_enroll(self, s: Session) -> str:
+        """``renewed`` (or ``reloaded`` when another process just did it) while the certificate is valid, else
+        ``enrolled`` (a new session: the provider never renews an expired certificate). Blocking."""
+        from pgw.enroll.client import renew_client_cert
+        from pgw.wire.client import client_cert_validity, reload_client_cert
+
+        assert s.client_cert_file is not None and s.client_key_file is not None
+        with file_lock(s.dir / ".enroll.lock", timeout_s=60.0):
+            w = client_cert_validity(s.client_cert_file)
+            now = time.time()
+            if w is not None and now < w[0] + (w[1] - w[0]) * 2.0 / 3.0:
+                reload_client_cert(s.client_cert_file, s.client_key_file)
+                return "reloaded"
+            if w is not None and now < w[1] - 60.0:
+                serial = renew_client_cert(s.service_url, s.token().get_secret_value(), s.client_cert_file,
+                                           s.client_key_file, ca_file=s.ca_file, timeout_s=30.0, reload=True)
+                log.info("renewed the client certificate (serial %x)", serial)
+                return "renewed"
+        self.session = ensure_session(self.key, self.layout, force=True, transport=self._enroll_transport,
+                                      timeout_s=min(60.0, self.options.timeout_s))
+        return "enrolled"
 
     # ---- requests --------------------------------------------------------------------------------
     async def _ready_runtime(self, model: str, deadline: float) -> tuple[ModelHandle, Any]:
@@ -636,13 +828,37 @@ class Engine:
                 return sess
             except MaskExhaustedError as exc:
                 fac = h.factory
+                want = int(exc.details.get("entitled") or exc.details.get("needed") or 0)
+                cap = fac.plan.target_slots if fac is not None else None
+                if cap is not None and want > cap:
+                    # more than the factory ever stocks: waiting cannot help (the factory stops at its target)
+                    raise BadRequestError(
+                        f"this request needs up to {want} mask slots (its prompt plus max_tokens), more than the "
+                        f"mask stock of model {h.name!r} ever holds ({cap} slots, set by mask_store_gb="
+                        f"{self.options.mask_store_gb:g} or mask_target_slots): lower max_tokens or shorten the "
+                        "prompt, or raise mask_store_gb", code=str(ErrorCode.PAYLOAD_TOO_LARGE), request_id=rid,
+                        details={"needed_slots": want, "stock_target_slots": cap}) from exc
+                if fac is not None and fac.plan.demand_file is not None and self.options.factory:
+                    # the factory refills only below its low-water mark: ask it for what this request waits for
+                    write_demand(fac.plan.demand_file, want + int(exc.details.get("promised") or 0))
                 broken = fac is not None and fac.owner and fac.failures >= 3 and fac.last_error
+                fst = fac.state() if fac is not None else {}
+                disk = fst.get("disk_limited") if isinstance(fst.get("disk_limited"), dict) else None
+                fac_error = fst.get("last_error") if isinstance(fst.get("last_error"), str) else None
                 first_fill = (fac is not None and not broken and not h.masks_seen and setup_deadline is not None
-                              and not fac.state().get("halted"))
+                              and not fst.get("halted") and disk is None and fac_error is None)
                 limit = max(mask_deadline, setup_deadline) if first_fill and setup_deadline else mask_deadline
                 if broken or time.monotonic() + delay > limit:
                     why = f"; the mask factory is failing: {fac.last_error}" if broken and fac is not None else (
                         "" if self.options.factory else "; the background mask factory is off (factory=False)")
+                    if disk is not None:
+                        why += (f"; the mask factory stopped producing because the disk of {self.layout.root} is "
+                                f"almost full (it keeps {int(disk.get('min_free_bytes') or 0) / 2**30:.1f} GiB free; "
+                                "free disk space there, or lower PGW_FACTORY_MIN_FREE_BYTES)")
+                    elif fst.get("halted"):
+                        why += "; the mask factory halted after provider integrity failures (see pgw sdk status)"
+                    elif fac_error is not None and not broken:
+                        why += f"; the mask factory's last run failed: {fac_error[:300]}"
                     if first_fill:
                         why += "; the one-time mask setup of this model is still running (see pgw sdk status)"
                     raise NotReadyError(f"no masks in stock for model {h.name!r} after waiting{why}",
@@ -763,6 +979,8 @@ class Engine:
                     raise
                 raise from_pgw_error(exc, request_id=rid) from exc
             except PGWError as exc:
+                if str(exc.code) in _AUTH_CODES:
+                    self._note_auth_failure(h, exc)
                 if (produced == 0 and str(exc.code) in _RETRY_CODES and attempt < self.options.max_retries
                         and time.monotonic() < deadline and not isinstance(exc, MaskExhaustedError)):
                     attempt += 1
@@ -903,7 +1121,12 @@ class Engine:
 
     # ---- shutdown ----------------------------------------------------------------------------------
     def close(self, timeout_s: float = 30.0) -> None:
-        """Stop the models, the factories and the loop; close the mask store (idempotent)."""
+        """Stop the models, the factories and the loop; close the mask store (idempotent).
+
+        Order: the dummy passes still due (strict speculation) run first; requests still running are then cancelled
+        (their callers get :class:`APIConnectionError`; their unused masks are burned, never reused); the runtimes
+        stop; every task left on the loop is cancelled before the loop stops, so no caller waits forever. Bounded by
+        about ``timeout_s`` in total."""
         with self._mu:
             if self._closed:
                 return
@@ -911,10 +1134,11 @@ class Engine:
             loop, thread = self._loop, self._thread
         if os.getpid() != self.pid:
             return
+        deadline = time.monotonic() + timeout_s
         for h in list(self.models.values()):
             if h.factory is not None:
                 with contextlib.suppress(Exception):
-                    h.factory.stop()
+                    h.factory.stop(timeout_s=max(1.0, min(30.0, 0.3 * timeout_s)))
         if loop is not None and thread is not None and thread.is_alive():
             async def _stop() -> None:
                 for h in list(self.models.values()):
@@ -923,16 +1147,22 @@ class Engine:
                         # strict speculation: let the dummy passes still due run first, so the provider sees one
                         # pass per generated token even when the application closes right after an answer
                         with contextlib.suppress(Exception):
-                            await asyncio.wait_for(gen.wait_drained(), timeout=max(1.0, 0.8 * timeout_s))
+                            await asyncio.wait_for(gen.wait_drained(), timeout=max(1.0, 0.6 * timeout_s))
+                await _cancel_all(self._tasks, max(1.0, 0.1 * timeout_s))
                 for h in list(self.models.values()):
                     if h.runtime is not None:
                         with contextlib.suppress(Exception):
-                            await h.runtime.stop()
+                            await asyncio.wait_for(h.runtime.stop(), timeout=max(1.0, 0.2 * timeout_s))
 
             try:
-                asyncio.run_coroutine_threadsafe(_stop(), loop).result(timeout=timeout_s)
+                asyncio.run_coroutine_threadsafe(_stop(), loop).result(
+                    timeout=max(1.0, deadline - time.monotonic()))
             except Exception:
                 log.warning("stopping the models did not finish cleanly")
+            try:  # whatever is still pending (a stuck runtime stop, background tasks): cancel, then stop the loop
+                asyncio.run_coroutine_threadsafe(_cancel_all(None, 2.0), loop).result(timeout=5.0)
+            except Exception:
+                log.warning("tasks of the pgw client were still running at close")
             self._write_status()
             loop.call_soon_threadsafe(loop.stop)
             thread.join(timeout=10)
@@ -950,6 +1180,21 @@ class Engine:
         if loop is not None and not loop.is_running():
             with contextlib.suppress(Exception):
                 loop.close()
+
+
+def _disk_full(message: str) -> bool:
+    m = message.lower()
+    return "disk is full" in m or "no space left" in m or "not enough free space" in m or "quota" in m
+
+
+async def _cancel_all(tasks: set[asyncio.Task[Any]] | None, timeout_s: float) -> None:
+    """Cancel ``tasks`` (default: every task of the running loop but this one) and wait up to ``timeout_s``."""
+    me = asyncio.current_task()
+    todo = [t for t in (list(tasks) if tasks is not None else asyncio.all_tasks()) if t is not me and not t.done()]
+    for t in todo:
+        t.cancel()
+    if todo:
+        await asyncio.wait(todo, timeout=timeout_s)
 
 
 def read_status(layout: CacheLayout) -> dict[str, Any]:

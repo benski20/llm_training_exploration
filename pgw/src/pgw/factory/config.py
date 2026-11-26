@@ -113,6 +113,11 @@ class FactorySettings(PGWSettings):
     max_segments_per_run: int = Field(0, ge=0, description="0 = unlimited")
     low_water_slots: int | None = Field(None, ge=0, description="Start refilling below this (default: store setting)")
     target_slots: int | None = Field(None, ge=0, description="Refill up to this (default: store setting)")
+    demand_file: Path | None = Field(
+        None, description="JSON file {\"slots\": int, \"until\": unix time} a consumer writes while a request waits "
+        "for more masks than are in stock: until then, a stock below min(slots, target_slots) refills as if below "
+        "low water (the client library's factory; a stale or unreadable file is ignored)",
+    )
     # ---- resource governance ----------------------------------------------------------------
     max_slots_per_hour: float = Field(0.0, ge=0, description="Rate limit on produced slots; 0 = unlimited")
     duty_cycle: float = Field(1.0, gt=0, le=1, description="Fraction of wall time spent computing (idle in between)")

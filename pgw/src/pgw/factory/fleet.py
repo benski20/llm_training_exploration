@@ -450,6 +450,10 @@ def _hint_build_lock(settings: Any) -> Iterator[None]:
 def _worker_main(settings_json: str, k: int, n: int, root: str, store_overrides: dict[str, Any],
                  ready: Any = None) -> None:
     """Entry point of one worker process (spawned)."""
+    from pgw.core.proc_tuning import exit_with_parent
+
+    # a worker ends with its supervisor, even when the supervisor is SIGKILLed (out of memory): never an orphan
+    exit_with_parent(os.getppid())
     from pgw.core.log import configure_logging
     from pgw.factory.config import FactorySettings
     from pgw.factory.governor import Throttle, apply_process_priority

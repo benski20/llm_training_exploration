@@ -25,6 +25,7 @@ import contextlib
 import os
 import queue
 import threading
+import weakref
 from collections.abc import AsyncIterator, Iterator
 from typing import Any
 
@@ -211,9 +212,36 @@ class _Base:
         return dict(self._engine.status())
 
 
+def _cancel(fut: Any) -> None:
+    if fut is not None and not fut.done():
+        fut.cancel()
+
+
+def _pump(engine: Any, req: Any, conversation: str | None, timeout_s: float | None, put: Any, end: object) -> Any:
+    """The coroutine that runs one streamed request on the engine loop and hands its chunks to ``put``. It holds no
+    reference to the stream object, so a stream the application drops is collected and its finalizer stops the
+    generation (no tokens, masks or provider work are spent on an answer nobody reads)."""
+
+    async def pump() -> None:
+        try:
+            async for c in engine.chat_stream(req, conversation=conversation, timeout_s=timeout_s):
+                put(c)
+        except asyncio.CancelledError:
+            put(engine.closed_error())  # read only if the client was closed under a running stream
+            raise
+        except BaseException as exc:
+            put(exc if isinstance(exc, Exception) else from_pgw_error(exc))
+            if not isinstance(exc, Exception):
+                raise
+        finally:
+            put(end)
+
+    return pump()
+
+
 class _SyncStream:
-    """Iterator over the chunks of a streaming chat completion (``close()`` or leaving the ``with`` block cancels
-    generation and burns the request's unused masks)."""
+    """Iterator over the chunks of a streaming chat completion (``close()``, leaving the ``with`` block or dropping
+    the iterator cancels generation and burns the request's unused masks)."""
 
     _END = object()
 
@@ -222,19 +250,8 @@ class _SyncStream:
         self._q: queue.Queue[Any] = queue.Queue()
         self._timeout_s = timeout_s
         self._done = False
-
-        async def pump() -> None:
-            try:
-                async for c in engine.chat_stream(req, conversation=conversation, timeout_s=request_timeout_s):
-                    self._q.put(c)
-            except BaseException as exc:
-                self._q.put(exc if isinstance(exc, Exception) else from_pgw_error(exc))
-                if not isinstance(exc, Exception):
-                    raise
-            finally:
-                self._q.put(self._END)
-
-        self._fut = engine.submit(pump())
+        self._fut = engine.submit(_pump(engine, req, conversation, request_timeout_s, self._q.put, self._END))
+        self._finalizer = weakref.finalize(self, _cancel, self._fut)
 
     def __iter__(self) -> Iterator[T.ChatCompletionChunk]:
         return self
@@ -249,6 +266,9 @@ class _SyncStream:
             from pgw.sdk.errors import APITimeoutError
 
             raise APITimeoutError("the stream produced nothing within the timeout") from None
+        except BaseException:  # KeyboardInterrupt in the consuming thread: stop generating
+            self.close()
+            raise
         if item is self._END:
             self._done = True
             raise StopIteration
@@ -260,18 +280,13 @@ class _SyncStream:
     def close(self) -> None:
         """Stop generation (idempotent)."""
         self._done = True
-        if not self._fut.done():
-            self._fut.cancel()
+        self._finalizer()
 
     def __enter__(self) -> _SyncStream:
         return self
 
     def __exit__(self, *exc: object) -> None:
         self.close()
-
-    def __del__(self) -> None:
-        with contextlib.suppress(Exception):
-            self.close()
 
 
 class _Completions:
@@ -381,7 +396,8 @@ class OpenAI(_Base):
 
 # ---- async -----------------------------------------------------------------------------------------------
 class _AsyncStream:
-    """Async iterator over the chunks of a streaming chat completion (``aclose()`` cancels generation)."""
+    """Async iterator over the chunks of a streaming chat completion. ``aclose()``, cancelling the task that iterates
+    it (e.g. the web framework's handler when its HTTP client disconnects) or dropping it stops generation."""
 
     _END = object()
 
@@ -394,30 +410,25 @@ class _AsyncStream:
         self._rto = request_timeout_s
         self._q: asyncio.Queue[Any] | None = None
         self._fut: Any = None
+        self._finalizer: Any = None
         self._done = False
 
     def _start(self) -> None:
         caller = asyncio.get_running_loop()
         q: asyncio.Queue[Any] = asyncio.Queue()
         self._q = q
-        end = self._END
 
         def put(item: Any) -> None:
             with contextlib.suppress(RuntimeError):  # the caller's loop closed
                 caller.call_soon_threadsafe(q.put_nowait, item)
 
-        async def pump() -> None:
-            try:
-                async for c in self._engine.chat_stream(self._req, conversation=self._conv, timeout_s=self._rto):
-                    put(c)
-            except BaseException as exc:
-                put(exc if isinstance(exc, Exception) else from_pgw_error(exc))
-                if not isinstance(exc, Exception):
-                    raise
-            finally:
-                put(end)
+        self._fut = self._engine.submit(_pump(self._engine, self._req, self._conv, self._rto, put, self._END))
+        self._finalizer = weakref.finalize(self, _cancel, self._fut)
 
-        self._fut = self._engine.submit(pump())
+    def _stop(self) -> None:
+        self._done = True
+        if self._finalizer is not None:
+            self._finalizer()
 
     def __aiter__(self) -> AsyncIterator[T.ChatCompletionChunk]:
         return self
@@ -431,10 +442,13 @@ class _AsyncStream:
         try:
             item = await asyncio.wait_for(self._q.get(), timeout=self._timeout_s)
         except TimeoutError:
-            await self.aclose()
+            self._stop()
             from pgw.sdk.errors import APITimeoutError
 
             raise APITimeoutError("the stream produced nothing within the timeout") from None
+        except BaseException:  # the consuming task was cancelled (its HTTP client went away): stop generating
+            self._stop()
+            raise
         if item is self._END:
             self._done = True
             raise StopAsyncIteration
@@ -445,9 +459,7 @@ class _AsyncStream:
 
     async def aclose(self) -> None:
         """Stop generation (idempotent)."""
-        self._done = True
-        if self._fut is not None and not self._fut.done():
-            self._fut.cancel()
+        self._stop()
 
     async def __aenter__(self) -> _AsyncStream:
         return self
@@ -472,15 +484,24 @@ class _AsyncCompletions:
             return _AsyncStream(eng, req, conv, rto if rto is not None else o.options.timeout_s
                                 + o.options.ready_timeout_s, rto)
         fut = eng.submit(eng.chat(req, conversation=conv, timeout_s=rto))
-        try:
-            return await asyncio.wrap_future(fut)
-        except asyncio.CancelledError:
-            fut.cancel()
-            raise
-        except PGWAPIError:
-            raise
-        except Exception as exc:
-            raise from_pgw_error(exc) from exc
+        return await _await(eng, fut)  # type: ignore[no-any-return]
+
+
+async def _await(engine: Any, fut: Any) -> Any:
+    """Await an engine future from the caller's loop: cancelling the caller cancels the request; a request the
+    engine cancelled (the client was closed) raises :class:`APIConnectionError`, not ``CancelledError``."""
+    try:
+        return await asyncio.wrap_future(fut)
+    except asyncio.CancelledError:
+        task = asyncio.current_task()
+        if fut.cancelled() and task is not None and not task.cancelling():
+            raise engine.closed_error() from None
+        fut.cancel()
+        raise
+    except PGWAPIError:
+        raise
+    except Exception as exc:
+        raise from_pgw_error(exc) from exc
 
 
 class _AsyncModels:
@@ -491,7 +512,7 @@ class _AsyncModels:
         """Models the provider serves to this key and this release supports."""
         o = self._owner
         o._check_open()
-        names = await asyncio.wrap_future(o._engine.submit(o._engine.list_models()))
+        names = await _await(o._engine, o._engine.submit(o._engine.list_models()))
         return T.ModelList(data=[T.Model(id=n) for n in names])
 
     async def retrieve(self, model: str) -> T.Model:
@@ -524,11 +545,11 @@ class AsyncOpenAI(_Base):
     async def warmup(self, model: str) -> None:
         """Enroll, provision and connect ``model`` now."""
         self._check_open()
-        await asyncio.wrap_future(self._engine.submit(self._engine.ensure_model(model)))
+        await _await(self._engine, self._engine.submit(self._engine.ensure_model(model)))
 
     async def reset_integrity_breaker(self, model: str) -> None:
         """Re-open ``model`` after an integrity failure blocked it (only after investigating)."""
-        await asyncio.wrap_future(self._engine.submit(self._engine.reset_breaker(model)))
+        await _await(self._engine, self._engine.submit(self._engine.reset_breaker(model)))
 
     async def close(self) -> None:
         """Release this client (the shared engine stops when its last client closes)."""

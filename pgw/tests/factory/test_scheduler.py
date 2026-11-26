@@ -394,3 +394,28 @@ def test_crash_recovery_cleans_partials_once(tmp_path: Path, fake_store: FakeMas
     sch.run_once()
     sch.close()
     assert calls == [1]
+
+
+def test_demand_file_refills_above_low_water(tmp_path: Path, fake_store: FakeMaskStore, fake_pack: FakePack) -> None:
+    """A consumer that waits for more masks than are in stock (``demand_file``) makes a stock that is above its
+    low-water mark refill up to the target now; the factory never fills above its target, and a stale or broken
+    demand is ignored."""
+    demand = tmp_path / "demand.json"
+    sch = _sched(tmp_path, fake_store, [fake_pack], demand_file=demand)
+    sch.run_once()
+    assert sch.plan() == []  # at target
+    fake_store.consume(fake_pack.fingerprint, 150)  # 150 left: above low water (100)
+    assert sch.plan() == []
+    demand.write_text(json.dumps({"slots": 200, "until": time.time() + 30}))
+    (p,) = sch.plan()
+    assert p.available == 150 and p.segments * p.slots_per_segment >= 150  # back up to the target (300)
+    sch.run_once()
+    assert sch.plan() == []  # at target: a demand above it changes nothing
+    demand.write_text(json.dumps({"slots": 10_000, "until": time.time() + 30}))
+    assert sch.plan() == []
+    fake_store.consume(fake_pack.fingerprint, 140)  # 160 left
+    demand.write_text(json.dumps({"slots": 200, "until": time.time() - 1}))  # expired
+    assert sch.plan() == []
+    demand.write_text("{not json")
+    assert sch.plan() == []
+    sch.close()

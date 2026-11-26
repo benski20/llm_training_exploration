@@ -202,6 +202,9 @@ class FactoryState:
     provider_integrity_failures: int = 0
     #: The most recent of them (time, model/ring, error; no secrets), at most ``_MAX_FAILURE_RECORDS``.
     provider_integrity_log: list[dict[str, Any]] = field(default_factory=list)
+    #: Set while the disk budget stops production (``{"at", "free_bytes", "min_free_bytes"}``), else ``None``: what a
+    #: consumer waiting for masks tells its caller.
+    disk_limited: dict[str, Any] | None = None
     #: Set when the factory halted on provider integrity failures; cleared only by an operator.
     halted: dict[str, Any] | None = None
 
@@ -572,6 +575,11 @@ class FactoryScheduler:
             avail = int(self.sink.available_slots(fp, RingParams.from_name(ring)))
             key = (fp, ring)
             below = avail < self.low_water_slots
+            demand = self._demand()
+            if not below and demand is not None and avail < demand:
+                below = True  # a consumer waits for more than is in stock: refill now, up to the target
+                if key not in self._refilling:
+                    log.info("refill on demand: %d slots available < %d wanted by a waiting request", avail, demand)
             self.metrics.inventory(fp, ring, avail, below)
             if below:
                 self._refilling.add(key)
@@ -632,6 +640,20 @@ class FactoryScheduler:
                                   cap, tier="ring", priority=0 if low else 2))
         return out
 
+    def _demand(self) -> int | None:
+        """Slots a waiting consumer wants (``demand_file``, capped at ``target_slots``), or ``None``."""
+        path = getattr(self.settings, "demand_file", None)
+        if path is None:
+            return None
+        try:
+            d = json.loads(Path(path).read_text(encoding="utf-8"))
+            slots, until = int(d["slots"]), float(d["until"])
+        except (OSError, ValueError, KeyError, TypeError):
+            return None
+        if until < time.time() or slots <= 0:
+            return None
+        return min(slots, self.target_slots)
+
     def _heartbeat(self) -> None:
         self.last_progress_at = time.time()
         self.metrics.run_ok(self.last_progress_at)
@@ -688,7 +710,23 @@ class FactoryScheduler:
             if fit > 0:
                 out.append(dataclasses.replace(p, segments=int(fit)))
                 budget -= fit * seg_bytes
+        self._record_disk_limit()
         return out
+
+    def _record_disk_limit(self) -> None:
+        """Persist the disk-limit flag in ``factory-state.json`` when it changes (read by status displays)."""
+        if self.disk_limited == (self.state.disk_limited is not None):
+            return
+        if self.disk_limited:
+            path = self.sink.state_dir() if hasattr(self.sink, "state_dir") else None
+            free = None
+            with contextlib.suppress(OSError, TypeError):
+                free = int(shutil.disk_usage(Path(path)).free) if path is not None else None
+            self.state.disk_limited = {"at": time.time(), "free_bytes": free,
+                                       "min_free_bytes": int(getattr(self.settings, "min_free_bytes", 0) or 0)}
+        else:
+            self.state.disk_limited = None
+        self._save_state()
 
     # ---- execution ---------------------------------------------------------------------------
     def _produce(self, plan: RefillPlan) -> str:

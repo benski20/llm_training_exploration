@@ -12,6 +12,9 @@
   transports and timers on the request path), else the standard asyncio loop.
   ``PGW_UVLOOP=0`` forces the standard loop. Use it as ``asyncio.run(main(), loop_factory=new_event_loop)``.
 
+* :func:`exit_with_parent`: a helper process (the client library's mask factory and its fleet workers) ends when
+  the process that started it ends, even when that one is killed with SIGKILL (out of memory): SIGTERM through
+  ``PR_SET_PDEATHSIG`` on Linux plus a parent watch, then a hard exit if the graceful stop does not finish.
 * :func:`os_thread_name` (``PGW_THREAD_NAMES=1``, default off): copies the calling Python thread's name
   into the kernel's thread name (``/proc/<pid>/task/<tid>/comm``, 15 bytes), so per-thread CPU time can be
   attributed to a stage (diagnostics: the encrypted factory's stage threads call it).
@@ -23,6 +26,7 @@ dispatches callbacks.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import ctypes
 import logging
 import os
@@ -35,6 +39,7 @@ __all__ = [
     "M_TOP_PAD",
     "M_TRIM_THRESHOLD",
     "apply_malloc_tuning",
+    "exit_with_parent",
     "glibc_version",
     "loop_name",
     "new_event_loop",
@@ -174,3 +179,37 @@ def os_thread_name(name: str | None = None) -> bool:
         return int(lib.prctl(_PR_SET_NAME, ctypes.c_char_p(raw), 0, 0, 0)) == 0
     except (AttributeError, OSError):  # pragma: no cover - no prctl (not Linux)
         return False
+
+
+def exit_with_parent(parent: int | None = None, *, grace_s: float = 20.0, poll_s: float = 1.0) -> None:
+    """End this process when ``parent`` (default: the current parent) exits, however it exits.
+
+    SIGTERM is delivered at once on Linux (``PR_SET_PDEATHSIG``, so the process's own SIGTERM handler stops it
+    gracefully) and, on any platform, by a daemon thread that sees the parent pid change within ``poll_s``. If the
+    process is still alive ``grace_s`` after the parent's exit (its stop is stuck: a hung call, a lock), it exits
+    hard (``os._exit(70)``): an orphaned helper must never keep running and spending CPU after its owner died.
+    """
+    import signal
+    import sys
+    import threading
+    import time
+
+    parent = int(parent or os.getppid())
+    if sys.platform.startswith("linux"):
+        try:
+            libc = ctypes.CDLL(None, use_errno=True)
+            libc.prctl(1, int(signal.SIGTERM), 0, 0, 0)  # PR_SET_PDEATHSIG
+        except Exception:  # pragma: no cover - platform dependent (the watch thread below still runs)
+            log.debug("PR_SET_PDEATHSIG not set", exc_info=True)
+    if os.getppid() != parent:  # the parent died before the prctl took effect
+        os._exit(0)
+
+    def watch() -> None:
+        while os.getppid() == parent:
+            time.sleep(poll_s)
+        with contextlib.suppress(OSError):
+            os.kill(os.getpid(), signal.SIGTERM)
+        time.sleep(grace_s)
+        os._exit(70)
+
+    threading.Thread(target=watch, name="pgw-parent-watch", daemon=True).start()

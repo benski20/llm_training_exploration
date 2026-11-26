@@ -462,6 +462,7 @@ def test_factory_supervisor_backs_off_and_reports(tmp_path: Path, monkeypatch: p
     plan = _plan(tmp_path, "plain")
     fp = F.FactoryProcess(plan, poll_s=0.05)
     spawned: list[float] = []
+    delays: list[float] = []
 
     class Dead:
         returncode = 1
@@ -472,6 +473,7 @@ def test_factory_supervisor_backs_off_and_reports(tmp_path: Path, monkeypatch: p
 
     def spawn() -> None:
         spawned.append(time.monotonic())
+        delays.append(fp.backoff_s)
         with fp.log_file.open("a") as fh:
             fh.write('{"level": "INFO"}\nerror [config]: something is wrong\n')
         fp._proc = Dead()  # type: ignore[assignment]
@@ -484,8 +486,10 @@ def test_factory_supervisor_backs_off_and_reports(tmp_path: Path, monkeypatch: p
         time.sleep(0.02)
     fp.stop()
     assert fp.failures >= 3 and fp.last_error == "error [config]: something is wrong"
-    gaps = [b - a for a, b in itertools.pairwise(spawned)]
-    assert gaps[-1] > gaps[0] * 2  # exponential back-off
+    # exponential back-off: each restart waits twice as long as the previous one (the scheduled delays, not wall-clock
+    # gaps: those depend on the machine's load)
+    assert len(delays) >= 4 and all(b == 2 * a for a, b in itertools.pairwise(delays[1:])) and delays[1] > 0
+    assert all(b - a >= d * 0.99 for (a, b), d in zip(itertools.pairwise(spawned), delays[1:], strict=False))
     st = fp.state()
     assert st["consecutive_failures"] >= 3 and st["owner"] is False  # lock released by stop()
 

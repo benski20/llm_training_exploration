@@ -60,7 +60,7 @@ from pgw.engine import (
 from pgw.engine.backends import Int8DraftBackend, NativeInt8DraftBackend, int8_lm_head, native_int8_lm_head
 from pgw.engine.prefix_cache import ConversationPrefixCache, PrefixHit, PrefixSink
 from pgw.gateway.config import GatewayModelConfig, GatewaySettings, network_path, origin_of
-from pgw.gateway.egress import EgressGuardTransport
+from pgw.gateway.egress import EgressGuardTransport, PerLoopTransport
 from pgw.gateway.masks import EntitlementLedger, WindowedReservation, chunk_entitlement
 from pgw.gateway.metrics import GatewayMetrics
 from pgw.gateway.safety import AdmissionController, CircuitBreaker
@@ -636,16 +636,13 @@ class ModelRuntime:
         inner = self._transport
         real_network = inner is None
         if inner is None:
-            inner = httpx.AsyncHTTPTransport(
-                http2=cc.http2,
-                verify=build_ssl_context(cc) if cc.uses_tls else True,
-                trust_env=False,
-                limits=httpx.Limits(
-                    max_connections=cc.max_connections,
-                    max_keepalive_connections=cc.max_keepalive_connections,
-                    keepalive_expiry=cc.keepalive_expiry_s,
-                ),
-            )
+            verify = build_ssl_context(cc) if cc.uses_tls else True
+            limits = httpx.Limits(max_connections=cc.max_connections,
+                                  max_keepalive_connections=cc.max_keepalive_connections,
+                                  keepalive_expiry=cc.keepalive_expiry_s)
+            # one pool per event loop: the client runs calls on the engine's loop and on its private sync loop
+            inner = PerLoopTransport(lambda: httpx.AsyncHTTPTransport(http2=cc.http2, verify=verify, trust_env=False,
+                                                                      limits=limits))
         allowed = self.settings.egress_origins([c])
         if origin_of(c.service_url) not in allowed:  # pragma: no cover - egress_origins includes it
             raise ConfigError("service URL is not on the egress allowlist")
@@ -1661,7 +1658,8 @@ class ModelRuntime:
                     f"not enough mask slots for this request: it can use up to {need} ({rows0} prompt rows + the "
                     f"decode budget), {avail} are available and {held} are promised to running requests. Lower "
                     "max_tokens, or retry when the mask factory has added more (the Masks page shows the stock)",
-                    details={"needed": need, "available": avail, "promised": held, "model": self.name},
+                    details={"needed": need, "available": avail, "promised": held, "model": self.name,
+                             "entitled": entitled},
                 )
             res = await _reserve_shielded(self.mask_store, self.fingerprint, self.ring, first, rid,
                                           **self._reserve_kw())
