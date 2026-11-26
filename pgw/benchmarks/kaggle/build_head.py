@@ -100,9 +100,8 @@ SPEC_JOBS: dict[str, dict] = {
             {"kind": "shell", "name": "spec_7b", "timeout": 8400,
              "cmd": "HF_HUB_OFFLINE=0 PGW_BENCH_MASK_GB=15 PYTHONPATH=src:.:benchmarks python benchmarks/sdk_spec_bench.py "
                     "--model qwen2.5-7b-instruct --provider-device cuda "
-                    "--head $(ls /kaggle/input/*/out/head_d384_v16384.pt /kaggle/input/*/head_d384_v16384.pt "
-                    "2>/dev/null | head -1) "
-                    "--configs off,head:3 --chat 2 --code 1 --tokens 48 "
+                    "--head $(find /kaggle/input -name head_d384_v16384.pt | head -1) "
+                    "--configs off,head:2,head:3 --chat 2 --code 1 --tokens 48 "
                     "--opt mask_workers=3 --opt mask_wait_s=1800 --opt timeout=7200 --work /tmp "
                     "--json /kaggle/working/spec_7b.json"},
         ]},
