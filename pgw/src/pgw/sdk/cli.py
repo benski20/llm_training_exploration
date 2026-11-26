@@ -104,7 +104,7 @@ def _print_status(rep: dict[str, Any]) -> None:
                 click.echo(f"    preparing: {m['progress']}")
             if m.get("state") == "ready" and m.get("masks_available") in (0, None) and models:
                 click.echo("    (no masks yet: on first use the background factory prepares the one-time mask setup;"
-                           " see the factory line)")
+                           " see the factory lines; 'pgw sdk prepare' does it ahead of the first traffic)")
             if m.get("error"):
                 click.echo(f"    error: {m['error']}")
         for name, hrec in sorted((s.get("integrity_halts") or {}).items()):
@@ -115,6 +115,7 @@ def _print_status(rep: dict[str, Any]) -> None:
             click.echo(f"  factory {fp}: halted={f.get('halted')}  provider_integrity_failures="
                        f"{f.get('provider_integrity_failures', 0)}  last run {_age(f.get('last_run_at'))}"
                        + (f"  last error: {f['last_error']}" if f.get("last_error") else ""))
+            _print_watch(f.get("watch") or {})
             cs = f.get("check_stock")
             if cs and "stocks" not in cs:
                 click.echo(f"    factory_weights=stream: check stock {cs.get('segments', 0)}/"
@@ -132,6 +133,32 @@ def _print_status(rep: dict[str, Any]) -> None:
                     if isinstance(it, dict):
                         click.echo(f"  mask stock {str(it.get('fingerprint', ''))[:12]} {it.get('ring', '')}: "
                                    f"{it.get('slots_available', it.get('available', '?'))} slot(s)")
+
+
+def _print_watch(w: dict[str, Any]) -> None:
+    """The factory supervisor's view (``supervisor.json``): first-time setup, the segment being made, the
+    provider's reachability, a stall."""
+    from pgw.sdk.factory import describe_setup
+
+    if not w:
+        return
+    setup = describe_setup(w)
+    if setup:
+        click.echo(f"    {setup}")
+    seg = w.get("segment") if isinstance(w.get("segment"), dict) else None
+    if seg is not None and not (isinstance(w.get("setup"), dict) and w["setup"].get("stage") == "first_segment"):
+        eta = seg.get("eta_s")
+        run_s = float(seg.get("running_s") or 0)
+        click.echo(f"    making a segment of {seg.get('slots')} mask slots (running {run_s:.0f} s"
+                   + (f", about {float(eta):.0f} s left)" if isinstance(eta, int | float) else ")"))
+    prov: dict[str, Any] = w["provider"] if isinstance(w.get("provider"), dict) else {}
+    if prov.get("reachable") is False:
+        click.echo(f"    provider not answering for {float(prov.get('down_for_s') or 0):.0f} s: {prov.get('error')}")
+    if w.get("stalled"):
+        click.echo(f"    STALLED (requests waiting for masks fail at once; the factory keeps retrying): "
+                   f"{w['stalled']}")
+    elif w.get("last_error"):
+        click.echo(f"    retrying for {float(w.get('failing_for_s') or 0):.0f} s after: {w['last_error']}")
 
 
 @sdk_group.command("status")

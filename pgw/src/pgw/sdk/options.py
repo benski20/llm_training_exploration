@@ -85,8 +85,16 @@ class SDKOptions:
             usable sooner; pks-v3: rounded down to whole 256-slot groups, and four groups per segment cost about
             25 % less client CPU per mask slot than one).
         mask_wait_s: How long a request waits for masks when the stock is empty before failing (back-pressure).
-            During a model's first fill on a host (the factory still building its one-time setup) a request without
-            an explicit ``timeout`` waits up to ``ready_timeout_s`` instead.
+            During a model's first fill on a host (the factory still building its one-time setup and making
+            progress) a request without an explicit ``timeout`` waits up to ``ready_timeout_s`` instead. While the
+            factory is visibly making the segment a request waits for and expects it within the request's
+            ``timeout_s``, the request waits for it (never beyond ``timeout_s`` or its deadline).
+        factory_stall_s: [``PGW_FACTORY_STALL_S``] How long the background mask factory may make no progress
+            because the provider cannot be reached (connection refused or reset, TLS failure, 5xx, timeouts; the
+            library also checks the provider's ``/readyz``) or because its runs keep failing, before requests
+            waiting for masks fail at once with ``APIConnectionError`` / ``NotReadyError`` naming the reason
+            (default 120 s). The factory keeps retrying with back-off and resumes by itself when the provider is
+            back. A long first-time setup that makes progress is never cut short by this.
         mask_admission: [``PGW_MASK_ADMISSION``] ``"entitled"`` (default): a request starts only when the mask
             stock covers the whole remaining prompt + ``max_tokens`` of every running request (a running answer never waits for masks; N concurrent
             requests need a stock of about N x (prompt + max_tokens) slots). ``"overcommit"`` (opt-in): a request
@@ -165,6 +173,7 @@ class SDKOptions:
     mask_low_water_slots: int | None = None
     mask_segment_slots: int = 1024
     mask_wait_s: float = 120.0
+    factory_stall_s: float = 120.0
     mask_admission: Literal["entitled", "overcommit"] = "entitled"
     factory: bool = True
     lane: Literal["auto", "stream", "off"] = "auto"
@@ -212,6 +221,9 @@ class SDKOptions:
         cs = _env_int("PGW_CHECK_STOCK_SEGMENTS", None)
         if cs is not None:
             base["check_stock_segments"] = cs
+        stall = os.environ.get("PGW_FACTORY_STALL_S", "").strip()
+        if stall:
+            base["factory_stall_s"] = float(stall)
         adm = os.environ.get("PGW_MASK_ADMISSION", "").strip()
         if adm:
             base["mask_admission"] = adm
@@ -269,6 +281,8 @@ class SDKOptions:
             raise ValueError("draft_head_path is used only with speculation='draft_head'")
         if not 0.0 <= float(self.spec_pass_gap_ms) <= 1000.0:
             raise ValueError("spec_pass_gap_ms must be between 0 and 1000")
+        if not 1.0 <= float(self.factory_stall_s) <= 86400.0:
+            raise ValueError("factory_stall_s must be between 1 and 86400 seconds")
         if self.timeout_s <= 0 or self.mask_wait_s < 0 or self.max_retries < 0 or self.max_concurrent < 1:
             raise ValueError("timeouts must be positive and max_concurrent >= 1")
 

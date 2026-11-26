@@ -55,11 +55,37 @@ behind a fault-injection proxy) or `tests/sdk/test_reliability_unit.py`, unless 
 | it hangs (stopped, deadlocked) | as above | no heartbeat for 5 minutes (`PGW_SDK_FACTORY_HANG_S`): killed and restarted |
 | your process dies, however it dies (SIGKILL included) | - | the factory and its workers stop within seconds (SIGTERM, then a hard exit after 20 s) |
 | the factory halts after provider integrity failures | `NotReadyError` naming the halt once the stock is used up | operator action (`pgw factory clear-halt` after investigating), never automatic |
-| a request needs more masks than are in stock | it waits up to `mask_wait_s` (default 120 s) while the factory refills now (the factory normally refills only below its low-water mark) | automatic |
+| a request needs more masks than are in stock | it waits up to `mask_wait_s` (default 120 s) while the factory refills now (the factory normally refills only below its low-water mark); longer, up to the request's `timeout`, while the factory is visibly making the segment it needs and expects it within that time; else `NotReadyError` (`mask_exhausted`) saying when the factory expects more masks | automatic |
+| the provider dies, or cannot be reached, while the factory makes masks (connection refused or reset, TLS failure, 5xx, timeouts) | requests waiting for masks fail once the factory has made no progress for `factory_stall_s` (default 120 s): `APIConnectionError` (`backend_unavailable`, retryable) naming the provider, its probe result and the factory's last error. Detection takes `factory_stall_s` plus up to 10 s. Before 2026-11-26 a first request waited out `ready_timeout_s` (hours in the Kaggle 7B run) | the factory keeps retrying with back-off; when the provider answers again a factory waiting out a long back-off is restarted at once, and masks resume within seconds (5-8 s in the test). No action needed |
+| the factory's runs keep failing while the provider answers (for example the provider returns 503 for mask generation) | after `factory_stall_s` without a segment: `NotReadyError` naming the factory's last error | automatic once the cause is gone |
 | a request needs more masks than the stock ever holds (prompt plus `max_tokens` above `mask_target_slots`, set by `mask_store_gb`) | `BadRequestError` (`payload_too_large`, 400) at once, naming the setting | lower `max_tokens`, shorten the prompt or raise `mask_store_gb` |
 
 Several processes using the same key and cache share one factory: if its owner exits, another process takes over
 within a few seconds.
+
+**Slow is not stuck.** The library tells a long first-time setup from a stuck one by progress, not by elapsed
+time: the share of the one-time hint already built, writes to the segment being made, completed segments, the
+factory's heartbeat, and whether the provider answers its health check (`GET /readyz` with your session's pinned
+CA and client certificate; no token and nothing else is sent; only while the first fill runs, the factory reports
+an error, or a request waits). A first-time setup that keeps making progress is waited for, however long it
+takes, up to `ready_timeout_s`; the request fails early only when the provider cannot be reached, or the factory
+keeps failing, for `factory_stall_s`. `pgw sdk status` shows which it is:
+
+```
+  factory 2c6c430bdfeb748d: halted=False  provider_integrity_failures=0  last run never
+    first-time setup in progress: building the one-time pks-v3 hint, 45% done (about 9 min left), then the first mask segment
+```
+
+or, when the provider is gone:
+
+```
+    provider not answering for 130 s: connection failed (ConnectError)
+    STALLED (requests waiting for masks fail at once; the factory keeps retrying): the provider (https://...) has not answered for 130s ...
+```
+
+The same "first-time setup in progress" line is in the error a request gets if its `timeout` ends during the
+setup. To keep the first requests from waiting for the setup at all, run `pgw sdk prepare` before the first
+traffic ([Configuration](configuration.md#preparing-a-model-ahead-of-time)).
 
 ## Disk
 

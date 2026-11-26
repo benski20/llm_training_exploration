@@ -11,6 +11,20 @@ major version is 0, minor versions may change interfaces, and such changes are l
 * `mask_admission="overcommit"` (opt-in, `PGW_MASK_ADMISSION`).
 * New page: [Scaling](scaling.md) (sizing per model and concurrency, worker processes, fairness).
 
+## Unreleased: factory stalls and first use
+
+* A provider that dies or cannot be reached while the mask factory makes masks no longer leaves requests waiting
+  out their budget (a first request waited hours in the Kaggle 7B run): once the factory has made no progress for
+  `factory_stall_s` (new option, default 120 s, `PGW_FACTORY_STALL_S`), waiting requests fail with
+  `APIConnectionError` naming the provider and the factory's last error. The factory keeps retrying and, when the
+  provider answers again, resumes at once instead of after its back-off. A long first-time setup that makes
+  progress is still waited for.
+* `pgw sdk status`, `client.status()` and request errors say `first-time setup in progress` with the share of the
+  one-time hint built and an estimate of the time left, the segment being made, and whether the provider answers.
+* A request that needs more masks than are in stock waits for the segment the factory is making, up to its
+  `timeout`, when that segment is due in time (was: `mask_exhausted` after `mask_wait_s`).
+* The docs recommend `pgw sdk prepare` before the first traffic.
+
 ## Unreleased: reliability
 
 What happens on each failure is now written down in [Reliability](reliability.md), with a test for each.
