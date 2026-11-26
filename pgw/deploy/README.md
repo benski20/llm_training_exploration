@@ -8,7 +8,7 @@ factory needs no network, and the gateway may talk only to the compute service.
 | directory | what | for |
 |---|---|---|
 | [docker/](docker/) | Dockerfiles: `gateway` (CPU), `factory` (CPU), `factory-cuda`, `service-cuda`, `service-cpu` (demo/CI), `provider` (CUDA base, service + SDK-key accounts + native extension + pack tool + RunPod boot) and `provider-cpu` (tests, client test pod); `pgw-entrypoint`, `pgw-healthcheck`, `provider-smoke.sh` | all container deployments |
-| [runpod/](runpod/README.md) | provider on RunPod pods: launcher with cost cap, TTL self-stop + watchdog, SDK key bootstrap, client pod in the same data center, `rtt_probe.py` | our hosted provider |
+| [runpod/](runpod/README.md) | provider on RunPod pods: launcher with cost cap, TTL self-stop + watchdog, SDK key bootstrap, client pod in the same data center, `rtt_probe.py`; the H100 measurement [runbook](runpod/RUNBOOK.md) | our hosted provider |
 | [compose/](compose/README.md) | docker-compose demo: pack -> factory -> service -> gateway on one machine | evaluation, development |
 | [helm/](helm/README.md) | charts `pgw-gateway`, `pgw-factory`, `pgw-service` | Kubernetes (customer cluster, our cluster) |
 | [systemd/](systemd/) | hardened units, env examples, `install.sh` | VMs and bare metal; base of the OVA/AMI images |

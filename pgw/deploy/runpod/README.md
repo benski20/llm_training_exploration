@@ -11,6 +11,8 @@ service (`tests/deploy/test_runpod.py`). Check the first real launch with `--dry
 | `pod_boot.py` | runs inside the pod (`pgw-runpod-boot` in the provider images): volume, PKI, packs, service, self-stop at the TTL |
 | `runpod_api.py` | minimal RunPod REST/GraphQL client (`RUNPOD_API_KEY`, never printed; one place for the API's field names) |
 | `rtt_probe.py` | round trips from the client side to the provider over pinned TLS (run it in the client pod) |
+| `jobs.py`, `pod_job.py`, `job_setup.sh` | measurement sessions for a session that reaches RunPod only through its API and HTTPS pod proxy (no image registry, no SSH): [RUNBOOK.md](RUNBOOK.md) |
+| `provider_perf_session.py`, `sdk_remote_bench.py` | the H100 provider measurement plan; the client library against a remote provider (TTFT, tok/s, trips/token, client CPU, speculation, concurrency) |
 
 ## One-time setup
 

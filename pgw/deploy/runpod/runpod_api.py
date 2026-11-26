@@ -123,6 +123,16 @@ class RunPodAPI:
             raise RunPodError("network volume creation returned no id")
         return out
 
+    # ---- account (read-only) --------------------------------------------------------------------------
+    def account(self) -> dict[str, Any]:
+        """``{"clientBalance", "currentSpendPerHr", "spendLimit"}`` (USD; GraphQL ``myself``). Read-only."""
+        out = self._call("POST", GRAPHQL_URL, {"query": "query { myself { clientBalance currentSpendPerHr "
+                                                         "spendLimit } }"})
+        if isinstance(out, dict) and out.get("errors"):
+            raise RunPodError(self._redact(f"account query refused: {json.dumps(out['errors'])[:300]}"))
+        me = ((out or {}).get("data") or {}).get("myself") or {}
+        return dict(me) if isinstance(me, dict) else {}
+
     # ---- prices -------------------------------------------------------------------------------------
     def gpu_prices(self) -> dict[str, dict[str, Any]]:
         """``{gpu type id: {"displayName", "memoryInGb", "securePrice", "communityPrice"}}`` (USD per GPU-hour)."""

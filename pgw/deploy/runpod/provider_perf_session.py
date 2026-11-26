@@ -66,8 +66,9 @@ MINUTES = {"env": 1, "memory": 20, "device_time": 12, "gemv_table": 6, "lane_loc
 def _log(out: Path, phase: str, msg: str) -> None:
     line = f"[{time.strftime('%H:%M:%S')}] {phase}: {msg}"
     print(line, flush=True)
-    with (out / "session.log").open("a") as f:
-        f.write(line + "\n")
+    if out.is_dir():  # a dry run creates nothing
+        with (out / "session.log").open("a") as f:
+            f.write(line + "\n")
 
 
 def _run(out: Path, phase: str, cmd: list[str], minutes: float, dry: bool) -> dict[str, Any]:
@@ -441,12 +442,14 @@ def main() -> int:
     ap.add_argument("--nic-stub-port", type=int, default=8443,
                     help="lane_nic: transport-only stub lane port (RunPod maps 8443 and 8444 for the provider: stop "
                          "the provider service first, e.g. pkill -f 'pgw service serve')")
+    ap.add_argument("--nic-presets", default="7b,72b", help="lane_nic: layer widths served, in order")
     ap.add_argument("--budget-min", type=float, default=120.0, help="stop starting new phases after this")
     ap.add_argument("--cpu", action="store_true", help="CPU smoke test")
     ap.add_argument("--dry-run", action="store_true")
     a = ap.parse_args()
     out = Path(a.out)
-    out.mkdir(parents=True, exist_ok=True)
+    if not a.dry_run:
+        out.mkdir(parents=True, exist_ok=True)
     phases = [p for p in a.phases.split(",") if p]
     for p in phases:
         if p not in PHASES:
@@ -525,18 +528,19 @@ def main() -> int:
                 _log(out, p, "skipped: --host (the pod's public IP) is needed for the certificate")
                 continue
             r = {}
-            for pre in ("7b", "72b"):
+            for pre in a.nic_presets.split(","):
                 info = out / f"lane_nic_{pre}.json"
                 cmd = [py, "benchmarks/lane_nic_bench.py", "serve", "--preset", pre, "--host", a.host,
                        "--port", str(a.nic_port), "--stub-port", str(a.nic_stub_port), "--out", str(info),
-                       "--seconds", str(a.nic_minutes * 60)]
+                       "--seconds", str(a.nic_minutes * 60)] + (["--cpu"] if a.cpu else [])
                 _log(out, p, f"{pre}: copy {info} to the client pod, then run there: "
                      f"python benchmarks/lane_nic_bench.py client --info lane_nic_{pre}.json "
                      f"--port <RunPod public port of {a.nic_port}> --stub-port <of {a.nic_stub_port}> "
                      f"--conc 1,4,16,64 --iters 400 --json lane_nic_{pre}_client.json")
                 r[pre] = _run(out, f"{p}_{pre}", cmd, a.nic_minutes, a.dry_run)
         summary["phases"][p] = r
-        (out / "summary.json").write_text(json.dumps(summary, indent=1, default=str))
+        if out.is_dir():  # a dry run writes only into an existing --out
+            (out / "summary.json").write_text(json.dumps(summary, indent=1, default=str))
     _log(out, "done", f"{(time.time() - t_start) / 60:.1f} min; results in {out}")
     return 0
 
