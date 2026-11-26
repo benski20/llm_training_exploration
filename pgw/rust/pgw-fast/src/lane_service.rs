@@ -211,7 +211,7 @@ impl PyLaneService {
                         open_timeout_s = 10.0, stall_timeout_s = 30.0, tls_addr = None, tls_cert_pem = None,
                         tls_key_pem = None, tls_client_ca_pem = None, require_client_cert = false, read_spin_us = 0,
                         persistent = false, coalesce = false, coalesce_max_rows = 0, zero_copy = false,
-                        shm = false, bench_stub_us = None))]
+                        shm = false, bench_stub_us = None, max_items = 0, multi_merge_rows = 0))]
     #[allow(clippy::too_many_arguments)]
     fn new(
         py: Python<'_>,
@@ -243,7 +243,12 @@ impl PyLaneService {
         zero_copy: bool,
         shm: bool,
         bench_stub_us: Option<Vec<u32>>,
+        max_items: u16,
+        multi_merge_rows: u16,
     ) -> PyResult<Self> {
+        if max_items > pgw_lane::proto::MAX_ITEMS {
+            return Err(PyValueError::new_err(format!("max_items must be at most {}", pgw_lane::proto::MAX_ITEMS)));
+        }
         // TCP lane: TLS 1.3 only (there is no plaintext TCP listener)
         let tls = match tls_addr {
             None => {
@@ -315,12 +320,26 @@ impl PyLaneService {
             read_spin: Duration::from_micros(read_spin_us.min(100_000)),
             zero_copy,
             shm,
+            max_items,
+            merge_rows: multi_merge_rows.min(pgw_lane::proto::MAX_MULTI_ROWS),
         };
         let adm = admission.clone();
         let server = py
             .allow_threads(move || LaneServer::start(cfg, adm, Some(chain)))
             .map_err(|e| PyOSError::new_err(format!("lane listener: {e}")))?;
         Ok(PyLaneService { server, admission, graphs, persistent: pers, coalescer, has_py })
+    }
+
+    /// Lane format 2: most items per `multi` frame this listener serves (0 = format 1 only).
+    #[getter]
+    fn max_items(&self) -> u16 {
+        self.server.config().max_items
+    }
+
+    /// Most rows (all items) of one `multi` frame.
+    #[getter]
+    fn max_multi_rows(&self) -> u16 {
+        pgw_lane::proto::MAX_MULTI_ROWS
     }
 
     /// Socket path.
@@ -655,10 +674,16 @@ fn lane_cuda_driver_status() -> Option<String> {
     driver_status().err()
 }
 
-/// Lane wire format version.
+/// Lane wire format version of the version-1 frames (`lane_protocol_versions` lists every version served).
 #[pyfunction]
 fn lane_protocol_version() -> u16 {
     pgw_lane::LANE_PROTOCOL_VERSION
+}
+
+/// Every lane wire format version this listener can serve (2: the `multi` frame, when `max_items > 0`).
+#[pyfunction]
+fn lane_protocol_versions() -> Vec<u16> {
+    vec![pgw_lane::proto::VERSION, pgw_lane::proto::VERSION_MULTI]
 }
 
 /// Register this module's classes and functions in `pgw_fast`.
@@ -667,5 +692,6 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyDeviceLock>()?;
     m.add_function(wrap_pyfunction!(lane_cuda_driver_status, m)?)?;
     m.add_function(wrap_pyfunction!(lane_protocol_version, m)?)?;
+    m.add_function(wrap_pyfunction!(lane_protocol_versions, m)?)?;
     Ok(())
 }

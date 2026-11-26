@@ -551,4 +551,265 @@ mod tests {
         assert_eq!(call(&mut c, 0, 1, 4, 2).0.status, Status::Ok);
         assert_eq!(s.shared().admission.inflight(), 0);
     }
+
+    // ---- lane format 2: multi frames -----------------------------------------------------------
+
+    /// Records the rows of every executor call (the Fake's arithmetic).
+    struct Rec {
+        inner: Fake,
+        rows: std::sync::Mutex<Vec<(u32, u16)>>,
+        refuse_linear: Option<u32>,
+        /// answer `Fallback` to calls of more rows (as the graph executor does above its captured rows)
+        fallback_above: Option<u16>,
+    }
+
+    impl Executor for Rec {
+        fn execute(&self, call: &Call<'_>, out: &mut Vec<u8>) -> Result<Done, Refusal> {
+            self.rows.lock().unwrap().push((call.linear, call.rows));
+            if self.fallback_above.is_some_and(|r| call.rows > r) {
+                return Err(Refusal::new(Status::Fallback));
+            }
+            if self.refuse_linear == Some(call.linear) {
+                return Err(Refusal::new(Status::Internal));
+            }
+            self.inner.execute(call, out)
+        }
+    }
+
+    fn rec(refuse_linear: Option<u32>) -> Arc<Rec> {
+        Arc::new(Rec {
+            inner: Fake { calls: AtomicUsize::new(0), sleep: Duration::ZERO },
+            rows: std::sync::Mutex::new(Vec::new()),
+            refuse_linear,
+            fallback_above: None,
+        })
+    }
+
+    fn widths(linear: u32) -> (usize, usize) {
+        let m = model();
+        m.linears.get(linear as usize).map_or((4, 4), |l| (l.n as usize, l.m as usize))
+    }
+
+    fn item_body(linear: u32, rows: u16, seed: u32) -> Vec<u8> {
+        let (n, _) = widths(linear);
+        (0..rows as usize * n).flat_map(|i| (i as u32 * 31 + seed * 1009 + 5).to_le_bytes()).collect()
+    }
+
+    /// Send a multi frame; `table` overrides the encoded item table, `len_delta` the body length.
+    fn send_multi(
+        c: &mut UnixStream,
+        items: &[(u32, u16)],
+        id: u8,
+        table: Option<Vec<u8>>,
+        len_delta: i64,
+    ) -> Vec<Vec<u8>> {
+        let its: Vec<proto::Item> = items.iter().map(|&(linear, rows)| proto::Item { linear, rows }).collect();
+        let mut tb = Vec::new();
+        proto::encode_items(&its, &mut tb);
+        let tb = table.unwrap_or(tb);
+        let bodies: Vec<Vec<u8>> =
+            items.iter().enumerate().map(|(i, &(l, r))| item_body(l, r, id as u32 * 100 + i as u32)).collect();
+        let total: u16 = items.iter().map(|it| it.1).sum();
+        let blen = tb.len() as i64 + bodies.iter().map(|b| b.len() as i64).sum::<i64>() + len_delta;
+        let h = RequestHeader {
+            kind: Kind::Multi,
+            request_id: [id; 16],
+            linear: items.len() as u32,
+            rows: total,
+            ring: 0,
+            deadline_ms: 0,
+            body_len: blen as u32,
+        };
+        c.write_all(&h.encode()).unwrap();
+        c.write_all(&tb).unwrap();
+        for b in &bodies {
+            c.write_all(b).unwrap();
+        }
+        bodies
+    }
+
+    /// Item bodies cut into one-row bodies (`linear`'s width).
+    fn split_rows(bodies: &[Vec<u8>], linear: u32) -> Vec<Vec<u8>> {
+        let row = widths(linear).0 * 4;
+        bodies.iter().flat_map(|b| b.chunks(row).map(|c| c.to_vec()).collect::<Vec<_>>()).collect()
+    }
+
+    /// What one single-item call of each item answers (the reference the multi reply must equal).
+    fn singles(s: &LaneServer, items: &[(u32, u16)], bodies: &[Vec<u8>]) -> Vec<u8> {
+        let (mut c, _) = open(s, "ref");
+        let mut want = Vec::new();
+        for (i, (&(l, r), b)) in items.iter().zip(bodies).enumerate() {
+            let h = RequestHeader {
+                kind: Kind::Call,
+                request_id: [200 + i as u8; 16],
+                linear: l,
+                rows: r,
+                ring: 0,
+                deadline_ms: 0,
+                body_len: b.len() as u32,
+            };
+            c.write_all(&h.encode()).unwrap();
+            c.write_all(b).unwrap();
+            let (rh, y) = reply(&mut c);
+            assert_eq!(rh.status, Status::Ok);
+            want.extend_from_slice(&y);
+        }
+        want
+    }
+
+    #[test]
+    fn multi_frame_equals_single_calls_and_merges_same_linear_runs() {
+        let ex = rec(None);
+        let (s, _d) = start_with(
+            |c| {
+                c.max_items = 64;
+                c.max_rows = 4;
+            },
+            ex.clone(),
+        );
+        let (mut c, _) = open(&s, "t");
+        // runs: [0:1, 0:1] -> one call of 2; [1:1]; [0:2, 0:2] -> 4; [0:1] -> next call (4 + 1 > 4)
+        let items = [(0, 1), (0, 1), (1, 1), (0, 2), (0, 2), (0, 1)];
+        let bodies = send_multi(&mut c, &items, 7, None, 0);
+        let (h, y) = reply(&mut c);
+        assert_eq!((h.status, h.request_id), (Status::Ok, [7; 16]));
+        let calls = ex.rows.lock().unwrap().clone();
+        assert_eq!(calls, vec![(0, 2), (1, 1), (0, 4), (0, 1)]);
+        let want = singles(&s, &items, &bodies);
+        assert_eq!(y, want, "multi reply == the single calls' replies, in item order");
+        assert_eq!(h.body_len as usize, want.len());
+        // the connection stays usable for single calls and further multi frames
+        assert_eq!(call(&mut c, 0, 1, 4, 9).0.status, Status::Ok);
+        let items16: Vec<(u32, u16)> = (0..16).map(|i| (i % 2, 1)).collect();
+        let b16 = send_multi(&mut c, &items16, 8, None, 0);
+        let (h, y) = reply(&mut c);
+        assert_eq!(h.status, Status::Ok);
+        assert_eq!(y, singles(&s, &items16, &b16));
+        let st = s.shared().stats.drain();
+        assert_eq!(st.requests[&("t".to_owned(), "ok")].count, 3, "one request per frame");
+        assert_eq!(s.shared().admission.inflight(), 0);
+    }
+
+    #[test]
+    fn multi_frame_merges_up_to_merge_rows_and_splits_on_fallback() {
+        let ex = rec(None);
+        let (s, _d) = start_with(
+            |c| {
+                c.max_items = 64;
+                c.max_rows = 4;
+                c.merge_rows = 64;
+            },
+            ex.clone(),
+        );
+        let (mut c, _) = open(&s, "t");
+        let items: Vec<(u32, u16)> = (0..12).map(|_| (0, 1)).chain([(1, 2)]).collect();
+        let bodies = send_multi(&mut c, &items, 3, None, 0);
+        let (h, y) = reply(&mut c);
+        assert_eq!(h.status, Status::Ok);
+        assert_eq!(ex.rows.lock().unwrap().clone(), vec![(0, 12), (1, 2)], "one call per same-linear run");
+        let want = singles(&s, &items, &bodies);
+        assert_eq!(y, want);
+        // an executor with nothing above 4 rows: the run is served again in calls of at most max_rows
+        let ex2 = Arc::new(Rec {
+            inner: Fake { calls: AtomicUsize::new(0), sleep: Duration::ZERO },
+            rows: std::sync::Mutex::new(Vec::new()),
+            refuse_linear: None,
+            fallback_above: Some(4),
+        });
+        let (s2, _d2) = start_with(
+            |c| {
+                c.max_items = 64;
+                c.max_rows = 4;
+                c.merge_rows = 64;
+            },
+            ex2.clone(),
+        );
+        let (mut c2, _) = open(&s2, "t");
+        let bodies = send_multi(&mut c2, &items, 3, None, 0);
+        let (h, y2) = reply(&mut c2);
+        assert_eq!(h.status, Status::Ok);
+        assert_eq!(ex2.rows.lock().unwrap().clone(), vec![(0, 12), (0, 4), (0, 4), (0, 4), (1, 2)]);
+        assert_eq!(y2, singles(&s2, &items, &bodies));
+        assert_eq!(y2, y);
+    }
+
+    #[test]
+    fn multi_frames_off_answer_version_like_a_format_1_service() {
+        let ex = rec(None);
+        let (s, _d) = start_with(|_| {}, ex.clone());
+        let (mut c, _) = open(&s, "t");
+        send_multi(&mut c, &[(0, 1), (0, 1)], 3, None, 0);
+        assert_eq!(reply(&mut c).0.status, Status::Version);
+        let mut rest = Vec::new();
+        // closed (unread bodies may turn the close into a reset)
+        assert_eq!(c.read_to_end(&mut rest).unwrap_or(0), 0);
+        assert!(ex.rows.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn multi_frame_tampering_is_refused() {
+        let ex = rec(None);
+        let (s, _d) = start_with(
+            |c| {
+                c.max_items = 4;
+                c.max_rows = 2;
+            },
+            ex.clone(),
+        );
+        let fatal = |status: Status, items: &[(u32, u16)], table: Option<Vec<u8>>, delta: i64| {
+            let (mut c, _) = open(&s, "t");
+            send_multi(&mut c, items, 5, table, delta);
+            assert_eq!(reply(&mut c).0.status, status, "{items:?}");
+            let mut rest = Vec::new();
+            assert_eq!(c.read_to_end(&mut rest).unwrap_or(0), 0, "closed after {status:?}");
+        };
+        // body length off by one either way
+        fatal(Status::BadLength, &[(0, 1), (1, 1)], None, 1);
+        fatal(Status::BadLength, &[(0, 1), (1, 1)], None, -1);
+        // a linear outside the table
+        fatal(Status::UnknownLinear, &[(0, 1), (9, 1)], None, 0);
+        // more items than the service serves
+        fatal(Status::BadHeader, &[(0, 1); 5], None, 0);
+        // the table's rows do not sum to the header's / reserved bits / zero rows
+        let mut t = Vec::new();
+        proto::encode_items(&[proto::Item { linear: 0, rows: 2 }, proto::Item { linear: 1, rows: 1 }], &mut t);
+        fatal(Status::BadHeader, &[(0, 1), (1, 1)], Some(t.clone()), 0);
+        let mut r = t.clone();
+        r[4] = 1;
+        r[6] = 1;
+        fatal(Status::BadHeader, &[(0, 1), (1, 1)], Some(r), 0);
+        // an item of more rows than one call serves: cut into calls of at most max_rows (rows 1 + 3 = 2 + 2)
+        let (mut c, _) = open(&s, "t");
+        let before = ex.rows.lock().unwrap().len();
+        let bodies = send_multi(&mut c, &[(0, 1), (0, 3)], 6, None, 0);
+        let (h, y) = reply(&mut c);
+        assert_eq!(h.status, Status::Ok);
+        assert_eq!(ex.rows.lock().unwrap()[before..].to_vec(), vec![(0, 2), (0, 2)]);
+        assert_eq!(y, singles(&s, &[(0, 1), (0, 1), (0, 1), (0, 1)], &split_rows(&bodies, 0)));
+        send_multi(&mut c, &[(0, 1), (0, 1)], 7, None, 0);
+        assert_eq!(reply(&mut c).0.status, Status::Ok);
+        assert_eq!(s.shared().admission.inflight(), 0);
+    }
+
+    #[test]
+    fn multi_frame_is_all_or_nothing_and_admitted_once() {
+        let ex = rec(Some(1));
+        let (s, _d) = start_with(|c| c.max_items = 8, ex.clone());
+        let (mut c, _) = open(&s, "t");
+        // one item's executor call fails: the whole frame is refused (no partial reply), connection kept
+        send_multi(&mut c, &[(0, 1), (1, 1), (0, 1)], 4, None, 0);
+        let (h, y) = reply(&mut c);
+        assert_eq!((h.status, h.body_len, y.len()), (Status::Internal, 0, 0));
+        send_multi(&mut c, &[(0, 1), (0, 1)], 5, None, 0);
+        assert_eq!(reply(&mut c).0.status, Status::Ok);
+        // the tenant's row bucket is charged the frame's total rows once
+        let limits = Limits { tenant_rows_per_s: Some(1e-6), tenant_burst_rows: Some(3.0), ..Limits::default() };
+        let (s2, _d2) = start_with(|c| c.max_items = 8, rec(None));
+        s2.shared().admission.set_limits(limits);
+        let (mut c2, _) = open(&s2, "q");
+        send_multi(&mut c2, &[(0, 1), (0, 1), (0, 1)], 1, None, 0);
+        assert_eq!(reply(&mut c2).0.status, Status::Ok);
+        send_multi(&mut c2, &[(0, 1)], 2, None, 0);
+        assert_eq!(reply(&mut c2).0.status, Status::RateLimited);
+    }
 }

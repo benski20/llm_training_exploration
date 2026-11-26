@@ -78,6 +78,9 @@ NATIVE_ENV: dict[str, str] = {
     "PGW_TRIP_DECRYPT_AHEAD": "1",
     "PGW_LANE_SPIN_AUTO_US": "400",
     "PGW_LANE_WAIT_PREFETCH": "1",
+    # several answers in one batched trip: one lane-format-2 multi call when the service offers it (same items,
+    # bytes and request id as the stream channel's request; tests/sdk/test_lane_multi.py)
+    "PGW_LANE_MULTI": "1",
 }
 
 #: The ring of the proven stack (K32: p31 checks and pks-v3 need it).

@@ -26,6 +26,27 @@
 //! `call` frame (kind 2) carries `rows * n(linear) * bytes_per_element(ring)` bytes of `x_hat`
 //! exactly; an OK reply carries `rows * m(linear) * bytes_per_element(ring)` bytes of `y_hat`.
 //!
+//! **Version 2** adds one frame kind and changes nothing else: a `multi` frame (kind 4, header
+//! version 2) carries the rows of several answers of **one** batched trip, the same items the
+//! WebSocket stream channel's compute request carries (`ComputeRequest.items`, in order). Its
+//! header's `linear` field holds the item count (1..=[`MAX_ITEMS`]) and `rows` the total row count
+//! (1..=[`MAX_MULTI_ROWS`]); the body is an item table followed by the items' `x_hat`, in order. An
+//! item may have more rows than one `call` frame serves (a prompt's rows): the service runs them in
+//! calls its executors serve (rows are independent) and answers with the same bytes:
+//!
+//! ```text
+//! multi body: count x { u32 linear index, u16 rows (>= 1), u16 reserved (0) }  (8 B each)
+//!             then x_hat of item 0, item 1, ...   (rows_i * n(linear_i) * bpe bytes each)
+//! OK reply:   the 40-byte reply header (version 1, unchanged) and y_hat of item 0, item 1, ...
+//! ```
+//!
+//! A service offers version 2 in its ticket (`lane/open`: `"versions": [1, 2]`, `"max_items"`);
+//! a client sends a `multi` frame only to a service that offered it, so a version-1 service never
+//! sees one (it would answer [`Status::Version`], fatal). Version-1 frames are unchanged and served
+//! as before. A `multi` frame is all or nothing: one status for the whole frame, and a refusal
+//! means "send the whole request on the stream channel" as for a single call. The connection's
+//! tenant (its ticket) owns every item: a frame never mixes tenants.
+//!
 //! Statuses below [`FATAL_MIN`] leave the connection usable; statuses at or above it are followed
 //! by the service closing the connection. [`Status::is_fallback`] statuses mean "send the
 //! byte-identical body on the regular stream channel under the same request id".
@@ -34,8 +55,16 @@
 pub const REQUEST_MAGIC: [u8; 4] = *b"PGWL";
 /// Reply magic (`b"PGWR"`).
 pub const REPLY_MAGIC: [u8; 4] = *b"PGWR";
-/// Wire format version this crate implements.
+/// Wire format version of the `open`, `call` and `shm` frames and of every reply.
 pub const VERSION: u16 = 1;
+/// Wire format version of the `multi` frame (the highest version this crate implements).
+pub const VERSION_MULTI: u16 = 2;
+/// Most items in one `multi` frame.
+pub const MAX_ITEMS: u16 = 64;
+/// Most rows (all items) in one `multi` frame.
+pub const MAX_MULTI_ROWS: u16 = 256;
+/// Size of one entry of a `multi` frame's item table.
+pub const ITEM_LEN: usize = 8;
 /// Size of a [`RequestHeader`] on the wire.
 pub const REQUEST_HEADER_LEN: usize = 48;
 /// Size of a [`ReplyHeader`] on the wire.
@@ -59,6 +88,9 @@ pub enum Kind {
     /// All fields 0, no body. A service without it answers [`Status::Fallback`] (non-fatal) and the
     /// connection stays on the socket.
     Shm,
+    /// Version 2: the items of one batched trip (see the module docs). `linear` = item count, `rows`
+    /// = total rows, body = item table + the items' `x_hat`.
+    Multi,
 }
 
 impl Kind {
@@ -67,6 +99,7 @@ impl Kind {
             1 => Some(Kind::Open),
             2 => Some(Kind::Call),
             3 => Some(Kind::Shm),
+            4 => Some(Kind::Multi),
             _ => None,
         }
     }
@@ -76,8 +109,58 @@ impl Kind {
             Kind::Open => 1,
             Kind::Call => 2,
             Kind::Shm => 3,
+            Kind::Multi => 4,
         }
     }
+
+    /// The header version a frame of this kind carries.
+    pub fn version(self) -> u16 {
+        match self {
+            Kind::Multi => VERSION_MULTI,
+            _ => VERSION,
+        }
+    }
+}
+
+/// One entry of a `multi` frame's item table.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Item {
+    /// Linear index in the ticket's table.
+    pub linear: u32,
+    /// Rows of this item (>= 1; all items at most MAX_MULTI_ROWS).
+    pub rows: u16,
+}
+
+/// Encode an item table (clients and tests).
+pub fn encode_items(items: &[Item], out: &mut Vec<u8>) {
+    for it in items {
+        out.extend_from_slice(&it.linear.to_le_bytes());
+        out.extend_from_slice(&it.rows.to_le_bytes());
+        out.extend_from_slice(&0u16.to_le_bytes());
+    }
+}
+
+/// Parse the item table of a `multi` frame whose header named `count` items and `total` rows: every
+/// entry with at least one row and a zero reserved field, the rows summing to `total`. Table indices
+/// are checked by the server (it knows the tables). `Err(BadHeader)` otherwise.
+pub fn parse_items(b: &[u8], count: usize, total: u16) -> Result<Vec<Item>, Status> {
+    if b.len() != count * ITEM_LEN || count == 0 || count > MAX_ITEMS as usize {
+        return Err(Status::BadHeader);
+    }
+    let mut items = Vec::with_capacity(count);
+    let mut sum: u32 = 0;
+    for e in b.chunks_exact(ITEM_LEN) {
+        let it = Item { linear: u32_at(e, 0), rows: u16_at(e, 4) };
+        if it.rows == 0 || it.rows > MAX_MULTI_ROWS || u16_at(e, 6) != 0 {
+            return Err(Status::BadHeader);
+        }
+        sum += u32::from(it.rows);
+        items.push(it);
+    }
+    if sum != u32::from(total) {
+        return Err(Status::BadHeader);
+    }
+    Ok(items)
 }
 
 /// Reply status codes.
@@ -214,10 +297,15 @@ impl RequestHeader {
             return Err((Status::BadHeader, id));
         }
         id.copy_from_slice(&b[8..24]);
-        if u16_at(b, 4) != VERSION {
+        let version = u16_at(b, 4);
+        if version != VERSION && version != VERSION_MULTI {
             return Err((Status::Version, id));
         }
         let kind = Kind::from_u16(u16_at(b, 6)).ok_or((Status::BadHeader, id))?;
+        if kind.version() != version {
+            // version 2 is the multi frame only, and a multi frame is version 2 only
+            return Err((Status::BadHeader, id));
+        }
         if b[40..48].iter().any(|&x| x != 0) {
             return Err((Status::BadHeader, id));
         }
@@ -251,6 +339,16 @@ impl RequestHeader {
                     return Err((Status::BadHeader, id));
                 }
             }
+            Kind::Multi => {
+                if h.linear == 0
+                    || h.linear > u32::from(MAX_ITEMS)
+                    || h.rows == 0
+                    || h.rows > MAX_MULTI_ROWS
+                    || (h.body_len as u64) < h.linear as u64 * ITEM_LEN as u64
+                {
+                    return Err((Status::BadHeader, id));
+                }
+            }
         }
         Ok(h)
     }
@@ -259,7 +357,7 @@ impl RequestHeader {
     pub fn encode(&self) -> [u8; REQUEST_HEADER_LEN] {
         let mut b = [0u8; REQUEST_HEADER_LEN];
         b[0..4].copy_from_slice(&REQUEST_MAGIC);
-        b[4..6].copy_from_slice(&VERSION.to_le_bytes());
+        b[4..6].copy_from_slice(&self.kind.version().to_le_bytes());
         b[6..8].copy_from_slice(&self.kind.as_u16().to_le_bytes());
         b[8..24].copy_from_slice(&self.request_id);
         b[24..28].copy_from_slice(&self.linear.to_le_bytes());
@@ -372,7 +470,7 @@ mod tests {
         b[0] = b'X';
         assert_eq!(RequestHeader::parse(&b).unwrap_err().0, Status::BadHeader);
         let mut b = good;
-        b[4] = 2;
+        b[4] = 3; // 2 is the multi frame's version (BadHeader on a call, multi_frame_layout_and_versions)
         assert_eq!(RequestHeader::parse(&b).unwrap_err(), (Status::Version, [7u8; 16]));
         let mut b = good;
         b[6] = 9;
@@ -400,6 +498,71 @@ mod tests {
         assert_eq!(RequestHeader::parse(&o.encode()).unwrap_err().0, Status::BadHeader);
     }
 
+    fn multi(count: u32, rows: u16, body_len: u32) -> RequestHeader {
+        RequestHeader {
+            kind: Kind::Multi,
+            request_id: [5u8; 16],
+            linear: count,
+            rows,
+            ring: 0,
+            deadline_ms: 0,
+            body_len,
+        }
+    }
+
+    #[test]
+    fn multi_frame_layout_and_versions() {
+        let h = multi(3, 4, 3 * 8 + 4 * 16);
+        let b = h.encode();
+        assert_eq!(&b[0..4], b"PGWL");
+        assert_eq!(u16_at(&b, 4), 2, "a multi frame is version 2");
+        assert_eq!(u16_at(&b, 6), 4);
+        assert_eq!(u32_at(&b, 24), 3);
+        assert_eq!(u16_at(&b, 28), 4);
+        assert_eq!(RequestHeader::parse(&b).unwrap(), h);
+        // version 1 frames keep version 1
+        assert_eq!(u16_at(&call(1, 4).encode(), 4), 1);
+        // a multi frame claiming version 1, or a call claiming version 2: refused
+        let mut v1 = b;
+        v1[4] = 1;
+        assert_eq!(RequestHeader::parse(&v1).unwrap_err().0, Status::BadHeader);
+        let mut c2 = call(1, 4).encode();
+        c2[4] = 2;
+        assert_eq!(RequestHeader::parse(&c2).unwrap_err().0, Status::BadHeader);
+        let mut v3 = b;
+        v3[4] = 3;
+        assert_eq!(RequestHeader::parse(&v3).unwrap_err(), (Status::Version, [5u8; 16]));
+        // field ranges
+        for bad in [multi(0, 1, 0), multi(65, 65, 65 * 8 + 65), multi(2, 0, 16), multi(2, 257, 16), multi(2, 2, 15)] {
+            assert_eq!(RequestHeader::parse(&bad.encode()).unwrap_err().0, Status::BadHeader, "{bad:?}");
+        }
+        assert!(RequestHeader::parse(&multi(64, 256, 64 * 8).encode()).is_ok());
+    }
+
+    #[test]
+    fn item_table() {
+        let items = [Item { linear: 7, rows: 1 }, Item { linear: 7, rows: 3 }, Item { linear: 2, rows: 8 }];
+        let mut b = Vec::new();
+        encode_items(&items, &mut b);
+        assert_eq!(b.len(), 24);
+        assert_eq!(&b[0..8], &[7, 0, 0, 0, 1, 0, 0, 0]);
+        assert_eq!(parse_items(&b, 3, 12).unwrap(), items.to_vec());
+        assert_eq!(parse_items(&b, 3, 11).unwrap_err(), Status::BadHeader, "rows must sum to the header's");
+        assert_eq!(parse_items(&b[..16], 3, 12).unwrap_err(), Status::BadHeader);
+        let mut r = b.clone();
+        r[6] = 1; // reserved
+        assert_eq!(parse_items(&r, 3, 12).unwrap_err(), Status::BadHeader);
+        let mut z = b.clone();
+        z[4] = 0; // zero rows
+        assert_eq!(parse_items(&z, 3, 11).unwrap_err(), Status::BadHeader);
+        let mut big = b.clone();
+        big[4] = 9; // above one call's MAX_ROWS: allowed (the service cuts it into calls)
+        assert!(parse_items(&big, 3, 20).is_ok());
+        big[4] = 0x01;
+        big[5] = 0x01; // 257 rows: above MAX_MULTI_ROWS
+        assert_eq!(parse_items(&big, 3, 268).unwrap_err(), Status::BadHeader);
+    }
+
     #[test]
     fn status_classes() {
         for s in Status::ALL {
@@ -423,9 +586,9 @@ mod tests {
             s ^= s << 17;
             s
         };
-        let seeds = [call(1, 4).encode(), call(8, 1 << 20).encode()];
+        let seeds = [call(1, 4).encode(), call(8, 1 << 20).encode(), multi(4, 4, 1 << 12).encode()];
         for i in 0..200_000 {
-            let mut b = if i % 2 == 0 { seeds[(i / 2) % 2] } else { [0u8; REQUEST_HEADER_LEN] };
+            let mut b = if i % 2 == 0 { seeds[(i / 2) % 3] } else { [0u8; REQUEST_HEADER_LEN] };
             let flips = 1 + (next() % 4) as usize;
             for _ in 0..flips {
                 let r = next();

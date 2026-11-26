@@ -27,7 +27,10 @@ use std::time::{Duration, Instant};
 
 use crate::admission::{Admission, Refusal};
 use crate::exec::{Call, Done, Executor, ModelEntry, ReplySink};
-use crate::proto::{Kind, ReplyHeader, RequestHeader, Status, MAX_ROWS, REQUEST_HEADER_LEN, TICKET_LEN};
+use crate::proto::{
+    parse_items, Item, Kind, ReplyHeader, RequestHeader, Status, ITEM_LEN, MAX_ITEMS, MAX_ROWS, REQUEST_HEADER_LEN,
+    TICKET_LEN,
+};
 use crate::shm::{self, Region};
 use crate::stats::Stats;
 use crate::sync::{MutexExt, RwLockExt};
@@ -77,6 +80,16 @@ pub struct ServerConfig {
     /// Opt-in: answer a connection's `shm` frame by moving its calls to a sealed shared-memory segment
     /// ([`crate::shm`]); without it the frame gets `Fallback` and the connection stays on the socket.
     pub shm: bool,
+    /// Lane format 2: most items per `multi` frame (0 = format 1 only: a `multi` frame is refused with
+    /// `Version`, as a format-1 service does). At most [`MAX_ITEMS`]. Same-linear runs of a frame's items
+    /// are served by one executor call of at most `max_rows` rows (rows are independent; the coalescer
+    /// relies on the same), and the reply is cut back per item.
+    pub max_items: u16,
+    /// Lane format 2: most rows of one executor call serving a same-linear run of a `multi` frame (0 =
+    /// `max_rows`). Above `max_rows` only where the executor serves any row count in one call (the kernel
+    /// path; CUDA graphs exist for 1..=8 rows): a merged call the executor answers with `Fallback` is
+    /// served again in calls of at most `max_rows` rows.
+    pub merge_rows: u16,
 }
 
 impl Default for ServerConfig {
@@ -94,6 +107,8 @@ impl Default for ServerConfig {
             read_spin: Duration::ZERO,
             zero_copy: false,
             shm: false,
+            max_items: 0,
+            merge_rows: 0,
         }
     }
 }
@@ -548,6 +563,9 @@ trait Frames {
     fn reply_direct(&mut self, h: &ReplyHeader, body: &[u8]) -> std::io::Result<()>;
     /// Complete a [`Frames::reply_direct`] (after the executor returned).
     fn finish(&mut self) -> std::io::Result<()>;
+    /// True if `multi` frames are served on this transport (the socket; a shm segment is sized for one
+    /// call of at most `MAX_ROWS` rows).
+    fn multi(&self) -> bool;
 }
 
 /// The socket transport (`zero_copy`: replies are written straight from the executor's buffer with a
@@ -621,6 +639,10 @@ impl Frames for SockFrames<'_> {
         self.pending.clear();
         r
     }
+
+    fn multi(&self) -> bool {
+        true
+    }
 }
 
 /// The shared-memory transport of one connection (after a `shm` frame).
@@ -670,6 +692,10 @@ impl Frames for ShmFrames<'_> {
     fn finish(&mut self) -> std::io::Result<()> {
         Ok(())
     }
+
+    fn multi(&self) -> bool {
+        false
+    }
 }
 
 /// Per-connection scratch buffers.
@@ -677,6 +703,8 @@ impl Frames for ShmFrames<'_> {
 struct Scratch {
     body: Vec<u8>,
     out: Vec<u8>,
+    /// One executor call's reply inside a `multi` frame.
+    part: Vec<u8>,
 }
 
 /// The zero-copy reply sink handed to the executor: counts the call and replies from its buffer.
@@ -744,6 +772,9 @@ fn handle_call<F: Frames>(
         sh.stats.request(&conn.tenant, st.name(), received.elapsed().as_secs_f64());
         let _ = f.reply(&ReplyHeader::refusal(st, id, 0), &[]);
     };
+    if h.kind == Kind::Multi {
+        return handle_multi(f, sh, cfg, conn, h, received, sc);
+    }
     if h.kind != Kind::Call {
         fatal(f, Status::NotOpen);
         return false;
@@ -858,6 +889,193 @@ fn handle_call<F: Frames>(
             f.reply(&ReplyHeader::refusal(r.status, id, r.retry_after_ms), &[]).is_ok() && !r.status.is_fatal()
         }
     }
+}
+
+/// Validate and serve one `multi` frame (lane format 2; see [`crate::proto`]): the item table is read
+/// and checked against the tables (indices, rows, exact body length) before the items' bodies are read;
+/// the frame is admitted once for its total rows; consecutive items of one linear run as one executor
+/// call of at most `max_rows` rows, in item order, and the reply is their outputs in item order. One
+/// status for the whole frame. False: close the connection.
+fn handle_multi<F: Frames>(
+    f: &mut F,
+    sh: &Arc<Shared>,
+    cfg: &ServerConfig,
+    conn: &Conn,
+    h: RequestHeader,
+    received: Instant,
+    sc: &mut Scratch,
+) -> bool {
+    let id = h.request_id;
+    let fatal = |f: &mut F, st: Status| {
+        sh.stats.request(&conn.tenant, st.name(), received.elapsed().as_secs_f64());
+        let _ = f.reply(&ReplyHeader::refusal(st, id, 0), &[]);
+    };
+    if cfg.max_items == 0 {
+        fatal(f, Status::Version); // as a format-1 service answers
+        return false;
+    }
+    if !f.multi() {
+        // shm segment: the whole frame is in the segment, nothing to drain; the client resends it
+        sh.stats.request(&conn.tenant, Status::Fallback.name(), received.elapsed().as_secs_f64());
+        return f.reply(&ReplyHeader::refusal(Status::Fallback, id, 0), &[]).is_ok();
+    }
+    if sh.generation(&conn.tenant) != conn.generation {
+        fatal(f, Status::Unauthenticated);
+        return false;
+    }
+    let count = h.linear as usize;
+    if count > cfg.max_items.min(MAX_ITEMS) as usize {
+        fatal(f, Status::BadHeader);
+        return false;
+    }
+    let Some(ring) = conn.model.rings.get(h.ring as usize) else {
+        fatal(f, Status::UnknownLinear);
+        return false;
+    };
+    let mut table = [0u8; MAX_ITEMS as usize * ITEM_LEN];
+    let table = &mut table[..count * ITEM_LEN];
+    if !f.body(table, sh, cfg) {
+        return false;
+    }
+    let items = match parse_items(table, count, h.rows) {
+        Ok(v) => v,
+        Err(st) => {
+            fatal(f, st);
+            return false;
+        }
+    };
+    let bpe = ring.bytes_per_element as u64;
+    let mut want_in = 0u64;
+    let mut out_len = 0u64;
+    let mut kinds = Vec::with_capacity(count);
+    for it in &items {
+        let Some(lin) = conn.model.linears.get(it.linear as usize) else {
+            fatal(f, Status::UnknownLinear);
+            return false;
+        };
+        want_in += it.rows as u64 * lin.n as u64 * bpe;
+        out_len += it.rows as u64 * lin.m as u64 * bpe;
+        kinds.push((lin.n as u64 * bpe, lin.m as u64 * bpe, lin.kind.as_str()));
+    }
+    if h.body_len as u64 != (count * ITEM_LEN) as u64 + want_in || out_len > u32::MAX as u64 {
+        fatal(f, Status::BadLength);
+        return false;
+    }
+    sc.body.resize(want_in as usize, 0);
+    if !f.body(&mut sc.body, sh, cfg) {
+        return false;
+    }
+    let cap = cfg.deadline_cap_ms.max(1);
+    let ms = if h.deadline_ms == 0 { cap } else { h.deadline_ms.min(cap) };
+    let deadline = received + Duration::from_millis(ms as u64);
+    let reply = match sh.admission.admit(&conn.tenant, h.rows as u64, true) {
+        Err(r) => Err(r),
+        Ok(()) => {
+            let admitted = Admitted { admission: &sh.admission, tenant: &conn.tenant };
+            let r = run_multi(sh, cfg, conn, &items, &kinds, h.ring, received, deadline, sc);
+            drop(admitted);
+            r
+        }
+    };
+    match reply {
+        Ok((queue_us, compute_us)) if sc.out.len() as u64 == out_len => {
+            let rh = ReplyHeader {
+                status: Status::Ok,
+                request_id: id,
+                queue_us,
+                compute_us,
+                retry_after_ms: 0,
+                body_len: out_len as u32,
+            };
+            sh.stats.request(&conn.tenant, Status::Ok.name(), received.elapsed().as_secs_f64());
+            f.reply(&rh, &sc.out).is_ok()
+        }
+        Ok(_) => {
+            sh.stats.request(&conn.tenant, Status::Internal.name(), received.elapsed().as_secs_f64());
+            f.reply(&ReplyHeader::refusal(Status::Internal, id, 0), &[]).is_ok()
+        }
+        Err(r) => {
+            sh.stats.request(&conn.tenant, r.status.name(), received.elapsed().as_secs_f64());
+            f.reply(&ReplyHeader::refusal(r.status, id, r.retry_after_ms), &[]).is_ok() && !r.status.is_fatal()
+        }
+    }
+}
+
+/// The executor calls of an admitted `multi` frame, in row order: maximal runs of consecutive rows of one
+/// linear (across item boundaries, and an item longer than a call is cut at row boundaries), each call at
+/// most `merge_rows` rows (`max_rows` once the executor answered `Fallback` to a longer one); outputs appended
+/// to `sc.out`, so the reply is the items' `y_hat` in order (rows are independent). Returns the summed
+/// `(queue_us, compute_us)`; the first refusal refuses the whole frame.
+#[allow(clippy::too_many_arguments)]
+fn run_multi(
+    sh: &Arc<Shared>,
+    cfg: &ServerConfig,
+    conn: &Conn,
+    items: &[Item],
+    kinds: &[(u64, u64, &str)],
+    ring: u16,
+    received: Instant,
+    deadline: Instant,
+    sc: &mut Scratch,
+) -> Result<(u32, u32), Refusal> {
+    let Some(ex) = sh.executor.pread().clone() else { return Err(Refusal::new(Status::Fallback)) };
+    sc.out.clear();
+    // the item of every row, in order (at most MAX_MULTI_ROWS)
+    let rows_of: Vec<usize> =
+        items.iter().enumerate().flat_map(|(i, it)| std::iter::repeat_n(i, it.rows as usize)).collect();
+    let (mut queue_us, mut compute_us) = (0u32, 0u32);
+    let mut off = 0usize; // into sc.body
+    let mut pos = 0usize; // into rows_of
+    let mut cap = cfg.merge_rows.max(cfg.max_rows) as usize;
+    while pos < rows_of.len() {
+        let first = rows_of[pos];
+        let lin = items[first].linear;
+        let mut n = 1usize;
+        while pos + n < rows_of.len() && n < cap && items[rows_of[pos + n]].linear == lin {
+            n += 1;
+        }
+        let (in_row, out_row, kind) = kinds[first];
+        let in_len = n * in_row as usize;
+        let out_len = n * out_row as usize;
+        let call = Call {
+            tenant: &conn.tenant,
+            model: conn.model_id,
+            linear: lin,
+            ring,
+            rows: n as u16,
+            body: &sc.body[off..off + in_len],
+            out_len,
+            received,
+            deadline,
+        };
+        sc.part.clear();
+        let d = match ex.execute(&call, &mut sc.part) {
+            Err(r) if r.status == Status::Fallback && n > cfg.max_rows as usize => {
+                // this executor has nothing for so many rows (CUDA graphs: 1..=8): calls of at most max_rows
+                cap = cfg.max_rows as usize;
+                continue;
+            }
+            other => other?,
+        };
+        if sc.part.len() != out_len {
+            return Err(Refusal::new(Status::Internal));
+        }
+        sc.out.extend_from_slice(&sc.part);
+        sh.stats.computed(
+            &conn.tenant,
+            kind,
+            d.backend,
+            n as u64,
+            in_len as u64,
+            out_len as u64,
+            d.compute_us as f64 * 1e-6,
+        );
+        queue_us = queue_us.saturating_add(d.queue_us);
+        compute_us = compute_us.saturating_add(d.compute_us);
+        off += in_len;
+        pos += n;
+    }
+    Ok((queue_us, compute_us))
 }
 
 /// Body capacities of a connection's shm segment: the largest request and reply of its model's tables

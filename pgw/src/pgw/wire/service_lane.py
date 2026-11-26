@@ -33,15 +33,24 @@ of the pool asks for a fresh ticket. A1 statuses are mapped onto the client's
 becomes ``DEADLINE``, and every status after which the A1 service closes the connection (16 and above,
 ``busy`` = 23 included) becomes a closing status, so the client drops the lane and cools down.
 
+Lane format 2 (``multi`` frames, ``rust/pgw-lane/src/proto.rs``): a service that serves them says so in its
+ticket (``"versions": [1, 2]``, ``"max_items"``, ``"max_multi_rows"``; a format-1 service sends neither and keeps
+``"version": 1``, which every client checks). With :attr:`~pgw.wire.lane.LaneConfig.multi` on
+(``PGW_LANE_MULTI=1``; the SDK sets it) a request of several items, the rows of several answers in one batched
+trip, goes in one multi call on the native channel: the same items in the same order, the same bytes and request
+id as the stream channel's request, under the same connection's tenant. A format-1 ticket, the Python channel or
+a shm connection keep one item per call (several-item requests take the stream channel, as before).
+
 ``build_lane_client`` is what the gateway uses (``GatewayModelConfig.lane``: ``auto`` / ``required`` accept
 UDS tickets only, ``tls`` TCP tickets only).
 """
 
 from __future__ import annotations
 
-import os
+import asyncio
 import hashlib
 import json
+import os
 import socket
 import struct
 import threading
@@ -81,6 +90,10 @@ _REQUEST = struct.Struct("<4sHH16sIHHIIQ")
 _REPLY = struct.Struct("<4sHH16sIIII")
 _KIND_OPEN = 1
 _KIND_CALL = 2
+#: lane format 2: the multi frame (``rust/pgw-lane/src/proto.rs``) and its limits
+_VERSION_MULTI = 2
+_MAX_ITEMS = 64
+_MAX_MULTI_ROWS = 256
 _TICKET_LEN = 32
 _MAX_TICKET_BODY = 1 << 20
 
@@ -229,6 +242,8 @@ class ServiceLaneOpener:
         self._tcp_ports: frozenset[int] | None = None if tcp_ports is None else frozenset(int(p) for p in tcp_ports)
         self._used: set[bytes] = set()
         self._used_lock = threading.Lock()
+        #: the event loop of the first async lane_open (the client's HTTP pool may be bound to it)
+        self._home: asyncio.AbstractEventLoop | None = None
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self._client, name)
@@ -252,6 +267,12 @@ class ServiceLaneOpener:
             linears = tuple(LinearInfo(str(i), *dims[str(i)]) for i in d["linears"])
             rings = tuple(str(r) for r in d["rings"])
             ttl_ms = max(1, int(float(d.get("ttl_s", 30.0)) * 1000))
+            # lane format 2 (multi frames): only when the service lists it; a format-1 ticket has no "versions"
+            versions = d.get("versions", [_VERSION])
+            multi: dict[str, int] = {}
+            if isinstance(versions, list) and _VERSION_MULTI in [int(v) for v in versions]:
+                multi = {"max_items": max(0, min(_MAX_ITEMS, int(d.get("max_items", 0)))),
+                         "max_multi_rows": max(0, min(_MAX_MULTI_ROWS, int(d.get("max_multi_rows", 0))))}
             common = (rid, _VERSION, str(d["transport"]), secret, ttl_ms, int(self._lane_config.max_channels),
                       int(d["max_rows"]), fingerprint, rings, linears)
             if d["transport"] == "tcp":
@@ -261,8 +282,8 @@ class ServiceLaneOpener:
                 if self._tcp_ports is not None and port not in self._tcp_ports:
                     raise ProtocolError(f"lane ticket names port {port}, which is not on the gateway's egress "
                                         "allowlist for the service host (add https://<host>:<port>)")
-                return LaneTicket(*common, port=port)
-            return LaneTicket(*common, path=str(d["socket"]))
+                return LaneTicket(*common, port=port, **multi)
+            return LaneTicket(*common, path=str(d["socket"]), **multi)
         except ProtocolError:
             raise
         except (ValueError, KeyError, TypeError) as exc:
@@ -273,6 +294,8 @@ class ServiceLaneOpener:
         """A ticket from ``POST /pgw/v1/lane/open`` (one attempt; authenticated like a compute call)."""
         if not set(transports) & set(self._lane_config.transports) or _VERSION not in lane_versions:
             raise ProtocolError("the service lane is lane version 1 over the configured transports only")
+        if self._home is None:
+            self._home = asyncio.get_running_loop()
         rid = uuid.uuid4().hex
         body = json.dumps({"fingerprint": fingerprint}).encode()
         deadline = time.monotonic() + float(getattr(self._client.config, "request_timeout_s", 60.0))
@@ -284,9 +307,27 @@ class ServiceLaneOpener:
 
     def lane_open_sync(self, fingerprint: str, ring: str, *, transports: tuple[str, ...] = ("uds",),
                        lane_versions: tuple[int, ...] = (1,)) -> LaneTicket:
-        """Blocking :meth:`lane_open`."""
-        return self._client._run_sync(  # type: ignore[no-any-return]
-            self.lane_open(fingerprint, ring, transports=transports, lane_versions=lane_versions))
+        """Blocking :meth:`lane_open`.
+
+        On the event loop the first :meth:`lane_open` ran on (the gateway's), when it still runs and this is
+        another thread: the wrapped client's HTTP pool may be bound to that loop (an injected transport such as
+        the gateway's egress filter is), so the client's private sync loop would fail on it (``RuntimeError``:
+        bound to a different event loop), and every further lane connection with it."""
+        coro = self.lane_open(fingerprint, ring, transports=transports, lane_versions=lane_versions)
+        home = self._home
+        if home is not None and home.is_running() and not home.is_closed():
+            try:
+                running = asyncio.get_running_loop()
+            except RuntimeError:
+                running = None
+            if running is not home:
+                fut = asyncio.run_coroutine_threadsafe(coro, home)
+                try:
+                    return fut.result(timeout=float(getattr(self._client.config, "request_timeout_s", 60.0)) + 5.0)
+                except BaseException:
+                    fut.cancel()
+                    raise
+        return self._client._run_sync(coro)  # type: ignore[no-any-return]
 
     def channel(self, ticket: LaneTicket, secret: bytearray) -> Any:
         """``LaneComputeClient`` channel factory: the accepted ticket for its first connection, a fresh
@@ -393,10 +434,12 @@ def build_lane_client(client: Any, *, uds_dir: str | None = None, pool_wait_s: f
     except ValueError as exc:
         raise ValueError(f"PGW_LANE_SPIN_AUTO_US must be an integer, got {raw!r}") from exc
     shm = os.environ.get("PGW_LANE_SHM", "0").strip().lower() in ("1", "true", "yes", "on")
+    # opt-in (the SDK sets it): several-item requests in one lane-format-2 multi call when the service offers it
+    multi = os.environ.get("PGW_LANE_MULTI", "0").strip().lower() in ("1", "true", "yes", "on")
     bad = set(transports) - {"uds", "tcp"}
     if bad or not transports:
         raise ValueError(f"unknown lane transports {sorted(bad)}")
     cfg = LaneConfig(native=native, uds_dir=uds_dir, pool_wait_s=pool_wait_s, max_channels=max_channels,
-                     transports=tuple(transports), spin_us=spin_us, spin_auto_us=spin_auto_us, shm=shm)
+                     transports=tuple(transports), spin_us=spin_us, spin_auto_us=spin_auto_us, shm=shm, multi=multi)
     opener = ServiceLaneOpener(client, cfg, tcp_ports=tcp_ports)
     return LaneComputeClient(opener, cfg, channel_factory=opener.channel)
