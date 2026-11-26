@@ -47,6 +47,48 @@ def fast_topk(x: torch.Tensor, k: int) -> list[tuple[int, float]]:
     return [(int(i), float(v)) for v, i in zip(top.values, top.indices, strict=True)]
 
 
+def _top_p_reference(logits: torch.Tensor, top_p: float) -> torch.Tensor:
+    """The top-p (nucleus) filter: keep the smallest prefix of the descending order with mass >= ``top_p``."""
+    sorted_logits, order = torch.sort(logits, descending=True)
+    probs = torch.softmax(sorted_logits, dim=-1)
+    cum = torch.cumsum(probs, dim=-1)
+    remove = (cum - probs) >= top_p  # keep the smallest prefix with mass >= top_p
+    remove[0] = False
+    sorted_logits = sorted_logits.masked_fill(remove, float("-inf"))
+    return torch.empty_like(logits).scatter_(0, order, sorted_logits)
+
+
+def top_p_filter(logits: torch.Tensor, top_p: float) -> torch.Tensor:
+    """:func:`_top_p_reference` with numpy's sort (about 5x cheaper than ``torch.sort`` over a 152k vocabulary on
+    one core, far more with busy intra-op threads), bit-identical.
+
+    A descending sort of a 1-D float32 array has one sequence of values, whatever the sort; only the order of equal
+    values (and of ``-0.0`` / ``+0.0``) can differ, and each element keeps its own value through the scatter. The
+    softmax, cumulative sum and removal mask run on that same value sequence, so they are identical; the kept set
+    could differ only where the mask changes inside a run of equal values, which is checked (then, as with NaN, the
+    reference runs)."""
+    import numpy as np
+
+    if logits.ndim != 1 or logits.dtype != torch.float32 or logits.device.type != "cpu" or logits.numel() < 2:
+        return _top_p_reference(logits, top_p)
+    a = logits.detach().numpy()
+    if np.isnan(a).any():
+        return _top_p_reference(logits, top_p)
+    order = np.argsort(-a)  # ascending order of -a: the descending order of a, ties in any order
+    sv = a[order]
+    sorted_logits = torch.from_numpy(sv)
+    probs = torch.softmax(sorted_logits, dim=-1)
+    cum = torch.cumsum(probs, dim=-1)
+    remove = (cum - probs) >= top_p
+    remove[0] = False
+    r = remove.numpy()
+    at = np.flatnonzero(r[1:] != r[:-1]) + 1
+    if at.size and bool((sv[at] == sv[at - 1]).any()):
+        return _top_p_reference(logits, top_p)  # the boundary splits equal values: torch's tie order decides
+    sorted_logits = sorted_logits.masked_fill(remove, float("-inf"))
+    return torch.empty_like(logits).scatter_(0, torch.from_numpy(order), sorted_logits)
+
+
 class SamplingParams(BaseModel):
     """Decoding controls. ``temperature == 0`` means greedy.
 
@@ -162,13 +204,7 @@ class Sampler:
             probs = torch.softmax(logits, dim=-1)
             logits = logits.masked_fill(probs < p.min_p * probs.max(), float("-inf"))
         if p.top_p < 1.0:
-            sorted_logits, order = torch.sort(logits, descending=True)
-            probs = torch.softmax(sorted_logits, dim=-1)
-            cum = torch.cumsum(probs, dim=-1)
-            remove = (cum - probs) >= p.top_p  # keep the smallest prefix with mass >= top_p
-            remove[0] = False
-            sorted_logits = sorted_logits.masked_fill(remove, float("-inf"))
-            logits = torch.empty_like(logits).scatter_(0, order, sorted_logits)
+            logits = top_p_filter(logits, p.top_p)  # keep the smallest prefix with mass >= top_p
         return logits
 
     def sample(self, logits: torch.Tensor, generated: list[int]) -> tuple[int, float | None]:
