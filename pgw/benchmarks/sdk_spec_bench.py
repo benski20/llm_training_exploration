@@ -81,9 +81,10 @@ def run_config(cfg: str, key: str, pack: Path, root: Path, head: Path | None, it
                 opts["draft_head_path"] = head
         else:
             opts["speculation"] = "lookup"
-    c = OpenAI(api_key=key, cache_dir=root / "c", state_dir=root / "s", mask_scheme="plain", mask_workers=1,
-               mask_store_gb=float(os.environ.get("PGW_BENCH_MASK_GB", "3")), mask_segment_slots=256,
-               provisioner=LocalPackProvisioner({MODEL: pack}), **opts, **(extra or {}))
+    kw: dict[str, Any] = {"mask_scheme": "plain", "mask_workers": 1, "mask_segment_slots": 256,
+                          "mask_store_gb": float(os.environ.get("PGW_BENCH_MASK_GB", "3")), **opts, **(extra or {})}
+    c = OpenAI(api_key=key, cache_dir=root / "c", state_dir=root / "s",
+               provisioner=LocalPackProvisioner({MODEL: pack}), **kw)
     try:
         c.warmup(MODEL)
         if stock_s > 0:
