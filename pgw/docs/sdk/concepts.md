@@ -86,7 +86,7 @@ Greedy decoding (`temperature=0`) is therefore reproducible across runs.
 ## Why your application should run near our GPU
 
 Generating one token needs a chain of round trips between your process and our GPU: four per transformer
-layer, one after the other, so 112 round trips per token for Qwen2.5-7B. Each round trip costs at least
+layer, one after the other, plus one for the masked LM head, so 113 round trips per token for Qwen2.5-7B. Each round trip costs at least
 the network round-trip time (RTT). The RTT therefore multiplies:
 
 | where your process runs | RTT (estimate) | added per token, Qwen2.5-7B (estimate) |

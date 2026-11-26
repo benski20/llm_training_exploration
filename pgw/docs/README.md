@@ -34,6 +34,7 @@ Client library (`pip install pgw-sdk`, `from pgw import OpenAI`: the gateway run
 | Developers | [Configuration reference](sdk/configuration.md) | client options, request parameters, environment variables, cache directory |
 | Developers | [Supported models](sdk/models.md) | Qwen2.5-Instruct 0.5B-7B, limits, resources per model |
 | Developers, operators | [Troubleshooting](sdk/troubleshooting.md) | installation, first start, speed, error codes, reporting issues |
+| Developers, operators | [Scaling](sdk/scaling.md) | many concurrent streams and worker processes on one client machine: limits in order, sizing table, mask cost per slot |
 | Developers, operators | [Reliability](sdk/reliability.md) | what happens on each failure: network, provider restart, revocation, certificates, factory crashes, disk full, damaged cache, cancellation, shutdown |
 | Security reviewers | [Security model summary](sdk/security.md) | what is and is not protected, review status (pks-v3 pending external review) |
 | Pilot customers | [Pilot hand-off](sdk/pilot-handoff.md) | one page: what you get, five-minute setup on RunPod, what to test, privacy promise |

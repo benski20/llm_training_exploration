@@ -117,6 +117,13 @@ _NON_FIELD_ENV = {
     "PGW_FACTORY_WEIGHTS",  # SDKOptions.factory_weights (the factory child gets PGW_FACTORY_FACTORY_WEIGHTS)
     "PGW_FACTORY_WEIGHTS_SOURCE",  # SDKOptions.factory_weights_source (= FactorySettings.weights_source)
     "PGW_CHECK_STOCK_SEGMENTS",  # SDKOptions.check_stock_segments
+    "PGW_FACTORY_STALL_S",  # SDKOptions.factory_stall_s (pgw.sdk.factory: stalled-factory deadline)
+    "PGW_SDK_FACTORY_HANG_S",  # pgw.sdk.factory: hung factory child deadline (supervisor knob)
+    "PGW_MASK_ADMISSION",  # SDKOptions.mask_admission
+    "PGW_SPECULATION",  # SDKOptions.speculation
+    "PGW_PKS_COMPACT",  # pks-v3 compact output switch read by pgw.hemask.pks_backend
+    "PGW_VECMAT_NATIVE",  # native vecmat switch read by pgw.factory.kernels
+    "PGW_WRITER_THREADS",  # segment writer threads read by pgw.maskstore.segment_io
     "PGW_PLATFORM_ENABLED",  # developer console on the provider (pgw.platform.PlatformSettings)
     "PGW_PLATFORM_ACCOUNTS_URL",
     "PGW_PLATFORM_ACCOUNTS_TOKEN_FILE",

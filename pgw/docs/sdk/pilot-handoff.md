@@ -71,8 +71,9 @@ ever seeing your prompts or the answers. This page is all you need to start.
    ```
 
    The very first run prepares the model on this machine: for the 7B model a one-time download of about
-   6.5 GB of public weights and about 20-30 minutes of CPU on 4 cores (less with more cores; a few minutes for
-   0.5B), all cached. Later runs start in seconds. `pgw sdk status` shows the progress and, afterwards, the
+   11 GB (6.5 GB of it public int8 weights) and the one-time mask setup, about 10 CPU-minutes on a CPU with AMX
+   or AVX-512 VNNI (5 minutes on 4 cores; more on older CPUs; a minute or two for 0.5B), all cached. To do this
+   ahead of the first request, run `pgw sdk prepare --model qwen2.5-7b-instruct`. Later runs start in seconds. `pgw sdk status` shows the progress and, afterwards, the
    prepared models and the last integrity check.
 
 ## What to test

@@ -80,7 +80,7 @@ or, when the provider is gone:
 
 ```
     provider not answering for 130 s: connection failed (ConnectError)
-    STALLED (requests waiting for masks fail at once; the factory keeps retrying): the provider (https://...) has not answered for 130s ...
+    STALLED (requests waiting for masks fail at once; the factory keeps retrying): the provider (https://provider.example.com:8443) has not answered for 130s ...
 ```
 
 The same "first-time setup in progress" line is in the error a request gets if its `timeout` ends during the

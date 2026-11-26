@@ -5,10 +5,13 @@ under the Apache 2.0 license (the 3B model has its own Qwen research license; ch
 
 | model id (`model=`) | upstream checkpoint | parameters | layers | round trips per token |
 |---|---|---|---|---|
-| `qwen2.5-0.5b-instruct` | `Qwen/Qwen2.5-0.5B-Instruct` | 0.5 B | 24 | 96 |
-| `qwen2.5-1.5b-instruct` | `Qwen/Qwen2.5-1.5B-Instruct` | 1.5 B | 28 | 112 |
-| `qwen2.5-3b-instruct` | `Qwen/Qwen2.5-3B-Instruct` | 3 B | 36 | 144 |
-| `qwen2.5-7b-instruct` | `Qwen/Qwen2.5-7B-Instruct` | 7 B | 28 | 112 |
+| `qwen2.5-0.5b-instruct` | `Qwen/Qwen2.5-0.5B-Instruct` | 0.5 B | 24 | 97 |
+| `qwen2.5-1.5b-instruct` | `Qwen/Qwen2.5-1.5B-Instruct` | 1.5 B | 28 | 113 |
+| `qwen2.5-3b-instruct` | `Qwen/Qwen2.5-3B-Instruct` | 3 B | 36 | 145 |
+| `qwen2.5-7b-instruct` | `Qwen/Qwen2.5-7B-Instruct` | 7 B | 28 | 113 |
+
+Round trips per token are four per layer plus one for the masked LM head (when the service serves it, as ours
+does); strict speculation (`speculation=`) can yield several tokens per pass of these trips.
 
 Your key lists the models it may use; a model outside that list fails with `model_not_found`.
 

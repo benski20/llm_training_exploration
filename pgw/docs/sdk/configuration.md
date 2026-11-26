@@ -75,6 +75,8 @@ silently ignored.
 | `PGW_CHECK_STOCK_SEGMENTS` | `64` | `check_stock_segments` |
 | `PGW_MASK_WORKERS` | a quarter of the CPUs | `mask_workers` |
 | `PGW_SPECULATION` | `off` | `speculation` |
+| `PGW_MASK_ADMISSION` | `entitled` | `mask_admission` |
+| `PGW_FACTORY_STALL_S` | `120` | `factory_stall_s` |
 | `PGW_MASK_STORE_GB` | `8` | `mask_store_gb` |
 | `PGW_SDK_LOG` | unset | `log_level` |
 | `PGW_FACTORY_MIN_FREE_BYTES` | `2147483648` (2 GiB) | free space the mask factory leaves on the cache volume; it stops producing below it ([Reliability](reliability.md#disk)) |
