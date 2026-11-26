@@ -257,7 +257,9 @@ class ProviderProvisioner:
             hint = "local"  # prepare: the fused, resumable build now (else: the factory on first use)
         source = "provider"
         kw: dict[str, Any] = {"session": ps, "cache_dir": root, "progress": say, "expected_fingerprint": served,
-                              "masked_head": masked_head, "factory_pack": True, "resume": resume}
+                              "masked_head": masked_head, "factory_pack": True}
+        if resume:
+            kw["resume"] = True
         try:
             if expected is None and not self._public_check_ok(root, served, pin):
                 assert pin is not None
