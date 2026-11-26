@@ -428,8 +428,15 @@ def test_a_damaged_cache_repairs_itself(chaos: Chaos, tmp_path: Path) -> None:
     b[len(b) // 2] ^= 0x40
     plain.write_bytes(bytes(b))
     sess = next((cache / "sessions").iterdir())
+    tok = sess / "secrets" / "service_token"
+    tok.write_text(tok.read_text()[:10])  # a half-written token: the provider refuses it, the client enrolls again
+    c = mk()
+    try:
+        assert _text(c) == want
+    finally:
+        c.close()
     crt = sess / "client.crt"
-    crt.write_text(crt.read_text()[:100])
+    crt.write_text(crt.read_text()[:100])  # a half-written certificate: detected when loaded, enrolled again
     c = mk()
     try:
         assert _text(c) == want
@@ -444,3 +451,50 @@ def test_a_damaged_cache_repairs_itself(chaos: Chaos, tmp_path: Path) -> None:
         assert "masks.counter" in ei.value.message and str(cache) in ei.value.message
     finally:
         c.close()
+
+
+# ---- shutdown ----------------------------------------------------------------------------------------------------
+_EXIT_CODE = """
+import json, sys
+sys.path[:0] = [sys.argv[4], sys.argv[5]]
+from pgw import OpenAI
+from pgw.sdk import LocalPackProvisioner
+c = OpenAI(api_key=sys.argv[1], cache_dir=sys.argv[2] + "/cache", state_dir=sys.argv[2] + "/state",
+           mask_scheme="plain", mask_workers=2, mask_target_slots=400, mask_low_water_slots=200,
+           provisioner=LocalPackProvisioner({"qwen2.5-0.5b-instruct": sys.argv[3]}))
+c.chat.completions.create(model="qwen2.5-0.5b-instruct", messages=[{"role": "user", "content": "Hi"}],
+                          temperature=0, max_tokens=4)
+fac = c._engine.models["qwen2.5-0.5b-instruct"].factory
+print(json.dumps({"factory": fac._proc.pid}), flush=True)
+# no close(): interpreter exit (atexit) must stop the engine, the factory and its workers
+"""
+
+
+def _procs_under(path: Path) -> list[int]:
+    """Processes whose working directory is under ``path`` (the factory and its workers run in its state dir)."""
+    out = []
+    for d in Path("/proc").iterdir():
+        if d.name.isdigit():
+            try:
+                if str(Path(os.readlink(d / "cwd"))).startswith(str(path)) and _alive(int(d.name)):
+                    out.append(int(d.name))
+            except OSError:
+                continue
+    return out
+
+
+def test_interpreter_exit_without_close_stops_everything(chaos: Chaos, tmp_path: Path) -> None:
+    import subprocess
+    import sys
+
+    from tests.sdk.conftest import ROOT
+
+    key = chaos.prov.new_key("atexit")
+    p = subprocess.run([sys.executable, "-c", _EXIT_CODE, key, str(tmp_path), str(chaos.prov.pack_dir),  # noqa: S603
+                        str(ROOT / "src"), str(ROOT)], capture_output=True, text=True, timeout=300,
+                       env={k: v for k, v in os.environ.items() if not k.startswith("PGW_")})
+    assert p.returncode == 0, p.stderr[-3000:]
+    assert p.stderr == "", p.stderr[-3000:]  # silent library, also at exit
+    fac = json.loads(p.stdout.strip().splitlines()[-1])["factory"]
+    assert _wait(lambda: not _alive(fac), 15), "the factory outlived the interpreter"
+    assert _wait(lambda: _procs_under(tmp_path) == [], 15), _procs_under(tmp_path)

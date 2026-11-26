@@ -57,14 +57,30 @@ def _descendants(pid: int) -> list[int]:
     todo = [pid]
     while todo:
         p = todo.pop()
-        try:
-            kids = Path(f"/proc/{p}/task/{p}/children").read_text().split()
+        kids: list[str] = []
+        try:  # children are listed per thread (the one that forked them)
+            for t in Path(f"/proc/{p}/task").iterdir():
+                with contextlib.suppress(OSError):
+                    kids += (t / "children").read_text().split()
         except OSError:
             continue
         for k in kids:
             out.append(int(k))
             todo.append(int(k))
     return out
+
+
+def _store_breakdown(root: Path) -> dict[str, float]:
+    """MB per kind of file under the session directory (segments, state database, logs, other)."""
+    out: dict[str, float] = {}
+    for p in root.rglob("*"):
+        with contextlib.suppress(OSError):
+            if not p.is_file():
+                continue
+            kind = ("segments" if p.suffix == ".pgwm" else "state_db" if "sqlite" in p.name else
+                    "logs" if p.suffix == ".log" else "other")
+            out[kind] = out.get(kind, 0.0) + p.stat().st_size / 2**20
+    return {k: round(v, 2) for k, v in out.items()}
 
 
 def _du(path: Path) -> int:
@@ -234,6 +250,7 @@ def main() -> None:
                         "children": kids, "provider": _proc_stats(prov.proc.pid),
                         "masks_available": st.get("masks_available"),
                         "mask_store_mb": round(_du(work / "c" / "cache" / "sessions") / 2**20, 2),
+                        "store_breakdown_mb": _store_breakdown(work / "c" / "cache" / "sessions"),
                         "factory": {k: st.get("factory", {}).get(k) for k in ("running", "starts",
                                                                                 "consecutive_failures")},
                         "lane": st.get("lane"),

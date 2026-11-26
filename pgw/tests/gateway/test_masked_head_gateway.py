@@ -119,12 +119,15 @@ async def test_head_item_on_the_wire_and_strict_speculation(tiny_pack_dir: Path,
     ref = await _reference(tiny_pack_dir, tmp_path, keys, key, req, **HEAD)
     assert rm.json()["choices"][0]["logprobs"] == ref["choices"][0]["logprobs"]
     lid = hp.head_id.key
-    heads = [int(x.shape[0]) for k, x in svc.received if k == lid]
-    qkv = [int(x.shape[0]) for k, x in svc.received if k == "0.qkv"]
+    received = list(svc.received)  # one snapshot: a dummy pass may still be on its way when the app stops
+    heads = [int(x.shape[0]) for k, x in received if k == lid]
+    qkv = [int(x.shape[0]) for k, x in received if k == "0.qkv"]
     # the prompt pass (its layers' rows may be split into pipelined blocks) ends in one 1-row head call; every
-    # decode pass, real or dummy, sends R = 2 rows to every linear, the head included
+    # decode pass, real or dummy, sends R = 2 rows to every linear, the head included (its last call). A pass cut
+    # short by the shutdown has its first layer's call but not its head call yet: at most one such pass.
     decode = [n for n in qkv if n == 2]
-    assert heads[0] == 1 and heads[1:] == decode and len(decode) >= 4  # dummy passes may still be due
+    assert heads[0] == 1 and all(h == 2 for h in heads[1:]) and len(heads) - 1 >= 4
+    assert len(decode) - (len(heads) - 1) in (0, 1), (heads, decode)
 
 
 async def test_service_without_masked_head_is_refused(tiny_pack_dir: Path, tmp_path: Path, gw_pack: Any,

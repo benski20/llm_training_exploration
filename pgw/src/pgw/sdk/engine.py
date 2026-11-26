@@ -216,6 +216,8 @@ class Engine:
         #: request coroutines running on the loop (``submit``): cancelled by ``close()``, so no caller waits forever
         self._tasks: set[asyncio.Task[Any]] = set()
         self._cert_task: asyncio.Task[None] | None = None
+        #: cached packs deleted and provisioned again after a failed verification (never twice per process)
+        self._repaired: set[str] = set()
         #: content-free request reports for the provider's console (``usage_reports``)
         self.reporter: Any = None
         if options.usage_reports:
@@ -507,8 +509,8 @@ class Engine:
             pkw["masked_head"] = h.masked_head
         try:
             raw = await asyncio.to_thread(self.provisioner, h.name, **pkw)
-        except (AuthError, PGWAPIError) as exc:
-            if str(getattr(exc, "code", "")) not in _AUTH_CODES:
+        except Exception as exc:
+            if not isinstance(exc, AuthError) and str(getattr(exc, "code", "")) not in _AUTH_CODES:
                 raise
             # the provider refused the cached session (its token or certificate is gone): enroll again once
             session = pkw["session"] = await self.ensure_session(force=True)
@@ -536,8 +538,8 @@ class Engine:
             rt = ModelRuntime(cfg, self._settings, mask_store=self.store, metrics=GatewayMetrics(enabled=False))
             try:
                 await rt.start()
-            except PGWError as exc:
-                if isinstance(exc, AuthError) or str(exc.code) in _AUTH_CODES:
+            except Exception as exc:
+                if isinstance(exc, AuthError) or str(getattr(exc, "code", "")) in _AUTH_CODES:
                     if attempt == 2:
                         raise
                     # the provider no longer accepts the service token or certificate (rotated, lost, revoked):
@@ -545,13 +547,16 @@ class Engine:
                     session = await self.ensure_session(force=True)
                     cfg = self._model_config(h, session, prov)
                     continue
-                if repaired or rt.fingerprint or not self._in_cache(prov.pack_path):
+                if (repaired or rt.fingerprint or not self._in_cache(prov.pack_path)
+                        or not _damaged_pack(exc) or str(prov.pack_path) in self._repaired):
                     raise
-                # the cached gateway pack failed its verification before anything was sent (a damaged or partly
-                # copied cache): delete it and provision it again once; the new copy is checked the same way
+                self._repaired.add(str(prov.pack_path))  # at most once per pack and process
+                # the cached gateway pack failed its verification (or could not be read) before anything was sent:
+                # a damaged or partly copied cache. Delete it and provision it again once; the new copy is checked
+                # the same way against the pinned fingerprint
                 repaired = True
                 log.warning("model %s: the cached model files are damaged (%s); downloading them again", h.name,
-                            exc.message)
+                            getattr(exc, "message", None) or type(exc).__name__)
                 await asyncio.to_thread(shutil.rmtree, prov.pack_path, True)
                 prov = adapt(await asyncio.to_thread(self.provisioner, h.name, **pkw), model=h.name)
                 if prov.fingerprint != str(entry["fingerprint"]).lower():
@@ -1189,6 +1194,14 @@ class Engine:
         if loop is not None and not loop.is_running():
             with contextlib.suppress(Exception):
                 loop.close()
+
+
+def _damaged_pack(exc: BaseException) -> bool:
+    """A pack that fails its verification or cannot be parsed (bytes changed, file truncated or missing)."""
+    if isinstance(exc, CoreIntegrityError | OSError | ValueError):
+        return True
+    m = str(getattr(exc, "message", "") or exc).lower()
+    return any(w in m for w in ("manifest", "truncated", "inconsistent offsets", "safetensors", "no such file"))
 
 
 def _disk_full(message: str) -> bool:
