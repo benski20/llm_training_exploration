@@ -6,6 +6,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import os
 import socket
 import threading
 import time
@@ -323,6 +324,26 @@ def test_local_hint_and_public_source_fallback(service: dict[str, Any], tiny_hf_
     with pytest.raises(FingerprintMismatchError):
         provision(service["fp"], session=None, cache_dir=tmp_path / "d", hint="none", masked_head=False,
                   source="hf", hf_repo=str(tiny_hf_dir), hf_name="other-name")
+
+
+def test_public_source_factory_pack_shares_plain_files(service: dict[str, Any], tiny_hf_dir: Path,
+                                                       tmp_path: Path) -> None:
+    """source='hf' with a factory pack: the gateway pack's plain-only files are hard links to the factory pack's
+    (no second copy of the embeddings / float head on disk), and both packs still verify in full."""
+    from pgw.provision.client import FACTORY_PACK_DIR
+
+    man = ModelPack.open(service["pack_dir"]).manifest
+    pm = provision(service["fp"], session=None, cache_dir=tmp_path, hint="none", masked_head=False,
+                   source="hf", hf_repo=str(tiny_hf_dir), hf_name=man.name, hf_plain_dtype=man.quant.plain_dtype,
+                   factory_pack=True)
+    assert pm.factory_pack_dir == pm.pack_dir.parent / FACTORY_PACK_DIR
+    plain_only = set(man.plain_files()) - set(man.linear_files())
+    assert plain_only
+    for f in plain_only:
+        assert os.path.samefile(pm.pack_dir / f, pm.factory_pack_dir / f)
+    pm.open_pack(verify="full").close()
+    ModelPack.open(pm.factory_pack_dir, verify="full").close()
+    pm.close()
 
 
 def test_provision_disabled_by_default(tiny_pack_dir: Path) -> None:

@@ -1923,3 +1923,30 @@ change.
       xdist; it passes in order).
     - `test_console_build.py::test_wheel_contains_the_console` globs `pgw-*.whl` while the distribution is
       `pgw-sdk`.
+
+
+## 2026-11-26: client disk: the factory pack stays (W8 is used per segment); hf-path duplicate removed
+
+Question: replace the factory pack (int8 `W8`, 6.5 / 31 / 70 GB at 7B / 32B / 72B) with a small stock of secret
+check-vector sets drawn at setup, sized against the factory's halt rule (3 failures + margin), plus a re-provision
+on exhaustion. Full note: `research/reviews/pks-v3-client-disk.md`.
+
+- **Does not hold; not implemented.** The factory needs `W8` for **every segment**, not just after rejections:
+  each segment's own Freivalds vectors `uW = u W8 mod p` come from a fresh `os.urandom` seed per segment
+  (SPEC 7.3 / 7.6). That is 3.3 / 11 / 17 MB per 1024-slot segment. The private `v W8` sets (94 / 309 / 486 MB) are
+  also redrawn at every worker start and after every aborted segment, transport errors and SIGTERM included,
+  and at 72B every segment (1.18 GiB > the 1 GiB in-RAM cache). A pack-sized stock would last ~2 / 2.9 / 4.1 M
+  token rows before a full `W8` re-download, so that path would be routine, not rare. A pre-drawn stock would be
+  as secret and as sound (same seeds, same derivation, KEK envelope as the store's segments), so no property needs
+  weakening; it just does not pay. The levers that would pay are a transposed pks-v3 hint (no client `W8`,
+  1.3 / 4.2 / 6.7 GB; a scheme change needing review) and dropping the float head after setup (1.6 / 2.3 / 3.7 GB;
+  changes what is verified against the pin). Both are left as decisions.
+- **Fixed:** `source="hf"` with a factory pack stored the plain tensors twice (gateway pack copy + factory pack).
+  The gateway pack now hard-links plain-only files, as the provider path already did. 0.5B measured 2.17 -> 1.63 GB
+  (`du`); 7B / 32B / 72B extrapolated 17.6 / 51.0 / 100.9 -> 13.3 / 44.8 / 90.9 GB. The provider path (SDK
+  default) is unchanged at 1.63 / 13.3 / 44.8 / 90.9 GB on disk (`prepare_real_bench.py`'s 2.17 GB counts hard
+  links twice).
+- Measured too: `W8` order-0 entropy 7.06 bits per weight (lossless compression at most ~12 %, at the price of
+  decompressing `W8` every segment): not pursued.
+- Tests: `tests/provision` 44 passed / 1 skipped (new `test_public_source_factory_pack_shares_plain_files`);
+  `tests/sdk` 103 passed / 1 skipped. tests/hemask and tests/service were not run (the change does not touch them).

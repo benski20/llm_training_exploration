@@ -290,7 +290,19 @@ def _install_from_full_pack(full: Any, mdir: Path) -> Path:
         if o.kind == "tensor":
             by_file.setdefault(str(o.file), []).append(o)
     headers: dict[str, Any] = {}
+    lin_files = set(man.linear_files())
     for file, fobjs in by_file.items():
+        if file not in lin_files and file in man.plain_files():
+            src_names = {n for n, t in man.tensors.items() if t.file == file}
+            if src_names == {o.name for o in fobjs}:
+                # A plain-only file the gateway needs whole: hard-link it (the full pack is kept as the factory
+                # pack, so a copy would store the embeddings / float head twice); the verification below hashes
+                # every tensor against the manifest either way.
+                try:
+                    os.link(full.root / file, part / file)
+                    continue
+                except OSError:
+                    pass
         offs = write_safetensors_layout(part / file, fobjs)
         with open(part / file, "r+b") as out:
             for o in fobjs:
