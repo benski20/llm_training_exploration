@@ -912,8 +912,9 @@ class Accounts:
             return "org"
         return None
 
-    def admit(self, tenant: str, fingerprint: str, rows: int) -> None:
-        """Per-call policy of an SDK tenant (others pass at once).
+    def admit(self, tenant: str, fingerprint: str, rows: int, *, model_name: str | None = None) -> None:
+        """Per-call policy of an SDK tenant (others pass at once). ``model_name`` names the model directly
+        (provisioning, which addresses packs by their base fingerprint) instead of resolving ``fingerprint``.
 
         Raises:
             AuthError: key revoked/expired (also checked at authentication; here for long-lived channels).
@@ -927,7 +928,7 @@ class Accounts:
         if st is None or not st.active(now):
             raise AuthError("credentials revoked or expired")
         if st.allowed is not None:
-            info = self._model(fingerprint)
+            info = self._model(fingerprint) if model_name is None else _ModelInfo(model_name, "", 1)
             if info is None or info.name not in st.allowed:
                 raise PGWError("this SDK key is not allowed to use this model", code=ErrorCode.PERMISSION_DENIED)
         if st.rec.daily_token_quota is not None or st.org_quota is not None:
@@ -981,6 +982,13 @@ class Accounts:
         if not tenant.startswith(SDK_TENANT_PREFIX):
             return
         self._add(tenant, fingerprint, maskgen_cols=cols, maskgen_requests=1, bytes_in=bytes_in, bytes_out=bytes_out)
+
+    def allowed_models(self, tenant: str) -> frozenset[str] | None:
+        """The model names an SDK tenant's key may use (``None``: every model, or not an SDK tenant)."""
+        if not tenant.startswith(SDK_TENANT_PREFIX):
+            return None
+        st = self._keys.get(tenant)
+        return frozenset() if st is None else st.allowed
 
     def lane_opened(self, tenant: str, fingerprint: str) -> None:
         """A lane ticket for ``fingerprint`` was issued to ``tenant`` (attribution of the lane's counters)."""

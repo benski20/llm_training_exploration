@@ -50,6 +50,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from pgw.console.sessions import COOKIE_NAME, CSRF_HEADER, ConsoleSessions, LoginRateLimiter, cookie_secure
 from pgw.core.errors import AuthError, ConfigError, ErrorCode, PGWError
 from pgw.core.fileio import atomic_write_text, write_private
+from pgw.core.http_body import read_limited
 from pgw.gateway.setup_jobs import (
     CheckpointResolver,
     FactorySupervisor,
@@ -780,9 +781,7 @@ def create_setup_app(
             raise
 
     async def _json(request: Request) -> Any:
-        raw = await request.body()
-        if len(raw) > 64 << 10:
-            raise PGWError("request body too large", code=ErrorCode.PAYLOAD_TOO_LARGE)
+        raw = await read_limited(request, 64 << 10)  # stops at the limit, chunked bodies too (review S13)
         if not raw:
             return {}
         try:

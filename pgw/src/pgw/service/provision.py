@@ -376,6 +376,17 @@ def add_provision_routes(app: Any, state: Any) -> None:
                                           details={"reason": "provision = false"})
         return identity
 
+    def admit(identity: Any, fp: str, rows: int = 0) -> None:
+        """An SDK key's model scope, daily quotas and row rate apply to provisioning as to compute (security review
+        2026-11, S10): artifacts and hint jobs only of the key's models; H chunks count against its row bucket."""
+        acc = getattr(state, "accounts", None)
+        if acc is None:
+            return
+        e = svc._base_entries().get(fp)
+        if e is None:
+            return  # unknown fingerprint: the route answers 404
+        acc.admit(identity.tenant_id, fp, rows, model_name=str(e["name"]))
+
     def fail(exc: BaseException) -> Response:
         if not isinstance(exc, PGWError):
             log.error("provision internal error", exc_info=exc)
@@ -402,21 +413,28 @@ def add_provision_routes(app: Any, state: Any) -> None:
 
     async def models(request: Request) -> Response:
         try:
-            await auth(request)
-            return js(await asyncio.to_thread(svc.catalog))
+            ident = await auth(request)
+            out = await asyncio.to_thread(svc.catalog)
+            acc = getattr(state, "accounts", None)
+            allowed = acc.allowed_models(ident.tenant_id) if acc is not None else None
+            if allowed is not None:  # only the key's models (S10)
+                out = {**out, "models": [m for m in out["models"] if m["name"] in allowed]}
+            return js(out)
         except Exception as exc:
             return fail(exc)
 
     async def manifest(request: Request) -> Response:
         try:
-            await auth(request)
+            ident = await auth(request)
+            admit(ident, fp_of(request))
             return js(await asyncio.to_thread(svc.manifest, fp_of(request)))
         except Exception as exc:
             return fail(exc)
 
     async def obj(request: Request) -> Response:
         try:
-            await auth(request)
+            ident = await auth(request)
+            admit(ident, fp_of(request))
             oid = request.query_params.get("id")
             if not oid:
                 raise ProtocolError("query parameter 'id' is required")
@@ -444,6 +462,7 @@ def add_provision_routes(app: Any, state: Any) -> None:
             lin = req.get("linears")
             if lin is not None and (not isinstance(lin, list) or not all(isinstance(x, str) for x in lin)):
                 raise ProtocolError("linears must be a list of linear keys or null")
+            admit(ident, fp_of(request))
             out = await asyncio.to_thread(svc.create_job, ident.tenant_id, fp_of(request), bytes.fromhex(seed),
                                           masked_head=bool(req.get("masked_head", False)), linears=lin)
             return js(out)
@@ -456,8 +475,10 @@ def add_provision_routes(app: Any, state: Any) -> None:
             lin = request.query_params.get("linear")
             if not lin:
                 raise ProtocolError("query parameter 'linear' is required")
-            data = await asyncio.to_thread(svc.h_chunk, ident.tenant_id, str(request.path_params["job"]), lin,
-                                           int_param(request, "chunk"))
+            jid, chunk = str(request.path_params["job"]), int_param(request, "chunk")
+            job = svc._job(ident.tenant_id, jid)
+            admit(ident, job.fingerprint, H_ROWS_PER_CHUNK)  # hint work counts against the key's row rate (S10)
+            data = await asyncio.to_thread(svc.h_chunk, ident.tenant_id, jid, lin, chunk)
             return Response(content=data, media_type="application/octet-stream", headers={"Cache-Control": "no-store"})
         except Exception as exc:
             return fail(exc)
