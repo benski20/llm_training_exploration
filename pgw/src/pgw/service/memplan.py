@@ -47,13 +47,20 @@ from pgw.core.ringmm import (
 
 __all__ = [
     "GPUS",
+    "H100_RATES",
     "MODELS",
     "GpuSpec",
     "MemConfig",
     "MemPlan",
     "ModelShape",
+    "PksRates",
     "check_fit",
     "main",
+    "pks_device_hint",
+    "pks_item_seconds",
+    "pks_model_hint_bytes",
+    "pks_throughput",
+    "pks_throughput_table",
     "plan",
     "plan_model",
     "plan_table",
@@ -156,6 +163,11 @@ class MemConfig:
     maskgen_b_bits: int = 53  #: wire v2 upload bits (the default)
     maskgen_y_bits: int = 35
     maskgen_part_bytes: int = 512 * MIB
+    #: where the pks-v3 provider hint comes from (``PGW_SERVICE_PKS_DEVICE_HINT``): ``auto`` recomputes it per item
+    #: on the device when one seed's hints for the model exceed ``pks_cache_bytes``, else caches it on the host
+    pks_hint: Literal["auto", "device", "cache"] = "auto"
+    pks_cache_bytes: int = 8_000_000_000  #: ``PGW_SERVICE_PKS_CACHE_GB`` (host RAM)
+    pks_work_bytes: int = 512 * MIB  #: ``PGW_SERVICE_PKS_GPU_WORK_MB`` (row blocks of the key switch / device item)
     context_bytes: int = 512 * MIB  #: CUDA context, cuBLAS/cuBLASLt handles, Triton modules
     cublas_workspace_bytes: int = 32 * MIB  #: per stream that runs GEMMs
     fragmentation: float = 0.03  #: caching-allocator slack on non-weight memory
@@ -269,14 +281,29 @@ def _mulmod64_bytes(m: int, n: int, cols: int, nb: int, part_bytes: int, legacy:
     return n * cols * nb + held + block
 
 
-def _maskgen_v3_bytes(m: int, n: int, cfg: MemConfig, legacy: bool) -> int:
+def pks_model_hint_bytes(linears: Sequence[tuple[str, int, int]]) -> int:
+    """Host bytes of one customer seed's switched pks-v3 hints for every linear (``m x 4096`` uint64 each)."""
+    return sum(m for _, m, _ in linears) * 4096 * 8
+
+
+def pks_device_hint(cfg: MemConfig, linears: Sequence[tuple[str, int, int]]) -> bool:
+    """True when the provider recomputes the pks-v3 hint per item on the device (``PKSProvider``'s policy)."""
+    if cfg.maskgen_wire != "v3" or cfg.rev != "current" or cfg.pks_hint == "cache":
+        return False
+    return cfg.pks_hint == "device" or pks_model_hint_bytes(linears) > cfg.pks_cache_bytes
+
+
+def _maskgen_v3_bytes(m: int, n: int, cfg: MemConfig, legacy: bool, device_hint: bool = False) -> int:
     """One pks-v3 item (:class:`pgw.service.pks_provider.PKSProvider`): the hint build for a new customer seed
     (a 4096-column GEMM, once per seed and linear) or the item's GEMM, then the device key switch (row blocks of
-    :data:`pgw.service.pks_gpu.WORK_BYTES`; unblocked before 2026-11-26)."""
+    :data:`pgw.service.pks_gpu.WORK_BYTES`; unblocked before 2026-11-26). With ``device_hint``: the whole item on
+    the device in row blocks (:func:`pgw.service.pks_gpu.item_bytes`)."""
     from pgw.hemask.pks import NU, PACK, D
-    from pgw.service.pks_gpu import WORK_BYTES, _block_bytes
+    from pgw.service.pks_gpu import WORK_BYTES, _block_bytes, item_bytes
 
     groups = max(1, cfg.maskgen_cols // 256)
+    if device_hint and not legacy:
+        return item_bytes(m, n, padded_shape(m, n)[1], cfg.maskgen_cols, groups, cfg.pks_work_bytes)
     gemm = max(_mulmod64_bytes(m, n, NU, 7, MASKGEN_PART_BYTES_CUDA, legacy),
                _mulmod64_bytes(m, n, cfg.maskgen_cols, 7, MASKGEN_PART_BYTES_CUDA, legacy))
     blocks = m // PACK
@@ -285,10 +312,10 @@ def _maskgen_v3_bytes(m: int, n: int, cfg: MemConfig, legacy: bool) -> int:
     return max(gemm, ks + 8 * D * groups * PACK * min(blocks, max(1, WORK_BYTES // _block_bytes(groups))))
 
 
-def _maskgen_item_bytes(m: int, n: int, cfg: MemConfig, legacy: bool) -> int:
+def _maskgen_item_bytes(m: int, n: int, cfg: MemConfig, legacy: bool, device_hint: bool = False) -> int:
     """Device bytes of one maskgen item of ``cfg.maskgen_cols`` columns (v2: :mod:`pgw.service.maskgen_gpu`)."""
     if cfg.maskgen_wire == "v3":
-        return _maskgen_v3_bytes(m, n, cfg, legacy)
+        return _maskgen_v3_bytes(m, n, cfg, legacy, device_hint)
     from pgw.service.kernels import _maskgen_block_cols
 
     cols, bb, yb = cfg.maskgen_cols, cfg.maskgen_b_bits, cfg.maskgen_y_bits
@@ -314,6 +341,128 @@ def _maskgen_item_bytes(m: int, n: int, cfg: MemConfig, legacy: bool) -> int:
     if legacy:  # the previous block's planes, partials and result stayed referenced while the next allocated
         block = planes + part + y + max(planes + part, part + y, 3 * y)
     return data_in + data_out + vals + max(tail, block)
+
+
+# ---- pks-v3 item time (ESTIMATES) ---------------------------------------------------------------------------
+#: Bytes read + written by the device torch code per unit, counted operator by operator on CPU (the same torch code
+#: runs on CUDA; ``tests/service/test_pks_device_item.py`` recounts them): the key switch per output row is
+#: ``KS_ROW_BYTES[0] + KS_ROW_BYTES[1] G`` (16 + G NTTs of 8192 over 4 primes, ~4.5 KB per hint value: the
+#: dominant term), the 14-bit-digit modulus switch per hint value, the int64 recombination of the 7 GEMM planes
+#: per result value, the hint operand's plane build per input feature, the upload's per value.
+KS_ROW_BYTES = (11_681_791, 1_659_392)
+SWITCH_VALUE_BYTES = 488
+COMBINE_VALUE_BYTES = 140
+A_PLANES_FEATURE_BYTES = 163_901
+B_PLANES_VALUE_BYTES = 21
+#: torch operators per row block of the device item (key switch ~871, switch and recombination per column block)
+ITEM_OPS_PER_BLOCK = 871 + 8 * (28 + 13) + 2 * 13
+
+
+@dataclass(frozen=True)
+class PksRates:
+    """Rates of the pks-v3 item time model. Device rates are ESTIMATES from datasheets (the session's ``maskgen``
+    phase measures the real ones on an H100); host rates were measured on the 4-vCPU development container (a
+    loaded one: treat as order of magnitude)."""
+
+    name: str = "H100 SXM (estimate)"
+    int8_ops_s: float = 1.2e15  #: dense int8 GEMM (``torch._int_mm``): ~60 % of 1979 TOPS
+    hbm_bytes_s: float = 2.3e12  #: torch int64 element-wise kernels: ~70 % of 3.35 TB/s
+    launch_s: float = 5e-6  #: host time per eager torch operator (the floor when kernels are small)
+    h2d_pageable_s: float = 10e9  #: numpy -> device (pageable)
+    h2d_pinned_s: float = 20e9
+    d2h_s: float = 20e9
+    host_switch_row_s: float = 1.62 / 4096  #: ``pks.switch_hint`` numpy, one thread, per 4096-value row (measured)
+    host_native_switch_row_s: float = 0.115 / 4096  #: ``pgw_pks.switch_hint``, 4 threads (measured)
+    host_amlwe_feature_s: float = 0.46 / 8192  #: ``pks.a_mlwe_rows`` numpy per input feature (measured)
+    host_stream_bytes_s: float = 1.0e9  #: ``public_ring_rows`` ChaCha20, GIL held (measured)
+
+
+H100_RATES = PksRates()
+
+
+def pks_item_seconds(m: int, n: int, cols: int, path: str, rates: PksRates = H100_RATES,
+                     work_bytes: int = 512 * MIB) -> dict[str, float]:
+    """ESTIMATED seconds of one pks-v3 item (``cols`` columns of one ``m x n`` linear) by stage, for ``path``:
+
+    * ``"miss"``: the cache path when the hint is not cached (every item at 32B+ before 2026-11-26, and at 7B with
+      the default 8 GB cache): public ``A`` on the host, its 4096-column GEMM, ``H`` to the host, the numpy switch,
+      the switched hint back to the device for the key switch; ``"miss_native"``: the same with the native switch;
+    * ``"hit"``: the cached hint (host) copied to the device for the key switch every item;
+    * ``"device"``: :func:`pgw.service.pks_gpu.item` (only the ring rows and ``b`` go up, the reply comes back).
+
+    Every path also does the item's GEMM and the device key switch (the same torch code). Element-wise device work
+    is ``max(bytes / hbm, operators x launch_s)``."""
+    from pgw.hemask.pks import NU, PACK
+    from pgw.service.pks_gpu import _block_bytes, item_rows
+
+    r = rates
+    groups = cols // 256
+    np_ = padded_shape(m, n)[1]
+
+    def gemm(c: int) -> float:
+        return 2 * m * np_ * c * 7 / r.int8_ops_s
+
+    def elementwise(nbytes: float, ops: float) -> float:
+        return max(nbytes / r.hbm_bytes_s, ops * r.launch_s)
+
+    ks_blocks = -(-m // (max(1, work_bytes // _block_bytes(groups)) * PACK))  # pks_gpu.keyswitch's row blocks
+    t: dict[str, float] = {}
+    t["y_gemm"] = gemm(cols) + m * cols * COMBINE_VALUE_BYTES / r.hbm_bytes_s
+    t["key_switch"] = elementwise(m * (KS_ROW_BYTES[0] + KS_ROW_BYTES[1] * groups), 871 * ks_blocks)
+    t["reply_d2h"] = groups * m * D_REPLY * 8 / r.d2h_s
+    if path == "device":
+        blocks = -(-m // item_rows(m, np_, cols, groups, work_bytes))
+        t["ring_rows_host"] = n * 2048 / r.host_stream_bytes_s
+        t["upload_h2d"] = (n * 2048 + n * cols * 8) / r.h2d_pageable_s
+        t["planes"] = (n * A_PLANES_FEATURE_BYTES + n * cols * B_PLANES_VALUE_BYTES) / r.hbm_bytes_s
+        t["hint_gemm_switch"] = gemm(NU) + elementwise(m * NU * (COMBINE_VALUE_BYTES + SWITCH_VALUE_BYTES),
+                                                       blocks * (ITEM_OPS_PER_BLOCK - 871))
+        t["key_switch"] = elementwise(m * (KS_ROW_BYTES[0] + KS_ROW_BYTES[1] * groups), 871 * blocks)
+        return t
+    t["y_roundtrip"] = m * cols * 8 / r.d2h_s + m * cols * 8 / r.h2d_pageable_s
+    t["hint_h2d"] = m * NU * 8 / r.h2d_pageable_s
+    if path == "hit":
+        return t
+    if path not in ("miss", "miss_native"):
+        raise ValueError(f"unknown path {path!r}")
+    t["a_host"] = n * 2048 / r.host_stream_bytes_s + n * r.host_amlwe_feature_s
+    t["a_h2d"] = n * NU * 7 / r.h2d_pinned_s
+    t["hint_gemm"] = gemm(NU) + m * NU * COMBINE_VALUE_BYTES / r.hbm_bytes_s
+    t["hint_d2h"] = m * NU * 8 / r.d2h_s
+    t["host_switch"] = m * (r.host_switch_row_s if path == "miss" else r.host_native_switch_row_s)
+    return t
+
+
+D_REPLY = 256  # reply values per output row and group (8192 per 32 rows)
+
+
+def pks_throughput(model: str, path: str, cfg: MemConfig | None = None, rates: PksRates = H100_RATES
+                   ) -> dict[str, object]:
+    """ESTIMATED mask slots per second of one GPU serving pks-v3 items of ``cfg.maskgen_cols`` columns for every
+    linear of ``model`` in turn (one decode cycle: ``cols`` slots of every linear), items one after another."""
+    cfg = cfg or MemConfig()
+    lins = MODELS[model].linears(cfg.masked_head)
+    total = 0.0
+    stages: dict[str, float] = {}
+    for _, m, n in lins:
+        for k, v in pks_item_seconds(m, n, cfg.maskgen_cols, path, rates, cfg.pks_work_bytes).items():
+            stages[k] = stages.get(k, 0.0) + v
+            total += v
+    return {"model": model, "path": path, "cycle_s": round(total, 1), "slots_per_s": round(cfg.maskgen_cols / total, 2),
+            "hint_gb_per_seed": round(pks_model_hint_bytes(lins) / 1e9, 1),
+            "stages_s": {k: round(v, 2) for k, v in sorted(stages.items(), key=lambda kv: -kv[1])}}
+
+
+def pks_throughput_table(models: Sequence[str], cfg: MemConfig | None = None, rates: PksRates = H100_RATES) -> str:
+    rows = [f"ESTIMATES ({rates.name}; device rates from datasheets, host rates measured on a loaded 4-vCPU box)",
+            "| model | hint GB / seed | path | s per cycle | slots/s | largest stages (s per cycle) |",
+            "|---|---|---|---|---|---|"]
+    for model in models:
+        for path in ("miss", "miss_native", "hit", "device"):
+            s = pks_throughput(model, path, cfg, rates)
+            top = ", ".join(f"{k} {v}" for k, v in list(s["stages_s"].items())[:3])  # type: ignore[attr-defined]
+            rows.append(f"| {model} | {s['hint_gb_per_seed']} | {path} | {s['cycle_s']} | {s['slots_per_s']} | {top} |")
+    return "\n".join(rows)
 
 
 # ---- the plan ---------------------------------------------------------------------------------------------
@@ -352,6 +501,7 @@ def plan(model: str, linears: Sequence[tuple[str, int, int]], gpu: GpuSpec, cfg:
     """Memory plan of serving ``linears`` (``(key, m, n)``) on ``gpu`` (``cfg.tp`` / ``cfg.pipeline`` of them)."""
     cfg = cfg or MemConfig()
     legacy = cfg.rev != "current"
+    device_hint = pks_device_hint(cfg, linears)
     plans = []
     ks = sorted(set(cfg.rings_k))
     warm_k = cfg.rings_k[0]
@@ -422,7 +572,7 @@ def plan(model: str, linears: Sequence[tuple[str, int, int]], gpu: GpuSpec, cfg:
                 eager = max(eager, _eager_bytes(k, b, n, np_, mp, m, legacy))
         dp.serving["eager_call"] = eager
         if cfg.maskgen:
-            item = max(_maskgen_item_bytes(m, n, cfg, legacy) for m, n, _, _ in pads)
+            item = max(_maskgen_item_bytes(m, n, cfg, legacy, device_hint) for m, n, _, _ in pads)
             dp.serving["maskgen_items"] = cfg.maskgen_concurrency * item
             if cfg.rev == "bfee514" and not cfg.warmup:  # row sums for the maskgen constant via an int64 copy
                 dp.serving["maskgen_const_int64_copy"] = 8 * big_mp * big_np
@@ -505,19 +655,33 @@ def main(argv: Sequence[str] | None = None) -> int:
     ap.add_argument("--maskgen-concurrency", type=int, default=2)
     ap.add_argument("--maskgen-cols", type=int, default=1024)
     ap.add_argument("--maskgen-wire", default="v3", choices=["v2", "v3"])
+    ap.add_argument("--pks-hint", default="auto", choices=["auto", "device", "cache"],
+                    help="pks-v3 provider hint: recomputed per item on the device, or cached on the host")
+    ap.add_argument("--pks-cache-gb", type=float, default=8.0)
+    ap.add_argument("--pks-work-mb", type=int, default=512)
+    ap.add_argument("--pks-throughput", action="store_true",
+                    help="ESTIMATED pks-v3 mask slots/s per GPU by hint path (H100 rates) instead of the memory plan")
     ap.add_argument("--json", action="store_true", help="one JSON object per (model, GPU, TP) with the breakdown")
     a = ap.parse_args(argv)
     cfg = MemConfig(masked_head=not a.no_masked_head, lane=not a.no_lane, persistent=a.persistent,
                     max_batch_rows=a.max_batch_rows, eager_work_bytes=a.eager_work_mb << 20,
                     maskgen_concurrency=a.maskgen_concurrency, maskgen_cols=a.maskgen_cols, rev=a.rev,
-                    maskgen_wire=a.maskgen_wire,
-                    pipeline=a.pipeline)
+                    maskgen_wire=a.maskgen_wire, pks_hint=a.pks_hint, pks_cache_bytes=int(a.pks_cache_gb * 1e9),
+                    pks_work_bytes=a.pks_work_mb << 20, pipeline=a.pipeline)
     models = a.model or list(MODELS)
     gpus = a.gpu or list(GPUS)
     tps = [int(t) for t in a.tp.split(",")]
     for m in models + gpus:
         if m not in MODELS and m not in GPUS:
             ap.error(f"unknown model or GPU {m!r}")
+    if a.pks_throughput:
+        if a.json:
+            for model in models:
+                for path in ("miss", "miss_native", "hit", "device"):
+                    print(json.dumps(pks_throughput(model, path, cfg)))
+        else:
+            print(pks_throughput_table(models, cfg))
+        return 0
     if a.json:
         for model in models:
             for g in gpus:

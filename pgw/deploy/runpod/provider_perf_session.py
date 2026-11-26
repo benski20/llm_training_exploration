@@ -23,13 +23,17 @@ Phases (``--phases``, default all, in this order):
 ``lane_local``   ``benchmarks/lane_gpu_trip_bench.py``: lane trips over UDS / shm next to an idle, a Python-path
                  and a maskgen-GEMM-loaded GPU (lane overhead without the NIC).
 ``maskgen``      ``benchmarks/maskgen_provider_bench.py``: encrypted maskgen throughput (wire v2, fused) at 7B and
-                 70B widths, 1/4/16 groups, 1/2/4 concurrent items, and decode latency next to it.
+                 70B widths, 1/4/16 groups, 1/2/4 concurrent items, and decode latency next to it. Then pks-v3
+                 items in process (:func:`phase_pks_items`) on the largest linears of ``--models``: the hint cache
+                 path (miss: new seed, hit: same seed) against the per-item device hint
+                 (``PGW_SERVICE_PKS_DEVICE_HINT``) at 512/1024/2048 MB work budgets: seconds, peak memory,
+                 byte-identical replies, next to ``memplan.pks_item_seconds``'s estimate.
 ``lane_nic``     ``benchmarks/lane_nic_bench.py serve`` for ``--nic-minutes`` (7B, then 72B widths): run the printed
                  ``client`` command in the client pod (``launch.py --client-pod``, same data center) meanwhile; it
                  reports the lane's fixed cost per trip over the real NIC and throughput at 1-64 connections.
 
 Order and budget: ``env`` 1 min, ``memory`` ~20 min (72B: ~67 GB of random weights), ``device_time`` ~12 min,
-``gemv_table`` ~6 min, ``lane_local`` ~10 min, ``maskgen`` ~10 min, ``lane_nic`` 2 x ``--nic-minutes``. About 75 min
+``gemv_table`` ~6 min, ``lane_local`` ~10 min, ``maskgen`` ~20 min, ``lane_nic`` 2 x ``--nic-minutes``. About 85 min
 of one H100 (~$3 at ~$2.5/h Secure Cloud) plus the client CPU pod. The decisions each number feeds are in
 ``STATUS.md`` (2026-11-26 provider performance audit).
 
@@ -54,7 +58,7 @@ from typing import Any
 
 PGW = Path(__file__).resolve().parents[2]
 PHASES = ("env", "memory", "device_time", "gemv_table", "lane_local", "maskgen", "lane_nic")
-MINUTES = {"env": 1, "memory": 20, "device_time": 12, "gemv_table": 6, "lane_local": 10, "maskgen": 10, "lane_nic": 0}
+MINUTES = {"env": 1, "memory": 20, "device_time": 12, "gemv_table": 6, "lane_local": 10, "maskgen": 20, "lane_nic": 0}
 
 
 def _log(out: Path, phase: str, msg: str) -> None:
@@ -303,6 +307,90 @@ def _lane_capture(model: str, lins: list[tuple[str, int, int]], kernels: list[An
     return out
 
 
+# ---- maskgen: pks-v3 items (hint cached on the host vs recomputed per item on the device) -------------------
+#: The largest linears of each model: (key, m, n). 7B's masked head is the largest item of all.
+PKS_LINEARS = {
+    "qwen2.5-0.5b": [("0.o", 896, 896)],
+    "qwen2.5-7b": [("0.gate_up", 37888, 3584), ("0.down", 3584, 18944), ("28.head", 152064, 3584)],
+    "qwen2.5-32b": [("0.gate_up", 55296, 5120), ("0.down", 5120, 27648)],
+    "qwen2.5-72b": [("0.gate_up", 59136, 8192), ("0.down", 8192, 29568)],
+}
+
+
+def phase_pks_items(models: list[str], cpu: bool, cols: int = 1024, work_mbs: tuple[int, ...] = (512, 1024, 2048)
+                    ) -> dict[str, Any]:
+    """Seconds and peak device memory of one pks-v3 item per path on the largest linears (random int8 weights through
+    the service's ``ComputeKernel``): ``miss`` (the cache path with a new customer seed: hint GEMM, host switch,
+    key switch), ``hit`` (same seed again), ``device`` (``pks_gpu.item``) at several ``PGW_SERVICE_PKS_GPU_WORK_MB``.
+    Replies of every path must be byte-identical. Feeds ``memplan.PksRates`` (per-row key switch time, GEMM rate) and
+    the hint policy (does a cache hit beat recomputing?)."""
+    import numpy as np
+    import torch
+
+    from pgw.core.types import LinearId, LinearKind, LinearSpec
+    from pgw.hemask import pks
+    from pgw.hemask.wire import pack_bits
+    from pgw.service import memplan, pks_gpu
+    from pgw.service.kernels import ComputeKernel
+    from pgw.service.pks_provider import PKSProvider, pack_ksk
+
+    dev = torch.device("cpu" if cpu or not torch.cuda.is_available() else "cuda:0")
+    mem = _Mem(dev)
+    rng = np.random.default_rng(7)
+    groups = cols // pks.D
+    out: dict[str, Any] = {"device": str(dev), "cols": cols}
+    for model in models:
+        lins = PKS_LINEARS.get(model, [])
+        for key, m, n in lins:
+            if cpu:  # the CPU smoke test keeps these small
+                m, n = min(m, 64), min(n, 64)
+            layer, kind = key.split(".")
+            lid = LinearId(int(layer), LinearKind.LM_HEAD if kind == "head" else LinearKind(kind))
+            w = torch.randint(-128, 128, (m, n), dtype=torch.int8, generator=torch.Generator().manual_seed(3))
+            kern = ComputeKernel(LinearSpec(lid, m, n), w, device=dev)
+            del w
+            b = rng.integers(0, 1 << 56, (n, cols), dtype=np.uint64)
+            ops = np.stack([np.stack([rng.integers(0, p, (pks.RANK, pks.NR), dtype=np.uint64) for p in pks.QP])
+                            for _ in range(groups)]).astype(np.uint32)
+            from types import SimpleNamespace
+
+            item = SimpleNamespace(linear=key, cols=cols, b=pack_bits(b.reshape(-1), 56), b_bits=56,
+                                   ksk=pack_ksk(ops))
+            res: dict[str, Any] = {"m": m, "n": n}
+            replies: dict[str, bytes] = {}
+            cache = PKSProvider(cache_bytes=10**13, mode="cache")
+            cache._device_path(kern)  # the device key switch's self-test outside the timing
+            seed = os.urandom(32)
+            for path in ("miss", "hit"):
+                b0 = mem.reset()
+                t0 = time.perf_counter()
+                replies[path] = bytes(cache.run_item("fp", kern, item, seed))
+                res[path] = {"s": round(time.perf_counter() - t0, 3),
+                             "peak_delta_gib": round((mem.peak() - b0) / 2**30, 3)}
+            del cache
+            for wmb in work_mbs if not cpu else (512,):
+                os.environ["PGW_SERVICE_PKS_GPU_WORK_MB"] = str(wmb)
+                pv = PKSProvider(mode="device")
+                pv.use_device("fp", kern, key)  # self-test outside the timing
+                b0 = mem.reset()
+                t0 = time.perf_counter()
+                y = bytes(pv.run_item("fp", kern, item, seed))
+                dt = time.perf_counter() - t0
+                res[f"device_{wmb}mb"] = {"s": round(dt, 3), "peak_delta_gib": round((mem.peak() - b0) / 2**30, 3),
+                                          "us_per_row": round(dt / m * 1e6, 2), "device_items": pv.device_items,
+                                          "rows_per_block": pks_gpu.item_rows(m, kern.in_features, cols, groups)}
+                replies[f"device_{wmb}"] = y
+            os.environ.pop("PGW_SERVICE_PKS_GPU_WORK_MB", None)
+            res["identical"] = len(set(replies.values())) == 1
+            res["model_estimate_s"] = {p: round(sum(memplan.pks_item_seconds(m, n, cols, p).values()), 3)
+                                       for p in ("miss", "hit", "device")}
+            out[f"{model}:{key}"] = res
+            del kern
+            if dev.type == "cuda":
+                torch.cuda.empty_cache()
+    return out
+
+
 # ---- driver ------------------------------------------------------------------------------------------------
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
@@ -384,10 +472,19 @@ def main() -> int:
                                                str(out / f"lane_local_{pre}.json")], MINUTES[p] / 2, a.dry_run)
                  for pre in ("7b", "72b")}
         elif p == "maskgen":
-            r = _run(out, p, [py, "benchmarks/maskgen_provider_bench.py", "--presets", "qwen2.5-7b", "llama3-70b",
-                              "--formats", "v2:53:35", "--groups", "1", "4", "16", "--conc", "1", "2", "4",
-                              "--modes", "fused", "--decode", "--json", str(out / "maskgen.json")], MINUTES[p],
-                     a.dry_run)
+            r = {"v2": _run(out, p, [py, "benchmarks/maskgen_provider_bench.py", "--presets", "qwen2.5-7b",
+                                     "llama3-70b", "--formats", "v2:53:35", "--groups", "1", "4", "16", "--conc", "1",
+                                     "2", "4", "--modes", "fused", "--decode", "--json", str(out / "maskgen.json")],
+                            MINUTES[p] / 2, a.dry_run)}
+            _log(out, p, f"pks-v3 items (cache miss / hit / device hint) on {a.models}")
+            if a.dry_run:
+                r["pks_v3"] = {"dry_run": True}
+            else:
+                try:
+                    r["pks_v3"] = phase_pks_items(a.models.split(","), a.cpu)
+                except Exception as exc:  # e.g. an OOM: that is a finding
+                    r["pks_v3"] = {"error": f"{type(exc).__name__}: {str(exc)[:500]}"}
+                (out / "maskgen_pks_v3.json").write_text(json.dumps(r["pks_v3"], indent=1))
         else:  # lane_nic
             if not a.host:
                 _log(out, p, "skipped: --host (the pod's public IP) is needed for the certificate")

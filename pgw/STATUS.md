@@ -2128,3 +2128,138 @@ CPU by thread, lane counters), `benchmarks/sdk_scale_sizing.py` (cores / RAM / d
   passed; 2 failures not from this change (`test_ringbuf` / `test_ringshm` crash children: `tests/platform` shadows
   the stdlib `platform` module on their path). Open: multi-item (or parallel single-item) lane calls, a shared
   system-prompt prefix across conversations (needs a privacy review), per-user quotas.
+
+
+## 2026-11-26 — pks-v3 provider hint recomputed per item on the device (maskgen at 32B+)
+
+Problem (provider audit above): `PKSProvider` cached the switched hint `round(W8 A q1 / 2^56)` as `m x 4096` uint64 per
+(model, customer seed, linear): 14.9 / 50.5 / 157.5 / 229.8 GB per seed at 0.5B / 7B / 32B / 72B, against the 8 GB
+default cache. A decode cycle over all linears evicted every entry (LRU with cyclic access), so every item rebuilt its
+hint. A rebuild was: `A` expanded on the host (numpy `a_mlwe_rows`), a 4096-column GEMM, `H` copied to the host, the
+numpy switch on one thread, and the switched hint copied back for the key switch. On top of that, `y` went device ->
+host -> device.
+
+**Fix** (`pgw.service.pks_gpu.item`). The scheme, the wire and the replies are unchanged. Each item now runs on the
+kernel's device, in row blocks of whole reply ciphertexts (`PGW_SERVICE_PKS_GPU_WORK_MB`):
+- Only the customer's public ring rows `a_C` go up (`n/16 x 4096`, 1/16 of `A`). `A`'s 7 byte planes are expanded on
+  the device.
+- Per row block, four steps run back to back on the device:
+  1. the hint rows `W8 A`, using the same int8 plane GEMM and recombination as `ComputeKernel.mulmod64`;
+  2. their switch, using the existing 14-bit-digit `_round_mul_shift`;
+  3. the item's `y = W8 b`;
+  4. the existing device key switch.
+- Only the reply rows come back. Nothing is cached.
+
+Policy (`PGW_SERVICE_PKS_DEVICE_HINT`):
+- `auto` (the default) uses the device path on CUDA kernels when one seed's hints for the whole model exceed
+  `PGW_SERVICE_PKS_CACHE_GB`. The handler passes the model's dims; without them, the linears seen so far count. Below
+  the threshold the host cache works as before.
+- `device` and `cache` force a path.
+
+Safeguards and related changes:
+- Before first use on a device, `item_self_test` must match the host path bit for bit (zero-padded weight, extreme
+  rows). Any device error makes that device fall back to the cache path for good.
+- Concurrent device items run on their own CUDA streams.
+- Tensor-parallel kernels run one item part per shard when the shard bounds are multiples of 32 rows. Otherwise they
+  use the cache path.
+- The cache path now switches natively when `pgw_pks` is present (`pgw_pks.switch_hint`, multi-threaded, same bits).
+- The torch NTT's short butterfly stages (lengths 1-32) had stride-2 operands and took nearly all of its CPU time. They
+  now run on a transposed layout with in-place butterflies. The butterflies and the arithmetic are the same, so the
+  results are bit-identical (checked against `pks.Ntt`), and every device gets fewer operators and contiguous operands.
+
+The provider learns nothing new: it uses the same `A` derived from the public `a_seed` and the same ciphertexts. There
+is no scheme or wire change. The replies are bit-identical, so the customer's checks (self-check, Freivalds) are
+unchanged.
+
+**Exactness evidence** (`tests/service/test_pks_device_item.py`, run on CPU torch, the same code that runs on CUDA):
+- The device item equals the host path (numpy GEMM, `pks.switch_hint` and the CPU key switch) at two shapes:
+  - 64x48: 1 group, unpadded weight;
+  - 96x80: 2 groups, zero-padded weight, three 32-row blocks.
+- Through `PKSProvider`, the device bytes equal the cache-path bytes, and the customer (`pks_native.Customer`, with its
+  own compact hint) decrypts them to `W8 r mod 2^32`. This holds in four cases:
+  - 64x48 with 300 rows (2 groups, one of them partial);
+  - a 2-shard tensor-parallel kernel;
+  - Qwen2.5-0.5B's `o_proj` shape (896x896);
+  - Qwen2.5-0.5B's `down_proj` shape (896x4864).
+- Further checks:
+  - the `A` columns equal `a_mlwe_rows`;
+  - the NTTs equal `pks.Ntt`;
+  - the native host switch equals numpy;
+  - the device self-test passes on CPU;
+  - a failure falls back and returns the same bytes;
+  - the policy and env parsing behave as specified.
+
+**Memory**, measured with `tests/core/alloc_tracker.py` on CPU: one item's peak tensor bytes stay within
+`pks_gpu.item_bytes` and above 40 % of it, and 4 row blocks peak at less than half of 1 block. An item holds the hint
+operand's planes (`7 x 4096 x n_pad` B, 0.85 GB at 72B `down`), the upload's planes and one row block. `memplan` now
+models this (`--pks-hint`, `--pks-cache-gb`, `--pks-work-mb`). Maskgen items, 2 concurrent, GiB per device:
+
+| model | before | after |
+|---|---|---|
+| 7B | 3.45 | 2.32 |
+| 32B | 3.39 | 2.94 |
+| 72B | 4.24 | 3.07 |
+| 72B, TP=2 | 4.78 | 3.07 |
+
+Peak serving for 72B on one H100 drops from 72.33 to 71.16 GiB (headroom 7.3 -> 8.5).
+
+**Throughput, ESTIMATES** (`python -m pgw.service.memplan --pks-throughput`). The setting is one H100 serving
+1024-column items of every linear in turn; slots per second = 1024 / seconds per cycle. Inputs:
+- Device rates are datasheet-based, not measured: int8 GEMM 1.2 POPS (60 % of peak), torch element-wise 2.3 TB/s (70 %
+  of HBM3), PCIe 10-20 GB/s, 5 us per eager operator.
+- Device traffic was counted per torch operator on CPU (`test_traffic_constants_are_the_counted_ones`): the key switch
+  moves 11.7 + 1.66 G MB per output row; the switch moves 488 B and the recombination 140 B per hint value.
+- Host rates were measured on this loaded 4-vCPU container: numpy switch 0.40 ms per 4096-value row, `a_mlwe_rows` 56 us
+  per feature, ChaCha20 1 GB/s. A server core is perhaps 2x faster, so "before" may be pessimistic by up to ~2x.
+
+| model | hint GB / seed | before: cache miss (numpy switch) | miss, native switch | cache hit | after: device hint |
+|---|---|---|---|---|---|
+| 0.5B | 14.9 | 5.2 slots/s | 34 | 173 | 182 |
+| 7B | 50.5 | 1.5 | 8.8 | 51 | 53 (57 with a 1 GB work budget) |
+| 32B | 157.5 | 0.48 | 2.8 | 16.4 | 16.6 |
+| 72B | 229.8 | 0.33 (3141 s per cycle, of which the host switch is 2774 s) | 1.8 | 11.2 | 11.1 (12.0 with 1 GB) |
+
+That is ~35x at 7B-72B. The device path also matches a cache hit, which can no longer happen at these sizes: uploading
+a cached hint's 32 KB per row costs about as much as recomputing it. So on an H100, caching does not pay even where the
+hint fits.
+
+What remains at 72B (92 s per cycle):
+
+| stage | s per cycle |
+|---|---|
+| torch key switch | 56 |
+| hint switch + recombination | 19 |
+| host ChaCha20 of the ring rows (GIL held) | 9 |
+| GEMMs | 6 |
+| uploads | 4 |
+
+The key switch runs 16 + G NTTs of 8192 points per 32 rows over 4 primes as eager int64 operators, about 4.5 KB of
+memory traffic per hint value. The next lever is a fused NTT kernel (Triton or CUDA) that does one read and one write
+per transform instead of ~90 operator passes. That would make the key switch roughly an order of magnitude cheaper and
+leave the GEMMs (~6 s per cycle, ~150 slots/s at 72B). It is not done here because it needs a GPU to validate.
+
+**Per-device maskgen byte budget** (the audit's proposal; `pgw.service.maskgen_budget`, opt-in through
+`PGW_SERVICE_MASKGEN_DEVICE_MB`, off by default).
+- An item now also waits, first in first out, until its modelled device bytes fit next to the items already running on
+  its CUDA device. It is never refused: an item larger than the whole budget runs alone.
+- The only handler change is a hook of about 10 lines in `ServiceHandler._maskgen_in_slot`, released together with the
+  slot. Nothing else in admission changed.
+- pks-v3 items are now 0.6-2.1 GiB whatever the linear. The budget matters for wire v2 items, which grow with their
+  columns (11k columns on 7B's head: 7.8 GiB).
+
+**H100 measurement** (`deploy/runpod/provider_perf_session.py`, `maskgen` phase, now ~20 min). After the v2 bench, the
+phase runs the largest linears of 7B (gate_up, down, the head), 32B and 72B through `ComputeKernel` + `PKSProvider` on
+three paths: cache miss, cache hit, and the device path at 512 / 1024 / 2048 MB work budgets. For each it records
+seconds, us per row, peak memory and whether the replies are byte-identical, next to the estimate from
+`memplan.pks_item_seconds` (output: `maskgen_pks_v3.json`). The CPU smoke run passes, with identical replies. Decisions
+it feeds:
+- the `auto` threshold, or using the device path always;
+- the default work budget;
+- whether the fused NTT comes next.
+
+Tests:
+- Full runs, one directory at a time: `tests/service` and `tests/hemask`; also `tests/benchmarks/test_provider_perf_tools.py`.
+- New: `tests/service/test_pks_device_item.py` (19 tests, 2 of them `slow`: the 0.5B shapes, ~95 s together here) and
+  `tests/service/test_maskgen_budget.py` (5 tests).
+- New settings: `PGW_SERVICE_PKS_DEVICE_HINT` (default `auto`) and `PGW_SERVICE_MASKGEN_DEVICE_MB` (default off).
+- No GPU or cloud spend.

@@ -536,12 +536,14 @@ class InProcessPKSProvider:
                 w = lw.w8 if isinstance(lw.w8, torch.Tensor) else torch.from_numpy(np.asarray(lw.w8))
                 self.kern[lw.id.key] = ComputeKernel(spec, w, device=device)
         self.provider = PKSProvider()
+        self.dims = {k: (int(kk.out_features), int(kk.in_features)) for k, kk in self.kern.items()}
 
     def __call__(self, body: bytes, rid: str, decode: Callable[[bytes], Any]) -> Any:
         from pgw.hemask.wire import MaskgenResponse, MaskgenResult, decode_maskgen_request, encode_maskgen_response
 
         req = decode_maskgen_request(body, (1, 2, 3))
-        out = [MaskgenResult(it.linear, it.cols, self.provider.run_item(self.fp, self.kern[it.linear], it, req.a_seed))
+        out = [MaskgenResult(it.linear, it.cols, self.provider.run_item(self.fp, self.kern[it.linear], it, req.a_seed,
+                                                                        self.dims))
                for it in req.items]
         return decode(encode_maskgen_response(MaskgenResponse(req.request_id, tuple(out), req.version, (1, 2, 3))))
 
