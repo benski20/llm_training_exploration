@@ -41,7 +41,10 @@ Pack format 2 (bf16 plain tensors, exact) is the default. Fingerprints for 0.5B,
 (`PINNED_MODELS`).
 
 On the provider, the pks-v3 hint is recomputed per item on the device. This runs as fused Triton kernels after
-bit-exact self-tests, with the 4-prime forward NTT off by default. The mask store uses AES-256-GCM on AWS-LC
+bit-exact self-tests, with the 4-prime forward NTT off by default. Since the third round the reply keys are
+unpacked and range-checked on the device too, and uploads are staged by a host thread pool overlapped with PCIe
+(estimated H100 maskgen 450 / 135 / 81 slots/s at 7B / 32B / 72B, from 264 / 87 / 56; the device wire forms and
+keys validated on a Kaggle T4, every item byte-identical). The mask store uses AES-256-GCM on AWS-LC
 (same format). The security review's findings S1-S15 and S20 are fixed or closed.
 
 **Verified:**
@@ -3507,3 +3510,126 @@ tests/wire 334 passed.
 sessions can log `maskgen_progress` from the metrics port). A wedge of one CUDA stream while others progress is
 caught per item; a provider that answers neither the status endpoint nor `/readyz` is the existing
 `factory_stall_s` path. The SSE4.1 and NEON paths are not benchmarked on a CPU that lacks AVX2 (only forced here).
+
+## 2026-11-26 — pks-v3 device item, round 3: reply keys on the device, staged uploads (provider maskgen throughput)
+
+Goal: raise provider pks-v3 mask throughput by moving the per-item provider steps still on the host onto the GPU.
+The scheme, the wire and the replies are unchanged; the provider sees the same data as before.
+
+**Profile first** (H100 estimate from `memplan --pks-throughput`, host steps measured on this 4-vCPU box). Device
+path, seconds per 1024-slot cycle at 72B before this round (18.4 s, 55.6 slots/s):
+
+| stage | s / cycle | where |
+|---|---|---|
+| key switch (fused NTTs) | 4.62 | device |
+| hint GEMM + fused switch | 4.59 | device |
+| uploads (`b` wire bytes + keys): one-thread host staging copy, then PCIe | 4.43 | host copy + PCIe |
+| reply-key unpack + range check (`unpack_ksk`) | 2.96 | **host**, numpy, one thread |
+| `y` GEMM, planes, reply copy, ring rows, reply pack | 1.8 | device / overlapped |
+
+* (1) Key switching and the hint GEMM: **nothing of them is on the host** on the device path
+  (`pks_gpu.item`: ring rows, `A` planes, hint GEMM, switch, `y` GEMM and key switch all run on the device since the
+  earlier rounds). The cache path (host hint) is used only when a model's hints fit the host cache, which no 0.5B+
+  model does under `auto` on CUDA. Nothing to move.
+* (2) Uploads: 4.4 s at 72B. The staging copy into pinned memory ran on one thread (7.2-8.0 GB/s measured here)
+  and *then* the transfer started, so the two added up.
+* (3) Reply-key unpack: 3.46 ns per residue measured here (model: 4.4), 7.3 ms per 4-group item whatever the
+  linear: 1.0 / 2.4 / 3.0 s per cycle at 7B / 32B / 72B, **27 % of 7B's cycle**.
+
+**What moved** (`pgw.service.pks_gpu`, `pks_provider`):
+1. **Reply keys unpacked and range-checked on the device** (`PGW_SERVICE_PKS_GPU_KEYS`, default `auto`).
+   * `run_item` checks the keys' size on the host (as before) and hands their wire bytes on (`PackedKeys`).
+   * The device unpacks the `pack_bits` fields (16 + 8-bit byte fields, the 6-bit tail stream of the 30-bit primes)
+     straight into the fused kernels' `(4, G, 16, 8192)` uint32 form (`_unpack_ksk_dev`; 47 torch integer
+     operators per item, one pass per run of equal-width primes). 1.77 MB per group go up instead of 2.1 MB of
+     uint32, and the int64 -> uint32 re-layout of the keys is gone.
+   * **The range check is kept**: the device reduces `residue >= p` to one flag, copied to pinned memory on the
+     upload stream; the item reads it before its first key switch and refuses the item with the same
+     `ProtocolError` as the host unpack. No reply is computed from out-of-range keys or returned.
+   * A customer's bad keys are not a device fault: `_run_device` re-raises `ProtocolError` without switching the
+     device path off (before, the host unpack raised before the device was involved; tested).
+   * Start-up self-test `_keys_self_test` (2 groups, residues at 0, 1, p - 2, p - 1 and every byte boundary; must
+     flag `p` and `2^bits - 1` in each prime). Any mismatch or error falls back to the host unpack on that device for
+     good (same bits). `item_self_test` now also runs the keys' wire bytes end to end.
+2. **Staged uploads** (`staged_copy`, under `PGW_SERVICE_PKS_PINNED`, default on). Every upload of the item (the
+   keys' and `b`'s wire bytes, the host fallbacks) is copied into its pinned buffer in 8 MB pieces by the host
+   thread pool (numpy copies run without the GIL; 1.7-2.3x one thread: 9.2 against 5.4 GB/s on the T4 VM, 17.3
+   against 7.6 GB/s here), and each piece's
+   non-blocking transfer is queued as soon as the piece is there, so the host copy and PCIe overlap instead of
+   adding up. An error waits for or cancels every copy before it propagates (no copy keeps writing into a released
+   buffer). `PGW_SERVICE_PKS_HOST_THREADS=1` gives the previous behaviour.
+
+No secret material is involved: the reply keys are the customer's key-switching ciphertexts and `b` its upload, as
+before; nothing new is kept after the item (the host unpack is cached only in the item's `PackedKeys`).
+
+**Estimates** (`python -m pgw.service.memplan --pks-throughput`; `--pks-kernels r2` is the previous round). The
+H100 device rates are datasheet estimates, as before; the host copy pool is modelled at 1.7x the previous 10 GB/s
+single-thread assumption (17 GB/s; the lower of the two measured scalings), the T4's at its measured 9.2 GB/s.
+Slots per second:
+
+| model | H100 before (r2) | H100 after | T4 model before | T4 model after |
+|---|---|---|---|---|
+| 0.5B | 610 | 1567 | | |
+| 7B | 264 | 450 | 47.6 | 49.8 |
+| 14B | 159 | 276 | | |
+| 32B | 86.8 | 135 | 11.9 | 12.2 |
+| 72B | 55.6 | 81.3 | 5.86 | 5.94 |
+
+72B, seconds per cycle: 18.4 -> 12.6 (keys 2.96 -> 0.02 on the device; uploads 4.43 -> 1.49, now bound by the
+host copy pool, PCIe close behind). What is left is device compute: key switch 4.6, hint GEMM + switch 4.6, `y`
+GEMM 1.2. The uploads would hide fully behind a second concurrent item (2 per device by default), which the
+item-by-item model does not count. On the T4 the int8 GEMMs dominate, so the gain there is small.
+
+**Kaggle T4** (`pgw-pks-r3-t4`, torch 2.11 + cu130, Triton 3.6, 4 vCPUs; one kernel, ~3 min of steps; raw files in
+`results/kaggle/pks-r3-t4`). Pushed after the other agent's draft-head kernel had finished.
+* **Every item byte-identical** across `torch` (every kernel plain, host wire, host keys), `r2` and `fused` (every
+  device step under `auto`: `fused_status` = fused NTT, switch, ring rows, **wire**, **keys**; `fwd4` off as by
+  default) at 7B gate_up / down / head, 32B gate_up / down, 72B gate_up / down. **This is the first GPU run of
+  the device wire pack / unpack** (`PGW_SERVICE_PKS_GPU_WIRE`): its self-test passed and `auto` chose it, and the
+  CUDA pytest wire tests passed (device pack and host block pack = `pack_bits`, device unpack = `unpack_bits`,
+  the item with wire bytes in and out at a shard offset = the host path).
+* Reply keys: device unpack = `unpack_ksk` with edges; every out-of-range residue (p and 2^bits - 1 in each prime)
+  flagged where the host refuses; `auto` chose it after the self-test. Per 4-group item: host unpack 10.1 ms
+  (11.9 with its uint32 upload) against 1.8 ms on the device (3.2 with the upload of the wire bytes), and the
+  device time is asynchronous: the host thread no longer spends it.
+* Staged uploads (bytes identical): 3.65 -> 6.7 GB/s at 72B gate_up's 59 MB upload, 3.67 -> 9.15 GB/s at 72B
+  down's 212 MB (raw pinned transfer 12.3 GB/s, host copy one thread 5.4, pool 8.5-9.8).
+* Whole items, median of 3 (s): 7B gate_up 0.753 -> 0.740, down 0.281 -> 0.276, head 3.16 -> 3.18; 32B gate_up
+  1.456 -> 1.460, down 0.649 -> 0.637; 72B gate_up 1.991 -> 2.017, down 1.013 -> 1.014: equal within +-2 %, as
+  the T4 model says (GEMM-bound). Against the previous T4 run's items (host wire): 7B gate_up 1.20 -> 0.74,
+  7B head 4.69 -> 3.18, 72B gate_up 2.54 -> 2.0: mostly the device wire forms (that run also used the 4-prime
+  forward NTT, which `auto` no longer picks), measured for the first time.
+* pytest on CUDA (`test_pks_keys_upload`, `test_pks_fused`, `test_pks_ntt`, `test_pks_device_item`, not slow):
+  103 passed, 2 skipped, **1 failed: a test bug** (`test_cuda_staged_upload_and_keys` built its uint64 array from
+  too few random bytes after its staged-upload assertion had passed); fixed, not rerun on the GPU. The rest of
+  that test (device keys on CUDA) is covered by the bench's `round3` and by `test_cuda_item_packed_keys`, which
+  passed (including the refusal of an out-of-range key through the pinned flag, with the device path kept).
+* The bench's `exact_new` reported `all: false` only because it required every `fused_status` entry to be fused,
+  including the 4-prime forward NTT that is off by default; every exactness value in it was true. Fixed in the
+  bench.
+* Model gap: the T4 model now under-predicts whole items by ~1.6-1.9x on the device-wire path (7B gate_up: model
+  0.41 s, measured 0.74 s), where it was within 30 % with the host wire. The before/after ratios above are not
+  affected (both columns share the gap), but the absolute H100 figures carry the same uncertainty until the RunPod
+  session measures them.
+
+Tests:
+* New: `tests/service/test_pks_keys_upload.py` (31 CPU tests, 3 CUDA tests skipped here; on the T4: 2 of 3 CUDA tests
+  passed, the third had the test bug above): the device unpack equals
+  `unpack_ksk` (and the customer's `pack_ksk` bytes); out-of-range residues flagged for every prime and group; the
+  self-test detects a flipped bit, a missing flag and a false flag; `auto` / `torch` / `fused` and the permanent
+  fallback; the item with the keys' wire bytes (device and host unpack) equals the host path; an out-of-range key
+  is refused before any key switch under `torch`, `fused` and `auto` without falling back; through `PKSProvider`
+  the device path returns the cache path's bytes, the customer decrypts them, and bad keys / a wrong size are
+  refused on both paths with the device path kept; `staged_copy` order, exactness and error handling; the memplan
+  stages.
+* `tests/service` (one directory, `-n 2`): 579 passed, 88 skipped (CUDA), 2 failed before the fix of one assertion
+  (`fused_status` gained `keys`); the other, `test_lane_persistent.py::test_lane_persistent_is_bit_identical[3]`,
+  fails without the native lane library in this worktree (no pks code involved). `tests/benchmarks/
+  test_provider_perf_tools.py` passes; `tests/deploy` 140 passed, 1 failed
+  (`test_lane_nic_session_two_pods_on_cpu`: the lane NIC bench, same cause); `tests/docs` only the 18
+  environment-only `test_numbers` failures known from the integration sweep. `tests/hemask`: 439 passed, 20 skipped.
+
+New setting: `PGW_SERVICE_PKS_GPU_KEYS` (default `auto`). Bench: `benchmarks/pks_ntt_bench.py` gained `--sections`,
+`--configs`, `--item-reps`, the `round3` section and the `r2` item configuration; RunPod `maskgen` phase gained `r2`.
+
+Cloud spend: one Kaggle T4 kernel (~10 min with set-up). No other compute.

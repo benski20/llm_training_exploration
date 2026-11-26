@@ -321,15 +321,17 @@ PKS_LINEARS = {
 
 
 #: Settings of the device item's fused kernels (``pgw.service.pks_gpu``) the maskgen phase compares: ``auto`` (every
-#: kernel after its self-test), ``prev`` (the fused NTTs only) and ``torch`` (every kernel plain).
+#: kernel after its self-test), ``r2`` (the reply keys unpacked on the host, uploads staged by one thread: before
+#: the third round), ``prev`` (the fused NTTs only) and ``torch`` (every kernel plain).
 PKS_ENV = ("PGW_SERVICE_PKS_GPU_NTT", "PGW_SERVICE_PKS_GPU_FWD4", "PGW_SERVICE_PKS_GPU_SWITCH",
            "PGW_SERVICE_PKS_GPU_RING", "PGW_SERVICE_PKS_PINNED", "PGW_SERVICE_PKS_HOST_THREADS",
-           "PGW_SERVICE_PKS_GPU_WIRE")
+           "PGW_SERVICE_PKS_GPU_WIRE", "PGW_SERVICE_PKS_GPU_KEYS")
 _PKS_PLAIN = {"PGW_SERVICE_PKS_GPU_FWD4": "torch", "PGW_SERVICE_PKS_GPU_SWITCH": "torch",
               "PGW_SERVICE_PKS_GPU_RING": "torch", "PGW_SERVICE_PKS_GPU_WIRE": "torch",
-              "PGW_SERVICE_PKS_PINNED": "0", "PGW_SERVICE_PKS_HOST_THREADS": "1"}
+              "PGW_SERVICE_PKS_GPU_KEYS": "torch", "PGW_SERVICE_PKS_PINNED": "0", "PGW_SERVICE_PKS_HOST_THREADS": "1"}
 PKS_CONFIGS = {
     "auto": {},
+    "r2": {"PGW_SERVICE_PKS_GPU_KEYS": "torch", "PGW_SERVICE_PKS_HOST_THREADS": "1"},
     "fwd4": {"PGW_SERVICE_PKS_GPU_FWD4": "auto"},  # the 4-prime forward NTT (off by default: slower on the T4)
     "prev": _PKS_PLAIN,
     "torch": {**_PKS_PLAIN, "PGW_SERVICE_PKS_GPU_NTT": "torch"},
@@ -389,10 +391,10 @@ def phase_pks_items(models: list[str], cpu: bool, cols: int = 1024, work_mbs: tu
             del cache
             # the device path with every fused kernel as chosen by ``auto`` (the fused NTTs, 4-prime forward, hint
             # switch + recombination, device ring rows and pinned overlapped copies on CUDA after their self-tests)
-            # at every work budget; at the first budget also ``fwd4`` (with the 4-prime forward NTT), ``prev`` (the
-            # fused NTTs only: the previous state) and ``torch`` (every kernel plain)
+            # at every work budget; at the first budget also ``fwd4`` (with the 4-prime forward NTT), ``r2`` (host
+            # reply keys, one-thread staging), ``prev`` (the fused NTTs only) and ``torch`` (every kernel plain)
             runs = [(wmb, "auto") for wmb in (work_mbs if not cpu else (512,))] + [
-                (work_mbs[0], c) for c in ("fwd4", "prev", "torch")]
+                (work_mbs[0], c) for c in ("fwd4", "r2", "prev", "torch")]
             for wmb, cfg in runs:
                 for k in PKS_ENV:
                     os.environ.pop(k, None)
@@ -418,6 +420,8 @@ def phase_pks_items(models: list[str], cpu: bool, cols: int = 1024, work_mbs: tu
                                        for p in ("miss", "hit", "device")}
             res["model_estimate_s"]["device_fused"] = round(
                 sum(memplan.pks_item_seconds(m, n, cols, "device", ntt="fused").values()), 3)
+            res["model_estimate_s"]["device_r2"] = round(
+                sum(memplan.pks_item_seconds(m, n, cols, "device", ntt="fused", kernels="r2").values()), 3)
             res["model_estimate_s"]["device_prev"] = round(
                 sum(memplan.pks_item_seconds(m, n, cols, "device", ntt="fused", kernels="ntt").values()), 3)
             out[f"{model}:{key}"] = res

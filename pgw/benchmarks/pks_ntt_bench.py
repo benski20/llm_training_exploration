@@ -20,10 +20,13 @@ Sections (one JSON object, ``--json``):
   of output rows, before (torch / host / pageable) and after (fused / device / pinned): ring rows, the upload and
   its wire unpack, the hint operand's planes, the GEMMs, the recombination + switch, the key switch, the reply copy
   and its wire pack; scaled to a 1024-slot cycle of every linear of 7B / 32B / 72B;
+* ``round3``: the reply keys unpacked and range-checked on the device against the host unpack (exactness, residues
+  out of range flagged, seconds per 4-group item) and the staged uploads (one thread against the thread pool's
+  overlapped pieces, GB/s at 72B's upload sizes, next to the raw pinned transfer and the host copy rates);
 * ``items``: one pks-v3 item (1024 columns) of the largest linears of 7B / 32B / 72B through ``ComputeKernel`` +
-  ``PKSProvider`` (device hint path) in three configurations: ``torch`` (every kernel plain), ``prev`` (the fused
-  NTTs only: the state before this round) and ``fused`` (every kernel under ``auto``); seconds and byte-identical
-  replies;
+  ``PKSProvider`` (device hint path) in four configurations (``--configs``): ``torch`` (every kernel plain),
+  ``prev`` (the fused NTTs only), ``r2`` (the second round: host reply keys, one-thread staging) and ``fused``
+  (every device step under ``auto``); seconds and byte-identical replies;
 * ``cycle``: key-switch seconds of one 1024-slot decode cycle per model (every linear), from the per-row times.
 
 Runs on CPU too (``--cpu``, Triton interpreter, tiny shapes): a smoke test of the script only.
@@ -58,14 +61,17 @@ LINEARS = {
 }
 CHOICES = ("PGW_SERVICE_PKS_GPU_NTT", "PGW_SERVICE_PKS_GPU_FWD4", "PGW_SERVICE_PKS_GPU_SWITCH",
            "PGW_SERVICE_PKS_GPU_RING", "PGW_SERVICE_PKS_PINNED", "PGW_SERVICE_PKS_HOST_THREADS",
-           "PGW_SERVICE_PKS_GPU_WIRE")
-#: item configurations: every kernel plain; the fused NTTs only (before this round); every kernel under auto
+           "PGW_SERVICE_PKS_GPU_WIRE", "PGW_SERVICE_PKS_GPU_KEYS")
+#: item configurations: every kernel plain; the fused NTTs only (before the second round); every kernel of the second
+#: round under auto but the reply keys unpacked on the host and the uploads staged by one thread (``r2``: before the
+#: third round); every device step under auto
 _PKS_PLAIN = {"PGW_SERVICE_PKS_GPU_FWD4": "torch", "PGW_SERVICE_PKS_GPU_SWITCH": "torch",
               "PGW_SERVICE_PKS_GPU_RING": "torch", "PGW_SERVICE_PKS_GPU_WIRE": "torch",
-              "PGW_SERVICE_PKS_PINNED": "0", "PGW_SERVICE_PKS_HOST_THREADS": "1"}
+              "PGW_SERVICE_PKS_GPU_KEYS": "torch", "PGW_SERVICE_PKS_PINNED": "0", "PGW_SERVICE_PKS_HOST_THREADS": "1"}
 CONFIGS = {
     "torch": {**_PKS_PLAIN, "PGW_SERVICE_PKS_GPU_NTT": "torch"},
     "prev": _PKS_PLAIN,
+    "r2": {"PGW_SERVICE_PKS_GPU_KEYS": "torch", "PGW_SERVICE_PKS_HOST_THREADS": "1"},
     "fused": {},
 }
 
@@ -236,7 +242,9 @@ def exact_new(dev: torch.device, small: bool) -> dict[str, Any]:
             out[name] = repr(e)
     _set_env({})
     out["fused_status"] = pks_gpu.fused_status(dev)
-    out["all"] = _all_true(out) and (dev.type != "cuda" or set(out["fused_status"].values()) == {"fused"})
+    # every kernel ``auto`` chose on CUDA (the 4-prime forward NTT is off unless set: slower on the T4)
+    chosen = {k: v for k, v in out["fused_status"].items() if k != "fwd4" or pks_gpu.FWD4.mode() != "torch"}
+    out["all"] = _all_true(out) and (dev.type != "cuda" or set(chosen.values()) == {"fused"})
     return out
 
 
@@ -451,8 +459,90 @@ def stages(dev: torch.device, rows: int, reps: int, small: bool) -> dict[str, An
     return out
 
 
+def round3(dev: torch.device, small: bool, reps: int) -> dict[str, Any]:
+    """The third round's device steps: the reply keys unpacked and range-checked on the device against the host unpack
+    (exactness, the range check, seconds per 4-group item), and the staged uploads (one host thread, then one transfer,
+    against the thread pool's pieces with their transfers queued as they arrive; GB/s at 72B's down and gate_up upload
+    sizes, next to the raw pinned transfer)."""
+    from pgw.core.errors import ProtocolError
+    from pgw.hemask.wire import V3_KSK_BITS, pack_bits
+    from pgw.service.pks_provider import pack_ksk, unpack_ksk
+
+    rng = np.random.default_rng(31)
+    out: dict[str, Any] = {"host_threads": pks_gpu._host_threads(), "cpus": os.cpu_count()}
+    groups = 4
+    beta = _keys(rng, groups).astype(np.uint64)
+    for i, p in enumerate(pks.QP):
+        beta[0, i, 0, :6] = [0, 1, p - 2, p - 1, 65535, 65536]
+        beta[3, i, 15] = p - 1
+    data = bytes(pack_ksk(beta.astype(np.uint32)))
+    want = unpack_ksk(data, groups)
+    u32, bad = pks_gpu._unpack_ksk_dev(pks_gpu._upload_bytes(data, dev), groups)
+    out["keys_device_equal_host"] = bool(not bool(bad) and np.array_equal(
+        u32.view(torch.int32).cpu().numpy().view(np.uint32), want.transpose(1, 0, 2, 3)))
+    flagged = []
+    for i, (bits, p) in enumerate(zip(V3_KSK_BITS, pks.QP, strict=True)):
+        for v in (p, (1 << bits) - 1):
+            b1 = beta.copy()
+            b1[2, i, 9, 99] = v
+            raw = bytearray()
+            for g in range(groups):
+                for k, bk in enumerate(V3_KSK_BITS):
+                    raw += pack_bits(np.ascontiguousarray(b1[g, k]).reshape(-1), bk)
+            try:
+                unpack_ksk(bytes(raw), groups)
+                host_refused = False
+            except ProtocolError:
+                host_refused = True
+            flagged.append(host_refused and bool(pks_gpu._unpack_ksk_dev(pks_gpu._upload_bytes(bytes(raw), dev),
+                                                                       groups)[1]))
+    out["keys_out_of_range_flagged"] = all(flagged)
+    raw_t = pks_gpu._upload_bytes(data, dev)
+    os.environ["PGW_SERVICE_PKS_PINNED"] = "1"
+    out["keys_s"] = {
+        "host_unpack": _time(lambda: unpack_ksk(data, groups), dev, reps),
+        "host_unpack_and_upload_u32": _time(lambda: pks_gpu._host_keys(unpack_ksk(data, groups), dev), dev, reps),
+        "device_unpack": _time(lambda: pks_gpu._unpack_ksk_dev(raw_t, groups), dev, reps),
+        "device_upload_and_unpack": _time(lambda: pks_gpu._device_keys(pks_gpu.PackedKeys(data, groups), dev), dev,
+                                          reps)}
+    ups: dict[str, Any] = {}
+    sizes = {"64KiB": 1 << 16} if small else {"72b_gate_up_b": 8192 * 1024 * 7, "72b_down_b": 29568 * 1024 * 7}
+    ok = True
+    for name, size in sizes.items():
+        src = np.frombuffer(os.urandom(size), dtype=np.uint8)
+        row: dict[str, float] = {}
+        for label, threads in (("one_thread", "1"), ("pool", "")):
+            if threads:
+                os.environ["PGW_SERVICE_PKS_HOST_THREADS"] = threads
+            else:
+                os.environ.pop("PGW_SERVICE_PKS_HOST_THREADS", None)
+            sec = _time(lambda: pks_gpu._upload_bytes(src, dev), dev, reps)  # noqa: B023 (called here)
+            row[f"{label}_gbps"] = round(size / sec / 1e9, 2)
+            got = pks_gpu._upload_bytes(src, dev)
+            _sync(dev)
+            ok = ok and bool(np.array_equal(got.cpu().numpy(), src))
+        if dev.type == "cuda":
+            pin = torch.from_numpy(src.copy()).pin_memory()
+            row["raw_pinned_h2d_gbps"] = round(size / _time(lambda: pin.to(dev, non_blocking=True), dev, reps) / 1e9,  # noqa: B023
+                                               2)
+            dst = np.empty_like(src)
+            row["host_copy_one_thread_gbps"] = round(size / _time(lambda: np.copyto(dst, src), dev, reps) / 1e9, 2)  # noqa: B023
+            os.environ.pop("PGW_SERVICE_PKS_HOST_THREADS", None)
+            row["host_copy_pool_gbps"] = round(size / _time(lambda: pks_gpu.staged_copy(src, dst, lambda a, b: None),  # noqa: B023
+                                                            dev, reps) / 1e9, 2)
+        ups[name] = row
+    os.environ.pop("PGW_SERVICE_PKS_HOST_THREADS", None)
+    os.environ.pop("PGW_SERVICE_PKS_PINNED", None)
+    out["staged_upload"] = ups
+    out["staged_upload_identical"] = ok
+    out["keys_choice"] = pks_gpu.KEYS.impl(dev)
+    out["all"] = bool(out["keys_device_equal_host"] and out["keys_out_of_range_flagged"] and ok and
+                      (dev.type != "cuda" or out["keys_choice"] == "fused"))
+    return out
+
+
 def items(dev: torch.device, models: list[str], cols: int, cpu: bool, deadline: float,
-          progress: Any = None) -> dict[str, Any]:
+          progress: Any = None, configs: tuple[str, ...] = tuple(CONFIGS), reps: int = 1) -> dict[str, Any]:
     from types import SimpleNamespace
 
     from pgw.core.types import LinearId, LinearKind, LinearSpec
@@ -483,7 +573,8 @@ def items(dev: torch.device, models: list[str], cols: int, cpu: bool, deadline: 
             seed = os.urandom(32)
             res: dict[str, Any] = {"m": m, "n": n}
             replies = {}
-            for cfg, env in CONFIGS.items():
+            for cfg in configs:
+                env = CONFIGS[cfg]
                 if time.time() > deadline:
                     break
                 _set_env(env)
@@ -492,20 +583,25 @@ def items(dev: torch.device, models: list[str], cols: int, cpu: bool, deadline: 
                 if cfg not in warm:  # warm-up once per configuration: kernel compilation, allocator
                     bytes(pv.run_item("fp", kern, it, seed))
                     warm.add(cfg)
-                _sync(dev)
-                t0 = time.perf_counter()
-                replies[cfg] = bytes(pv.run_item("fp", kern, it, seed))
-                res[f"{cfg}_s"] = round(time.perf_counter() - t0, 3)
+                ts = []
+                for _ in range(1 if cfg in ("torch", "prev") else reps):
+                    _sync(dev)
+                    t0 = time.perf_counter()
+                    replies[cfg] = bytes(pv.run_item("fp", kern, it, seed))
+                    ts.append(time.perf_counter() - t0)
+                res[f"{cfg}_s"] = round(float(np.median(ts)), 4)
                 res[f"{cfg}_device_items"] = pv.device_items
                 if cfg == "fused":
                     res["fused_status"] = pks_gpu.fused_status(dev)
             _set_env({})
-            res["identical"] = len(replies) == len(CONFIGS) and len(set(replies.values())) == 1
+            res["identical"] = len(replies) == len(configs) and len(set(replies.values())) == 1
             if "fused_s" in res:
-                res["speedup_vs_prev"] = round(res.get("prev_s", 0) / max(res["fused_s"], 1e-9), 2)
-                res["speedup_vs_torch"] = round(res.get("torch_s", 0) / max(res["fused_s"], 1e-9), 2)
-            res["model_estimate_device_s"] = round(sum(memplan.pks_item_seconds(m, n, cols, "device",
-                                                                                ntt="fused").values()), 3)
+                for base in ("prev", "torch", "r2"):
+                    if f"{base}_s" in res:
+                        res[f"speedup_vs_{base}"] = round(res[f"{base}_s"] / max(res["fused_s"], 1e-9), 3)
+            for kk in ("r2", "all"):
+                res[f"model_t4_{kk}_s"] = round(sum(memplan.pks_item_seconds(
+                    m, n, cols, "device", memplan.T4_RATES, ntt="fused", kernels=kk).values()), 3)
             out[f"{model}:{key}"] = res
             print(model, key, res, flush=True)
             if progress is not None:  # saved per item: a step timeout keeps what finished
@@ -535,7 +631,12 @@ def main() -> int:
     ap.add_argument("--models", default="qwen2.5-7b,qwen2.5-32b,qwen2.5-72b")
     ap.add_argument("--warps", default="4,8,16")
     ap.add_argument("--budget-s", type=float, default=2400)
+    ap.add_argument("--sections", default="exact,exact_new,ntt_us,keyswitch,stages,round3,items",
+                    help="comma list of the sections to run")
+    ap.add_argument("--configs", default=",".join(CONFIGS), help="item configurations (comma list of CONFIGS)")
+    ap.add_argument("--item-reps", type=int, default=1, help="timed runs per item and configuration (median)")
     a = ap.parse_args()
+    want = set(a.sections.split(","))
     t_start = time.time()
     if a.cpu:
         os.environ.setdefault("TRITON_INTERPRET", "1")
@@ -563,10 +664,13 @@ def main() -> int:
         save()
 
     small = a.cpu
-    section("exact", lambda: exact(dev, PACK * (2 if small else 64)))
-    section("exact_new", lambda: exact_new(dev, small))
-    section("ntt_us", lambda: ntt_us(dev, 16 if small else 2048, 1 if small else 5,
-                                     [8] if small else [int(w) for w in a.warps.split(",")]))
+    if "exact" in want:
+        section("exact", lambda: exact(dev, PACK * (2 if small else 64)))
+    if "exact_new" in want:
+        section("exact_new", lambda: exact_new(dev, small))
+    if "ntt_us" in want:
+        section("ntt_us", lambda: ntt_us(dev, 16 if small else 2048, 1 if small else 5,
+                                         [8] if small else [int(w) for w in a.warps.split(",")]))
     best = None
     if isinstance(res.get("ntt_us"), dict):
         cand = {k: v["keyswitch_g4_us_per_row"] for k, v in res["ntt_us"].items() if k.startswith("warps_")}
@@ -574,22 +678,31 @@ def main() -> int:
             best = min(cand, key=cand.get).split("_")[1]
             os.environ["PGW_SERVICE_PKS_NTT_WARPS"] = best
     res["warps_used"] = best
-    section("keyswitch", lambda: keyswitch_rows(dev, PACK if small else 2048, 1 if small else 5))
-    if isinstance(res.get("keyswitch"), dict) and "g4" in res["keyswitch"]:
-        section("cycle", lambda: cycle(res["keyswitch"]))
-    section("stages", lambda: stages(dev, PACK if small else 2048, 1 if small else 5, small))
+    if "keyswitch" in want:
+        section("keyswitch", lambda: keyswitch_rows(dev, PACK if small else 2048, 1 if small else 5))
+        if isinstance(res.get("keyswitch"), dict) and "g4" in res["keyswitch"]:
+            section("cycle", lambda: cycle(res["keyswitch"]))
+    if "stages" in want:
+        section("stages", lambda: stages(dev, PACK if small else 2048, 1 if small else 5, small))
+    if "round3" in want:
+        section("round3", lambda: round3(dev, small, 1 if small else 5))
+
     def partial(o: dict[str, Any]) -> None:
         res["items"] = o
         save()
 
-    section("items", lambda: items(dev, a.models.split(","), 1024 if not small else 256, small,
-                                   t_start + a.budget_s, partial))
+    configs = tuple(a.configs.split(","))
+    if "items" in want:
+        section("items", lambda: items(dev, a.models.split(","), 1024 if not small else 256, small,
+                                       t_start + a.budget_s, partial, configs, a.item_reps))
     res["total_s"] = round(time.time() - t_start, 1)
     save()
-    ok = all(isinstance(res.get(s), dict) and res[s].get("all") is True for s in ("exact", "exact_new"))
+    ok = all(isinstance(res.get(s), dict) and res[s].get("all") is True
+             for s in ("exact", "exact_new", "round3") if s in want)
     ok = ok and all(v.get("identical", False) for k, v in res.get("items", {}).items() if isinstance(v, dict))
-    ok = ok and bool(res.get("stages", {}).get("recombination_identical"))
-    ok = ok and bool(res.get("stages", {}).get("reply_pack_identical"))
+    if "stages" in want:
+        ok = ok and bool(res.get("stages", {}).get("recombination_identical"))
+        ok = ok and bool(res.get("stages", {}).get("reply_pack_identical"))
     print("OK" if ok else "FAILED", flush=True)
     return 0 if ok else 1
 

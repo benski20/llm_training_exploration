@@ -992,6 +992,34 @@ JOBS["pgw-pks-ntt-t4"] = {"machine_shape": "NvidiaTeslaT4", "session_timeout_s":
 ]}
 
 
+#: The third round of the pks-v3 device item (reply keys unpacked on the device, staged uploads) and the first GPU run
+#: of the device wire forms: the fused-kernel tests and the new ones on CUDA, then the bench's exactness sections,
+#: ``round3`` and the items (plain / second round / every device step, byte-identical).
+_PKS_R3_TESTS = (*_PKS_NTT_TESTS, "test_pks_keys_upload.py", "test_pks_device_item.py")
+JOBS["pgw-pks-r3-t4"] = {"machine_shape": "NvidiaTeslaT4", "session_timeout_s": 45 * 60, "exclude": [
+    "scripts", "examples", "rust", "SPEC.md", "INTERFACE_NOTES.md", "STATUS.md",
+    *sorted(f"src/pgw/{p.name}" for p in (PGW / "src" / "pgw").iterdir()
+            if p.is_dir() and p.name not in _PKS_NTT_KEEP_SRC),
+    *sorted(f"tests/{p.name}" for p in (PGW / "tests").iterdir() if p.name not in _PKS_NTT_KEEP_TESTS | {"core"}),
+    *sorted(f"tests/core/{p.name}" for p in (PGW / "tests" / "core").iterdir()
+            if p.name not in ("__init__.py", "alloc_tracker.py")),
+    *sorted(f"tests/service/{p.name}" for p in (PGW / "tests" / "service").iterdir()
+            if p.name not in _PKS_R3_TESTS),
+    *sorted(f"benchmarks/{p.name}" for p in HERE.parent.iterdir() if p.name != "pks_ntt_bench.py")], "steps": [
+    {"kind": "shell", "name": "gpu_info", "cmd": "nproc; free -g; nvidia-smi; python -c 'import triton; "
+     "print(triton.__version__)'", "timeout": 120},
+    {"kind": "pytest", "name": "pytest_pks_cuda", "args": ["tests/service/test_pks_keys_upload.py",
+                                                           "tests/service/test_pks_fused.py",
+                                                           "tests/service/test_pks_ntt.py",
+                                                           "tests/service/test_pks_device_item.py", "-q", "-rs",
+                                                           "-m", "not slow", "--timeout", "600"], "timeout": 900},
+    {"kind": "shell", "name": "pks_ntt_bench",
+     "cmd": "python benchmarks/pks_ntt_bench.py --json /kaggle/working/pks_ntt.json --budget-s 900 "
+            "--sections exact,exact_new,round3,items --configs torch,r2,fused --item-reps 3",
+     "timeout": 1500},
+]}
+
+
 def source_tarball(exclude: tuple[str, ...] = (), include_top: tuple[str, ...] = ()) -> bytes:
     """xz tarball of pgw/ without the excluded folders (plus ``exclude``: job-specific paths under pgw/;
     ``include_top``: top-level folders of :data:`EXCLUDE_TOP` this job needs after all)."""

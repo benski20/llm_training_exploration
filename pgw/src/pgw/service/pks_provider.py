@@ -280,7 +280,7 @@ class PKSProvider:
                 self._item_ok[key] = ok
         return ok
 
-    def _run_device(self, kern: Any, it: Any, a_seed: bytes, b: Any, ops: np.ndarray) -> bytes | bytearray | None:
+    def _run_device(self, kern: Any, it: Any, a_seed: bytes, b: Any, ops: Any) -> bytes | bytearray | None:
         from pgw.service import pks_gpu
 
         parts = _device_operands(kern)
@@ -318,6 +318,8 @@ class PKSProvider:
                 with ThreadPoolExecutor(len(parts)) as pool:
                     for f in [pool.submit(one, p) for p in parts]:
                         f.result()
+        except ProtocolError:  # the customer's data refused (reply key out of range): not a device failure
+            raise
         except Exception as exc:  # pragma: no cover - device errors only
             log.warning("maskgen v3: device hint path failed on %s (%s); using the hint cache from now on",
                         [str(p[4]) for p in parts], exc)
@@ -334,17 +336,26 @@ class PKSProvider:
         if n % RANK or m % PACK:
             raise ProtocolError(f"maskgen v3: {it.linear} ({m} x {n}) is not a pks-v3 shape")
         groups = cols // D
-        ops = unpack_ksk(it.ksk, groups)
+        if len(it.ksk) != groups * V3_KSK_BYTES:
+            raise ProtocolError("maskgen v3: reply key size mismatch")
+        keys: Any = None
         if self.use_device(fp, kern, it.linear, dims):
             from pgw.service import pks_gpu
 
             # the upload stays in its wire form: the device unpacks it where it may (``PGW_SERVICE_PKS_GPU_WIRE``)
             bw: Any = pks_gpu.PackedUpload(it.b, n, cols) if int(it.b_bits) == 56 and pks_gpu.wire_layout_ok() \
                 else unpack_bits(it.b, n * cols, it.b_bits).reshape(n, cols)
-            res = self._run_device(kern, it, a_seed, bw, ops)
+            # so do the reply keys (unpacked and range-checked on the device where it may, ``PGW_SERVICE_PKS_GPU_KEYS``;
+            # a residue out of range is refused before any key switch either way)
+            keys = pks_gpu.PackedKeys(it.ksk, groups) if pks_gpu.keys_layout_ok() else unpack_ksk(it.ksk, groups)
+            res = self._run_device(kern, it, a_seed, bw, keys)
             if res is not None:
                 self.items += 1
                 return res
+        if keys is None:
+            ops = unpack_ksk(it.ksk, groups)
+        else:  # the device path fell back (its unpack is reused)
+            ops = keys if isinstance(keys, np.ndarray) else keys.host()
         b = unpack_bits(it.b, n * cols, it.b_bits).reshape(n, cols)
         if int(b.max(initial=0)) >= 1 << 56:  # pragma: no cover - unpack_bits gives < 2^56
             raise ProtocolError("maskgen v3: upload value out of range")

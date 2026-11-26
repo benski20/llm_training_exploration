@@ -1,0 +1,23 @@
+...............................F...............................s........ [ 67%]
+....................s.............                                       [100%]
+=================================== FAILURES ===================================
+_______________________ test_cuda_staged_upload_and_keys _______________________
+
+    @GPU
+    def test_cuda_staged_upload_and_keys() -> None:  # pragma: no cover - GPU only
+        dev = torch.device("cuda", 0)
+        data = os.urandom(3 * pks_gpu.UPLOAD_CHUNK + 1234)
+        got = pks_gpu._upload_bytes(data, dev)
+        torch.cuda.synchronize(dev)
+        assert bytes(got.cpu().numpy()) == data
+>       arr = np.frombuffer(os.urandom(8 * 999), dtype=np.uint64).reshape(999, 8)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       ValueError: cannot reshape array of size 999 into shape (999,8)
+
+tests/service/test_pks_keys_upload.py:347: ValueError
+=========================== short test summary info ============================
+SKIPPED [1] tests/service/test_pks_fused.py:453: CPU kernels only
+SKIPPED [1] tests/service/test_pks_device_item.py:119: pgw_pks not built
+1 failed, 103 passed, 2 skipped, 3 deselected in 154.09s (0:02:34)
+
+---stderr---

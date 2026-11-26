@@ -272,7 +272,7 @@ def test_fused_status_on_cpu(monkeypatch: pytest.MonkeyPatch) -> None:
     for e in CHOICES:
         monkeypatch.delenv(e, raising=False)
     assert pks_gpu.fused_status("cpu") == {"ntt": "torch", "fwd4": "torch", "switch": "torch", "ring": "torch",
-                                           "wire": "torch"}
+                                           "wire": "torch", "keys": "torch"}
     # the 4-prime forward NTT is off unless set (slower on the T4); auto or fused enable it
     assert pks_gpu.FWD4.mode() == "torch"
     monkeypatch.setenv("PGW_SERVICE_PKS_GPU_FWD4", "auto")
@@ -495,7 +495,7 @@ def test_memplan_reproduces_the_t4_items() -> None:
     for name, (m, n, before, after) in T4_ITEMS.items():
         prev = mp.pks_item_seconds(m, n, 1024, "device", mp.T4_RATES, ntt="fused", kernels="ntt")
         assert abs(sum(prev.values()) / before - 1) < 0.25, (name, sum(prev.values()), before)
-        new = mp.pks_item_seconds(m, n, 1024, "device", mp.T4_RATES, ntt="fused", kernels="all")
+        new = mp.pks_item_seconds(m, n, 1024, "device", mp.T4_RATES, ntt="fused", kernels="r2")
         new.pop("reply_pack_device")  # the run packed on the host
         new["wire_host"], new["reply_d2h"] = prev["wire_host"], prev["reply_d2h"]
         assert abs(sum(new.values()) / after - 1) < 0.3, (name, sum(new.values()), after)
