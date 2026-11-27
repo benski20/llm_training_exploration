@@ -248,7 +248,7 @@ def test_fused2_config_validation_and_defaults_off() -> None:
     for bad, match in (
         ({"ring": "K32A12C27"}, "K56"), ({"ring": "K56A12"}, "K56"), ({"float_ops": "torch"}, "native"),
         ({"lane": "off"}, "lane"), ({"lane": "stream"}, "lane"), ({"freivalds_rate": 0.5}, "freivalds_rate"),
-        ({"head_mode": "provider_int8"}, "head"), ({"spec_lookup": 3}, "speculate"),
+        ({"spec_lookup": 3}, "speculate"), ({"spec_rows": 4, "spec_strict_passes": True, "spec_lookup": 3, "spec_tokens": 3}, "folded head"),
         ({"local_linears": "attention"}, "local_linears"), ({"prefix_cache": "conversation"}, "prefix_cache"),
         ({"prefill_chunk_rows": 64}, "prefill_chunk_rows"), ({"mode": "float"}, "masked"),
     ):

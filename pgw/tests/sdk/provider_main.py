@@ -34,6 +34,20 @@ def _install_tamper(flag: Path) -> None:
 
     ComputeKernel.run = run  # type: ignore[method-assign]
 
+    from pgw.service.fused2_lane import Fused2LaneEntry
+
+    orig_f2 = Fused2LaneEntry.run
+
+    def run_f2(self: Any, index: int, rows: int, body: Any) -> bytes:  # fused2 lane items (schedule "fused")
+        out = orig_f2(self, index, rows, body)
+        if flag.exists() and out:
+            b = bytearray(out)
+            b[0] ^= 0x01
+            return bytes(b)
+        return out
+
+    Fused2LaneEntry.run = run_f2  # type: ignore[method-assign]
+
 
 def _install_maskgen_hang(flag: Path) -> None:
     """While ``flag`` exists, every pks-v3 maskgen item blocks in its worker thread (a wedged GPU: the service

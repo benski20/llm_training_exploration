@@ -106,6 +106,11 @@ NATIVE_ENV: dict[str, str] = {
     # tests/engine/test_decode_native_multi.py, tests/sdk/test_concurrency_cpu.py
     "PGW_DECODE_NATIVE_MULTI": "1",
     "PGW_SAMPLE_THREADS": "auto",
+    # schedule="fused": the wide element-wise stages of a one-row fused pass (unmask of the second stage, its check,
+    # the gate/up and output-layer scaling, SiLU) in fixed element ranges on the native pool (the same bits;
+    # 32B widths on 4 vCPUs: 0.95-1.10 -> 0.75 ms per pair trip, benchmarks/results/fused2/
+    # driver_cpu_32b_split_2026-11-27.json). Read by the fused2 driver only: the standard schedule is unaffected
+    "PGW_FUSED2_SPLIT": "4" if (os.cpu_count() or 1) >= 4 else "2",
 }
 
 #: The ring of the proven stack (K32: p31 checks and pks-v3 need it).
@@ -158,6 +163,10 @@ class ModelHandle:
     factory: FactoryProcess | None = None
     masked_head: bool = False
     ring: str = PREFERRED_RING
+    #: the linear schedule of this model for the life of the client (``standard`` / ``fused``; pgw.sdk.schedule):
+    #: decided once, at the first start, never changed afterwards (a reconnect keeps it)
+    schedule: str = "standard"
+    schedule_decision: Any = None
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     ready_event: asyncio.Event = field(default_factory=asyncio.Event)
     start_task: asyncio.Task[None] | None = None
@@ -184,7 +193,10 @@ class ModelHandle:
     def public(self) -> dict[str, Any]:
         """Status view (no secrets, no content)."""
         out: dict[str, Any] = {"model": self.name, "state": self.state, "error": self.error, "progress": self.progress,
-                               "masked_head": self.masked_head, "ring": self.ring, "requests": self.requests,
+                               "masked_head": self.masked_head, "ring": self.ring, "schedule": self.schedule,
+                               "schedule_decision": (self.schedule_decision.public()
+                                                     if self.schedule_decision is not None else None),
+                               "requests": self.requests,
                                "verified_requests": self.verified_requests,
                                "integrity_failures": self.integrity_failures,
                                "requests_waiting_for_masks": len(self.mask_waiters),
@@ -218,6 +230,10 @@ class ModelHandle:
                                       if isinstance(v, int | float | str | bool)}
             with contextlib.suppress(Exception):
                 out["breaker"] = rt.breaker.status()
+            if getattr(rt, "fused2", False):  # schedule = "fused": public configuration and counters only
+                with contextlib.suppress(Exception):
+                    out["fused2"] = {k: v for k, v in rt._fused2_status().items()
+                                     if isinstance(v, int | float | str | bool | type(None))}
         if self.factory is not None:
             with contextlib.suppress(Exception):
                 out["factory"] = self.factory.state()
@@ -579,7 +595,15 @@ class Engine:
             self._start_gc()
         if self._settings is None:
             self._settings = self._gateway_settings(session)
-        h.ring = self._pick_ring(entry)
+        if h.schedule_decision is None:  # once per model and client: the reference never changes afterwards
+            h.schedule_decision = await self._decide_schedule(session, entry, prov)
+            h.schedule = h.schedule_decision.schedule
+        if h.schedule == "fused":
+            from pgw.sdk.schedule import FUSED_RING
+
+            h.ring = FUSED_RING
+        else:
+            h.ring = self._pick_ring(entry)
         apply_native_env(self.options.native)
         cfg = self._model_config(h, session, prov)
         self._settings.validate_policy([cfg])
@@ -685,6 +709,30 @@ class Engine:
         model.aforward_batch = paced
         model._pgw_paced = True
 
+    async def _decide_schedule(self, session: Session, entry: dict[str, Any], prov: Provisioned) -> Any:
+        """``schedule`` (pgw.sdk.schedule): standard, fused, or auto (link measured once, now)."""
+        from pgw.sdk.schedule import FUSED_RING, decide
+
+        o = self.options
+        served = "fused" in (entry.get("schedules") or ()) and str(entry.get("fused_ring", FUSED_RING)) == FUSED_RING
+        arch = None
+        if o.schedule == "auto" and served:
+            from pgw.modelpack import ModelPack
+
+            def read_arch() -> Any:
+                p = ModelPack.open(prov.pack_path, verify="fingerprint")
+                try:
+                    return p.arch
+                finally:
+                    with contextlib.suppress(Exception):
+                        p.close()
+
+            arch = await asyncio.to_thread(read_arch)
+        d = await asyncio.to_thread(decide, o.schedule, fused_served=served, arch=arch, session=session,
+                                    rtt_threshold_ms=o.schedule_auto_rtt_ms, margin=o.schedule_auto_margin)
+        log.info("model %s: schedule %s (%s: %s)", entry.get("name"), d.schedule, d.requested, d.reason)
+        return d
+
     @staticmethod
     def _pick_ring(entry: dict[str, Any]) -> str:
         rings = [str(r) for r in (entry.get("rings") or [])]
@@ -747,6 +795,13 @@ class Engine:
             "head_mode": "provider_int8" if h.masked_head else "gateway",
             "prefix_cache": "conversation" if self._prefix_on(h) else "off",
         }
+        if h.schedule == "fused":
+            if lane != "tls" and not (o.extra or {}).get("fused_lane_uds"):
+                raise NotFoundError("schedule='fused' needs the provider's TCP+TLS trip lane (none was offered)")
+            # fused2 + the folded head (head_mode provider_int8 with fused2) + layer 0's qkv local: 2L trips;
+            # the pinned fused reference (migration 8 bits, derived from the verified pack like the provider's)
+            kw.update({"schedule": "fused2", "head_mode": "provider_int8", "fused2_local_qkv0": True,
+                       "fused2_migrate_bits": 8, "prefix_cache": "off", "float_ops": "native"})
         kw.update(self._spec_config(h.name))
         return GatewayModelConfig(**kw)
 
@@ -780,6 +835,8 @@ class Engine:
         ``"auto"`` without the masked head (the earlier default; with the masked head it stays opt-in: see
         ``research/reviews/prefix-cache.md``)."""
         p = self.options.prefix_cache
+        if h.schedule == "fused":
+            return False
         return p is True or (p == "auto" and not h.masked_head)
 
     def _prefix_cache_factory(self, cfg: Any) -> Any:
@@ -806,12 +863,17 @@ class Engine:
         seg = max(16, min(o.mask_segment_slots, target))
         scheme = o.mask_scheme
         hint_key = None
+        fused = h.schedule == "fused"
         if scheme == "pks-v3":
             hint_key = h.provisioned.hint_key_file or (sdir / "pks-hint.key")
         s = self.session
         prov = h.provisioned
         state_dir = self.layout.factory_dir(kid) / prov.fingerprint[:16]
         stream = getattr(prov, "factory_weights", "pack") == "stream"
+        if fused and stream:
+            from pgw.core.errors import ConfigError
+
+            raise ConfigError("schedule='fused' needs the int8 weights for its K56 masks (factory_weights='pack')")
         if o.factory_weights == "stream" and not stream:
             from pgw.core.errors import ConfigError
 
@@ -822,17 +884,19 @@ class Engine:
             ring=h.ring,
             state_dir=state_dir, demand_file=state_dir / "demand.json",
             store_root=self.layout.masks_dir(kid), kek_file=sdir / "masks.kek", counter_file=sdir / "masks.counter",
-            scheme=scheme, check_field="p31" if prime else "ring", masked_head=h.masked_head,
+            scheme=scheme, check_field="p31" if prime else "ring", masked_head=h.masked_head and not fused,
             workers=o.workers, threads=max(1, o.mask_threads), nice=o.mask_nice, target_slots=target,
             low_water_slots=low, segment_slots=seg, first_segment_slots=max(16, min(64, seg)),
             service_url=s.service_url, token_file=s.token_file, ca_file=s.ca_file,
             client_cert_file=s.client_cert_file, client_key_file=s.client_key_file,
-            hint_dir=h.provisioned.hint_dir or (self.layout.models_dir / h.provisioned.fingerprint[:16] / "hint"),
+            # fused: its own pks-v3 hint over the fused2 linears (built locally by the factory on first use)
+            hint_dir=(self.layout.models_dir / h.provisioned.fingerprint[:16] / "hint-fused" if fused else
+                      h.provisioned.hint_dir or (self.layout.models_dir / h.provisioned.fingerprint[:16] / "hint")),
             hint_key_file=hint_key, factory_weights="stream" if stream else "pack",
             weights_source=o.factory_weights_source, pack_fingerprint=prov.fingerprint, hf_repo=prov.hf_repo,
             hf_revision=prov.hf_revision, check_stock_segments=int(o.check_stock_segments),
             hint_work=self._hint_work(rt) if scheme == "pks-v3" else (),
-            store_fingerprint=getattr(rt, "fingerprint", None) or None,
+            store_fingerprint=getattr(rt, "fingerprint", None) or None, schedule="fused2" if fused else "standard",
             # one private set per worker start and per failed or aborted segment
             check_stock_private=max(8, 2 * int(o.workers) + 2))
 
@@ -841,6 +905,9 @@ class Engine:
         """``(linear key, rows x columns)`` of the runtime pack's linears: the weights of the hint build's progress
         (public shapes)."""
         try:
+            tables = getattr(rt, "_f2_tables", None) if getattr(rt, "fused2", False) else None
+            if tables is not None:  # fused: the hint covers the fused2 linears (file-safe keys, as the factory's)
+                return tuple((str(lin.key).replace("/", "-"), int(lin.m) * int(lin.n)) for lin in tables.all_linears())
             return tuple((str(s.id.key), int(s.out_features) * int(s.in_features)) for s in rt.pack.linear_specs())
         except Exception:  # pragma: no cover - progress without a percentage
             return ()
@@ -848,6 +915,9 @@ class Engine:
     @staticmethod
     def _slot_bytes(rt: Any) -> int:
         try:
+            tables = getattr(rt, "_f2_tables", None) if getattr(rt, "fused2", False) else None
+            if tables is not None:  # fused: every fused2 linear's outputs (the folded head included), K56
+                return int(sum(int(lin.m) for lin in tables.all_linears()) * rt.ring.k // 8)
             specs = rt.pack.linear_specs()
             return int(sum(int(s.out_features) for s in specs) * rt.ring.k // 8)
         except Exception:  # pragma: no cover - defensive

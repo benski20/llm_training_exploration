@@ -132,6 +132,14 @@ _NON_FIELD_ENV = {
     "PGW_WRITER_THREADS",  # segment writer threads read by pgw.maskstore.segment_io
 
     "PGW_SPECULATION",  # SDKOptions.speculation (read in SDKOptions.from_env)
+    "PGW_SCHEDULE",  # SDKOptions.schedule (read in SDKOptions.from_env)
+    "PGW_SDK_LINK_RTT_MS",  # schedule="auto": a known link RTT instead of the probe (pgw.sdk.schedule.decide)
+    "PGW_SERVICE_FUSED2_HEAD",  # the head-fold fused2 lane entry (pgw.service.fused2_lane.ENV_HEAD)
+    "PGW_SERVICE_FUSED2_FROM_PACK",  # fused2 lane entries derived from the packs (pgw.service.fused2_lane)
+    "PGW_SERVICE_FUSED2_MASKGEN",  # encrypted maskgen for the fused2 linears (pgw.service.fused2_lane)
+    "PGW_FUSED2_HE_DIGITS",  # the K56 product plan of the encrypted fused2 factory (pgw.factory.fused2_he)
+    "PGW_FUSED2_SPLIT",  # element ranges of the native fused2 driver on the pool (rust/pgw-fast decode_f2.rs)
+    "PGW_RING64_CPU",  # CPU pair op: exact float64 digits (default) or the Triton kernels (pgw.core.ring64)
     "PGW_DRAFT_HEAD_URL",  # mirror of the pinned draft heads (pgw.sdk.draft_heads.resolve_draft_head)
     "PGW_PLATFORM_ENABLED",  # developer console on the provider (pgw.platform.PlatformSettings)
     "PGW_PLATFORM_ACCOUNTS_URL",

@@ -753,6 +753,9 @@ class Accounts:
         #: ``() -> {"transport": "tcp", "port": int} | None``: the TCP+TLS trip lane clients should use (the
         #: advertised port when the lane is published through a port mapping); set by the app
         self.lane_hint: Callable[[], dict[str, Any] | None] | None = None
+        #: ``{base pack fingerprint: fused2 ring}`` of the packs whose head-fold fused2 lane entry (item table v2:
+        #: the client library's ``schedule = "fused"``) this service serves (empty: none)
+        self.fused_hint: Callable[[], dict[str, str]] | None = None
         #: content-free request log and session reports (``pgw.service.requestlog``); set by the app
         self.request_log: Any = None
         self._lock = threading.RLock()
@@ -1206,7 +1209,14 @@ class Accounts:
                                  "cert_serial": f"{serial:x}" if serial is not None else None,
                                  "models": [m["name"] for m in models]})
         heads = self._masked_head_bases()
-        out["models"] = [{**m, "masked_head": m["fingerprint"] in heads} for m in models]
+        fused: dict[str, str] = {}
+        if self.fused_hint is not None:
+            with contextlib.suppress(Exception):
+                fused = dict(self.fused_hint())
+        out["models"] = [{**m, "masked_head": m["fingerprint"] in heads,
+                          "schedules": ["standard", "fused"] if m["fingerprint"] in fused else ["standard"],
+                          **({"fused_ring": fused[m["fingerprint"]]} if m["fingerprint"] in fused else {})}
+                         for m in models]
         out["lane"] = None
         if self.lane_hint is not None:
             with contextlib.suppress(Exception):

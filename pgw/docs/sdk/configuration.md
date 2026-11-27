@@ -37,6 +37,9 @@ behaviour of the OpenAI client it replaces.
 | `spec_rows` | 3 | rows per round with `speculation` (2 to 8) |
 | `draft_head_path` | the shipped head | your own draft-head file for `speculation="draft_head"` (`benchmarks/feature_head_distill.py` trains one) |
 | `spec_pass_gap_ms` | 8 | with `speculation`: the least time between the end of one round and the start of the next (0 = off). It hides from the service the small timing differences between the answer's rounds and the random rounds after it; it costs a few ms per round |
+| `schedule` | `PGW_SCHEDULE`, else `"standard"` | how the per-token round trips are grouped: `"standard"` (`4 x layers + 1` round trips per token), `"fused"` (opt-in: `2 x layers` round trips per token, values 1.75x larger; for high-latency links such as consumer devices on the internet) or `"auto"` (measures the link when the model starts and picks one). `"fused"` gives slightly different answers (a different fixed reference, not bit-identical to `"standard"`), so the choice is fixed per model for the life of the client: [below](#schedule-standard-or-fused) |
+| `schedule_auto_rtt_ms` | 3 | `"auto"`: the least measured round-trip time (ms) at which `"fused"` may be picked |
+| `schedule_auto_margin` | 0.1 | `"auto"`: `"fused"` must be estimated at least this much faster per token (fraction) |
 | `log_level` | `PGW_SDK_LOG`, else silent | structured (JSON) logs on stderr at this level |
 
 ## Prefix cache
@@ -103,6 +106,8 @@ silently ignored.
 | `PGW_CHECK_STOCK_SEGMENTS` | `64` | `check_stock_segments` |
 | `PGW_MASK_WORKERS` | a quarter of the CPUs | `mask_workers` |
 | `PGW_SPECULATION` | `off` | `speculation` |
+| `PGW_SCHEDULE` | `standard` | `schedule` |
+| `PGW_SDK_LINK_RTT_MS` | unset | `schedule="auto"`: use this round-trip time (ms) instead of measuring the link (tests, or a link you know) |
 | `PGW_MASK_ADMISSION` | `entitled` | `mask_admission` |
 | `PGW_FACTORY_STALL_S` | `120` | `factory_stall_s` |
 | `PGW_SDK_MASKGEN_STALL_S` | `30` | `maskgen_stall_s` (`0`: the maskgen watchdog is off) |
@@ -119,6 +124,58 @@ silently ignored.
 | `PGW_PKS_NATIVE` | `1` | `0` disables only the native `pks-v3` kernels |
 | `PGW_PKS_ISA` | `auto` | caps the instruction set of the native `pks-v3` and check-vector kernels (`avx512ifma`, `avx512`, `avx2`, `scalar`); the best one the CPU has is picked by default. Every setting gives the same bits. For diagnosis and benchmarks only |
 | `PGW_REQUIRE_NATIVE` | `0` | build time only: `1` makes a source build fail when the native extensions cannot be compiled |
+
+## Schedule: standard or fused
+
+Every generated token needs a fixed number of sequential round trips to the service. On a link with a high
+round-trip time (RTT), such as a laptop or phone on a home network, those round trips are most of the time per
+token. `schedule="fused"` halves them:
+
+| | round trips per token | 0.5B / 1.5B / 3B / 7B | bytes per value | answers |
+|---|---|---|---|---|
+| `"standard"` (default) | `4 x layers + 1` | 97 / 113 / 145 / 113 | 4 | the standard fixed reference |
+| `"fused"` (opt-in) | `2 x layers` | 48 / 56 / 72 / 56 | 7 | the fused fixed reference |
+
+How: each round trip carries two linear layers of the model (the service applies them one after the other to
+masked values), the normalisation between them is folded into the second layer's public weights, the model's
+output layer rides the last round trip, and the first layer's first linear runs on your machine (its input is the
+token you just sampled, so nothing could be sent ahead of it). Privacy and checks are unchanged: the service sees
+only one-time-masked values of public shapes, each mask is used once, and every value the service returns is
+range- and Freivalds-checked (over the prime `2^61 - 1`) before it is used; a wrong value stops the answer with an
+`IntegrityError`, as on the standard schedule.
+
+**Answers are not bit-identical to `"standard"`.** The fused schedule rounds differently (a fixed-point residual
+stream and folded int8 weights), so it is its own fixed reference: the same seed and prompt give the same tokens
+and logprobs on every run of `"fused"`, but not the same as `"standard"`. Measured quality on Qwen2.5-0.5B-Instruct
+(4088 wikitext tokens): perplexity 19.90 vs 19.85, the same top-1 token at 97.4 % of positions
+(`benchmarks/results/fused2/quality_qwen05b_headfold_i8.json`); 7B in `STATUS.md`. Because of this, the schedule is
+decided **once per model when the client starts it** and never changes while the client runs: not during an
+answer, not between the turns of a conversation, not after a reconnect. Pin `"standard"` or `"fused"` when every
+run of your application must use the same reference; `"auto"` may choose differently on another day or network.
+
+**Costs.** Values on the wire are 7 bytes instead of 4: the same number of values per token, so 1.74x the bytes
+per token (Qwen2.5-0.5B: 1.27 MB up and 3.18 MB down per token instead of 0.73 / 1.82 MB; 7B: 5.8 / 10.8 MB instead
+of 3.3 / 6.2 MB). On a consumer link the bytes often cost more than the round trips (7B at 100 Mbit/s up: about
+0.47 s per token for the upload alone), so `"fused"` helps most where the RTT is high and the bandwidth is not the
+limit; `"auto"` weighs both. Mask generation
+for the fused schedule costs more client and service CPU per token (the `pks-v3` factory makes each 56-bit mask from
+3-4 ordinary 32-bit products), and its first use builds a second one-time mask hint. The service must offer it:
+`client.status()["models"][model]` shows `schedule` and, with `"auto"`, the decision.
+
+**`"auto"`.** When the model starts, the client measures the link to the service (the median round-trip time of a
+few empty authenticated probes, then the upload and download time of 512 KiB each way; no content) and estimates
+the time per token of both schedules from public shapes only: `round trips x RTT + bytes up / upload rate + bytes
+down / download rate + client work per round trip`. It picks `"fused"` when the service offers it, the RTT is at
+least `schedule_auto_rtt_ms` (3 ms) and the fused estimate is at least `schedule_auto_margin` (10 %) lower;
+otherwise `"standard"`. On a slow uplink the larger values can cost more than the saved round trips, which is why
+bandwidth counts. The decision with its inputs (`link.rtt_ms`, `link.up_mbps`, `link.down_mbps`, both estimates,
+the reason) is in `client.status()["models"][model]["schedule_decision"]`. A service without the fused schedule
+or the probe gives `"standard"` with the reason recorded; `schedule="fused"` against such a service fails with
+`NotFoundError` (never a silent switch of reference).
+
+Not combined with `"fused"` yet: `prefix_cache=True`, `factory_weights="stream"`, `lane` other than `"auto"`,
+`masked_head="off"`. Strict `speculation` works on both schedules (every verify pass has `spec_rows` rows; filler
+rows are masked rows on the fused schedule, so it costs `spec_rows` masks per pass).
 
 ## Speculative decoding: when to enable it
 

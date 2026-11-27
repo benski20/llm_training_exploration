@@ -30,6 +30,25 @@ from pgw.core.ring64 import (
 DEV = "cuda" if torch.cuda.is_available() else "cpu"
 
 
+@pytest.fixture(autouse=True)
+def _kernels_on_cpu(monkeypatch: pytest.MonkeyPatch) -> None:
+    """These tests exercise the Triton kernels (in the interpreter on CPU), not the CPU provider's exact path."""
+    monkeypatch.setenv("PGW_RING64_CPU", "triton")
+
+
+def test_cpu_exact_path_equals_the_reference(monkeypatch: pytest.MonkeyPatch) -> None:
+    from pgw.core.ring64 import check_op
+
+    monkeypatch.setenv("PGW_RING64_CPU", "exact")
+    gen = torch.Generator().manual_seed(5)
+    w1, w2 = _w(gen, 24, 40), _w(gen, 33, 24)
+    hm = torch.randint(1, 1 << 12, (24,), generator=gen, dtype=torch.int64)
+    for op in (PairOp(56, w1, w2, hm, max_rows=8), PairOp(56, w1, max_rows=8), PairOp(64, w1, w2, None, max_rows=8)):
+        for rows in (1, 3, 8):
+            for case in range(2):
+                assert check_op(op, rows, seed=rows + case, extreme=case == 1) is None
+
+
 def _w(gen: torch.Generator, m: int, n: int) -> torch.Tensor:
     w = torch.randint(-128, 128, (m, n), generator=gen, dtype=torch.int64).to(torch.int8)
     w[0] = -128

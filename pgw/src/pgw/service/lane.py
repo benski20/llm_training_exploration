@@ -594,6 +594,8 @@ class LaneManager:
             "max_rows": int(self.settings.lane_max_rows),
             "deadline_cap_ms": int(min(self.settings.max_deadline_s or 120.0, 3600.0) * 1000),
             **self._multi_offer(),
+            # fused2 lane models: the item table's version (2: with the folded-head pair item)
+            **({"fused2_items": int(self._f2slots[slot].items_version)} if slot in self._f2slots else {}),
         }
 
     def _multi_offer(self) -> dict[str, Any]:
@@ -1133,4 +1135,38 @@ def add_lane_routes(app: Any, state: Any) -> None:
                             headers=error_headers(exc))
 
     app.add_route(LANE_OPEN_PATH, lane_open, methods=["POST"], include_in_schema=False)
+
+    async def link_probe(request: Request) -> Response:
+        """``POST /pgw/v1/link/probe``: the client library's link measurement for ``schedule = "auto"`` (RTT and
+        bandwidth). Authenticated like a compute call; the body (at most 1 MiB, any bytes, discarded) measures the
+        upload, ``PGW-Probe-Reply-Bytes`` (at most 1 MiB) zero bytes come back to measure the download. No content,
+        no state."""
+        try:
+            check_protocol_header(request.headers.get(PROTOCOL_HEADER))
+            await _maybe_await(handler.authenticate(request.headers.get("authorization"),
+                                                    _client_cert_subject(request.scope)))
+            from pgw.core.http_body import read_limited
+
+            await read_limited(request, PROBE_MAX_BYTES, what="link/probe body")
+            try:
+                n = int(request.headers.get("pgw-probe-reply-bytes", "0") or 0)
+            except ValueError as exc:
+                raise ProtocolError("PGW-Probe-Reply-Bytes must be an integer") from exc
+            if not 0 <= n <= PROBE_MAX_BYTES:
+                raise ProtocolError(f"PGW-Probe-Reply-Bytes must be in [0, {PROBE_MAX_BYTES}]")
+            return Response(content=bytes(n), media_type="application/octet-stream",
+                            headers={"Cache-Control": "no-store"})
+        except Exception as exc:
+            if not isinstance(exc, PGWError):
+                log.error("link/probe internal error", exc_info=exc)
+            status, body = error_response_bytes(exc, None, json_body=True)
+            return Response(content=body, status_code=status, media_type="application/json",
+                            headers=error_headers(exc))
+
+    app.add_route(LINK_PROBE_PATH, link_probe, methods=["POST"], include_in_schema=False)
+
+
+#: The link measurement route (``schedule = "auto"`` of the client library) and its byte cap each way.
+LINK_PROBE_PATH = "/pgw/v1/link/probe"
+PROBE_MAX_BYTES = 1 << 20
 

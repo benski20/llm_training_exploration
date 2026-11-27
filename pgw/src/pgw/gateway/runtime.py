@@ -1043,13 +1043,16 @@ class ModelRuntime:
         from pgw.gateway.fused2 import load_fused2_weights
         from pgw.service.fused2_lane import fused2_fingerprint
 
+        c = self.config
         w = load_fused2_weights(pack, self.config)
         self.fingerprint = fused2_fingerprint(w, self.ring)
         self._f2_weights = w
-        self._f2_tables = gateway_tables(w)
-        c = self.config
+        self._f2_tables = gateway_tables(w, keep_qkv0=bool(c.fused2_local_qkv0))
+        head = w.head is not None
+        trips = 2 * int(w.num_layers) + 1 - int(bool(c.fused2_local_qkv0))
         self.fused2_info = {"lane_fingerprint": self.fingerprint, "base_fingerprint": pack.fingerprint,
-                            "ring": self.ring.name, "trips_per_token": 2 * int(w.num_layers) + 1,
+                            "ring": self.ring.name, "trips_per_token": trips, "head_fold": head,
+                            "local_qkv0": bool(c.fused2_local_qkv0),
                             "weights": (str(c.fused2_weights_path) if c.fused2_weights_path is not None
                                         else f"derived from the pack (migration {c.fused2_migrate_bits} bits)"),
                             "migrated": bool(getattr(w, "migrated", False))}
@@ -1169,7 +1172,10 @@ class ModelRuntime:
         if os.environ.get("PGW_PREFILL_PROFILE", "").strip() == "1":  # prompt-pass timings (gateway-local)
             self.model.prefill_profile = {}
         head_dev = os.environ.get("PGW_LM_HEAD_DEVICE", "").strip().lower() or c.lm_head_device
-        if c.head_mode == "provider_int8":  # the masked LM head: one more masked call per pass, no float head
+        if c.head_mode == "provider_int8" and self.fused2:  # the folded head: the last trip's second stage
+            self.lm_head_policy = {"device": "provider_fused2_folded", "fingerprint": self.fingerprint,
+                                   "base_fingerprint": getattr(self, "base_fingerprint", None)}
+        elif c.head_mode == "provider_int8":  # the masked LM head: one more masked call per pass, no float head
             from pgw.engine.masked_head import enable_masked_head
 
             head = enable_masked_head(self.model)
@@ -1259,7 +1265,8 @@ class ModelRuntime:
             raise ConfigError("fused2: no engine")
         if not isinstance(self.model.float_ops, NativeFloatOps):
             self.model.set_float_ops("native")
-        enable_fused2(self.model, self._f2_tables, self.ring)
+        enable_fused2(self.model, self._f2_tables, self.ring, head_fold=self._f2_tables.head is not None,
+                      local_qkv0=bool(c.fused2_local_qkv0))
         native = False
         if self.mode == "masked" and c.fused2_decode_native != "off":
             from pgw.core.native import fast
@@ -1942,7 +1949,7 @@ class ModelRuntime:
             "speculation": self._speculation_status(),
             "prefix_cache": self._prefix_cache_status(),
         }
-        if self.config.head_mode == "provider_int8":
+        if self.config.head_mode == "provider_int8" and not self.fused2:
             # the masked LM head: fingerprint is the derived one, base_fingerprint the pack's (config.fingerprint)
             bfp = getattr(self, "base_fingerprint", None)
             out["masked_head"] = {"linear": (f"{self.model.num_layers}.lm_head" if self.model is not None else None),

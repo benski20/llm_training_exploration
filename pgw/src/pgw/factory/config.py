@@ -159,6 +159,17 @@ class FactorySettings(PGWSettings):
         "computes each product as independent uniform digits on the existing HE schemes (mlwe v2 at K40 with "
         "14-bit digits, or pks-v3 at K32 with 8-bit digits) recombined exactly mod 2^K",
     )
+    fused2_he_digits: Literal["", "split", "top"] = Field(
+        "", description="schedule = 'fused2' with an encrypted factory: how K56 products are made from K_he "
+        "products (pgw.factory.fused2_he): 'split' = 7 x 8-bit digits at pks-v3 (the reference), 'top' = the "
+        "top-digit plan with stacked planes (3-4 products per mask; byte-identical segments). Empty: "
+        "PGW_FUSED2_HE_DIGITS, else 'split'",
+    )
+    fused2_head: bool = Field(
+        False, description="schedule = 'fused2': the public fused2 weights include the LM head folded into the "
+        "last trip (item table v2, the client library's schedule = 'fused'; must match the gateway's head_mode = "
+        "'provider_int8' and the service's PGW_SERVICE_FUSED2_HEAD; the lane fingerprint binds it)",
+    )
     fused2_migrate_bits: int = Field(
         8, ge=0, le=8, description="schedule = 'fused2': residual-grid migration bits (must match the gateway's "
         "fused2_migrate_bits and the service's PGW_SERVICE_FUSED2_FROM_PACK; the lane fingerprint binds them)",

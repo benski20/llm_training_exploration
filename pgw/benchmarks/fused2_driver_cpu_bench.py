@@ -47,6 +47,8 @@ def main() -> None:
     ap.add_argument("--shm", action="store_true")
     ap.add_argument("--spin-us", type=int, default=400)
     ap.add_argument("--json", default=None)
+    ap.add_argument("--head-fold", action="store_true",
+                    help="the client library's schedule='fused': folded head + local qkv0 (2L trips per pass)")
     args = ap.parse_args()
 
     from pgw.core import RingParams
@@ -70,22 +72,35 @@ def main() -> None:
     work.mkdir(parents=True, exist_ok=True)
     pack = ModelPack.open(build_pack(work, args.preset, args.layers))
     t0 = time.perf_counter()
-    cached = work / f"f2w-{args.preset}-{args.layers}-v{pack.arch.vocab_size}.pt"  # the tables, reused across runs
+    hf = bool(args.head_fold)
+    cached = work / f"f2w-{args.preset}-{args.layers}-v{pack.arch.vocab_size}{'-head' if hf else ''}.pt"  # reused
     if cached.exists():
         weights = Fused2Weights.load(cached)
     else:
-        weights = Fused2Weights(pack, None, multipliers=migration_multipliers(pack, 8))
+        weights = Fused2Weights(pack, None, multipliers=migration_multipliers(pack, 8, head=hf), head=hf)
         weights.save(cached)
     print(f"fused2 tables: {time.perf_counter() - t0:.1f}s", file=sys.stderr)
+    if hf and weights.down[-1].sigma <= 0.0:  # zero weights: a spectral norm of 0 (the bound the head trip needs)
+        import dataclasses
+
+        weights.down[-1] = dataclasses.replace(weights.down[-1], sigma=1.0)
     items = fused2_items(weights)
     widths = [(it.n1, it.m1, it.m2, it.k2 is not None) for it in items]
+    head_item = len(items) - 1 if weights.head is not None else None
 
     def execute(_model: int, linear: int, _ring: int, rows: int, body: bytes, _tenant: str, _left: float) -> Any:
         n1, m1, m2, pair = widths[linear]
         if not pair:  # Y_hat = W x_hat = 0
             return bytes(rows * m1 * nb)
-        # H_hat = R_hat + hmul * W1 x_hat = R_hat; Z_hat = W2' H_hat = 0
-        return bytes(body[rows * n1 * nb:rows * (n1 + m1) * nb]) + bytes(rows * m2 * nb)
+        # H_hat = R_hat + hmul * W1 x_hat = R_hat; Z_hat = W2' H_hat = 0 (the folded head is not zero: its exact Z)
+        r_hat = bytes(body[rows * n1 * nb:rows * (n1 + m1) * nb])
+        if head_item is not None and linear == head_item:
+            from pgw.core.packing import pack_ring, unpack_ring
+            from pgw.core.ringmm import int8_ring_matmul
+
+            h = unpack_ring(r_hat, (rows, m1), ring.k)
+            return r_hat + pack_ring(int8_ring_matmul(h, weights.head.w8, ring.k), ring.k)
+        return r_hat + bytes(rows * m2 * nb)
 
     sock_dir = tempfile.mkdtemp(prefix="pgwf2")
     sock = os.path.join(sock_dir, "lane.sock")
@@ -96,7 +111,10 @@ def main() -> None:
     ch = fast.TripChannel.connect_service_uds(sock, ticket, 30.0, 8, int(args.spin_us))
     if args.shm:
         assert ch.attach_shm() is True and ch.transport == "shm"
-    prov = LaneFused2Provider(ch, [it.name for it in items], items_of(weights), ring.k, max_rows=8)
+    from pgw.engine.fused2_lane import single_multipliers
+
+    prov = LaneFused2Provider(ch, [it.name for it in items], items_of(weights), ring.k, max_rows=8,
+                              hmul=single_multipliers(weights))
     src = Fused2MaskSource(weights, ring)
     passes = args.tokens + 3
     t0 = time.perf_counter()
@@ -105,7 +123,7 @@ def main() -> None:
     be = Fused2MaskedBackend(ring, prov, src)
     model = TransformerModel(pack, be)
     model.set_float_ops("native")
-    enable_fused2(model, weights, ring)
+    enable_fused2(model, weights, ring, head_fold=hf, local_qkv0=hf)
     nd = enable_fused2_native(model)
 
     g = torch.Generator().manual_seed(7)
@@ -141,7 +159,7 @@ def main() -> None:
     b = per_kind.get(kinds[2], {}).get("local_us", 0.0)
     res = {
         "preset": args.preset, "layers": L, "ring": ring.name, "transport": "shm" if args.shm else "uds",
-        "decode_passes": passes - 3, "trips_per_pass": 2 * L + 1,
+        "decode_passes": passes - 3, "trips_per_pass": 2 * L + (0 if hf else 1), "head_fold": hf,
         "local_us_per_trip": round(tot[3] / 1e3 / max(1, tot[2]), 1),
         "lane_us_per_trip": round(tot[4] / 1e3 / max(1, tot[2]), 1),
         "per_kind": per_kind,

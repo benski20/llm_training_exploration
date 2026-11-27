@@ -16,6 +16,8 @@ reference itself (no fake quantization):
 * ``f2mighead<b>:<ring>``: pure migration plus the LM head folded into the last trip (``head=True``,
   ``head_fold=True``; 2L + 1 trips with the head on the provider, 2L with ``local_qkv0``, which does not change
   the numbers);
+* ``f2i8mighead<b>:<ring>``: the same with the int8 fold from the pack (no float checkpoint): what the client
+  library's ``schedule = "fused"`` and the provider derive (the production reference);
 * ``f2+g<k>:<ring>``: fused2 with the split fold (``k`` gateway columns per folded linear, int16 on the
   gateway; ``Fused2Weights(gateway_columns=k)``).
 
@@ -71,7 +73,8 @@ def windows(ids: torch.Tensor, seq: int) -> list[torch.Tensor]:
 
 @torch.no_grad()
 def float_logits(model: Any, ids: torch.Tensor) -> torch.Tensor:
-    return model(ids[None]).logits[0].float()
+    dev = next(model.parameters()).device
+    return model(ids[None].to(dev)).logits[0].float().cpu()
 
 
 #: Bits of the gateway columns' integer weights (``--gateway-bits``).
@@ -102,6 +105,11 @@ def engine_runner(pack: Any, cfg: str, state: Any, calib: list[torch.Tensor] | N
         model = TransformerModel(hp, PlainBackend(hp, ring))
         enable_masked_head(model)
         return model, None
+    if kind.startswith("f2i8mighead"):  # the production derivation: int8 fold from the pack (the SDK's and the
+        b = int(kind[11:] or 8)          # service's fused2 weights: no float checkpoint), migration, folded head
+        w = Fused2Weights(pack, None, multipliers=migration_multipliers(pack, b, head=True), head=True)
+        model = TransformerModel(pack, Fused2PlainBackend(ring))
+        return model, enable_fused2(model, w, ring, head_fold=True, local_qkv0=True)
     if kind.startswith("f2mighead"):
         b = int(kind[9:] or 8)
         fl = hf_float_linears(state, pack.arch)
@@ -156,6 +164,9 @@ def main() -> None:
     ap.add_argument("--save-prompts", default=None, help="path prefix: keep each config's prompt logprobs")
     ap.add_argument("--pack", default=None, help="an on-disk pgw pack of the same checkpoint (less memory)")
     ap.add_argument("--ref", default=None, help="cache of the float reference (and the int8 prompt logprobs)")
+    ap.add_argument("--float-device", default="cpu", help="float reference: 'cpu' (float32) or 'cuda' (device_map "
+                    "auto over the GPUs, --float-dtype; for 7B+ on a T4 x 2)")
+    ap.add_argument("--float-dtype", default="float32", choices=["float32", "float16", "bfloat16"])
     args = ap.parse_args()
     global GATEWAY_BITS
     GATEWAY_BITS = args.gateway_bits
@@ -176,7 +187,11 @@ def main() -> None:
         ref = torch.load(ref_path)
     else:
         t0 = time.time()
-        fm = AutoModelForCausalLM.from_pretrained(d, dtype=torch.float32).eval()
+        if args.float_device == "cpu":
+            fm = AutoModelForCausalLM.from_pretrained(d, dtype=getattr(torch, args.float_dtype)).eval()
+        else:
+            fm = AutoModelForCausalLM.from_pretrained(d, dtype=getattr(torch, args.float_dtype),
+                                                      device_map="auto").eval()
         ref_top: list[torch.Tensor] = []
         nll = cnt = 0.0
         for w in wins:
@@ -196,6 +211,8 @@ def main() -> None:
         results = json.loads(Path(args.json).read_text())
     results["float"] = {"ppl": ref["ppl"], "tokens": ref["tokens"]}
     state = d / "model.safetensors"  # read lazily, one linear at a time (low memory)
+    if not state.is_file():  # a sharded checkpoint (7B+): the directory
+        state = d
     if args.pack:
         from pgw.modelpack import ModelPack
 

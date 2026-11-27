@@ -958,6 +958,38 @@ def _sdk_e2e_job(model: str, timeout_s: int) -> dict:
 
 JOBS["pgw-sdk-e2e-7b"] = _sdk_e2e_job("qwen2.5-7b-instruct", 2 * 3600 + 2700)  # kernel under 3 h in all
 JOBS["pgw-sdk-e2e-3b"] = _sdk_e2e_job("qwen2.5-3b-instruct", 2 * 3600)
+
+
+# fused2 + folded LM head + local qkv0 (the high-RTT schedule, 2L trips) at 7B: perplexity and top-1 vs the current
+# pipeline (standard + masked int8 head) on wikitext-2 (research/reviews/consumer-round-trips.md section 6). The
+# engine's exact integer pipelines run on the CPU (the pinned references themselves); only the float reference
+# runs on the GPUs (float16, device_map auto over the T4 x 2: float32 does not fit). 2048 wikitext tokens.
+_REV_7B = "a09a35458c702b33eeacc393d103063234e8bc28"
+_F2Q_EXCLUDE = ["scripts", "examples", "tests", "rust", "src/pgw/sdk/draft_heads", "SPEC.md",
+                "INTERFACE_NOTES.md", "STATUS.md",
+                *sorted(f"benchmarks/{p.name}" for p in HERE.parent.iterdir() if p.name != "fused2_quality.py"),
+                *sorted(f"src/pgw/{p.name}" for p in (PGW / "src" / "pgw").iterdir()
+                        if p.is_dir() and p.name in ("console", "platform", "chat", "design", "moe", "service", "gateway",
+                                                        "hemask", "sdk", "wire", "cli", "provision", "enroll",
+                                                        "observability")), "chat"]
+JOBS["pgw-fused2-quality-7b"] = {"machine_shape": "NvidiaTeslaT4x2", "exclude": _F2Q_EXCLUDE, "steps": [
+    {"kind": "shell", "name": "cpu_info", "cmd": "nproc; free -g; df -h / /tmp /kaggle/working; nvidia-smi",
+     "timeout": 60},
+    {"kind": "shell", "name": "download", "required": True, "timeout": 3600,
+     "cmd": "python -c \"from huggingface_hub import snapshot_download, hf_hub_download; "
+            f"print(snapshot_download('Qwen/Qwen2.5-7B-Instruct', revision='{_REV_7B}', "
+            "allow_patterns=['*.json', '*.safetensors', '*.txt'])); "
+            "print(hf_hub_download('Salesforce/wikitext', 'wikitext-2-raw-v1/test-00000-of-00001.parquet', "
+            "repo_type='dataset'))\""},
+    {"kind": "shell", "name": "pack", "required": True, "timeout": 3600,
+     "cmd": "python -c \"import glob; from pgw.modelpack import pack_checkpoint; "
+            "src = sorted(glob.glob('/root/.cache/huggingface/hub/models--Qwen--Qwen2.5-7B-Instruct/snapshots/*'))[-1]; "
+            "pack_checkpoint(src, '/tmp/pack7b', name='qwen2.5-7b-instruct')\" && du -sh /tmp/pack7b && free -g"},
+    {"kind": "shell", "name": "quality_7b", "timeout": 8 * 3600,
+     "cmd": "python benchmarks/fused2_quality.py --model Qwen2.5-7B-Instruct --pack /tmp/pack7b --threads 4 "
+            "--configs stdmh:K32A12C27 f2i8mighead8:K56A12C53 --tokens 2048 --float-device cuda "
+            "--float-dtype float16 --ref /tmp/ref7b.pt --json /kaggle/working/quality_qwen7b_headfold.json"},
+]}
 JOBS["pgw-sdk-e2e-15b"] = _sdk_e2e_job("qwen2.5-1.5b-instruct", 2 * 3600)
 
 

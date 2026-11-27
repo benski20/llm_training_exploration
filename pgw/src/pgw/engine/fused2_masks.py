@@ -71,7 +71,7 @@ class Fused2MaskFactory(Fused2MaskSource):
     def check_blob(self) -> bytes:
         """The secret check vectors of every linear (``u``, ``u W mod p`` with the stage-1 multipliers folded)."""
         out = {}
-        for lin in self.w.linears():
+        for lin in self.w.all_linears():
             ch = self.check_vectors(lin)
             out[lin.key] = {"u": torch.from_numpy(ch.u), "uw": torch.from_numpy(ch.uw)}
         buf = io.BytesIO()
@@ -85,7 +85,7 @@ class Fused2MaskFactory(Fused2MaskSource):
         if rows < 1:
             raise ConfigError("a segment holds at least one slot")
         k = self.ring.k
-        by_key = {lin.key: lin for lin in self.w.linears()}
+        by_key = {lin.key: lin for lin in self.w.all_linears()}
         start = self._next
         self._next += rows
         items = fused2_items(self.w)
@@ -266,17 +266,23 @@ class Fused2SegmentMasks:
         return cat
 
 
-def gateway_tables(weights: Any) -> Any:
+def gateway_tables(weights: Any, *, keep_qkv0: bool = False) -> Any:
     """A copy of ``weights`` without the int8 matrices (stride-0 zero views of the same shapes): what a weight-free
     gateway holds (scales, biases, norms, bounds, multipliers). Used by tests to prove the gateway path never
-    reads ``w8``."""
+    reads ``w8``. ``keep_qkv0`` (``local_qkv0``): layer 0's public folded qkv matrix stays (the gateway computes
+    that product itself)."""
     import copy
     import dataclasses
 
+    def blank(lin: Any) -> Any:
+        return dataclasses.replace(lin, w8=torch.zeros((), dtype=torch.int8).expand(lin.m, lin.n))
+
     w = copy.copy(weights)
     for part in ("qkv", "o", "gu", "down"):
-        setattr(w, part, [dataclasses.replace(lin, w8=torch.zeros((), dtype=torch.int8).expand(lin.m, lin.n))
-                          for lin in getattr(weights, part)])
+        setattr(w, part, [lin if keep_qkv0 and part == "qkv" and i == 0 else blank(lin)
+                          for i, lin in enumerate(getattr(weights, part))])
+    if getattr(weights, "head", None) is not None:
+        w.head = blank(weights.head)
     return w
 
 

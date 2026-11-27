@@ -224,7 +224,7 @@ class Fused2HEPack:
         self.fingerprint = str(fingerprint)
         self.short_fingerprint = self.fingerprint[:12]
         self.name = name
-        self._lins = {he_key(lin.key): lin for lin in weights.linears()}
+        self._lins = {he_key(lin.key): lin for lin in weights.all_linears()}
 
     @staticmethod
     def _id(key: str) -> Any:
@@ -316,10 +316,16 @@ def build_fused2_he(settings: Any, weights: Any, fingerprint: str, k: int, *, re
 
         remote_backend = build_he_backend(settings, adapter, HE_RINGS[scheme], worker_index=worker_index,
                                           workers=workers)
-    shapes = {lin.key: (int(lin.m), int(lin.n)) for lin in weights.linears()}
+    shapes = {lin.key: (int(lin.m), int(lin.n)) for lin in weights.all_linears()}
     import os
 
-    if os.environ.get("PGW_FUSED2_HE_DIGITS", "").strip().lower() == "top":  # opt-in: 3-4 products instead of 7
+    # the K56 product plan behind one interface (``matmul(key, r) -> W r mod 2^k``): "split" = 7 x 8-bit digits
+    # (the reference), "top" = the top-digit plan with stacked planes (3-4 products; the client library's default)
+    plan = (str(getattr(settings, "fused2_he_digits", "") or "") or os.environ.get("PGW_FUSED2_HE_DIGITS", "")
+            ).strip().lower() or "split"
+    if plan not in ("split", "top"):
+        raise ConfigError(f"fused2 HE digit plan must be 'split' or 'top', got {plan!r}")
+    if plan == "top":  # 3-4 products instead of 7
         top = TopDigitProducts(remote_backend, k=k, k_he=k_he, shapes=shapes, scheme=scheme)
         log.info("fused2 factory: K%d masks by the top-digit plan on the encrypted %s factory (%s)", k, scheme,
                  top.resolved_backend)

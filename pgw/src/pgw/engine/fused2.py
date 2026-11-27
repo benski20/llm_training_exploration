@@ -1060,41 +1060,127 @@ class Fused2MaskedBackend(LinearBackend):
             a += n
         return outs[0] if len(outs) == 1 else torch.cat(outs, dim=0)
 
-    def _masked(self, t: Fused2Trip, m: TripMasks, src: Any) -> torch.Tensor:
+    def _prep(self, t: Fused2Trip, m: TripMasks) -> tuple[str, str | None, torch.Tensor, torch.Tensor | None]:
+        """The provider request of one trip piece: ``(k1, k2, x_hat, r_hat)`` (masked; the noise monitor sees
+        ``x_hat`` before it leaves)."""
         k = self.ring.k
         mask = (1 << k) - 1
-        try:
-            x_hat = (t.x + m.r_x) & mask
-            noise = self.noise_monitor
-            if noise is not None:  # duplicate rows (mask reuse) and sampled uniformity, before the payload leaves
-                noise.guard(x_hat, t.x)
-            bpe = k // 8
-            self.f2.trips += 1
-            self.f2.rows += int(t.x.shape[0])
-            if t.kind == "single":
-                self.f2.bytes_up += x_hat.numel() * bpe
-                y_hat = self.provider.single(t.l1.key, x_hat)
-                self.f2.bytes_down += y_hat.numel() * bpe
-                # a first linear with multipliers (head_fold's rows without logits): the provider returns
-                # hmul * W1 x_hat, so the correction is hmul * W1 r_x; the check vectors are (u * hmul) W1
-                wr = m.wr_x if t.l1.hmul is None else (m.wr_x * t.l1.hmul) & mask
-                y = _center(y_hat - wr, k)
-                self._verify(t.l1, t.x, y, ch=m.c1, masks=src)
-                return y
-            assert t.r is not None and t.l2 is not None and m.v is not None and m.wv is not None
+        x_hat = (t.x + m.r_x) & mask
+        noise = self.noise_monitor
+        if noise is not None:  # duplicate rows (mask reuse) and sampled uniformity, before the payload leaves
+            noise.guard(x_hat, t.x)
+        bpe = k // 8
+        self.f2.trips += 1
+        self.f2.rows += int(t.x.shape[0])
+        if t.kind == "single":
+            self.f2.bytes_up += x_hat.numel() * bpe
+            return t.l1.key, None, x_hat, None
+        assert t.r is not None and t.l2 is not None and m.v is not None and m.wv is not None
+        wr = m.wr_x if t.l1.hmul is None else (m.wr_x * t.l1.hmul) & mask
+        r_r = (m.v - wr) & mask  # r_R = v - hmul * W1 r_x: then H_hat - v = R + hmul * W1 x exactly
+        r_hat = (t.r + r_r) & mask
+        self.f2.bytes_up += (x_hat.numel() + r_hat.numel()) * bpe
+        return t.l1.key, t.l2.key, x_hat, r_hat
+
+    def _finish(self, t: Fused2Trip, m: TripMasks, out: Any, src: Any) -> torch.Tensor:
+        """Unmask and check the provider's answer to one trip piece (range + ``F_p`` Freivalds, both stages)."""
+        k = self.ring.k
+        mask = (1 << k) - 1
+        bpe = k // 8
+        if t.kind == "single":
+            y_hat = out
+            self.f2.bytes_down += y_hat.numel() * bpe
+            # a first linear with multipliers (head_fold's rows without logits): the provider returns
+            # hmul * W1 x_hat, so the correction is hmul * W1 r_x; the check vectors are (u * hmul) W1
             wr = m.wr_x if t.l1.hmul is None else (m.wr_x * t.l1.hmul) & mask
-            r_r = (m.v - wr) & mask  # r_R = v - hmul * W1 r_x: then H_hat - v = R + hmul * W1 x exactly
-            r_hat = (t.r + r_r) & mask
-            self.f2.bytes_up += (x_hat.numel() + r_hat.numel()) * bpe
-            h_hat, z_hat = self.provider.pair(t.l1.key, t.l2.key, r_hat, x_hat)
-            self.f2.bytes_down += (h_hat.numel() + z_hat.numel()) * bpe
-            h = _center(h_hat - m.v, k)
-            self._verify(t.l1, t.x, h, offset=t.r, ch=m.c1, masks=src)  # stage 1: H - R == hmul * W1 x
-            z = _center(z_hat - m.wv, k)
-            self._verify(t.l2, h, z, ch=m.c2, masks=src)  # stage 2: Z == W2' H (H verified)
-            return torch.cat([h, z], dim=1)
+            y = _center(y_hat - wr, k)
+            self._verify(t.l1, t.x, y, ch=m.c1, masks=src)
+            return y
+        assert m.v is not None and m.wv is not None and t.l2 is not None
+        h_hat, z_hat = out
+        self.f2.bytes_down += (h_hat.numel() + z_hat.numel()) * bpe
+        h = _center(h_hat - m.v, k)
+        self._verify(t.l1, t.x, h, offset=t.r, ch=m.c1, masks=src)  # stage 1: H - R == hmul * W1 x
+        z = _center(z_hat - m.wv, k)
+        self._verify(t.l2, h, z, ch=m.c2, masks=src)  # stage 2: Z == W2' H (H verified)
+        return torch.cat([h, z], dim=1)
+
+    def _ask(self, req: tuple[str, str | None, torch.Tensor, torch.Tensor | None]) -> Any:
+        k1, k2, x_hat, r_hat = req
+        if k2 is None:
+            return self.provider.single(k1, x_hat)
+        return self.provider.pair(k1, k2, r_hat, x_hat)
+
+    def _masked(self, t: Fused2Trip, m: TripMasks, src: Any) -> torch.Tensor:
+        try:
+            return self._finish(t, m, self._ask(self._prep(t, m)), src)
         finally:
             m.wipe()
+
+    def _pieces(self, t: Fused2Trip, src: Any) -> list[tuple[Fused2Trip, TripMasks]]:
+        """The trip's row pieces with their masks (store masks: a take never crosses a segment extent)."""
+        if int(t.x.abs().max()) > (1 << self.ring.cap) if t.x.numel() else False:
+            raise RingOverflowError("fused2 input out of range")
+        if not getattr(src, "partial", False):
+            return [(t, src.take(t))]
+        rows = int(t.x.shape[0])
+        out: list[tuple[Fused2Trip, TripMasks]] = []
+        a = 0
+        try:
+            while a < rows:
+                sub = t if a == 0 else Fused2Trip(t.kind, t.l1, t.x[a:], t.cap, t.l2,
+                                                  None if t.r is None else t.r[a:])
+                m = src.take(sub)
+                n = int(m.r_x.shape[0])
+                if n < rows - a:
+                    sub = Fused2Trip(t.kind, t.l1, t.x[a:a + n], t.cap, t.l2, None if t.r is None else t.r[a:a + n])
+                out.append((sub, m))
+                a += n
+        except BaseException:
+            for _, m in out:
+                m.wipe()
+            raise
+        return out
+
+    def forward_many_multi(self, calls: Sequence[LinearCall]) -> list[torch.Tensor] | None:
+        """Several fused2 calls of one step (the last trip's single and head-fold items; the sequences of a
+        batched step) in **one** lane-format-2 multi call when the provider offers it: one round trip instead of
+        one per call. Every piece is masked, checked and its masks wiped exactly as one call per piece (the same
+        rows, bodies and checks). ``None``: not applicable (the caller runs one call per call)."""
+        prov = self.provider
+        if len(calls) < 2 or not callable(getattr(prov, "many", None)):
+            return None
+        trips = []
+        for c in calls:
+            trip = c.meta.get(FUSED2_META) if c.meta else None
+            if not isinstance(trip, Fused2Trip) or int(trip.x.shape[0]) == 0:
+                return None
+            trips.append(trip)
+        pieces: list[tuple[int, Fused2Trip, TripMasks, Any]] = []
+        try:
+            for i, (c, trip) in enumerate(zip(calls, trips, strict=True)):
+                src = self.masks_for(c.session)
+                for sub, m in self._pieces(trip, src):
+                    pieces.append((i, sub, m, src))
+            reqs = [self._prep(t, m) for _, t, m, _ in pieces]
+            if prov.multi_ok(reqs):
+                answers = prov.many(reqs)
+            elif callable(getattr(prov, "many_any", None)) and getattr(prov, "max_items", 0) >= 2:
+                answers = prov.many_any(reqs)  # as few multi calls as the offer allows (same bodies)
+            else:  # no multi frames: one call per piece (same bodies)
+                answers = [self._ask(r) for r in reqs]
+            outs: list[list[torch.Tensor]] = [[] for _ in calls]
+            for (i, t, m, src), ans in zip(pieces, answers, strict=True):
+                outs[i].append(self._finish(t, m, ans, src))
+            for c in calls:
+                self.stats.add(calls=1, rows=int(c.x.shape[0]))
+            return [o[0] if len(o) == 1 else torch.cat(o, dim=0) for o in outs]
+        except IntegrityError as exc:
+            self.integrity_failed(exc)
+            raise
+        finally:
+            for _, _, m, _ in pieces:
+                m.wipe()
 
     def forward(self, call: LinearCall) -> torch.Tensor:
         trip = call.meta.get(FUSED2_META) if call.meta else None
@@ -1117,6 +1203,9 @@ class Fused2MaskedBackend(LinearBackend):
                 logging.getLogger(__name__).exception("fused2 integrity-failure callback failed")
 
     def forward_many(self, calls: Sequence[LinearCall]) -> list[torch.Tensor]:
+        got = self.forward_many_multi(calls)
+        if got is not None:
+            return got
         return [self.forward(c) for c in calls]
 
 

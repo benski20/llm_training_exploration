@@ -110,6 +110,9 @@ class FactoryPlan:
     hint_work: tuple[tuple[str, int], ...] = ()
     #: the mask store's fingerprint directory of this model (segment-write progress); ``None``: any
     store_fingerprint: str | None = None
+    #: ``"fused2"`` (``schedule = "fused"``): K56 fused2 pair-mask segments with the folded head (item table v2)
+    #: under the fused2 lane fingerprint, from the encrypted factory by the top-digit plan
+    schedule: str = "standard"
 
 
 #: pks-v3 encrypts in groups of 256 slots and amortises the upload's public NTTs over the groups of one request:
@@ -156,6 +159,12 @@ def factory_env(plan: FactoryPlan) -> dict[str, str]:
     }
     if plan.demand_file is not None:
         env["PGW_FACTORY_DEMAND_FILE"] = str(plan.demand_file)
+    if plan.schedule == "fused2":
+        # K56 pair masks (fused2 + the folded head, migration 8 bits: the provider's and the gateway's derivation);
+        # encrypted: the top-digit plan (3-4 ordinary K32 products per mask; pgw.factory.fused2_he)
+        env.update({"PGW_FACTORY_SCHEDULE": "fused2", "PGW_FACTORY_FUSED2_HEAD": "true",
+                    "PGW_FACTORY_FUSED2_MIGRATE_BITS": "8", "PGW_FACTORY_FUSED2_HE_DIGITS": "top",
+                    "PGW_FACTORY_CHECK_FIELD": "auto", "PGW_FACTORY_MASKED_HEAD": "false"})
     if plan.scheme in ("pks-v3", "mlwe"):
         assert plan.service_url is not None
         env["PGW_FACTORY_HE_SERVICE_URL"] = plan.service_url

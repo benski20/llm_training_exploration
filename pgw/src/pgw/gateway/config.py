@@ -43,6 +43,7 @@ SETUP_MODEL_OPTION_KEYS: frozenset[str] = frozenset({
     "local_max_rows", "lm_head_device", "float_threads",
     "spec_rows", "spec_strict_passes", "spec_mask_rows", "spec_mask_credit", "spec_lookup", "spec_lookup_min_n",
     "spec_tokens", "inline_max_rows", "schedule", "ring", "fused2_migrate_bits", "fused2_decode_native",
+    "fused2_local_qkv0",
     "batch_lm_head", "engine_pingpong", "max_concurrent_sessions", "draft_pack_path", "draft_device",
     "draft_backend", "spec_pipeline_steps", "head_mode", "draft_head_path",
     # public fused2 tables precomputed from the same pack (base fingerprint checked at load; the lane fingerprint
@@ -383,8 +384,17 @@ class GatewayModelConfig(BaseModel):
         "fused2 lane fingerprint. Needs: a capped K56 ring (e.g. K56A12C53), float_ops = 'native', lane = 'auto' "
         "/ 'required' (UDS, optionally the shared-memory transport via PGW_LANE_SHM=1) or 'tls', the service "
         "serving the fused2 lane entry of this pack (PGW_SERVICE_FUSED2_FROM_PACK=<fused2_migrate_bits> or "
-        "PGW_SERVICE_FUSED2_WEIGHTS), freivalds_rate = 1, head_mode = 'gateway' (the masked head is not "
-        "combined with fused2 yet), no speculation, local linears, prefix cache or chunked prefill",
+        "PGW_SERVICE_FUSED2_WEIGHTS), freivalds_rate = 1, no local linears, prefix cache or chunked prefill. "
+        "head_mode = 'provider_int8' with fused2 folds the final norm and the LM head into the last trip (the "
+        "provider's head-fold item, PGW_SERVICE_FUSED2_HEAD=on; 2L + 1 trips, 2L with fused2_local_qkv0): the "
+        "client library's schedule = 'fused'. Strict speculation (spec_rows + spec_strict_passes) is allowed "
+        "with the folded head (fixed rows per pass, masked filler rows, dummy passes)",
+    )
+    fused2_local_qkv0: bool = Field(
+        False, description="schedule = 'fused2': layer 0's qkv product (the public folded int8 matrix times the "
+        "quantized embedding row) is computed exactly on the gateway instead of a provider trip: the same integers, "
+        "one trip fewer per pass, the provider sees strictly less (it holds that matrix: 1 / 17 / 37 / 84 MB at "
+        "0.5B / 7B / 32B / 72B)",
     )
     fused2_migrate_bits: int = Field(
         8, ge=0, le=8, description="schedule = 'fused2': residual-grid migration bits of the public fused2 weights "
@@ -543,11 +553,14 @@ class GatewayModelConfig(BaseModel):
             raise ValueError(f"{where} needs lane = 'auto', 'required' or 'tls' (pair items ride the trip lane only)")
         if self.freivalds_rate != 1.0:
             raise ValueError(f"{where} checks every trip (both stages): freivalds_rate must be 1.0")
-        if self.head_mode != "gateway":
-            raise ValueError(f"{where} runs the head on the gateway (head_mode = 'provider_int8' is not combined with "
-                             "fused2 yet)")
         if self.speculates or self.spec_rows is not None or self.spec_strict_passes:
-            raise ValueError(f"{where} does not speculate (no spec_lookup / draft / spec_rows)")
+            # strict speculation only (fixed rows per pass, dummy passes, masked filler rows: the provider learns
+            # nothing from acceptance) and only with the folded head (its logit rows are the last spec_rows rows)
+            if self.head_mode != "provider_int8" or self.spec_rows is None or not self.spec_strict_passes:
+                raise ValueError(f"{where} speculates only in strict mode (spec_rows + spec_strict_passes) with the "
+                                 "folded head (head_mode = 'provider_int8')")
+            if self.draft_pack_path is not None:
+                raise ValueError(f"{where} does not run a draft model (spec_lookup or the draft head only)")
         if self.local_linears != "off":
             raise ValueError(f"{where} sends every trip to the provider (local_linears = 'off')")
         if self.prefix_cache != "off" or self.prefill_chunk_rows:

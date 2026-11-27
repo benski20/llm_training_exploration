@@ -202,6 +202,8 @@ struct Pass {
     keys: Vec<u64>,
     f64a: Vec<f64>,
     f64b: Vec<f64>,
+    /// head_fold: the last trip's logits (float32), `(t, vocab)`.
+    logits: Vec<f32>,
 }
 
 impl Pass {
@@ -218,6 +220,7 @@ impl Pass {
         wipe(&mut self.reply);
         wipe(&mut self.f64a);
         wipe(&mut self.f64b);
+        wipe(&mut self.logits);
         self.active = false;
     }
 }
@@ -277,6 +280,54 @@ struct View<'a> {
     a_bits: u32,
     c_bits: u32,
     trips: &'a [TripCfg],
+    /// head_fold (item table v2): the last trip is the pair (last down, folded head); logits into `Pass::logits`.
+    head_fold: bool,
+    /// local_qkv0: layer 0's public folded qkv int8 matrix `(m, n)` row-major; trip 0 is computed here exactly.
+    local0: Option<&'a [i8]>,
+}
+
+/// `y = W8 xq` exactly for one row (`|w| <= 127`, `|x| <= 2^C`: every product and sum fits int64): the integers
+/// the provider would return for trip 0 (local_qkv0). Rows of `W` in fixed ranges on the pool for wide outputs.
+fn local_product(w: &[i8], xq: &[i64], n: usize, m: usize, y: &mut [i64]) -> bool {
+    // |x| <= 2^C fits i32 only for small inputs: the quantized embedding row has |x| < 2^(A-1) <= 2^23, but the
+    // i32 dot path below needs |x| < 2^15 (i16) with blocks of 2048 terms (|sum| < 127 * 2^15 * 2048 < 2^31);
+    // larger inputs take the exact i64 loop.
+    let small = xq.iter().all(|&v| (-32768..32768).contains(&v));
+    let x16: Vec<i16> = if small { xq.iter().map(|&v| v as i16).collect() } else { Vec::new() };
+    let row = |j: usize| -> i64 {
+        let wr = &w[j * n..(j + 1) * n];
+        if small {
+            let mut acc = 0i64;
+            for (wc, xc) in wr.chunks(2048).zip(x16.chunks(2048)) {
+                let mut a32 = 0i32;
+                for (&a, &b) in wc.iter().zip(xc) {
+                    a32 += i32::from(a) * i32::from(b); // vectorizes (pmaddwd-style)
+                }
+                acc += i64::from(a32);
+            }
+            return acc;
+        }
+        let mut acc = 0i64;
+        for (&a, &b) in wr.iter().zip(xq) {
+            acc += i64::from(a) * b;
+        }
+        acc
+    };
+    let parts = if m * n >= 1 << 20 { (crate::prepare::pool::global().workers() + 1).clamp(1, 16) } else { 1 };
+    if parts < 2 {
+        for (j, o) in y.iter_mut().enumerate().take(m) {
+            *o = row(j);
+        }
+        return true;
+    }
+    let yp = SendPtr(y.as_mut_ptr());
+    crate::prepare::pool::global().run(parts, &|i| {
+        let (a, b) = range_of(m, parts, i);
+        for j in a..b {
+            // SAFETY: element j is written by this task only; y outlives the run.
+            unsafe { *yp.get().add(j) = row(j) };
+        }
+    })
 }
 
 fn ns(d: Duration) -> u64 {
@@ -466,6 +517,8 @@ fn run_loop<T: Kv>(
         let (n1, m1) = (l1.n, l1.m);
         let m2 = l2.map_or(0, |l| l.m);
         let last = pos + 1 == total;
+        let local = pos == 0 && cfg.local0.is_some();
+        let kind = if pos == 0 { 0 } else if (pos - 1) % 2 == 0 { 1 } else { 2 };
         let t0 = Instant::now();
         // ---- quantize (the gateway's roundings) ----
         p.xq.resize(t * n1, 0);
@@ -498,7 +551,7 @@ fn run_loop<T: Kv>(
                     *o = f64::from(v);
                 }
                 let h = &p.h[r * hidden..(r + 1) * hidden];
-                let l2q = if last { None } else { l2 };
+                let l2q = if last && !cfg.head_fold { None } else { l2 };
                 match quantize_pair_row(&arow, h, l1, l2q, cfg.a_bits, cfg.c_bits, &mut qrow, &mut rrow, &mut tmp) {
                     Some(s) => svals[r] = s,
                     None => return Outcome::Overflow(format!("fused2: trip {pos} cannot be bounded by 2^{}", cfg.c_bits)),
@@ -517,9 +570,24 @@ fn run_loop<T: Kv>(
         if p.xq[..t * n1].iter().any(|v| v.unsigned_abs() > bound as u64) {
             return Outcome::Overflow("fused2 input out of range".into());
         }
+        let t2: Instant;
+        let pair = l2.is_some() && (!last || cfg.head_fold);
+        if local {
+            // local_qkv0: the exact integers of the provider's product, computed here (no mask, no trip, no check)
+            let w = cfg.local0.expect("local");
+            p.y.resize(t * m1, 0);
+            for r in 0..t {
+                let (xs, ys) = (&p.xq[r * n1..(r + 1) * n1], &mut p.y[r * m1..(r + 1) * m1]);
+                if !local_product(w, xs, n1, m1, ys) {
+                    return Outcome::Overflow("fused2: internal error in a local product task".into());
+                }
+            }
+            t2 = Instant::now();
+            st.local_ns += ns(t2 - t0);
+            f2_phase_add(kind, ns(t2 - t0));
+        } else {
         // ---- mask + pack ----
         let mk = &masks[i];
-        let pair = l2.is_some() && !last;
         let body_len = t * (n1 + if pair { m1 } else { 0 }) * nb;
         p.payload.resize(body_len, 0);
         {
@@ -579,7 +647,6 @@ fn run_loop<T: Kv>(
         };
         let t1 = Instant::now();
         st.local_ns += ns(t1 - t0);
-        let kind = if pos == 0 { 0 } else if (pos - 1) % 2 == 0 { 1 } else { 2 };
         f2_phase_add(kind, ns(t1 - t0));
         f2_phase_add(6 + kind, 1);
         if crate::lane::wait_prefetch::enabled() {
@@ -603,7 +670,7 @@ fn run_loop<T: Kv>(
         }
         let res = lane.ch.trip_raw(&hdr, &p.payload, &mut p.reply, lane.timeout);
         crate::lane::wait_prefetch::clear();
-        let t2 = Instant::now();
+        t2 = Instant::now();
         st.remote_ns += ns(t2 - t1);
         match res {
             Ok((0, cus)) => st.compute_us += u64::from(cus),
@@ -688,6 +755,8 @@ fn run_loop<T: Kv>(
         }
         let tfl = Instant::now();
         f2_phase_add(12 + kind, ns(tfl - tc0));
+        } // the provider trip (not local)
+        let tfl = Instant::now();
         // ---- the float work after the trip ----
         if pos == 0 {
             let qc = m1;
@@ -697,6 +766,37 @@ fn run_loop<T: Kv>(
                 normed_row(&p.y[r * m1..(r + 1) * m1], l1, svals[r], rinv, &mut p.qkv[r * qc..(r + 1) * qc]);
             }
             attend(cfg, p, 0, kc, vc, cos, sin);
+        } else if last && cfg.head_fold {
+            // head_fold: the residual from the verified H, then the logits from the folded head's Z
+            // (fused2.Fused2Schedule._last_with_head: residual_from, normed_output with rinv of the new residual)
+            let hl = l2.expect("head");
+            p.logits.resize(t * m2, 0.0);
+            for r in 0..t {
+                residual_row(&p.y[r * m1..(r + 1) * m1], l1, svals[r], &mut p.h[r * hidden..(r + 1) * hidden]);
+                let rinv = rinv_row(&p.h[r * hidden..(r + 1) * hidden], cfg.eps, &mut tmp);
+                let parts = split_parts(m2);
+                if parts >= 2 {
+                    // the same element-wise products in fixed ranges on the pool (PGW_FUSED2_SPLIT)
+                    let f = svals[r] * rinv;
+                    let (zs, lp) = (&p.z[r * m2..(r + 1) * m2], SendPtr(p.logits[r * m2..].as_mut_ptr()));
+                    let ok = crate::prepare::pool::global().run(parts, &|i| {
+                        let (a, b) = range_of(m2, parts, i);
+                        for j in a..b {
+                            let mut v = (zs[j] as f64 * hl.scale[j]) * f;
+                            if let Some(bb) = &hl.bias {
+                                v += bb[j];
+                            }
+                            // SAFETY: element j is written by this task only; p.logits outlives the run.
+                            unsafe { *lp.get().add(j) = v as f32 };
+                        }
+                    });
+                    if !ok {
+                        return Outcome::Overflow("fused2: internal error in a head task".into());
+                    }
+                } else {
+                    normed_row(&p.z[r * m2..(r + 1) * m2], hl, svals[r], rinv, &mut p.logits[r * m2..(r + 1) * m2]);
+                }
+            }
         } else if last {
             for r in 0..t {
                 let hq: Vec<i64> = (0..m1).map(|j| p.y[r * m1 + j] + p.rq[r * m1 + j]).collect();
@@ -825,6 +925,10 @@ pub struct Fused2Driver {
     c_bits: u32,
     trips: Vec<TripCfg>,
     pass: Pass,
+    /// head_fold: the folded head's rows (vocab); 0 = off.
+    head_m: usize,
+    /// local_qkv0: layer 0's public folded qkv int8 matrix (row-major `(m, n)`).
+    local0: Option<Vec<i8>>,
 }
 
 impl Fused2Driver {
@@ -836,7 +940,7 @@ impl Fused2Driver {
         } else if (idx - 1) % 2 == 0 {
             (self.nh * self.hd, h, i2)
         } else if idx + 1 == 2 * self.layers + 1 {
-            (self.inter, h, 0)
+            (self.inter, h, self.head_m)
         } else {
             (self.inter, h, q)
         }
@@ -861,7 +965,37 @@ impl Fused2Driver {
             a_bits: a, c_bits: c,
             trips: (0..2 * layers + 1).map(|_| TripCfg::default()).collect(),
             pass: Pass::default(),
+            head_m: 0,
+            local0: None,
         })
+    }
+
+    /// head_fold (opt-in): the last trip is the pair (last down, folded LM head) with ``vocab`` output rows; every
+    /// row of a pass gets logits (:meth:`end` hands them back). Configure the head as stage 2 of the last trip.
+    fn set_head_fold(&mut self, vocab: usize) -> PyResult<()> {
+        if vocab == 0 {
+            return Err(verr("vocab must be > 0"));
+        }
+        self.head_m = vocab;
+        Ok(())
+    }
+
+    /// local_qkv0 (opt-in): layer 0's public folded qkv matrix ``w8`` (int8 ``(m, n)``); trip 0 is computed here
+    /// exactly (no mask, no provider trip).
+    fn set_local_qkv0(&mut self, w8: &Bound<'_, PyArray2<i8>>) -> PyResult<()> {
+        let (n, m, _) = self.widths(0);
+        let ro = w8.try_readonly().map_err(|e| verr(format!("w8: {e}")))?;
+        if ro.shape() != [m, n] {
+            return Err(verr("w8 must be (qkv, hidden)"));
+        }
+        self.local0 = Some(ro.as_slice().map_err(|_| verr("w8 must be C-contiguous"))?.to_vec());
+        Ok(())
+    }
+
+    /// Whether the driver runs the folded head / local qkv0.
+    #[getter]
+    fn head_fold(&self) -> bool {
+        self.head_m > 0
     }
 
     /// Trips per pass (``2L + 1``).
@@ -974,8 +1108,9 @@ impl Fused2Driver {
         for (i, tc) in self.trips.iter().enumerate() {
             let (_, _, m2) = self.widths(i);
             let last = i + 1 == self.trips.len();
-            let need2 = m2 > 0 && !last;
-            if tc.l1.is_none() || tc.c1.is_none() || (need2 && (tc.l2.is_none() || tc.c2.is_none())) {
+            let need2 = m2 > 0 && (!last || self.head_m > 0);
+            let local = i == 0 && self.local0.is_some();
+            if tc.l1.is_none() || (tc.c1.is_none() && !local) || (need2 && (tc.l2.is_none() || tc.c2.is_none())) {
                 return Err(verr(format!("trip {i} not configured")));
             }
         }
@@ -1044,11 +1179,13 @@ impl Fused2Driver {
         let ss = sr.as_slice().map_err(|_| verr("sin must be C-contiguous"))?;
         // masks (borrowed read-only; Python wipes them after the call)
         type Ro<'a> = numpy::PyReadonlyArray2<'a, i64>;
-        let mut held: Vec<(Ro<'py>, Ro<'py>, Option<Ro<'py>>, Option<Ro<'py>>)> = Vec::with_capacity(count);
+        #[allow(clippy::type_complexity)]
+        let mut held: Vec<(Option<Ro<'py>>, Option<Ro<'py>>, Option<Ro<'py>>, Option<Ro<'py>>)> =
+            Vec::with_capacity(count);
         for i in 0..count {
             let idx = first + i;
             let (n1, m1, m2) = self.widths(idx);
-            let pair = m2 > 0 && idx + 1 != self.trips.len();
+            let pair = m2 > 0 && (idx + 1 != self.trips.len() || self.head_m > 0);
             let tup = masks.get_item(i)?;
             let get = |j: usize, cols: usize, name: &str| -> PyResult<Option<Ro<'py>>> {
                 let o = tup.get_item(j)?;
@@ -1062,8 +1199,12 @@ impl Fused2Driver {
                 }
                 Ok(Some(ro))
             };
-            let r_x = get(0, n1, "r_x")?.ok_or_else(|| verr("r_x missing"))?;
-            let wr_x = get(1, m1, "wr_x")?.ok_or_else(|| verr("wr_x missing"))?;
+            if idx == 0 && self.local0.is_some() {
+                held.push((None, None, None, None)); // local_qkv0: no masks for trip 0
+                continue;
+            }
+            let r_x = Some(get(0, n1, "r_x")?.ok_or_else(|| verr("r_x missing"))?);
+            let wr_x = Some(get(1, m1, "wr_x")?.ok_or_else(|| verr("wr_x missing"))?);
             let (v, wv) = if pair {
                 (Some(get(2, m1, "v")?.ok_or_else(|| verr("v missing"))?),
                  Some(get(3, m2, "wv")?.ok_or_else(|| verr("wv missing"))?))
@@ -1076,8 +1217,8 @@ impl Fused2Driver {
             .iter()
             .map(|(a, b, c, d)| -> PyResult<MaskIn<'_>> {
                 Ok(MaskIn {
-                    r_x: a.as_slice()?,
-                    wr_x: b.as_slice()?,
+                    r_x: a.as_ref().map(|x| x.as_slice()).transpose()?.unwrap_or(&[]),
+                    wr_x: b.as_ref().map(|x| x.as_slice()).transpose()?.unwrap_or(&[]),
                     v: c.as_ref().map(|x| x.as_slice()).transpose()?,
                     wv: d.as_ref().map(|x| x.as_slice()).transpose()?,
                 })
@@ -1124,6 +1265,7 @@ impl Fused2Driver {
             hidden: self.hidden, nh: self.nh, kvh: self.kvh, hd, inter: self.inter, attn_scale: self.attn_scale,
             eps: self.eps, attn_threads: self.attn_threads, attn_block: self.attn_block, layers: self.layers,
             cap: shape[1], k: self.k, a_bits: self.a_bits, c_bits: self.c_bits, trips: &self.trips,
+            head_fold: self.head_m > 0, local0: self.local0.as_deref(),
         };
         let pass = &mut self.pass;
         let mut sampled: Vec<(usize, Vec<i64>, Vec<i64>)> = Vec::new();
@@ -1174,9 +1316,10 @@ impl Fused2Driver {
         Ok((code, info, stats_t.into_any().unbind(), samp.into_any().unbind(), rec.into_any().unbind()))
     }
 
-    /// End the pass: the residual stream as float32 into ``h_out (t, hidden)`` (``st.hs``); every pass buffer is
-    /// zeroed.
-    fn end(&mut self, h_out: &Bound<'_, PyArray2<f32>>) -> PyResult<()> {
+    /// End the pass: the residual stream as float32 into ``h_out (t, hidden)`` (``st.hs``) and, with head_fold, the
+    /// logits into ``logits_out (t, vocab)``; every pass buffer is zeroed.
+    #[pyo3(signature = (h_out, logits_out = None))]
+    fn end(&mut self, h_out: &Bound<'_, PyArray2<f32>>, logits_out: Option<&Bound<'_, PyArray2<f32>>>) -> PyResult<()> {
         let p = &mut self.pass;
         if !p.active || p.pos != 2 * self.layers + 1 {
             p.wipe();
@@ -1191,6 +1334,15 @@ impl Fused2Driver {
             }
             for (o, &v) in hs.iter_mut().zip(&p.h[..n]) {
                 *o = v as f32;
+            }
+            if self.head_m > 0 {
+                let lo = logits_out.ok_or_else(|| verr("head_fold: logits_out (t, vocab) is required"))?;
+                let mut lw = lo.try_readwrite().map_err(|e| verr(format!("logits_out: {e}")))?;
+                let ls = lw.as_slice_mut().map_err(|_| verr("logits_out must be C-contiguous"))?;
+                if ls.len() != p.t * self.head_m || p.logits.len() != ls.len() {
+                    return Err(verr("logits_out must be (t, vocab)"));
+                }
+                ls.copy_from_slice(&p.logits);
             }
             Ok(())
         })();

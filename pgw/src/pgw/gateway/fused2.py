@@ -51,20 +51,26 @@ def load_fused2_weights(pack: Any, config: Any) -> Any:
     after computing the lane fingerprint)."""
     from pgw.engine.fused2 import Fused2Weights, migration_multipliers
 
+    # head_mode = "provider_int8" with fused2: the LM head folded into the last trip (item table v2)
+    head = getattr(config, "head_mode", "gateway") == "provider_int8"
     path = getattr(config, "fused2_weights_path", None)
     if path is not None:
         w = Fused2Weights.load(path)
         if str(getattr(w, "fingerprint", "")) != str(pack.fingerprint):
             raise ConfigError("fused2_weights_path holds weights of another pack (base fingerprint mismatch)")
-        if any(float(lin.scale.abs().sum()) == 0.0 for lin in w.linears()):
+        if any(float(lin.scale.abs().sum()) == 0.0 for lin in w.all_linears()):
             raise ConfigError("fused2_weights_path is a provider-only file (no scales): the gateway needs the full "
                               "public weights (Fused2Weights.save(path) without provider_only)")
         if int(w.num_layers) != int(pack.arch.num_layers):
             raise ConfigError("fused2_weights_path does not match the pack's layer count")
+        if (w.head is not None) != head:
+            raise ConfigError("fused2_weights_path: the folded head must be present exactly with head_mode = "
+                              "'provider_int8' (head fold)")
         return w
     bits = int(getattr(config, "fused2_migrate_bits", 8))
     t0 = time.perf_counter()
-    w = Fused2Weights(pack, None, multipliers=migration_multipliers(pack, bits) if bits else None)
+    w = Fused2Weights(pack, None, multipliers=migration_multipliers(pack, bits, head=head) if bits else None,
+                      head=head)
     log.info("fused2 weights derived from pack %s (migration %d bits) in %.1f s", str(pack.fingerprint)[:12], bits,
              time.perf_counter() - t0)
     return w
@@ -77,8 +83,8 @@ def fused2_item_names(weights: Any) -> list[str]:
     return [it.name for it in fused2_items(weights)]
 
 
-def _check_ticket(raw: bytes, fingerprint: str, ring: Any, names: list[str], transports: tuple[str, ...]
-                  ) -> dict[str, Any]:
+def _check_ticket(raw: bytes, fingerprint: str, ring: Any, names: list[str], transports: tuple[str, ...],
+                  items_version: int = 1) -> dict[str, Any]:
     try:
         d = json.loads(raw)
     except ValueError as exc:
@@ -101,13 +107,20 @@ def _check_ticket(raw: bytes, fingerprint: str, ring: Any, names: list[str], tra
                           details={"expected": fingerprint, "served": str(d.get("fingerprint"))})
     if linears != names:
         raise ProtocolError("fused2 lane ticket: the service's item table differs from the gateway's")
+    if int(d.get("fused2_items", 1)) != int(items_version):
+        raise ProtocolError(f"fused2 lane ticket: item table version {d.get('fused2_items', 1)} != {items_version}")
     if rings != [ring.name]:
         raise ProtocolError(f"fused2 lane ticket: rings {rings} != [{ring.name}]")
     if not 1 <= max_rows <= 1024:
         raise ProtocolError("fused2 lane ticket: bad max_rows")
     return {"transport": d["transport"], "socket": d.get("socket"), "port": d.get("port"),
             "alpn": d.get("alpn", "pgw-lane/1"), "secret": bytearray(secret), "max_rows": max_rows,
-            "linears": linears}
+            "linears": linears,
+            # lane format 2 (multi frames: several items in one call) when the service offers it
+            # (pair items in multi frames only from a v2 item-table service: it runs each pair item as one call)
+            "max_items": (int(d.get("max_items", 0) or 0)
+                          if 2 in (d.get("versions") or ()) and int(d.get("fused2_items", 1)) >= 2 else 0),
+            "max_multi_rows": int(d.get("max_multi_rows", 0) or 0)}
 
 
 async def open_fused2_ticket(client: Any, fingerprint: str, ring: Any, weights: Any, *,
@@ -127,7 +140,9 @@ async def open_fused2_ticket(client: Any, fingerprint: str, ring: Any, weights: 
     raw: bytes = await call("POST", SERVICE_LANE_OPEN_PATH, body=json.dumps({"fingerprint": fingerprint}).encode(),
                             request_id=rid, deadline=deadline, decode=lambda b: bytes(b),
                             max_response_bytes=_MAX_TICKET_BODY, max_retries=0)
-    return _check_ticket(raw, fingerprint, ring, names, transports)
+    from pgw.service.fused2_lane import items_version
+
+    return _check_ticket(raw, fingerprint, ring, names, transports, items_version(weights))
 
 
 def _env_int(name: str, default: int) -> int:
@@ -165,7 +180,7 @@ def connect_fused2_lane(ticket: dict[str, Any], weights: Any, ring: Any, *, clie
             if tcp_ports is not None and port not in set(tcp_ports):
                 raise ProtocolError(f"fused2 lane ticket names port {port}, which is not on the gateway's egress "
                                     "allowlist for the service host (add https://<host>:<port>)")
-            ch = _connect_tls(fast, client_config, SimpleNamespace(port=port, max_rows=max_rows), secret,
+            ch = _connect_tls(fast.TripChannel, client_config, SimpleNamespace(port=port, max_rows=max_rows), secret,
                               float(timeout_s), spin)
         else:
             path = str(ticket["socket"] or "")
@@ -181,5 +196,19 @@ def connect_fused2_lane(ticket: dict[str, Any], weights: Any, ring: Any, *, clie
             ch.set_spin_auto(auto)
     finally:
         secret[:] = bytes(len(secret))
+    from pgw.engine.fused2_lane import single_multipliers
+
     return LaneFused2Provider(ch, ticket["linears"], items_of(weights), ring.k, max_rows=max_rows,
-                              timeout_s=float(timeout_s))
+                              timeout_s=float(timeout_s), hmul=single_multipliers(weights),
+                              max_items=int(ticket.get("max_items", 0) or 0) if ticket["transport"] == "tcp"
+                              or not ch_is_shm(ch) else 0,
+                              max_multi_rows=int(ticket.get("max_multi_rows", 0) or 0))
+
+
+def ch_is_shm(ch: Any) -> bool:
+    """Whether a native lane channel moved to the shared-memory transport (multi frames need the socket)."""
+    try:
+        t = getattr(ch, "transport", "")
+        return str(t() if callable(t) else t) == "shm"
+    except Exception:  # pragma: no cover - defensive
+        return True

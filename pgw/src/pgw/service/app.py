@@ -355,6 +355,17 @@ def create_app(
                 return {"transport": "tcp", "port": int(s.lane_advertised_port or lane.svc.port)}
 
             acc.lane_hint = _lane_hint
+
+            def _fused_hint() -> dict[str, str]:
+                # the head-fold fused2 lane entries (PGW_SERVICE_FUSED2_FROM_PACK + PGW_SERVICE_FUSED2_HEAD) by base
+                # pack: the client library's schedule = "fused" needs one (with the lane and fused2 maskgen)
+                lane = state.lane
+                f2 = getattr(lane, "fused2", None) or {}
+                if not f2 or getattr(state.handler, "fused2_maskgen", None) is None:
+                    return {}
+                return {e.base_fingerprint: e.ring.name for e in f2.values() if int(e.items_version) >= 2}
+
+            acc.fused_hint = _fused_hint
             state.accounts = acc
             state.handler.accounts = acc
             if state.handler.authenticator is not None:

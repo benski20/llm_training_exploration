@@ -439,6 +439,40 @@ The service admits by tenant (one tenant per SDK key): `tenant_max_inflight` (co
 process holds one lane connection set per model; a single lane call serves at most 8 rows, a multi call up to 64 items and 256 rows. Size the provider by rows
 per second (sum of all clients' tokens/s, prompt rows included); the client side never needs changes for it.
 
+## Consumer devices: the fused schedule (`schedule="fused"` / `"auto"`, opt-in)
+
+On a high-latency link the round trips per token, not the GPU, set the speed. `schedule="fused"`
+([Configuration](configuration.md#schedule-standard-or-fused)) halves them (`2 x layers` instead of `4 x layers +
+1`) and is a different fixed reference (not bit-identical to `"standard"`); `"auto"` picks it per model when the
+client starts, from the measured RTT and bandwidth, and keeps it for the client's life.
+
+What it costs a client machine, per generated token:
+
+* **Bytes:** 1.74x the standard schedule's (7-byte values; the same number of values). Qwen2.5-0.5B: 1.27 MB up and
+  3.18 MB down; 7B: 5.8 / 10.8 MB. On a consumer uplink this is often the limit (7B at 100 Mbit/s: ~0.47 s per
+  token for the upload alone); `"auto"` counts it.
+* **Masks:** one K56 slot per token row (the same number of values as a standard slot at 7 bytes each: 3.2 MB per
+  slot at 0.5B). The encrypted `pks-v3` factory makes each 56-bit mask from 3-4 ordinary 32-bit products (the
+  top-digit plan), so a fused slot costs about 3-4x a standard slot's client factory CPU and provider maskgen;
+  size `mask_workers` accordingly. The first use of a model builds a second one-time hint (over the fused weights)
+  next to the standard one.
+* **Client CPU:** the native fused driver runs a whole decode pass (layer 0's qkv computed locally, every pair trip,
+  the folded output layer) in one call; measured client CPU per token in `benchmarks/sdk_fused_wan.py` (tiny test
+  model on loopback: 3.6-5.9 ms fused vs 6.8-10.3 ms standard). The wide element-wise stages of a one-row pass
+  (unmask of the second stage, its check, the gate/up and output-layer scaling) can be split over the native pool
+  with `PGW_FUSED2_SPLIT=<parts>` (same bits); the client library sets it (4 parts on 4+ CPUs): at 32B widths
+  0.95-1.10 -> 0.75 ms per pair trip on 4 vCPUs. Layer 0's local qkv is a memory-bound int8 GEMV of the public
+  folded matrix (1 / 16.5 / 37 MB at 0.5B / 7B / 32B) once per token.
+* **Speculation:** strict speculation works on the fused schedule; filler rows are masked rows there, so a verify
+  pass of `spec_rows` rows costs `spec_rows` mask slots.
+
+Measured on this 4-vCPU box with the CPU test provider behind an emulated link (`benchmarks/sdk_fused_wan.py`,
+`benchmarks/results/fused2/sdk_wan_*_cpu_2026-11-27.json`): the trips per token are exact (tiny: 9 standard, 4
+fused; Qwen2.5-0.5B: 97 and 48) and the fused answers equal the fused reference bit for bit. The decode rate on the
+tiny model at RTT 0 / 5 / 20 ms: standard 37 / 13.2 / 4.6 tok/s, fused 114 / 33.5 / 10.8 tok/s; Qwen2.5-0.5B:
+standard 2.65 / 1.04 / 0.41, fused 4.18 / 2.01 / 0.80 tok/s, where the CPU provider's own products (a GPU's job)
+take ~0.22 s per token, so the ratio grows with RTT (1.6x / 1.9x / 2.0x). See `STATUS.md`.
+
 ## Consumer devices: mask cost per token (research, opt-in switches)
 
 `research/reviews/mask-cost-consumer.md` (2026-11-27) sizes pks-v3 masks for a consumer device at 20 tok/s.
