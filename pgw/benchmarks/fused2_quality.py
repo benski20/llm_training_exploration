@@ -11,6 +11,11 @@ reference itself (no fake quantization):
   migration bits, ``k`` top columns, calibrated on wikitext-2 test tokens far from the evaluated ones);
 * ``f2mig<b>:<ring>``: pure pack-time migration (:func:`pgw.engine.fused2.migration_multipliers`, ``b`` bits;
   no calibration data, no gateway columns; needs K56C53 at ``b = 8``);
+* ``stdmh:<ring>``: the client library's default reference (standard schedule + the masked int8 LM head,
+  :mod:`pgw.engine.masked_head`): "the current pipeline" of ``research/reviews/consumer-round-trips.md``;
+* ``f2mighead<b>:<ring>``: pure migration plus the LM head folded into the last trip (``head=True``,
+  ``head_fold=True``; 2L + 1 trips with the head on the provider, 2L with ``local_qkv0``, which does not change
+  the numbers);
 * ``f2+g<k>:<ring>``: fused2 with the split fold (``k`` gateway columns per folded linear, int16 on the
   gateway; ``Fused2Weights(gateway_columns=k)``).
 
@@ -90,6 +95,19 @@ def engine_runner(pack: Any, cfg: str, state: Any, calib: list[torch.Tensor] | N
     ring = RingParams.from_name(ring_name)
     if kind == "std":
         return TransformerModel(pack, PlainBackend(pack, ring)), None
+    if kind == "stdmh":
+        from pgw.engine.masked_head import MaskedHeadPack, enable_masked_head
+
+        hp = MaskedHeadPack(pack)
+        model = TransformerModel(hp, PlainBackend(hp, ring))
+        enable_masked_head(model)
+        return model, None
+    if kind.startswith("f2mighead"):
+        b = int(kind[9:] or 8)
+        fl = hf_float_linears(state, pack.arch)
+        w = Fused2Weights(pack, fl, multipliers=migration_multipliers(pack, b, head=True), head=True)
+        model = TransformerModel(pack, Fused2PlainBackend(ring))
+        return model, enable_fused2(model, w, ring, head_fold=True, local_qkv0=True)
     kind, _, gcols = kind.partition("+g")  # "f2+g8": split fold, 8 gateway columns per folded linear
     if kind.startswith("f2mig"):  # "f2mig8": pure pack-time migration, 8 bits (no calibration, no gateway columns)
         fl = hf_float_linears(state, pack.arch)
@@ -186,6 +204,9 @@ def main() -> None:
         pack = InMemoryPack.from_state_dict(load_file(str(state)),
                                             arch_config_from_hf(json.loads((d / "config.json").read_text())))
     base_prompt: list[torch.Tensor] | None = ref.get("int8")
+    #: wikitext top-1 tokens of the first config (the "base": e.g. stdmh, the current pipeline)
+    base_top: list[torch.Tensor] | None = None
+    base_cfg = ""
     for cfg in args.configs:
         t0 = time.time()
         calib = None
@@ -193,12 +214,16 @@ def main() -> None:
             cids = load_tokens(tok, args.calib_tokens, args.calib_offset)
             calib = [cids[i : i + args.seq] for i in range(0, len(cids), args.seq)]
         model, sched = engine_runner(pack, cfg, state, calib)
-        nll = cnt = agree = 0.0
-        for w, rt in zip(wins, ref_top, strict=True):
+        nll = cnt = agree = agree_base = 0.0
+        tops = []
+        for wi, (w, rt) in enumerate(zip(wins, ref_top, strict=True)):
             a, b, top = stats(engine_logits(model, w), w)
             nll += a
             cnt += b
             agree += float((top == rt).sum())
+            tops.append(top)
+            if base_top is not None:
+                agree_base += float((top == base_top[wi]).sum())
         lps = [torch.log_softmax(engine_logits(model, p).double(), -1) for p in prompts]
         if args.save_prompts:
             torch.save({"lps": [lp.float() for lp in lps]}, f"{args.save_prompts}.{cfg.replace(':', '_')}.pt")
@@ -207,8 +232,11 @@ def main() -> None:
         d_inf = max(float((lp - rp).abs().max()) for lp, rp in zip(lps, ref_prompt, strict=True))
         top_p = sum(int((lp.argmax(-1) == rp.argmax(-1)).sum()) for lp, rp in zip(lps, ref_prompt, strict=True))
         npos = sum(len(p) for p in prompts)
+        if base_top is None:
+            base_top, base_cfg = tops, cfg
         r: dict[str, Any] = {
             "ppl": math.exp(nll / cnt), "top1_vs_float": agree / cnt,
+            "top1_vs_base": agree_base / cnt if base_cfg != cfg else 1.0, "base": base_cfg,
             "prompt_max_dlogprob_next_vs_float": d_next, "prompt_max_dlogprob_vocab_vs_float": d_inf,
             "prompt_top1_vs_float": top_p / npos, "seconds": time.time() - t0,
         }

@@ -24,6 +24,29 @@ def _load() -> ModuleType:
 rt = _load()
 
 
+# ---- --consumer / --twenty: fused schedules at internet RTTs (research/reviews/consumer-round-trips.md) ----------
+@pytest.mark.parametrize("model,L", [("0.5B", 24), ("7B", 28), ("32B", 64), ("72B", 80)])
+def test_consumer_trip_counts(model: str, L: int) -> None:
+    want = {"standard (today, 4L+1)": 4 * L + 1, "fused2 + head trip (2L+2)": 2 * L + 2,
+            "fused2 folded head, local qkv0 (2L)": 2 * L, "parallel blocks fused (L+1)": L + 1}
+    for sched, trips in want.items():
+        assert rt.consumer_pass_ms(model, sched, 20.0)["trips"] == trips
+
+
+def test_consumer_fusion_wins_at_internet_rtt_and_tau_divides() -> None:
+    for model in rt.C_SHAPES:
+        std = rt.consumer_tok_s(model, "standard (today, 4L+1)", 20.0)
+        f2 = rt.consumer_tok_s(model, "fused2 folded head, local qkv0 (2L)", 20.0)
+        par = rt.consumer_tok_s(model, "parallel blocks fused (L+1)", 20.0)
+        assert 1.6 < f2 / std < 2.2 and par > f2
+    one = rt.consumer_pass_ms("7B", "fused2 folded head, local qkv0 (2L)", 20.0, rows=3)["pass_ms"]
+    assert rt.consumer_tok_s("7B", "fused2 folded head, local qkv0 (2L)", 20.0, tau=2.0, rows=3) == pytest.approx(
+        2e3 / one)
+    # 20 tok/s at 32B: 128 trips at RTT 20 ms alone take 2.56 s per pass
+    assert rt.consumer_tok_s("32B", "fused2 folded head, local qkv0 (2L)", 20.0, tau=8, rows=8, gw="target",
+                             rows_free=True, tp=2) < 5
+
+
 @pytest.mark.parametrize("model,trips", [("7B", 113), ("32B", 257), ("72B", 321)])
 def test_trips_are_four_per_layer_plus_the_masked_head(model: str, trips: int) -> None:
     b = rt.sdk_ms_per_token(model, 0.2)

@@ -1,0 +1,53 @@
+{
+ "model": "/root/.cache/huggingface/hub/models--Qwen--Qwen2.5-0.5B-Instruct/snapshots/7ae557604adf67be50417f59c2c2f167def9a775",
+ "ring": "K56A12C53",
+ "migrate_bits": 8,
+ "columns": 0,
+ "weights": {
+  "calibration": null,
+  "fold": "migrated 8 bits",
+  "migrate_bits_used": 8,
+  "probe_rows_below_a": {},
+  "gateway_cost": {
+   "columns": 0,
+   "weight_bytes": 0,
+   "macs_per_token": 0
+  },
+  "build_s": 64.86794400215149
+ },
+ "prompt_tokens": 31,
+ "tokens": 4,
+ "text": "The sky is blue",
+ "ttft_s": 15.413815703999717,
+ "decode_tok_s": 0.12984788821270413,
+ "ms_per_token_p50": 7615.5493240003125,
+ "trips_per_token": 48.0,
+ "expected_trips_per_token": 48,
+ "head": "folded into the last trip (provider)",
+ "standard_trips_per_token_provider_head": 97,
+ "bytes_per_token": 4455173.0,
+ "trip_ms_p50": 117.47956999988673,
+ "trip_ms_p90": 197.71351700001105,
+ "provider_compute_ms_p50": 115.19415283203125,
+ "trip_ms_sum_per_token": 7427.0441614994525,
+ "transport": "socket",
+ "masks": "inproc",
+ "lane_graphs": null,
+ "lane_calls": null,
+ "checks": 481,
+ "all_checks_passed": true,
+ "slots_used": 35,
+ "slots_per_token": 1.0,
+ "mask_prefill_s": 6.885124028000064,
+ "check_vectors_setup_s": 22.7886803150177,
+ "mask_stock_hits": 241,
+ "mask_stock_misses": 0,
+ "factory_macs_per_slot": 498319360.0,
+ "act_bits_hist": {
+  "12": 1680
+ },
+ "exact": true,
+ "exact_positions": "5/5",
+ "max_abs_logit_diff": 0.0,
+ "replay_s": 9.432436227798462
+}

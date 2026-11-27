@@ -4243,3 +4243,45 @@ retry of the costliest session still fits the cap ($51.80 < $55).
 pod-scoped key (unchanged from the integration sweep); the bundle upload at ~29 MB; the shard-wise packer against
 the hub on a RunPod volume and its fingerprint equal to the pins; the metrics port sampler on a real service; the
 real 32B client setup (37 GB from the provider, local hint, 60 GB stock); every number.
+
+## 2026-11-27 — Consumer devices over the internet: fusion across RMSNorm to 2L trips, parallel blocks to L + 1 (opt-in)
+
+Review: `research/reviews/consumer-round-trips.md`. Goal: far fewer provider round trips per token for consumer devices
+at 5-50 ms RTT, privacy and integrity unchanged. All new paths default off; the default path's outputs are unchanged.
+
+- **Composite matrices are not needed** (they would cost +90-99 % of the model's int8 weights on the provider: 6.3 /
+  30.8 / 63 GB at 7B / 32B / 72B, 2x bytes per trip, 2x mask products and pks-v3 hint): the provider applies the two
+  linear maps in sequence within one trip (`H = R + W1 x`, `Z = W2' H`), which is the existing fused2 (2026-11-22/23).
+- **New (prototype, exact, tested):** the LM head folded into the last trip (`Fused2Weights(head=True)`,
+  `Fused2Schedule(head_fold=True)`, `Fused2FoldedHead`; the final RMSNorm folds like the layers' norms) and layer 0's
+  qkv computed locally (`local_qkv0=True`, a public 1-84 MB int8 matrix). Trips per pass with the head on the provider:
+  **2L** (0.5B 48, 7B 56, 32B 128, 72B 160) vs 4L + 1 today. **Parallel attention + MLP blocks**
+  (`pgw.engine.fused_parallel`): one pair trip per layer (`[W_o | W_down]`, then `[W_qkv ; W_gate_up]` folded), **L + 1**
+  trips (25 / 29 / 65 / 81); needs a parallel-block model (the prototype reads Qwen/Llama packs as parallel blocks).
+- **Below 2L is impossible** for a sequential layer while the client evaluates softmax and SiLU and the provider sees
+  only one-time-padded values (the provider can carry a masked value only through affine maps; review section 5).
+- **Quality, Qwen2.5-0.5B, 4088 wikitext tokens** (`benchmarks/results/fused2/quality_qwen05b_headfold.json`): fused2 +
+  folded head ppl 19.887 vs 19.847 for the current pipeline (standard + masked int8 head), top-1 = float 96.26 % vs
+  96.67 %, same top-1 as the current pipeline at 97.19 % of positions; every row at 12 activation bits, `|Z|` <= 48.6
+  bits (ring K56C53). A new pinned reference, not bit-identical to today's.
+- **Measured end to end on CPU** (`benchmarks/fused_trips_e2e.py`, 0.5B, 6 tokens,
+  `benchmarks/results/fused2/trips_e2e_qwen05b_2026-11-27.json`): 48 trips per token (2L, folded) and 25 (L + 1,
+  parallel), every logit bit-identical to the plain reference, 2 checks per pair trip.
+- **Privacy / integrity:** provider view per trip uniform (`(R + v - hmul W1 r_x, x + r_x)`), each mask row once (tested:
+  no payload row ever repeats); every returned value (`H`, `Z`, the head's logits, the last down's rows without
+  logits) passes range + Freivalds over `F_(2^61-1)` before use; tamper and wrong-factory-correction tests raise.
+- **Costs:** K56 (1.75x bytes per element); pks-v3 at K56 by digit decomposition = ~6x client factory CPU and ~7x
+  provider maskgen per slot (bounds users per GPU); H100 pair op 1.22x the K32 singles at 1 row (7B, measured), today's
+  kernels 2.8x / 5.4x at 4 / 8 rows; native fused2 client work per pair trip 0.58 ms at 32B on one core.
+- **20 tok/s at 32B** (`python benchmarks/round_trip_model.py --twenty`): every trip must fit `50 T / 128` ms; the largest
+  RTT that meets it (target kernels, 2 H100s) is 0.1 / 0.4 / 1.1 / 2.3 ms at T = 1 / 2 / 4 / 8 tokens per pass (parallel
+  blocks 0.3 / 1.0 / 2.3 / 4.8 ms): not reachable over the consumer internet; at RTT 20 ms 32B gives 0.4-1.0 tok/s fused
+  (T = 1-3). `--consumer` sweeps RTT 0.5 / 5 / 20 / 50 ms with tokens per pass and rows as parameters for the other
+  studies; fused schedules are 1.8-2x faster per token at RTT >= 5 ms at every size.
+- **GPU plan:** `deploy/runpod/RUNBOOK.md` session 6 (proposed, not launched): `fused2_pair_bench.py --model {7b,32b,72b}
+  --extra-items` (the folded-head and parallel items, 1-16 rows, byte-exact against the prototype).
+- **Not done (production):** K56 pks-v3 digit masks in the client library, the head-fold and parallel items on the lane,
+  the native fused2 driver's head fold / local qkv0 (it refuses them, fail closed), speculation padding on fused
+  schedules, a parallel-block checkpoint (LayerNorm / GELU architecture in the engine), 7B+ quality of the folded head.
+- Tests: `tests/engine/test_fused2_headfold.py` (34), `tests/engine/test_fused_parallel.py` (16); `tests/engine` 1262
+  passed, 15 skipped (CUDA); ruff clean on the new files.

@@ -68,7 +68,7 @@ class Fused2Service:
         self.device = dev
         self._w: dict[str, PreparedWeight] = {}
         self._hmul: dict[str, torch.Tensor] = {}
-        for lin in weights.linears():
+        for lin in weights.all_linears():  # the folded head too (head_fold, opt-in)
             self._w[lin.key] = PreparedWeight(lin.w8.to(dev), device=dev, cache_float=False)
             if lin.hmul is not None:
                 self._hmul[lin.key] = lin.hmul.to(dev)
@@ -82,7 +82,11 @@ class Fused2Service:
 
     def single(self, k1: str, x_hat: torch.Tensor) -> torch.Tensor:
         self.calls += 1
-        return self._w[k1].matmul(x_hat.to(self.device), self.k).cpu()
+        y = self._w[k1].matmul(x_hat.to(self.device), self.k)
+        hm = self._hmul.get(k1)
+        if hm is not None:  # a first linear's single trip (head_fold's rows without logits): multipliers too
+            y = (y * hm) & ((1 << self.k) - 1)
+        return y.cpu()
 
     def pair(self, k1: str, k2: str, r_hat: torch.Tensor, x_hat: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         self.calls += 1
@@ -241,7 +245,7 @@ def main(argv: list[str] | None = None) -> None:
     w = Fused2Weights.load(args.weights)
     svc = Fused2Service(w, args.k, args.device)
     # warm the device kernels once per linear (first-call setup off the measured path)
-    for lin in w.linears():
+    for lin in w.all_linears():
         svc.single(lin.key, torch.zeros((1, lin.n), dtype=torch.int64))
     print(f"fused2 provider: {len(w.linears())} linears on {svc.device}, K={args.k}, {args.address}", flush=True)
     serve(svc, args.address)

@@ -245,7 +245,8 @@ class Fused2Weights:
 
     def __init__(self, pack: Any, float_linears: Mapping[str, torch.Tensor] | None = None, *,
                  gateway_columns: int | Mapping[str, Sequence[int]] = 0, gateway_bits: int = 16,
-                 multipliers: Mapping[str, Any] | None = None, sigma: bool = True):
+                 multipliers: Mapping[str, Any] | None = None, sigma: bool = True,
+                 head: bool = False, float_head: torch.Tensor | None = None):
         a = pack.arch
         self.num_layers = int(a.num_layers)
         self.fingerprint = str(getattr(pack, "fingerprint", ""))
@@ -255,13 +256,16 @@ class Fused2Weights:
         self.gateway_bits = int(gateway_bits)
         self.gateway_columns = gateway_columns if isinstance(gateway_columns, int) else dict(gateway_columns)
         mults = dict(multipliers or {})
-        if f"{self.num_layers - 1}.down" in mults:
+        if f"{self.num_layers - 1}.down" in mults and not head:
             raise ConfigError("fused2: the last layer's down (a single trip) takes no multipliers")
         self.migrated = bool(mults)
         self.o: list[F2Linear] = []
         self.down: list[F2Linear] = []
         self.gu: list[F2Linear] = []
         self.qkv: list[F2Linear] = []
+        #: The LM head folded into the last trip (``head=True``, opt-in): ``int8(W_head diag(g_final * grid))``
+        #: with ``g_final`` the final RMSNorm gain and ``grid`` the last down's residual grid; None by default.
+        self.head: F2Linear | None = None
         g_in = [pack.load_plain(f"layers.{i}.input_norm", dtype=torch.float32) for i in range(self.num_layers)]
         g_post = [pack.load_plain(f"layers.{i}.post_attn_norm", dtype=torch.float32) for i in range(self.num_layers)]
 
@@ -298,6 +302,16 @@ class Fused2Weights:
             key = f"{i}.gate_up/f2"
             self.gu.append(_fold(key, wg, c_post, lg.bias, cols(key, wg, g_post[i]), self.gateway_bits))
             del wg
+        if head:
+            # the head as the second stage of the last trip (down + head): the final norm folded like the
+            # layers' norms. Float source: ``float_head`` (the checkpoint's head; the tied embedding when tied),
+            # else the pack's plain head (``lm_head``, or ``embed_tokens`` when tied).
+            if float_head is None:
+                name = "embed_tokens" if getattr(a, "tie_word_embeddings", False) else "lm_head"
+                float_head = pack.load_plain(name, dtype=torch.float32)
+            g_fin = pack.load_plain("final_norm", dtype=torch.float32).to(torch.float64)
+            nl = self.num_layers
+            self.head = _fold(f"{nl}.lm_head/f2", float_head, g_fin * self.down[nl - 1].grid, None)
         # tighter Z bounds for split folds: only the provider's channels of H enter Z
         for i in range(self.num_layers):
             pairs = [(self.o[i], self.gu, i)] + ([(self.down[i], self.qkv, i + 1)] if i + 1 < self.num_layers else [])
@@ -322,6 +336,8 @@ class Fused2Weights:
         blob["provider_only"] = provider_only
         for part in ("qkv", "o", "gu", "down"):
             blob[part] = [one(lin) for lin in getattr(self, part)]
+        if self.head is not None:
+            blob["head"] = one(self.head)
         torch.save(blob, os.fspath(path))
 
     @classmethod
@@ -342,6 +358,14 @@ class Fused2Weights:
                          "scale": torch.zeros(m, dtype=torch.float64), "bias": None, "wnorm": 0.0}
                 lins.append(F2Linear(**d))
             setattr(self, part, lins)
+        self.head = None
+        hd = blob.get("head")
+        if hd is not None:
+            if blob.get("provider_only"):
+                m = int(hd["w8"].shape[0])
+                hd = {"key": hd["key"], "w8": hd["w8"], "hmul": hd["hmul"],
+                      "scale": torch.zeros(m, dtype=torch.float64), "bias": None, "wnorm": 0.0}
+            self.head = F2Linear(**hd)
         return self
 
     def linears(self) -> list[F2Linear]:
@@ -349,6 +373,10 @@ class Fused2Weights:
         for i in range(self.num_layers):
             out += [self.qkv[i], self.o[i], self.gu[i], self.down[i]]
         return out
+
+    def all_linears(self) -> list[F2Linear]:
+        """:meth:`linears` plus the folded head (``head=True``), last."""
+        return self.linears() + ([self.head] if self.head is not None else [])
 
     def gateway_cost(self) -> dict[str, int]:
         """Gateway side of the split fold: columns, public weight bytes it holds, integer MACs per token."""
@@ -360,8 +388,8 @@ class Fused2Weights:
         }
 
 
-def migration_multipliers(pack: Any, bits: int = 8, *, sw: Mapping[str, torch.Tensor] | None = None
-                          ) -> dict[str, torch.Tensor]:
+def migration_multipliers(pack: Any, bits: int = 8, *, sw: Mapping[str, torch.Tensor] | None = None,
+                          head: bool = False) -> dict[str, torch.Tensor]:
     """Pure pack-time migration (no calibration data, no gateway columns): public integer multipliers.
 
     Per trip's first linear ``l1`` (every ``o``, every ``down`` but the last) and the gain ``g`` of the norm
@@ -377,6 +405,8 @@ def migration_multipliers(pack: Any, bits: int = 8, *, sw: Mapping[str, torch.Te
         pairs = [(LinearId(i, LinearKind.O), f"layers.{i}.post_attn_norm")]
         if i + 1 < nl:
             pairs.append((LinearId(i, LinearKind.DOWN), f"layers.{i + 1}.input_norm"))
+        elif head:  # the last down starts the head trip (down + head, opt-in): its gain is the final norm's
+            pairs.append((LinearId(i, LinearKind.DOWN), "final_norm"))
         for lid, gname in pairs:
             g = pack.load_plain(gname, dtype=torch.float32).to(torch.float64).abs()
             key = f"{i}.{'o' if lid.kind == LinearKind.O else 'down'}"

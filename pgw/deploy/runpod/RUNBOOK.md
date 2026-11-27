@@ -282,6 +282,33 @@ Before relaunching, edit `SESSIONS["sdk7b"]["steps"]` in `jobs.py`: drop the `fa
 step's `"spec": "off"`, `"stages": "setup,conc"` and `"conc": "1,4,16"` (~60 min, ~$6). If you do, record the
 edit in the commit message.
 
+### 6. Proposed, not wired into `jobs.py`: `fused`, GPU validation of the fused schedules (fusion across RMSNorm)
+
+Not launched; no `SESSIONS` entry yet. Design and the CPU prototype: `research/reviews/consumer-round-trips.md`.
+Run it inside session 1 (`perf`, same pod, after its phases; ~10 min of extra GPU, ~$0.5) or as its own 1 x H100
+session with no client pod (~25 min, ~$1.5):
+
+```bash
+# on the GPU pod, repo root, after job_setup.sh
+for m in 7b 32b 72b; do
+  python benchmarks/fused2_pair_bench.py --model $m --extra-items --rows 1,2,4,8,16 --reps 30 --variants planes,sum \
+      --budget-s 120 --json results/fused/pair_$m.json
+done
+```
+
+* What it measures, byte for byte against the prototype provider (`exact` must be true everywhere; stop and report
+  otherwise): the K56 pair op at Qwen2.5-7B / 32B / 72B shapes for the fused2 items (`o+gate_up`, `down+qkv`), the
+  **folded-head item** (`down+head`: last down, then the 152064-row LM head) and the **parallel-block item**
+  (`[W_o | W_down]`, then `[W_qkv ; W_gate_up]`), at 1-16 rows, against the graphed K32 singles of the same linears.
+  72B's `down+head` and parallel items need ~1.2 / ~0.9 GB of int8 weights each: one H100 holds every item.
+* Decisions it feeds (the model is `benchmarks/round_trip_model.py --consumer` / `--twenty`):
+  * `C_SCHEDULES`' device factor (1.22 measured at 7B, 1 row) at 32B / 72B, and `C_ROWS_DEVICE` (the rows curve: 7B
+    measured 1 / 1.62 / 2.83 / 5.37 at 1 / 2 / 4 / 8 rows; a memory-bound kernel would be ~1.0-1.3 to 16 rows);
+  * whether the folded head costs the provider less than the separate K32 masked head trip it replaces;
+  * the per-pass device time of the parallel-block schedule (same weights as fused2, half the trips).
+* Not in scope: end to end over a WAN (the lane, the K56 store and the pks-v3 digit factory are not wired into the
+  client library for fused schedules yet; see the review's production list).
+
 ## 4. Budget
 
 `python deploy/runpod/jobs.py plan` (table prices, Secure Cloud, each session at its full TTL including the

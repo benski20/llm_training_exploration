@@ -318,7 +318,9 @@ def enable_fused2_native(model: Any) -> Fused2NativeDecode:
     sched = model.schedule
     if sched is None or getattr(sched, "name", "") != "fused2":
         raise ConfigError("the native fused2 driver needs the fused2 schedule")
-    nd = Fused2NativeDecode(model, sched, model.backend)
+    if getattr(sched, "head_fold", False) or getattr(sched, "local_qkv0", False):
+        raise ConfigError("the native fused2 driver has no head_fold / local_qkv0 pass (Python path only)")
+    nd =Fused2NativeDecode(model, sched, model.backend)
     sched.native_decode = nd
     model.backend.native_decode = nd  # the backend's release_session_checks also wipes the driver's copies
     return nd

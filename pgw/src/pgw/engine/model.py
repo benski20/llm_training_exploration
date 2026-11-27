@@ -1244,6 +1244,8 @@ class TransformerModel:
             c.advance(t.numel())
         if self.head_mode is None:
             return self._logits(seqs, st.hs)
+        if getattr(self.head_mode, "from_pass_state", False):  # logits computed by the schedule's last trip
+            return self.head_mode.logits_from(self, seqs, st)  # (fused2 head_fold, opt-in)
         if pads is not None:  # the head's calls take the pass's padding too (supports_pad_rows checked it)
             return (yield from self._padded(self.head_mode.steps(self, seqs, st.hs), pads))
         return (yield from self.head_mode.steps(self, seqs, st.hs))
