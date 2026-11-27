@@ -21,6 +21,9 @@ How to read this file: the verdict above is the v0.1.0 release view (2026-11-17)
 sections. The 2026-11-25 sections follow this summary. The 2026-11-19 to 2026-11-23 updates come next, then the
 release report's numbered sections (1-6). The **2026-11-26 sections are at the end**, ending with the RunPod
 runbook's launch-readiness pass, followed by the 2026-11-27 web restyle (console and platform). A note in *italics* marks a statement that a later section superseded.
+runbook's launch-readiness pass. A note in *italics* marks a statement that a later section superseded.
+Since 2026-11-27: **PGW Chat** (`pgw chat`), a private chat app whose plaintext stays on the user's device (last
+section).
 
 **What the product is now.** The client library (`pip install pgw-sdk`, `from pgw import OpenAI`) runs the gateway
 in the application's process against our provider service. Defaults:
@@ -4286,3 +4289,73 @@ Playwright browser test (128 passed) and the slow wheel test; `tests/gateway -m 
 new status unit test; the prefix-reuse test now also asserts the cache counters in `/admin/status`); ruff clean
 on the changed Python files. All 94 screenshots in `docs/design/screenshots/` regenerated (`npm run screenshots`,
 `scripts/platform_screenshots.py`) with no console errors or CSP violations.
+## 2026-11-27: PGW Chat, a private chat app on the client library (`pgw chat`; prototype, design note)
+
+Question from the user: a public-facing chatbot for encrypted general chat, and how the client end would work. The
+answer keeps the library's guarantee unchanged: **plaintext exists only on the user's own device; our GPUs see only
+masked data.** Design note: `research/reviews/encrypted-chat-app.md`; user guide: `docs/sdk/chat.md`.
+
+**Recommendation: a local app** (option A). The SDK runs on the user's machine and talks directly to our provider;
+`pgw chat` serves a chat UI on 127.0.0.1 and opens the browser; a Tauri desktop wrapper with a bundled Python sidecar
+is designed (later: IPC instead of the loopback socket). **Rejected**, because they break the device-only plaintext
+principle: a hosted chat backend (our server would see plaintext), and the same inside a confidential VM / TEE
+(replaces the cryptographic guarantee with trust in the hardware vendor). **Deferred**: an in-browser client (WASM /
+WebGPU): same RTT problem, mask factory and setup too heavy at 7B in a tab, no raw TCP for the lane.
+
+**Speed, stated plainly** (in the note and the UI): each token is `4L + 1` sequential masked round trips (97 at 0.5B,
+113 at 1.5B / 7B, 145 at 3B). Lower bound per token at 5 / 20 / 50 ms RTT: 7B 0.57 / 2.3 / 5.7 s (with the draft
+head's ~1.7 tokens per pass 0.33 / 1.3 / 3.3 s); 0.5B 0.49 / 1.9 / 4.9 s. So a home-network app is practical for
+private, slow or batch use, not interactive chat, until trips per token fall (RMSNorm-crossing layer fusion, stronger
+speculation: a separate research workstream) and GPUs move closer (regional placement). The UI shows tokens/s per
+answer and live, says "Waiting for the GPU" with the reason, and keeps stop / leave-and-come-back working.
+
+**Built** (`src/pgw/chat/`, standard library only on the server side; `pgw/chat/` web app, React + TS + Vite, built
+into `src/pgw/chat/static/` and shipped as package data; `scripts/build-chat.sh`):
+* `pgw chat [--model] [--no-browser] [--no-history] [--factory-weights stream] [--prefix-cache on]
+  [--speculation draft_head] [--no-usage-reports] [--demo]`: one `pgw.OpenAI` client, the default model's first-run
+  setup started at once, the browser opened through a 0600 redirect file (the token never on a command line), no core
+  dumps (`RLIMIT_CORE=0`, `PR_SET_DUMPABLE=0`).
+* Localhost server security: bind 127.0.0.1 only; a 256-bit token per launch on every `/api/` call (fragment ->
+  sessionStorage, stripped from the address bar); Host check on every request (DNS rebinding), Origin required on
+  state-changing calls and checked when present, `Sec-Fetch-Site`, JSON-only bodies, no CORS; strict CSP
+  (`default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; ...`) and the usual headers; request
+  bodies always read whole (an unread body was parsed as the next keep-alive request: found by the browser test,
+  fixed); the request log off, errors logged by type only.
+* Conversations: 0600 JSON files in a 0700 directory under the SDK state dir (ids validated before any path, symlinks
+  and oversized files ignored), or memory only; delete one or all. Not encrypted beyond the disk's encryption (stated
+  in the UI); the desktop design adds a keychain-held key.
+* UI: calm centred column, serif answers (Source Serif 4) and Inter UI (both self-hosted, OFL, licences shipped),
+  collapsible sidebar grouped by day, one composer with send / stop, model picker limited to the supported models with
+  memory / disk / download per model and a device-based recommendation (largest of 0.5B-3B that fits; 7B opt-in),
+  first-run setup card (stages, percent, ETA, disk/CPU disclosure, stalled-provider and failed states from
+  `client.status()`), per-answer "Computed privately" + tokens/s + time, copy and regenerate, typed SDK errors mapped
+  to plain messages (integrity failure = security event, not retried), a quiet "Private" indicator opening "What is
+  true right now" (what stays on the device, masking, checks with the verified count, what the provider sees, prefix
+  cache and speculation state, history location; never "end-to-end encrypted" or "anonymous"), light / dark / system.
+  Our own safe Markdown renderer (elements only; links http(s)/mailto without referrer; images never loaded).
+  Mock mode (`npm run dev:mock`, `?state=setup|stalled|slow|empty|blocked`).
+* Prefix cache: kept at the library default (off with the masked head), `--prefix-cache on` opt-in, the
+  provider-visible hit signal explained in the UI. Speculation: opt-in (`--speculation draft_head`) because of the
+  strict-mode tail (the next request waits for the answer's remaining dummy rounds).
+
+**Tests** (this box; absolute `PYTHONPATH`, one directory at a time): `tests/chat` 46 passed in 41 s: server security
+(bind address, token, Host / Origin / fetch-site, content types, body limits, CSP and headers on every response,
+traversal, no content in logs or stderr, private files, stop and closed-tab cancellation, typed errors, regenerate),
+status mapping, the static build (no inline code, hashed assets, no mock code, fonts with licences, package data, no
+HTML injection in the sources), a Chromium smoke test (fragment token hand-over, no CSP violation or console error, no
+request to any other origin, send / stream / stop / regenerate / error / privacy / delete, a tokenless tab refused,
+inline script blocked), and **end to end against the tiny CPU test provider**: a message through the chat server
+streams token by token and equals the SDK's answer bit for bit, turn 2 (whole conversation resent) too, and typed into
+the real web app in Chromium the stored answer equals the SDK's. Web app: Vitest 17 passed (markdown safety, token
+handling, SSE, privacy copy, the app against the mock: send / stream / setup / stalled / privacy / delete), ESLint and
+`tsc` clean. `tests/cli` 210 passed (the `chat` command added to the command list). `tests/docs`: only the 18 known
+environment-only `test_numbers` failures. ruff clean on the new code.
+
+Screenshots (light / dark, desktop / phone): `docs/design/screenshots/chat-{welcome,conversation,waiting,streaming,
+privacy,setup,stalled}-*.png`, `chat-models-*-desktop.png`, `chat-sidebar-*-phone.png`.
+
+**Open (decisions for the user)**: accounts (email / passkey vs anonymous keys with proof-of-work; free quotas);
+moderation (none, or an advisory on-device classifier; we cannot see content by design); consumer defaults (1.5B with
+the weight-free stock? speculation on despite the tail? `usage_reports` off?); the desktop wrapper and who signs
+releases; regional GPU placement targets. Not built: the sign-up / device-code key flow, the desktop wrapper, the
+keychain-held history key.

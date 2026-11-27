@@ -15,7 +15,8 @@ from pgw.cli import cli
 from pgw.cli._common import EXIT_ERROR, EXIT_INTERRUPTED, EXIT_NOT_IMPLEMENTED, LazyGroup, handle_errors
 from pgw.core.errors import ConfigError
 
-TOP_LEVEL = {"version", "doctor", "pack", "inspect", "factory", "maskstore", "service", "gateway", "bench", "config", "sdk"}
+TOP_LEVEL = {"version", "doctor", "pack", "inspect", "factory", "maskstore", "service", "gateway", "bench", "config", "sdk",
+             "chat"}
 
 
 def test_help_lists_every_command(runner: CliRunner) -> None:
@@ -29,6 +30,7 @@ def test_help_lists_every_command(runner: CliRunner) -> None:
 @pytest.mark.parametrize("path", [
     ["factory", "--help"], ["factory", "generate", "--help"], ["factory", "run", "--help"],
     ["factory", "status", "--help"], ["factory", "benchmark", "--help"],
+    ["chat", "--help"],
     ["gateway", "--help"], ["gateway", "serve", "--help"], ["gateway", "keys", "create", "--help"],
     ["maskstore", "init", "--help"], ["maskstore", "status", "--help"], ["maskstore", "import", "--help"],
     ["maskstore", "gc", "--help"], ["maskstore", "rotate-key", "--help"],
