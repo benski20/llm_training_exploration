@@ -101,7 +101,7 @@ class Fused2NativeDecode:
             self.drv.set_head_fold(int(w.head.m))
         if self.local_qkv0:
             w0 = w.qkv[0].w8
-            if w0.stride() == (0, 0) or not bool(w0.any()):  # the weight-free tables' placeholder
+            if w0.numel() and 0 in tuple(w0.stride()):  # the weight-free tables' placeholder (a broadcast zero)
                 raise ConfigError("local_qkv0 needs layer 0's folded qkv matrix (gateway_tables(keep_qkv0=True))")
             self.drv.set_local_qkv0(np.ascontiguousarray(w0.numpy()))
         for idx, ((l1, l2), name) in enumerate(zip(self.plan, self.names, strict=True)):

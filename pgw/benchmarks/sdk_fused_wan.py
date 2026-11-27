@@ -110,7 +110,8 @@ def one(prov: Any, sched: str, rtt: float, work: Path, args: argparse.Namespace,
     root = work / f"client-{sched}-{rtt}"
     c = OpenAI(api_key=prov.new_key(f"wan-{sched}-{rtt}"), provisioner=LocalPackProvisioner({MODEL: prov.pack_dir}),
                cache_dir=root / "cache", state_dir=root / "state", mask_scheme="plain", mask_workers=1,
-               mask_target_slots=2048, mask_low_water_slots=256, mask_segment_slots=512, timeout=1200,
+               mask_target_slots=args.stock, mask_low_water_slots=args.stock // 2, mask_segment_slots=args.stock // 2,
+               timeout=1200,
                ready_timeout_s=1800, schedule=sched, usage_reports=False)
     try:
         kw = {"temperature": 0, "max_tokens": args.tokens, "extra_body": {"ignore_eos": True}}
@@ -167,6 +168,9 @@ def one(prov: Any, sched: str, rtt: float, work: Path, args: argparse.Namespace,
         return out
     finally:
         c.close()
+        import shutil
+
+        shutil.rmtree(root, ignore_errors=True)  # the K56 stock is large (3.2 MB per slot at 0.5B)
 
 
 def _calls(rt: Any) -> int:
@@ -193,6 +197,7 @@ def main() -> None:
     ap.add_argument("--tokens", type=int, default=12)
     ap.add_argument("--reps", type=int, default=3)
     ap.add_argument("--pack", default=None)
+    ap.add_argument("--stock", type=int, default=256, help="mask slots per client (K56 slots are 3.2 MB at 0.5B)")
     ap.add_argument("--json", default=None)
     args = ap.parse_args()
     res = run(args)

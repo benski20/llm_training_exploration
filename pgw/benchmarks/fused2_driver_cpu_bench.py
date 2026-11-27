@@ -80,15 +80,27 @@ def main() -> None:
         weights = Fused2Weights(pack, None, multipliers=migration_multipliers(pack, 8, head=hf), head=hf)
         weights.save(cached)
     print(f"fused2 tables: {time.perf_counter() - t0:.1f}s", file=sys.stderr)
+    if hf and weights.down[-1].sigma <= 0.0:  # zero weights: a spectral norm of 0 (the bound the head trip needs)
+        import dataclasses
+
+        weights.down[-1] = dataclasses.replace(weights.down[-1], sigma=1.0)
     items = fused2_items(weights)
     widths = [(it.n1, it.m1, it.m2, it.k2 is not None) for it in items]
+    head_item = len(items) - 1 if weights.head is not None else None
 
     def execute(_model: int, linear: int, _ring: int, rows: int, body: bytes, _tenant: str, _left: float) -> Any:
         n1, m1, m2, pair = widths[linear]
         if not pair:  # Y_hat = W x_hat = 0
             return bytes(rows * m1 * nb)
-        # H_hat = R_hat + hmul * W1 x_hat = R_hat; Z_hat = W2' H_hat = 0
-        return bytes(body[rows * n1 * nb:rows * (n1 + m1) * nb]) + bytes(rows * m2 * nb)
+        # H_hat = R_hat + hmul * W1 x_hat = R_hat; Z_hat = W2' H_hat = 0 (the folded head is not zero: its exact Z)
+        r_hat = bytes(body[rows * n1 * nb:rows * (n1 + m1) * nb])
+        if head_item is not None and linear == head_item:
+            from pgw.core.packing import pack_ring, unpack_ring
+            from pgw.core.ringmm import int8_ring_matmul
+
+            h = unpack_ring(r_hat, (rows, m1), ring.k)
+            return r_hat + pack_ring(int8_ring_matmul(h, weights.head.w8, ring.k), ring.k)
+        return r_hat + bytes(rows * m2 * nb)
 
     sock_dir = tempfile.mkdtemp(prefix="pgwf2")
     sock = os.path.join(sock_dir, "lane.sock")

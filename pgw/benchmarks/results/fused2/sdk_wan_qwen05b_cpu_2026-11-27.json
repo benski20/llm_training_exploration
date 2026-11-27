@@ -1,0 +1,100 @@
+{
+ "model": "qwen",
+ "tokens": 8,
+ "reps": 2,
+ "configs": [
+  {
+   "schedule": "standard",
+   "rtt_ms": 0.0,
+   "trips_per_token": 97.0,
+   "decode_tok_s": 2.652371282082373,
+   "client_cpu_ms_per_token": 52.77207142857167,
+   "driver_local_ms_per_pass": null,
+   "bytes_up_per_token": 3900416.0,
+   "bytes_down_per_token": 7146496.0,
+   "provider_ms_per_token": null,
+   "native_decode": true,
+   "integrity_failures": 0,
+   "ring": "K32A12C27"
+  },
+  {
+   "schedule": "fused",
+   "rtt_ms": 0.0,
+   "trips_per_token": 48.0,
+   "decode_tok_s": 4.178430301281569,
+   "client_cpu_ms_per_token": 56.78457142856733,
+   "driver_local_ms_per_pass": 15.70998242857143,
+   "bytes_up_per_token": 6792016.0,
+   "bytes_down_per_token": 12463024.0,
+   "provider_ms_per_token": 225.8205,
+   "native_decode": true,
+   "integrity_failures": 0,
+   "ring": "K56A12C53",
+   "equals_fused_reference": true
+  },
+  {
+   "schedule": "standard",
+   "rtt_ms": 5.0,
+   "trips_per_token": 97.0,
+   "decode_tok_s": 1.0384584022042502,
+   "client_cpu_ms_per_token": 82.65085714285598,
+   "driver_local_ms_per_pass": null,
+   "bytes_up_per_token": 3900416.0,
+   "bytes_down_per_token": 7146496.0,
+   "provider_ms_per_token": null,
+   "native_decode": true,
+   "integrity_failures": 0,
+   "ring": "K32A12C27"
+  },
+  {
+   "schedule": "fused",
+   "rtt_ms": 5.0,
+   "trips_per_token": 48.0,
+   "decode_tok_s": 2.0084935343608494,
+   "client_cpu_ms_per_token": 61.89457142857334,
+   "driver_local_ms_per_pass": 15.264736857142857,
+   "bytes_up_per_token": 6792016.0,
+   "bytes_down_per_token": 12463024.0,
+   "provider_ms_per_token": 219.2239375,
+   "native_decode": true,
+   "integrity_failures": 0,
+   "ring": "K56A12C53",
+   "equals_fused_reference": true
+  },
+  {
+   "schedule": "standard",
+   "rtt_ms": 20.0,
+   "trips_per_token": 97.0,
+   "decode_tok_s": 0.408459388757995,
+   "client_cpu_ms_per_token": 94.32021428571602,
+   "driver_local_ms_per_pass": null,
+   "bytes_up_per_token": 3900416.0,
+   "bytes_down_per_token": 7146496.0,
+   "provider_ms_per_token": null,
+   "native_decode": true,
+   "integrity_failures": 0,
+   "ring": "K32A12C27"
+  },
+  {
+   "schedule": "fused",
+   "rtt_ms": 20.0,
+   "trips_per_token": 48.0,
+   "decode_tok_s": 0.7952548446681128,
+   "client_cpu_ms_per_token": 71.12128571428602,
+   "driver_local_ms_per_pass": 15.482078214285714,
+   "bytes_up_per_token": 6792016.0,
+   "bytes_down_per_token": 12463024.0,
+   "provider_ms_per_token": 234.6306875,
+   "native_decode": true,
+   "integrity_failures": 0,
+   "ring": "K56A12C53",
+   "equals_fused_reference": true
+  }
+ ],
+ "rtt_ms": [
+  0,
+  5,
+  20
+ ],
+ "note": "CPU test provider on a shared 4-vCPU box: provider_ms_per_token is the CPU provider computing the K56 products (a GPU job); client_cpu_ms_per_token is this process (includes the lane reply spin); bytes_*_per_token average the request (prompt pass included). RTT 0 rows from the first sweep, 5/20 from the second (same pack and code)."
+}

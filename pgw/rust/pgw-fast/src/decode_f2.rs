@@ -289,8 +289,24 @@ struct View<'a> {
 /// `y = W8 xq` exactly for one row (`|w| <= 127`, `|x| <= 2^C`: every product and sum fits int64): the integers
 /// the provider would return for trip 0 (local_qkv0). Rows of `W` in fixed ranges on the pool for wide outputs.
 fn local_product(w: &[i8], xq: &[i64], n: usize, m: usize, y: &mut [i64]) -> bool {
+    // |x| <= 2^C fits i32 only for small inputs: the quantized embedding row has |x| < 2^(A-1) <= 2^23, but the
+    // i32 dot path below needs |x| < 2^15 (i16) with blocks of 2048 terms (|sum| < 127 * 2^15 * 2048 < 2^31);
+    // larger inputs take the exact i64 loop.
+    let small = xq.iter().all(|&v| (-32768..32768).contains(&v));
+    let x16: Vec<i16> = if small { xq.iter().map(|&v| v as i16).collect() } else { Vec::new() };
     let row = |j: usize| -> i64 {
         let wr = &w[j * n..(j + 1) * n];
+        if small {
+            let mut acc = 0i64;
+            for (wc, xc) in wr.chunks(2048).zip(x16.chunks(2048)) {
+                let mut a32 = 0i32;
+                for (&a, &b) in wc.iter().zip(xc) {
+                    a32 += i32::from(a) * i32::from(b); // vectorizes (pmaddwd-style)
+                }
+                acc += i64::from(a32);
+            }
+            return acc;
+        }
         let mut acc = 0i64;
         for (&a, &b) in wr.iter().zip(xq) {
             acc += i64::from(a) * b;

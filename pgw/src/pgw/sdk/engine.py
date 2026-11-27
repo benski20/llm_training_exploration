@@ -106,6 +106,11 @@ NATIVE_ENV: dict[str, str] = {
     # tests/engine/test_decode_native_multi.py, tests/sdk/test_concurrency_cpu.py
     "PGW_DECODE_NATIVE_MULTI": "1",
     "PGW_SAMPLE_THREADS": "auto",
+    # schedule="fused": the wide element-wise stages of a one-row fused pass (unmask of the second stage, its check,
+    # the gate/up and output-layer scaling, SiLU) in fixed element ranges on the native pool (the same bits;
+    # 32B widths on 4 vCPUs: 0.95-1.10 -> 0.75 ms per pair trip, benchmarks/results/fused2/
+    # driver_cpu_32b_split_2026-11-27.json). Read by the fused2 driver only: the standard schedule is unaffected
+    "PGW_FUSED2_SPLIT": "4" if (os.cpu_count() or 1) >= 4 else "2",
 }
 
 #: The ring of the proven stack (K32: p31 checks and pks-v3 need it).

@@ -47,3 +47,12 @@ def test_fused2_driver_with_split_and_prefetch() -> None:
     _run({"PGW_FUSED2_SPLIT": "3", "PGW_FUSED2_SPLIT_MIN_ELEMS": "64", "PGW_LANE_WAIT_PREFETCH": "1",
           "PGW_POOL_ACTIVE_SPIN_US": "2000"},
          "tests/engine/test_fused2_native.py", "bit_for_bit or tamper or one_slot")
+
+
+@pytest.mark.skipif(not hasattr(fast, "Fused2Driver") or not hasattr(fast.Fused2Driver, "set_head_fold"),
+                    reason="pgw_fast without the head-fold fused2 driver")
+def test_fused2_head_fold_driver_with_split() -> None:
+    """The client library's fused schedule sets ``PGW_FUSED2_SPLIT``: the head's logit scaling and the local qkv0
+    product split over the pool give the same bits (native == Python == plain, tamper caught)."""
+    _run({"PGW_FUSED2_SPLIT": "4", "PGW_FUSED2_SPLIT_MIN_ELEMS": "64", "PGW_POOL_WORKERS": "3"},
+         "tests/engine/test_fused2_native_headfold.py", "plain or tamper or single_item")

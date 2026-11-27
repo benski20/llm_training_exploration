@@ -1,0 +1,183 @@
+{
+ "note": "benchmarks/fused2_driver_cpu_bench.py --preset 32b --layers 2 (PGW_BENCH_VOCAB=16384), shared 4-vCPU box; local = the native fused2 driver work per trip (quantize, mask, pack, unpack/unmask, both p61 checks, float work), no lane wait. Two runs per setting (second run below).",
+ "no_head_split0": {
+  "preset": "32b",
+  "layers": 2,
+  "ring": "K56A12C53",
+  "transport": "uds",
+  "decode_passes": 24,
+  "trips_per_pass": 5,
+  "head_fold": false,
+  "local_us_per_trip": 939.8,
+  "lane_us_per_trip": 358.2,
+  "per_kind": {
+   "single (first qkv)": {
+    "trips": 24,
+    "before_lane_us": 101.3,
+    "after_lane_us": 186.9,
+    "local_us": 288.2,
+    "unmask_us": 41.0,
+    "checks_us": 48.5,
+    "float_us": 97.0
+   },
+   "pair A (o + gate_up)": {
+    "trips": 48,
+    "before_lane_us": 206.5,
+    "after_lane_us": 1159.2,
+    "local_us": 1365.6,
+    "unmask_us": 432.5,
+    "checks_us": 361.6,
+    "float_us": 364.5
+   },
+   "pair B (down + next qkv)": {
+    "trips": 48,
+    "before_lane_us": 543.7,
+    "after_lane_us": 296.0,
+    "local_us": 839.7,
+    "unmask_us": 63.3,
+    "checks_us": 163.4,
+    "float_us": 68.9
+   }
+  },
+  "mean_pair_trip_local_us": 1102.7,
+  "extrapolated_full_model_local_ms_per_token": 141.14,
+  "wall_ms_per_pass_median": 19.6,
+  "bytes_per_trip_up_down": [
+   133324,
+   225382
+  ]
+ },
+ "no_head_split4": {
+  "preset": "32b",
+  "layers": 2,
+  "ring": "K56A12C53",
+  "transport": "uds",
+  "decode_passes": 24,
+  "trips_per_pass": 5,
+  "head_fold": false,
+  "local_us_per_trip": 649.2,
+  "lane_us_per_trip": 330.0,
+  "per_kind": {
+   "single (first qkv)": {
+    "trips": 24,
+    "before_lane_us": 95.1,
+    "after_lane_us": 165.0,
+    "local_us": 260.1,
+    "unmask_us": 33.0,
+    "checks_us": 46.9,
+    "float_us": 84.9
+   },
+   "pair A (o + gate_up)": {
+    "trips": 48,
+    "before_lane_us": 189.3,
+    "after_lane_us": 572.3,
+    "local_us": 761.6,
+    "unmask_us": 238.2,
+    "checks_us": 176.0,
+    "float_us": 157.7
+   },
+   "pair B (down + next qkv)": {
+    "trips": 48,
+    "before_lane_us": 466.7,
+    "after_lane_us": 264.6,
+    "local_us": 731.2,
+    "unmask_us": 51.6,
+    "checks_us": 155.7,
+    "float_us": 57.0
+   }
+  },
+  "mean_pair_trip_local_us": 746.4,
+  "extrapolated_full_model_local_ms_per_token": 95.54,
+  "wall_ms_per_pass_median": 17.667,
+  "bytes_per_trip_up_down": [
+   133324,
+   225382
+  ]
+ },
+ "head_fold_local_qkv0_split0": {
+  "preset": "32b",
+  "layers": 2,
+  "ring": "K56A12C53",
+  "transport": "uds",
+  "decode_passes": 16,
+  "trips_per_pass": 4,
+  "head_fold": true,
+  "local_us_per_trip": 3064.9,
+  "lane_us_per_trip": 2504.8,
+  "per_kind": {
+   "pair A (o + gate_up)": {
+    "trips": 32,
+    "before_lane_us": 183.1,
+    "after_lane_us": 995.2,
+    "local_us": 1178.3,
+    "unmask_us": 383.6,
+    "checks_us": 309.0,
+    "float_us": 302.1
+   },
+   "pair B (down + next qkv)": {
+    "trips": 32,
+    "before_lane_us": 498.7,
+    "after_lane_us": 432.7,
+    "local_us": 931.4,
+    "unmask_us": 153.1,
+    "checks_us": 189.2,
+    "float_us": 90.0
+   }
+  },
+  "mean_pair_trip_local_us": 1054.8,
+  "extrapolated_full_model_local_ms_per_token": 135.02,
+  "wall_ms_per_pass_median": 28.979,
+  "bytes_per_trip_up_down": [
+   173107,
+   311180
+  ]
+ },
+ "head_fold_local_qkv0_split4": {
+  "preset": "32b",
+  "layers": 2,
+  "ring": "K56A12C53",
+  "transport": "uds",
+  "decode_passes": 16,
+  "trips_per_pass": 4,
+  "head_fold": true,
+  "local_us_per_trip": 3000.9,
+  "lane_us_per_trip": 3401.3,
+  "per_kind": {
+   "pair A (o + gate_up)": {
+    "trips": 32,
+    "before_lane_us": 189.8,
+    "after_lane_us": 646.3,
+    "local_us": 836.2,
+    "unmask_us": 281.3,
+    "checks_us": 208.9,
+    "float_us": 155.6
+   },
+   "pair B (down + next qkv)": {
+    "trips": 32,
+    "before_lane_us": 529.1,
+    "after_lane_us": 420.6,
+    "local_us": 949.7,
+    "unmask_us": 129.7,
+    "checks_us": 215.8,
+    "float_us": 74.6
+   }
+  },
+  "mean_pair_trip_local_us": 893.0,
+  "extrapolated_full_model_local_ms_per_token": 114.3,
+  "wall_ms_per_pass_median": 30.506,
+  "bytes_per_trip_up_down": [
+   173107,
+   311180
+  ]
+ },
+ "runs_mean_pair_trip_local_us": {
+  "split0": [
+   950.9,
+   1102.7
+  ],
+  "split4": [
+   753.3,
+   746.4
+  ]
+ }
+}
