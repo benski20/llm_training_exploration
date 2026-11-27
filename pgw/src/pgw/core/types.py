@@ -92,6 +92,8 @@ class ModelArch(StrEnum):
 
     QWEN2 = "qwen2"
     LLAMA = "llama"
+    #: Qwen3 dense: Llama-style linears (no biases) plus a per-head RMSNorm of q and k before RoPE (gateway side).
+    QWEN3 = "qwen3"
 
 
 def linear_ids(num_layers: int) -> list[LinearId]:

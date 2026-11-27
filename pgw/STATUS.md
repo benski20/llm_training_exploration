@@ -4891,3 +4891,38 @@ extents.
   measured link is not persisted across restarts. Not combined yet: `prefix_cache=True`, `factory_weights="stream"`,
   the provider-built hint.
 * Parallel blocks: lane items (table v3) exist; no parallel-block checkpoint, so not exposed in the SDK.
+
+## 2026-11-27: consumer chat, the model side of latency (depth, parallel blocks, pruning, crypto limits); Qwen3 support
+
+Full review: `research/reviews/consumer-model-depth.md` (numbers: `research/reviews/consumer_depth_numbers.py`).
+
+- **Cost of a token = sequential non-linear stops + 1.** Standard blocks: 2 per layer (`2L + 1` fused); parallel
+  attention+MLP blocks: 1 (`L + 1`). Within a single stateless provider no crypto or architecture gets below one
+  client interaction per sequential non-linear stage (Beaver/FSS need the client online at each stage or a second
+  non-colluding server; garbling costs 10^4-10^5 x the wire; FHE ~20 s per 7B token on 8 GPUs, cited, approximate and
+  unverified; polynomial activations and softmax-free attention cannot be decoded off additive masks for less than
+  the next layer's cost). Early exit leaks per-token depth; padded, it saves nothing. MoE routing must be oblivious,
+  which multiplies the wire 4-23x on the expert linears (masks stay routed).
+- **Best quality per layer (commercial): Qwen3.** Qwen3-14B, 40 layers, Arena-Hard 86.3 (Qwen3 report) vs Qwen2.5-32B,
+  64 layers, 74.5: 81 fused trips instead of 129 at 32B-class chat. Native parallel-block models (Phi-2, StableLM-2,
+  Falcon, Pythia, GPT-J) are all weak; LayerNorm/GELU support for them is not worth building.
+- **Experiment (measured, Kaggle T4 x 2, `benchmarks/depth_prune_heal.py`, results in
+  `benchmarks/results/depth_prune/kaggle_05b_r1/`)**: Qwen2.5-0.5B-Instruct, students healed by self-distillation on
+  4.8M permissive tokens (UltraChat prompts with the model's own answers + FineWeb-Edu), 7-8M tokens seen. Original:
+  ppl 13.57, MMLU 0.495, HellaSwag 0.522. At 25 trips per pass, **parallel blocks (all 24 layers) beat dropping 12
+  layers**: ppl 20.44 vs 25.80, chat top-1 agreement 0.765 vs 0.651, HellaSwag 0.397 vs 0.350; drop 6 layers (37 trips):
+  ppl 17.19, agreement 0.774; parallel + drop 6 (19 trips): ppl 25.49. **MMLU falls to chance for every student** at
+  this budget: the quality gap is large at 0.5B / 8M tokens; a 1.5B-7B run with ~1B tokens is what a decision needs.
+- **20 tok/s up to 32B from a consumer device is not reachable with this protocol family** (derived): 41 trips need
+  RTT <= 1.8 ms at 1.7 tokens per pass, and the uniform masked traffic is ~34-59 MB per token at 32B-class / 40 layers
+  (~6 Gbit/s down at 20 tok/s). Consumer-direct is ~0.2-2 tok/s at 14B-32B-class. In topology B (RTT 0.3 ms, 25 Gbit/s)
+  Qwen3-14B with fused2 models at ~20 tok/s, a parallel conversion at ~27-38. On consumer uplinks fused2's K56 ring is
+  slower than K32 (Qwen2.5-7B, RTT 20, 300/30: 0.25 vs 0.31 tok/s): the fused schedule needs a narrower ring there.
+- **Engine: Qwen3 dense** (`model_type` qwen3): per-head q/k RMSNorm before RoPE on the client (no trip, no provider
+  change), packer + shard-wise packer + manifest checks, exact masked == plain on K32/K40/K48 and fused2
+  (`tests/engine/test_qwen3.py`, 13; `tests/modelpack/test_shardwise.py::test_qwen3_byte_identical`). qwen2/llama
+  paths unchanged (`qk_norms is None`); the native float ops refuse qwen3 and the native decode drivers step aside.
+  Not done: Qwen3 pins / SDK support (pin process; no room on this box for the checkpoints), a native q/k-norm path.
+- Tests (absolute `PYTHONPATH`, one directory at a time): tests/engine 1225 passed, 15 skipped; tests/modelpack 129
+  passed, 1 skipped; tests/docs only the 18 known environment-only `test_numbers` failures.
+
