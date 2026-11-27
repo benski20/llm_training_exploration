@@ -127,7 +127,7 @@ FUSED2_SCHEDULE = "fused2"
 P61 = (1 << 61) - 1
 #: Bytes per stored ``uW`` word with ``check_field = "p61"`` (values below ``2^61`` do not fit K56 elements).
 P61_WORD_BYTES = 8
-_FUSED2_KEY_RE = re.compile(r"^(0|[1-9][0-9]{0,5})\.(qkv/f2|o|gate_up/f2|down)$")
+_FUSED2_KEY_RE = re.compile(r"^(0|[1-9][0-9]{0,5})\.(qkv/f2|o|gate_up/f2|down|lm_head/f2)$")
 _SEG_ID_RE = re.compile(r"^[0-9a-f]{32}$")
 _HEX8_RE = re.compile(r"^[0-9a-f]{8}$")
 

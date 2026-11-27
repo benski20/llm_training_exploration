@@ -104,9 +104,31 @@ class LaneFused2Provider:
             y = (y * hm) & ((1 << self.k) - 1)
         return y
 
+    def _multi_chunks(self, k1: str, k2: str | None, x_hat: torch.Tensor, r_hat: torch.Tensor | None) -> Any:
+        """A trip with more rows than one call serves, as lane-format-2 multi calls of ``max_rows``-row items (one
+        round trip per ``max_multi_rows`` rows instead of one per ``max_rows``): the same item bodies, so the
+        provider sees the same masked elements. ``None`` when the lane offers no multi frames."""
+        rows = int(x_hat.shape[0])
+        if rows <= self.max_rows or self.max_items < 2 or self.max_multi_rows < 2 * self.max_rows:
+            return None
+        per = max(1, min(self.max_items, self.max_multi_rows // self.max_rows))
+        chunks = self._chunks(rows)
+        outs: list[Any] = []
+        for g in range(0, len(chunks), per):
+            grp = chunks[g : g + per]
+            reqs = [(k1, k2, x_hat[a:b], None if r_hat is None else r_hat[a:b]) for a, b in grp]
+            outs.extend(self.many(reqs) if len(reqs) > 1 else
+                        [self.single(k1, reqs[0][2]) if k2 is None else self.pair(k1, k2, reqs[0][3], reqs[0][2])])
+        if k2 is None:
+            return torch.cat(outs)
+        return torch.cat([h for h, _ in outs]), torch.cat([z for _, z in outs])
+
     def single(self, k1: str, x_hat: torch.Tensor) -> torch.Tensor:
         n1, m1, _ = self._items[k1]
         rows = int(x_hat.shape[0])
+        got = self._multi_chunks(k1, None, x_hat, None)
+        if got is not None:
+            return got  # multipliers applied per item by many()
         outs = []
         for a, b in self._chunks(rows):
             r = b - a
@@ -120,6 +142,40 @@ class LaneFused2Provider:
             return False
         rows = [int(x.shape[0]) for _, _, x, _ in reqs]
         return min(rows) > 0 and sum(rows) <= self.max_multi_rows and max(rows) <= self.max_rows
+
+    def many_any(self, reqs: Sequence[tuple[str, str | None, torch.Tensor, torch.Tensor | None]]) -> list[Any]:
+        """:meth:`many` for requests of any row counts: items split into ``max_rows`` pieces and packed into as
+        few multi calls as the offer allows (the same item bodies as one call per piece)."""
+        pieces: list[tuple[int, tuple[str, str | None, torch.Tensor, torch.Tensor | None]]] = []
+        for i, (k1, k2, x, r) in enumerate(reqs):
+            for a, b in self._chunks(int(x.shape[0])):
+                pieces.append((i, (k1, k2, x[a:b], None if r is None else r[a:b])))
+        groups: list[list[int]] = [[]]
+        rows = 0
+        for j, (_, (_, _, x, _)) in enumerate(pieces):
+            n = int(x.shape[0])
+            if groups[-1] and (len(groups[-1]) >= self.max_items or rows + n > self.max_multi_rows):
+                groups.append([])
+                rows = 0
+            groups[-1].append(j)
+            rows += n
+        answers: list[Any] = [None] * len(pieces)
+        for g in groups:
+            sub = [pieces[j][1] for j in g]
+            got = self.many(sub) if len(sub) > 1 else [
+                self.single(sub[0][0], sub[0][2]) if sub[0][1] is None else
+                self.pair(sub[0][0], sub[0][1], sub[0][3], sub[0][2])]  # type: ignore[arg-type]
+            for j, a in zip(g, got, strict=True):
+                answers[j] = a
+        out: list[Any] = []
+        for i, (_, k2, _, _) in enumerate(reqs):
+            mine = [answers[j] for j, (pi, _) in enumerate(pieces) if pi == i]
+            if k2 is None:
+                out.append(mine[0] if len(mine) == 1 else torch.cat(mine))
+            else:
+                out.append(mine[0] if len(mine) == 1 else (torch.cat([h for h, _ in mine]),
+                                                           torch.cat([z for _, z in mine])))
+        return out
 
     def many(self, reqs: Sequence[tuple[str, str | None, torch.Tensor, torch.Tensor | None]]
              ) -> list[torch.Tensor | tuple[torch.Tensor, torch.Tensor]]:
@@ -175,6 +231,9 @@ class LaneFused2Provider:
         name = f"{k1}+{k2}"
         n1, m1, m2 = self._items[name]
         rows = int(x_hat.shape[0])
+        got = self._multi_chunks(k1, k2, x_hat, r_hat)
+        if got is not None:
+            return got
         hs, zs = [], []
         for a, b in self._chunks(rows):
             r = b - a

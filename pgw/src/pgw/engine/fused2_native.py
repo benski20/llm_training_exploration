@@ -71,7 +71,16 @@ class Fused2NativeDecode:
         self.model, self.sched, self.backend = model, schedule, backend
         L = int(model.num_layers)
         self.layers = L
-        self.keys = [lin.key for lin in w.linears()]
+        #: head_fold (item table v2): the last trip is the pair (last down, folded head); passes in which every row
+        #: gets logits (decode, and verify passes with ``last_logits`` = rows) run natively, others take the Python
+        #: path. local_qkv0: trip 0 computed exactly in the driver from the public matrix (no mask, no trip).
+        self.head_fold = bool(getattr(schedule, "head_fold", False))
+        self.local_qkv0 = bool(getattr(schedule, "local_qkv0", False))
+        if (self.head_fold or self.local_qkv0) and not hasattr(fast.Fused2Driver, "set_head_fold"):
+            raise ConfigError("this pgw_fast has no fused2 head_fold / local_qkv0 pass (rebuild rust/pgw-fast)")
+        self.keys = [lin.key for lin in w.all_linears()]
+        if self.local_qkv0:
+            self.keys = [k for k in self.keys if k != w.qkv[0].key]
         self.drv = fast.Fused2Driver(int(model.arch.hidden_size), int(model.num_heads), int(model.num_kv_heads),
                                      int(model.head_dim), int(model.split_gate_up[0]), float(model.scale),
                                      float(model.eps), int(ops.attn_threads), int(ops.attn_block), bool(ops.kv_bf16),
@@ -86,14 +95,21 @@ class Fused2NativeDecode:
         self.plan: list[tuple[Any, Any]] = [(w.qkv[0], None)]
         for i in range(L):
             self.plan.append((w.o[i], w.gu[i]))
-            self.plan.append((w.down[i], w.qkv[i + 1] if i + 1 < L else None))
+            self.plan.append((w.down[i], w.qkv[i + 1] if i + 1 < L else (w.head if self.head_fold else None)))
         self.names = [l1.key + ("+" + l2.key if l2 is not None else "") for l1, l2 in self.plan]
+        if self.head_fold:
+            self.drv.set_head_fold(int(w.head.m))
+        if self.local_qkv0:
+            w0 = w.qkv[0].w8
+            if w0.stride() == (0, 0) or not bool(w0.any()):  # the weight-free tables' placeholder
+                raise ConfigError("local_qkv0 needs layer 0's folded qkv matrix (gateway_tables(keep_qkv0=True))")
+            self.drv.set_local_qkv0(np.ascontiguousarray(w0.numpy()))
         for idx, ((l1, l2), name) in enumerate(zip(self.plan, self.names, strict=True)):
-            item = int(prov._ix[name])
+            item = int(prov._ix[name]) if not (idx == 0 and self.local_qkv0) else 0
             self.drv.set_linear(idx, 1, l1.n, l1.m, _f64(l1.scale), _f64(l1.bias), _f64(l1.grid),
                                 None if l1.hmul is None else np.ascontiguousarray(l1.hmul.numpy().astype(np.int64)),
                                 float(l1.wnorm), float(l1.sigma), item)
-            if static:
+            if static and not (idx == 0 and self.local_qkv0):
                 c1 = backend.masks.check_vectors(l1)
                 self.drv.set_checks(idx, 1, np.ascontiguousarray(c1.u, dtype=np.int64),
                                     np.ascontiguousarray(c1.uw, dtype=np.int64))
@@ -131,6 +147,11 @@ class Fused2NativeDecode:
             return False
         if int(getattr(st.seqs[0], "serial_tail", 0) or 0) > 0:
             return False
+        if self.head_fold:  # the driver gives every row logits: decode (1 row) or a verify pass of last_logits rows
+            s = st.seqs[0]
+            nh = t if s.all_logits else (min(t, int(s.last_logits)) if s.last_logits > 0 else 1)
+            if nh != t:
+                return False
         cache = st.caches[0]
         if (cache.dtype == torch.bfloat16) != bool(self.model.float_ops.kv_bf16):
             return False
@@ -149,7 +170,10 @@ class Fused2NativeDecode:
         dummy = torch.empty((t, 0), dtype=torch.int64)
         out = []
         try:
-            for l1, l2 in self.plan:
+            for idx, (l1, l2) in enumerate(self.plan):
+                if idx == 0 and self.local_qkv0:
+                    out.append(None)  # no masks: computed locally
+                    continue
                 kind = "single" if l2 is None else "pair"
                 m = src.take(Fused2Trip(kind, l1, dummy, cap, l2, None))
                 out.append(m)
@@ -162,13 +186,16 @@ class Fused2NativeDecode:
                 raise ConfigError("the native fused2 driver serves store sessions only once one was seen")
         except BaseException:
             for m in out:
-                m.wipe()
+                if m is not None:
+                    m.wipe()
             raise
         return out
 
     def _install_checks(self, masks: list[Any]) -> None:
         """Store masks: install each trip's check vectors (of the segment its rows came from) when they changed."""
         for idx, m in enumerate(masks):
+            if m is None:
+                continue
             for stage, ch in ((1, m.c1), (2, m.c2)):
                 if ch is None:
                     if stage == 1 or self.plan[idx][1] is not None:
@@ -212,7 +239,8 @@ class Fused2NativeDecode:
         masks = self._masks(t, src)
         arrs: list[tuple[Any, ...]] = []
         for m in masks:
-            arrs.append(tuple(None if x is None else x.numpy() for x in (m.r_x, m.wr_x, m.v, m.wv)))
+            arrs.append((None, None, None, None) if m is None else
+                        tuple(None if x is None else x.numpy() for x in (m.r_x, m.wr_x, m.v, m.wv)))
         noise = getattr(be, "noise_monitor", None)
         plan_call = getattr(noise, "plan_call", None) if noise is not None else None
         total = len(self.plan)
@@ -251,17 +279,28 @@ class Fused2NativeDecode:
                             report(exc)
                         raise
             h_out = torch.empty((t, int(model.arch.hidden_size)), dtype=torch.float32)
-            drv.end(h_out.numpy())
+            logits = None
+            if self.head_fold:
+                logits = torch.empty((t, int(self.plan[-1][1].m)), dtype=torch.float32)
+                drv.end(h_out.numpy(), logits.numpy())
+            else:
+                drv.end(h_out.numpy())
             ok = True
         finally:
             if not ok:
                 drv.abort()
             for m in masks:
-                m.wipe()
+                if m is not None:
+                    m.wipe()
             if getattr(src, "closed", False):  # the session's reservation closed: drop its check vectors too
                 self.wipe_checks()
         self.totals[0] += 1
         st.hs = [h_out]
+        if logits is not None:  # Fused2FoldedHead.logits_from reads them (the Python path's ex["logits"])
+            from pgw.engine.fused2 import FUSED2_META
+
+            st.extra[FUSED2_META] = {"logits": [logits]}
+            self.sched.head_rows += t
 
     def _book(self, stats: Any, t: int, wall: float) -> None:
         trips, rows, up, down, checks, remote_ns, local_ns, compute_us, _dup_rows, _dups = (int(v) for v in stats)
@@ -318,9 +357,7 @@ def enable_fused2_native(model: Any) -> Fused2NativeDecode:
     sched = model.schedule
     if sched is None or getattr(sched, "name", "") != "fused2":
         raise ConfigError("the native fused2 driver needs the fused2 schedule")
-    if getattr(sched, "head_fold", False) or getattr(sched, "local_qkv0", False):
-        raise ConfigError("the native fused2 driver has no head_fold / local_qkv0 pass (Python path only)")
-    nd =Fused2NativeDecode(model, sched, model.backend)
+    nd = Fused2NativeDecode(model, sched, model.backend)
     sched.native_decode = nd
     model.backend.native_decode = nd  # the backend's release_session_checks also wipes the driver's copies
     return nd

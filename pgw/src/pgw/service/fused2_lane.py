@@ -214,9 +214,22 @@ class Fused2LaneEntry:
         """Eager call of item ``index`` (the lane's executor for calls without a graph)."""
         if not 0 <= index < len(self.ops):
             raise ProtocolError(f"fused2 lane: unknown item {index}")
+        op = self.ops[index]
         with self.lock:
             self.calls += 1
-            return self.ops[index].run(rows, body)
+            if rows <= op.max_rows:
+                return op.run(rows, body)
+            # a lane multi frame merged consecutive single items of one linear into more rows than the op's
+            # buffers: the same rows in pieces (rows are independent; a pair item is never merged, see pgw-lane)
+            if op.pair:
+                raise ProtocolError("fused2 lane: a pair item above the op's rows")
+            bpe = self.ring.k // 8
+            mv = memoryview(body)
+            out = bytearray()
+            for a in range(0, rows, op.max_rows):
+                r = min(op.max_rows, rows - a)
+                out += op.run(r, mv[a * op.n1 * bpe : (a + r) * op.n1 * bpe])
+            return bytes(out)
 
     def self_check(self) -> list[str]:
         """Kernels vs the Python-int reference on small random and extreme pairs (start-up gate)."""

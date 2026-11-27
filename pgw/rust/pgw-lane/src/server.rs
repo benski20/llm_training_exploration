@@ -1001,6 +1001,10 @@ fn handle_multi<F: Frames>(
     }
 }
 
+/// Linear kind of a fused2 pair item (`pgw.service.fused2_lane.KIND_PAIR`): its body is `pack(x_hat) ||
+/// pack(R_hat)` for all its rows, so a multi frame runs each such item as one call.
+const PAIR_KIND: &str = "f2pair";
+
 /// The executor calls of an admitted `multi` frame, in row order: maximal runs of consecutive rows of one
 /// linear (across item boundaries, and an item longer than a call is cut at row boundaries), each call at
 /// most `merge_rows` rows (`max_rows` once the executor answered `Fallback` to a longer one); outputs appended
@@ -1030,11 +1034,21 @@ fn run_multi(
     while pos < rows_of.len() {
         let first = rows_of[pos];
         let lin = items[first].linear;
-        let mut n = 1usize;
-        while pos + n < rows_of.len() && n < cap && items[rows_of[pos + n]].linear == lin {
-            n += 1;
-        }
         let (in_row, out_row, kind) = kinds[first];
+        let mut n = 1usize;
+        if kind == PAIR_KIND {
+            // a fused2 pair item (`x_hat` rows then `R_hat` rows, not row-interleaved): one executor call of the
+            // whole item, never merged with a neighbour nor cut at a row boundary (fused2 item table v2)
+            n = items[first].rows as usize;
+            if n > cfg.max_rows as usize {
+                return Err(Refusal::new(Status::Fallback));
+            }
+        } else {
+            while pos + n < rows_of.len() && n < cap && items[rows_of[pos + n]].linear == lin
+                && kinds[rows_of[pos + n]].2 != PAIR_KIND {
+                n += 1;
+            }
+        }
         let in_len = n * in_row as usize;
         let out_len = n * out_row as usize;
         let call = Call {

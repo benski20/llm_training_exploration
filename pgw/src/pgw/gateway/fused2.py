@@ -117,7 +117,9 @@ def _check_ticket(raw: bytes, fingerprint: str, ring: Any, names: list[str], tra
             "alpn": d.get("alpn", "pgw-lane/1"), "secret": bytearray(secret), "max_rows": max_rows,
             "linears": linears,
             # lane format 2 (multi frames: several items in one call) when the service offers it
-            "max_items": int(d.get("max_items", 0) or 0) if 2 in (d.get("versions") or ()) else 0,
+            # (pair items in multi frames only from a v2 item-table service: it runs each pair item as one call)
+            "max_items": (int(d.get("max_items", 0) or 0)
+                          if 2 in (d.get("versions") or ()) and int(d.get("fused2_items", 1)) >= 2 else 0),
             "max_multi_rows": int(d.get("max_multi_rows", 0) or 0)}
 
 
@@ -178,7 +180,7 @@ def connect_fused2_lane(ticket: dict[str, Any], weights: Any, ring: Any, *, clie
             if tcp_ports is not None and port not in set(tcp_ports):
                 raise ProtocolError(f"fused2 lane ticket names port {port}, which is not on the gateway's egress "
                                     "allowlist for the service host (add https://<host>:<port>)")
-            ch = _connect_tls(fast, client_config, SimpleNamespace(port=port, max_rows=max_rows), secret,
+            ch = _connect_tls(fast.TripChannel, client_config, SimpleNamespace(port=port, max_rows=max_rows), secret,
                               float(timeout_s), spin)
         else:
             path = str(ticket["socket"] or "")

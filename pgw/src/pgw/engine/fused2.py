@@ -1165,7 +1165,9 @@ class Fused2MaskedBackend(LinearBackend):
             reqs = [self._prep(t, m) for _, t, m, _ in pieces]
             if prov.multi_ok(reqs):
                 answers = prov.many(reqs)
-            else:  # more items or rows than one multi call carries: one call per piece (same bodies)
+            elif callable(getattr(prov, "many_any", None)) and getattr(prov, "max_items", 0) >= 2:
+                answers = prov.many_any(reqs)  # as few multi calls as the offer allows (same bodies)
+            else:  # no multi frames: one call per piece (same bodies)
                 answers = [self._ask(r) for r in reqs]
             outs: list[list[torch.Tensor]] = [[] for _ in calls]
             for (i, t, m, src), ans in zip(pieces, answers, strict=True):

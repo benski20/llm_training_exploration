@@ -218,6 +218,17 @@ class SDKOptions:
             application, and the application waking up when the answer is complete) differs a little between the
             answer's passes and the dummy passes after it; this floor hides it from the provider's view of pass
             timing (security review 2026-11, S20). It adds the floor minus the usual gap (a few ms) per pass.
+        schedule: The masked linear schedule [``PGW_SCHEDULE``] (:mod:`pgw.sdk.schedule`): ``"standard"``
+            (default: ``4 x layers + 1`` round trips per token, K32), ``"fused"`` (opt-in: ``2 x layers`` round
+            trips per token, the LM head folded into the last trip, K56 values: 1.75x the bytes per element; for
+            high-RTT links such as consumer devices on the internet) or ``"auto"`` (measure the link when the model
+            starts and pick ``fused`` when it is served, the RTT is at least ``schedule_auto_rtt_ms`` and its
+            estimated time per token is lower, bandwidth included). ``fused`` is a **different pinned reference**
+            (its tokens and logprobs are not bit-identical to ``standard``), so the choice is fixed per model for
+            the life of the client and never changes during an answer or a conversation; the decision and its
+            measurements are in ``status()``. Pin ``"standard"`` or ``"fused"`` for one reference across restarts.
+        schedule_auto_rtt_ms: ``auto``: the least measured RTT (ms) at which ``fused`` may be picked (default 3).
+        schedule_auto_margin: ``auto``: ``fused`` must be estimated at least this fraction faster (default 0.1).
         log_level: Enable the library's structured (JSON) logs on stderr at this level [``PGW_SDK_LOG``]; ``None``
             = silent (records still reach handlers the application configures).
     """
@@ -259,6 +270,9 @@ class SDKOptions:
     draft_head_path: Path | None = None
     spec_pass_gap_ms: float = 8.0
     log_level: str | None = None
+    schedule: Literal["standard", "fused", "auto"] = "standard"
+    schedule_auto_rtt_ms: float = 3.0
+    schedule_auto_margin: float = 0.1
     extra: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
@@ -300,6 +314,9 @@ class SDKOptions:
         spec = os.environ.get("PGW_SPECULATION", "").strip()
         if spec:
             base["speculation"] = spec
+        sch = os.environ.get("PGW_SCHEDULE", "").strip()
+        if sch:
+            base["schedule"] = sch
         lvl = os.environ.get("PGW_SDK_LOG", "").strip()
         if lvl:
             base["log_level"] = lvl
@@ -360,6 +377,22 @@ class SDKOptions:
             raise ValueError("factory_stall_s must be between 1 and 86400 seconds")
         if not (float(self.maskgen_stall_s) == 0.0 or 1.0 <= float(self.maskgen_stall_s) <= 86400.0):
             raise ValueError("maskgen_stall_s must be 0 (off) or between 1 and 86400 seconds")
+        if self.schedule not in ("standard", "fused", "auto"):
+            raise ValueError("schedule must be 'standard', 'fused' or 'auto'")
+        if self.schedule != "standard":
+            if self.prefix_cache is True:
+                raise ValueError("prefix_cache=True is not combined with schedule='fused' / 'auto' yet")
+            if self.factory_weights == "stream":
+                raise ValueError("schedule='fused' / 'auto' needs factory_weights='pack' (the K56 masks need W8)")
+            if self.lane != "auto":
+                raise ValueError("schedule='fused' / 'auto' needs lane='auto' (its pair items ride the trip lane)")
+            if self.masked_head == "off":
+                raise ValueError("schedule='fused' / 'auto' folds the LM head into the last trip on the provider: "
+                                 "masked_head='off' contradicts it")
+            if not self.native:
+                raise ValueError("schedule='fused' / 'auto' runs on the native float ops (native=True)")
+        if not 0.0 <= float(self.schedule_auto_rtt_ms) <= 10000.0 or not 0.0 <= float(self.schedule_auto_margin) < 1:
+            raise ValueError("schedule_auto_rtt_ms must be in [0, 10000] and schedule_auto_margin in [0, 1)")
         if self.timeout_s <= 0 or self.mask_wait_s < 0 or self.max_retries < 0 or self.max_concurrent < 1:
             raise ValueError("timeouts must be positive and max_concurrent >= 1")
 
