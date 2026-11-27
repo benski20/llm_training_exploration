@@ -13,6 +13,8 @@ the per-trip overhead the Modal e2e implies (26 ms median trip at 17 ms RTT, so 
     python benchmarks/round_trip_model.py --consumer [--tau 1,1.8,3 --rows 1,3,4] [--gw target] [--rows-free] [--tp 2]
         # consumer devices over the internet: fused schedules, RTT 0.5 / 5 / 20 / 50 ms (consumer-round-trips.md)
     python benchmarks/round_trip_model.py --twenty [--goal 20]   # the largest RTT per trip that still meets the goal
+    python benchmarks/round_trip_model.py --links [--rtt 20]   # tok/s per consumer link class: bytes per row on the
+        # link (wire widths, masks while chatting) added to the trips x RTT pass (consumer-bandwidth.md)
 """
 
 from __future__ import annotations
@@ -361,9 +363,118 @@ def twenty_main(goal: float = 20.0) -> None:
         print(f"| {L} | " + " | ".join(cells) + " | |")
 
 
+# ---- bandwidth: bytes per row on a consumer link (research/reviews/consumer-bandwidth.md) ------------------------
+# Every row of every pass moves its masked inputs up and its masked outputs down; a single stream's trips are
+# sequential, so the link time adds to the pass: up_bytes / uplink + down_bytes / downlink (+ the masks' own
+# traffic when they are downloaded while chatting). Goodput = LINK_EFF x line rate (Ethernet + IPv4 + TCP
+# timestamps: 1448 B of payload per 1538 B on the wire; TLS 1.3 records add 22 B per 16 KiB), and TCP ACKs
+# send ~ACK_UP of the downstream bytes up (one 66-B ACK per two full segments).
+LINK_EFF = 1448 / 1538 * 16384 / 16406
+ACK_UP = 66 / (2 * 1538)
+#: (downlink, uplink) Mbit/s of the consumer link classes (typical uplink ratios).
+LINKS: dict[str, tuple[float, float]] = {"DSL 25/3": (25, 3), "cable 100/10": (100, 10), "cable 300/30": (300, 30),
+                                        "cable 1000/50": (1000, 50), "fibre 1000/1000": (1000, 1000)}
+#: wire option -> (bits per standard-schedule input element, per output element, per fused input activation,
+#: per fused residual / output element). ``k32``: today; ``narrow``: weight-free narrow rings (outputs and inputs
+#: at C + 1 = 28 bits, K32A12C27; fused: C + 1 = 54 at K56C53); ``carry16``: the client holds W8 and sends activations
+#: at 16 bits (carry-corrected), outputs at 28 (fused: activations 16, residual and outputs 54). The 0.5B per-row
+#: widths measured 26.9 output bits on average (``narrow_wire_bench.py``): not used here (28 is provable everywhere).
+WIRES: dict[str, tuple[float, float, float, float]] = {"k32": (32, 32, 56, 56), "narrow": (28, 28, 54, 54),
+                                                      "carry16": (16, 28, 16, 54)}
+#: mask traffic per slot (bytes per input element up, per output element down) while chatting: pks-v3 today (7 B up,
+#: 4.5 B down + reply keys), pks-v3 with the narrow message ring (30-bit replies), or none (made on the device, or
+#: downloaded in idle time into stock).
+MASKS: dict[str, tuple[float, float]] = {"pks-v3": (7.0, 4.5), "pks-v3 narrow": (7.0, 3.75), "none": (0.0, 0.0)}
+#: reply keys per slot: 16 x 8192 x (24+24+30+30) bits per 256-slot group and linear.
+KSK_PER_SLOT = 16 * 8192 * (24 + 24 + 30 + 30) / 8 / 256
+
+
+def row_elements(model: str, schedule: str, logits: bool = True) -> dict[str, int]:
+    """Masked elements one row moves in one pass: standard inputs / outputs, or fused activations / residual-side."""
+    L, d, inter, q, vocab = C_SHAPES[model]
+    head_out = vocab if logits else 0
+    if schedule.startswith("standard"):
+        return {"in": L * (3 * d + inter) + (d if logits else 0), "out": L * (q + 2 * d + 2 * inter) + head_out,
+                "act": 0, "res": 0}
+    if schedule.startswith("parallel"):
+        # layer 0 [qkv | gate_up] (d up, q + 2I down), then per layer up [a | m] + R, down H + Z; head folded
+        act, res = d + L * (d + inter), L * d
+        out = (q + 2 * inter) + L * (d + q + 2 * inter) - (q + 2 * inter) + head_out
+        return {"in": 0, "out": 0, "act": act, "res": res + out}
+    # fused2 (folded head, local qkv0; the head-trip variant adds the K32 head separately): per layer pairs
+    # (o + gate_up): up a + R, down H + Z(2I); (down + next qkv / head): up m + R, down H + Z(q | vocab)
+    act, res = L * (d + inter), 2 * L * d
+    out = L * (2 * d + 2 * inter + q) - q + head_out
+    return {"in": 0, "out": 0, "act": act, "res": res + out}
+
+
+def row_bytes(model: str, schedule: str, wire: str = "k32", logits: bool = True) -> tuple[float, float]:
+    """(up, down) payload bytes of one row in one pass."""
+    e = row_elements(model, schedule, logits)
+    bi, bo, ba, br = WIRES[wire]
+    L, d, _inter, _q, _vocab = C_SHAPES[model]
+    if schedule.startswith("standard"):
+        return e["in"] * bi / 8, e["out"] * bo / 8
+    up_res = (2 * L * d if not schedule.startswith("parallel") else L * d)
+    down = e["res"] - up_res
+    return e["act"] * ba / 8 + up_res * br / 8, down * br / 8
+
+
+def mask_bytes_per_slot(model: str, masks: str = "pks-v3") -> tuple[float, float]:
+    """(up, down) mask traffic of one slot (standard schedule, K32 masks; the head included)."""
+    up_b, down_b = MASKS[masks]
+    if up_b == 0:
+        return 0.0, 0.0
+    L, d, inter, q, vocab = C_SHAPES[model]
+    sum_n = L * (3 * d + inter) + d
+    sum_m = L * (q + 2 * d + 2 * inter) + vocab
+    return up_b * sum_n + (4 * L + 1) * KSK_PER_SLOT, down_b * sum_m
+
+
+def link_ms(model: str, schedule: str, rows: int, link: tuple[float, float], wire: str = "k32",
+            masks: str = "none") -> float:
+    """ms of link time for one pass of ``rows`` rows (downlink, uplink in Mbit/s), masks' traffic included."""
+    up, down = row_bytes(model, schedule, wire)
+    if masks != "none":
+        mu, md = mask_bytes_per_slot(model, masks)
+        up, down = up + mu, down + md
+    dn_bps, up_bps = link[0] * 1e6 * LINK_EFF / 8, link[1] * 1e6 * LINK_EFF / 8
+    return rows * ((up + ACK_UP * down) / up_bps + down / dn_bps) * 1e3
+
+
+def links_main(rtt_ms: float = 20.0) -> None:
+    """Max tok/s per link class: bandwidth alone and with the trips x RTT model at ``rtt_ms`` (best speculation)."""
+    specs = {"off": (1, 1.0), "draft head R=2": (2, 1.45), "draft head R=3": (3, 1.64), "draft head R=4": (4, 1.72)}
+    combos = [("standard (today, 4L+1)", "k32", "pks-v3"), ("standard (today, 4L+1)", "k32", "none"),
+              ("standard (today, 4L+1)", "narrow", "none"), ("standard (today, 4L+1)", "carry16", "none"),
+              ("fused2 folded head, local qkv0 (2L)", "k32", "none"),
+              ("fused2 folded head, local qkv0 (2L)", "carry16", "none"),
+              ("parallel blocks fused (L+1)", "carry16", "none")]
+    print(f"\nPer-link tok/s, one stream: bandwidth bound (no speculation) / with RTT {rtt_ms:g} ms trips and the best "
+          "speculation setting (H100 provider, 32B on 2 GPUs, measured client work)")
+    print("| model | schedule | wire | masks while chatting | " + " | ".join(LINKS) + " |")
+    print("|---|---|---|---|" + "---|" * len(LINKS))
+    for model in ("0.5B", "3B", "7B", "32B"):
+        tp = 2 if model in ("32B", "72B") else 1
+        for sched, wire, masks in combos:
+            cells = []
+            for link in LINKS.values():
+                bw = 1e3 / link_ms(model, sched, 1, link, wire, masks)
+                best = 0.0
+                for rows, tau in specs.values():
+                    b = consumer_pass_ms(model, sched, rtt_ms, rows, tp=tp)
+                    best = max(best, 1e3 * tau / (b["pass_ms"] + link_ms(model, sched, rows, link, wire, masks)))
+                cells.append(f"{bw:.2f} / {best:.2f}")
+            print(f"| {model} | {sched.split(' (')[0]} | {wire} | {masks} | " + " | ".join(cells) + " |")
+
+
 def main() -> None:
     import sys
 
+    if "--links" in sys.argv:
+        rtt = float(sys.argv[sys.argv.index("--rtt") + 1]) if "--rtt" in sys.argv else 20.0
+        links_main(rtt)
+        return
     if "--sdk" in sys.argv:
         nic = 25.0
         if "--nic" in sys.argv:

@@ -1,0 +1,401 @@
+{
+ "model": "Qwen2.5-0.5B-Instruct",
+ "ring": "K32A12C27",
+ "tokens": 6,
+ "modes": {
+  "wf": {
+   "in_bits": "weight-free",
+   "exact": true,
+   "prefill_rows": 19,
+   "prefill_bytes_per_row": {
+    "up": 630389.052631579,
+    "down": 1053311.1578947369,
+    "k32_up": 725180.6315789474,
+    "k32_down": 1248498.5263157894
+   },
+   "decode_bytes_per_row": {
+    "up": 633360.0,
+    "down": 1541988.0,
+    "k32_up": 728576.0,
+    "k32_down": 1824256.0
+   },
+   "decode_saving_pct": {
+    "up": 13.068780744905128,
+    "down": 15.473047642436144,
+    "total": 14.786871991576412
+   },
+   "carries_per_decode_row": 0.0,
+   "carry_slots_per_decode_row": 0.0,
+   "carry_overflows": 0,
+   "mean_abs_xq": {
+    "qkv": 101.36731398809523,
+    "o": 184.16663318452382,
+    "gate_up": 142.16229538690476,
+    "down": 63.81482524671053,
+    "lm_head": 100.93877551020408
+   },
+   "mean_out_bits": {
+    "qkv": 26.86038773148148,
+    "o": 26.893833705357142,
+    "gate_up": 26.942438493695175,
+    "down": 27.817150297619047,
+    "lm_head": 26.927791965037912
+   },
+   "per_linear_decode_and_prefill": {
+    "qkv": [
+     600,
+     1839600,
+     2327614,
+     2150400,
+     2764800
+    ],
+    "o": [
+     600,
+     1820000,
+     1813354,
+     2150400,
+     2150400
+    ],
+    "gate_up": [
+     600,
+     1881600,
+     19667066,
+     2150400,
+     23347200
+    ],
+    "down": [
+     600,
+     10214400,
+     1876726,
+     11673600,
+     2150400
+    ],
+    "lm_head": [
+     7,
+     21952,
+     3580080,
+     25088,
+     4254208
+    ]
+   },
+   "cpu_s": {
+    "prefill": 19.008916290000343,
+    "decode_per_token": 0.7704741626666873
+   }
+  },
+  "16": {
+   "in_bits": 16,
+   "exact": true,
+   "prefill_rows": 19,
+   "prefill_bytes_per_row": {
+    "up": 362590.3157894737,
+    "down": 1053311.1578947369,
+    "k32_up": 725180.6315789474,
+    "k32_down": 1248498.5263157894
+   },
+   "decode_bytes_per_row": {
+    "up": 364288.0,
+    "down": 1541988.0,
+    "k32_up": 728576.0,
+    "k32_down": 1824256.0
+   },
+   "decode_saving_pct": {
+    "up": 50.0,
+    "down": 15.473047642436144,
+    "total": 25.327009376253507
+   },
+   "carries_per_decode_row": 273.6666666666667,
+   "carry_slots_per_decode_row": 11063.0,
+   "carry_overflows": 0,
+   "mean_abs_xq": {
+    "qkv": 101.36731398809523,
+    "o": 184.16663318452382,
+    "gate_up": 142.16229538690476,
+    "down": 63.81482524671053,
+    "lm_head": 100.93877551020408
+   },
+   "mean_out_bits": {
+    "qkv": 26.86038773148148,
+    "o": 26.893833705357142,
+    "gate_up": 26.942438493695175,
+    "down": 27.817150297619047,
+    "lm_head": 26.927791965037912
+   },
+   "per_linear_decode_and_prefill": {
+    "qkv": [
+     600,
+     1075200,
+     2327614,
+     2150400,
+     2764800
+    ],
+    "o": [
+     600,
+     1075200,
+     1813354,
+     2150400,
+     2150400
+    ],
+    "gate_up": [
+     600,
+     1075200,
+     19667066,
+     2150400,
+     23347200
+    ],
+    "down": [
+     600,
+     5836800,
+     1876726,
+     11673600,
+     2150400
+    ],
+    "lm_head": [
+     7,
+     12544,
+     3580080,
+     25088,
+     4254208
+    ]
+   },
+   "cpu_s": {
+    "prefill": 18.907402433000243,
+    "decode_per_token": 1.7177866776667845
+   }
+  },
+  "20": {
+   "in_bits": 20,
+   "exact": true,
+   "prefill_rows": 19,
+   "prefill_bytes_per_row": {
+    "up": 453237.8947368421,
+    "down": 1053311.1578947369,
+    "k32_up": 725180.6315789474,
+    "k32_down": 1248498.5263157894
+   },
+   "decode_bytes_per_row": {
+    "up": 455360.0,
+    "down": 1541988.0,
+    "k32_up": 728576.0,
+    "k32_down": 1824256.0
+   },
+   "decode_saving_pct": {
+    "up": 37.5,
+    "down": 15.473047642436144,
+    "total": 21.759520407139988
+   },
+   "carries_per_decode_row": 17.5,
+   "carry_slots_per_decode_row": 2153.0,
+   "carry_overflows": 0,
+   "mean_abs_xq": {
+    "qkv": 101.36731398809523,
+    "o": 184.16663318452382,
+    "gate_up": 142.16229538690476,
+    "down": 63.81482524671053,
+    "lm_head": 100.93877551020408
+   },
+   "mean_out_bits": {
+    "qkv": 26.86038773148148,
+    "o": 26.893833705357142,
+    "gate_up": 26.942438493695175,
+    "down": 27.817150297619047,
+    "lm_head": 26.927791965037912
+   },
+   "per_linear_decode_and_prefill": {
+    "qkv": [
+     600,
+     1344000,
+     2327614,
+     2150400,
+     2764800
+    ],
+    "o": [
+     600,
+     1344000,
+     1813354,
+     2150400,
+     2150400
+    ],
+    "gate_up": [
+     600,
+     1344000,
+     19667066,
+     2150400,
+     23347200
+    ],
+    "down": [
+     600,
+     7296000,
+     1876726,
+     11673600,
+     2150400
+    ],
+    "lm_head": [
+     7,
+     15680,
+     3580080,
+     25088,
+     4254208
+    ]
+   },
+   "cpu_s": {
+    "prefill": 16.926061276999462,
+    "decode_per_token": 1.5017360191668558
+   }
+  },
+  "24": {
+   "in_bits": 24,
+   "exact": true,
+   "prefill_rows": 19,
+   "prefill_bytes_per_row": {
+    "up": 543885.4736842106,
+    "down": 1053311.1578947369,
+    "k32_up": 725180.6315789474,
+    "k32_down": 1248498.5263157894
+   },
+   "decode_bytes_per_row": {
+    "up": 546432.0,
+    "down": 1541988.0,
+    "k32_up": 728576.0,
+    "k32_down": 1824256.0
+   },
+   "decode_saving_pct": {
+    "up": 25.0,
+    "down": 15.473047642436144,
+    "total": 18.19203143802648
+   },
+   "carries_per_decode_row": 2.0,
+   "carry_slots_per_decode_row": 799.0,
+   "carry_overflows": 0,
+   "mean_abs_xq": {
+    "qkv": 101.36731398809523,
+    "o": 184.16663318452382,
+    "gate_up": 142.16229538690476,
+    "down": 63.81482524671053,
+    "lm_head": 100.93877551020408
+   },
+   "mean_out_bits": {
+    "qkv": 26.86038773148148,
+    "o": 26.893833705357142,
+    "gate_up": 26.942438493695175,
+    "down": 27.817150297619047,
+    "lm_head": 26.927791965037912
+   },
+   "per_linear_decode_and_prefill": {
+    "qkv": [
+     600,
+     1612800,
+     2327614,
+     2150400,
+     2764800
+    ],
+    "o": [
+     600,
+     1612800,
+     1813354,
+     2150400,
+     2150400
+    ],
+    "gate_up": [
+     600,
+     1612800,
+     19667066,
+     2150400,
+     23347200
+    ],
+    "down": [
+     600,
+     8755200,
+     1876726,
+     11673600,
+     2150400
+    ],
+    "lm_head": [
+     7,
+     18816,
+     3580080,
+     25088,
+     4254208
+    ]
+   },
+   "cpu_s": {
+    "prefill": 23.470549752999432,
+    "decode_per_token": 1.3994789519999056
+   }
+  }
+ },
+ "pack_cpu_ms_per_decode_row": {
+  "0.5B": {
+   "up_k32_pack_ms": 0.192,
+   "up_k32_unpack_ms": 0.119,
+   "up_28b_pack_ms": 0.822,
+   "up_28b_unpack_ms": 0.834,
+   "up_28b_unpack_native_ms": 2.893,
+   "up_20b_pack_ms": 0.595,
+   "up_20b_unpack_ms": 0.585,
+   "up_20b_unpack_native_ms": 0.783,
+   "up_16b_pack_ms": 0.092,
+   "up_16b_unpack_ms": 0.048,
+   "up_16b_unpack_native_ms": 0.647,
+   "down_k32_pack_ms": 0.458,
+   "down_k32_unpack_ms": 0.352,
+   "down_28b_pack_ms": 1.861,
+   "down_28b_unpack_ms": 2.185,
+   "down_28b_unpack_native_ms": 2.629,
+   "down_20b_pack_ms": 1.371,
+   "down_20b_unpack_ms": 1.521,
+   "down_20b_unpack_native_ms": 1.955,
+   "down_16b_pack_ms": 0.322,
+   "down_16b_unpack_ms": 0.208,
+   "down_16b_unpack_native_ms": 1.579
+  },
+  "7B": {
+   "up_k32_pack_ms": 0.872,
+   "up_k32_unpack_ms": 0.637,
+   "up_28b_pack_ms": 3.487,
+   "up_28b_unpack_ms": 3.944,
+   "up_28b_unpack_native_ms": 4.735,
+   "up_20b_pack_ms": 2.614,
+   "up_20b_unpack_ms": 2.773,
+   "up_20b_unpack_native_ms": 3.433,
+   "up_16b_pack_ms": 0.672,
+   "up_16b_unpack_ms": 0.367,
+   "up_16b_unpack_native_ms": 2.926,
+   "down_k32_pack_ms": 1.777,
+   "down_k32_unpack_ms": 1.231,
+   "down_28b_pack_ms": 6.833,
+   "down_28b_unpack_ms": 7.502,
+   "down_28b_unpack_native_ms": 8.549,
+   "down_20b_pack_ms": 7.396,
+   "down_20b_unpack_ms": 7.49,
+   "down_20b_unpack_native_ms": 10.017,
+   "down_16b_pack_ms": 1.278,
+   "down_16b_unpack_ms": 0.936,
+   "down_16b_unpack_native_ms": 8.516
+  },
+  "32B": {
+   "up_k32_pack_ms": 4.292,
+   "up_k32_unpack_ms": 2.531,
+   "up_28b_pack_ms": 22.795,
+   "up_28b_unpack_ms": 18.287,
+   "up_28b_unpack_native_ms": 17.786,
+   "up_20b_pack_ms": 15.54,
+   "up_20b_unpack_ms": 14.584,
+   "up_20b_unpack_native_ms": 12.803,
+   "up_16b_pack_ms": 2.368,
+   "up_16b_unpack_ms": 1.939,
+   "up_16b_unpack_native_ms": 10.062,
+   "down_k32_pack_ms": 6.946,
+   "down_k32_unpack_ms": 5.464,
+   "down_28b_pack_ms": 37.067,
+   "down_28b_unpack_ms": 39.872,
+   "down_28b_unpack_native_ms": 34.535,
+   "down_20b_pack_ms": 26.689,
+   "down_20b_unpack_ms": 28.88,
+   "down_20b_unpack_native_ms": 25.519,
+   "down_16b_pack_ms": 4.74,
+   "down_16b_unpack_ms": 4.99,
+   "down_16b_unpack_native_ms": 19.453
+  }
+ }
+}

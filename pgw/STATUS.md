@@ -4533,3 +4533,100 @@ Tests:
   * `tests/factory/test_fused2_factory.py`: 16 passed;
   * `tests/hemask/test_pks56.py`: 4 passed;
   * `tests/factory`: 491 passed, 9 CUDA skips.
+## 2026-11-27: consumer bandwidth: bytes per row and per mask, floors, narrow wire rings (opt-in prototype; exact)
+
+Full note: `research/reviews/consumer-bandwidth.md`. Numbers: `research/reviews/consumer_bandwidth_numbers.py`.
+Measurements: `benchmarks/narrow_wire_bench.py` (`benchmarks/results/bandwidth/`). Every new path is default off and
+no existing output changes.
+
+**Today, per decode row** (standard 4L + 1 with the masked head, 4 B per element):
+
+| model | online up / down | pks-v3 slot up / down |
+|---|---|---|
+| 0.5B | 0.73 / 1.82 MB | 1.95 / 2.05 MB |
+| 7B | 3.34 / 6.17 MB | 6.63 / 6.94 MB |
+| 32B | 11.0 / 19.2 MB | 21.1 / 21.6 MB |
+
+* fused2 and parallel blocks move the same elements at K56, so 1.75x the bytes.
+* Headers and TLS are below 0.5 %. TCP/IP/Ethernet framing is 5.9 %, plus 2.1 % for upstream ACKs.
+
+**Floors.** Proved in the protocol's model: one-time-padded values, the provider applying `W8`, per-coordinate
+decoding, exact checks.
+* Outputs: at least `log2(2 B_j + 1)` bits, where `B_j` is the public per-row bound. That is at most C + 1 = 28 at
+  K32A12C27, and today sends 32.
+* Inputs, client without weights: at least the output modulus, 28 bits.
+* Inputs, client holding `W8`: a bytes-versus-client-work trade.
+* Masked payloads are uniform, so they cannot be compressed.
+
+**Built (exact, tested).** Logits are bit-identical to `PlainBackend` on the tiny model and on Qwen2.5-0.5B, in four
+modes.
+* **`pgw.core.narrow`** and **`pgw.engine.narrow_backend.NarrowMaskedBackend`**:
+  * per-row output widths, packed in a public width-grouped order;
+  * inputs at `max w_j` bits (weight-free mode, today's K32 masks truncated);
+  * carry-corrected `m`-bit inputs for clients holding `W8`. `x_hat = (xq + r) mod 2^m` is exactly uniform; the
+    client adds `2^m W8 c` for the sparse carries `c`, padded to a data-independent budget so its time reveals
+    nothing;
+  * checks: range against `B_j` and p31 Freivalds (the soundness bound is unchanged; the ring check cannot be used).
+* **`pgw.hemask.pks_narrow`**: pks-v3 with a 28-bit message ring and **30-bit replies** instead of 36 (-16.7 % of
+  the mask download).
+  * The noise margin is 1.91 bits against v3's 1.63 at the worst row norm.
+  * Same RLWE instance and reply key.
+  * The reference round trip is exact.
+* **`benchmarks/round_trip_model.py --links`**: the bandwidth term (`row_bytes`, `link_ms`, link classes, wire
+  widths, masks while chatting).
+
+**Measured, 0.5B, bytes per decode row:**
+
+| mode | up | down | total |
+|---|---|---|---|
+| K32 today | 728,576 | 1,824,256 | - |
+| weight-free narrow | 633,360 | 1,541,988 | -14.8 % |
+| carry m = 20 | 455,360 | 1,541,988 | -21.8 % |
+| carry m = 16 | 364,288 | 1,541,988 | -25.3 % |
+
+* At m = 16: 274 real carries per row out of 182,144 inputs, against a padded gather of 11,063.
+* 28-bit numpy packing costs ~8 ns per value, about 0.3 of a core per Gbit/s of link. 16 and 24 bits are casts.
+
+**Best sound case.** With the device holding `W8`: carry16, the local LM head and masks made on the device (5 / 71 /
+320 ms of one CPU core per slot at 0.5B / 7B / 32B, done in idle time). Per row, against today's online + pks-v3:
+
+| model | today | best case | reduction |
+|---|---|---|---|
+| 0.5B | 6.55 MB | 1.42 MB | 4.6x |
+| 7B | 23.1 MB | 6.5 MB | 3.5x |
+| 32B | 72.9 MB | 21.8 MB | 3.3x |
+
+**Per link** (bandwidth-only tok/s, one stream, today -> best case without the local head):
+* 0.5B: cable 100/10 0.37 -> 2.1; fibre 1000/1000 17.7 -> 58.9.
+* 7B: 0.10 -> 0.51 on cable 100/10; 5.0 -> 16.4 on fibre.
+* 32B: 0.03 -> 0.16 on cable 100/10; 1.6 -> 5.2 on fibre.
+* At RTT 20 ms the trips cap every case at ~0.3-3 tok/s.
+
+**Other costs.**
+* A 500-token prompt at 7B takes 41 s today (31 s best) even on symmetric gigabit fibre.
+* A typical chat day (40 requests) moves 293 / 1034 / 3268 GB today at 0.5B / 7B / 32B, and 88 / 317 / 1001 GB in
+  the best case.
+* Idle-time mask stock cannot cover typical use: at 0.5B that is 82 GB of stock per day, or about 21 hours of a
+  10 Mbit/s uplink.
+
+**Impossible in this protocol class.**
+* Online bytes below ~53-60 % of today (87.5 % without weights on the device), unless the device takes over linears.
+* Lossy or data-dependent output widths (they break exact integrity or leak norms).
+* 20 tok/s at 7B or 32B on any home link: that needs about 1.4 / 4.5 Gbit/s even at the floor.
+
+**Not done.**
+* Lane format 3 (narrow frames, provider truncation in `rust/pgw-lane`).
+* Native narrow `quantize_mask_pack` and carry gather.
+* The provider's `yb` negotiation and the client's decryption scale for the 30-bit reply.
+* fused2 at 54 bits.
+
+**Tests.**
+* New: `tests/core/test_narrow.py` (42), `tests/hemask/test_pks_narrow.py` (3), `tests/benchmarks/test_round_trip_model.py`
+  (+5).
+* Directories:
+  * `tests/core`: 624 passed, 28 skipped;
+  * `tests/benchmarks`: 59 passed;
+  * `tests/hemask/test_pks.py`: passed;
+  * `tests/docs`: 18 failures, all `test_numbers.py` reading `results/kaggle/*.log` files absent from this worktree
+    (pre-existing; unrelated).
+* `ruff` is clean on the new and changed files.
