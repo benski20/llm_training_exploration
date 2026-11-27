@@ -4400,6 +4400,9 @@ at 5-50 ms RTT, privacy and integrity unchanged. All new paths default off; the 
 - **Not done (production):** K56 pks-v3 digit masks in the client library, the head-fold and parallel items on the lane,
   the native fused2 driver's head fold / local qkv0 (it refuses them, fail closed), speculation padding on fused
   schedules, a parallel-block checkpoint (LayerNorm / GELU architecture in the engine), 7B+ quality of the folded head.
+  *Superseded by the last section: the SDK schedule, the K56 factory (top-digit plan), the head-fold and parallel
+  lane items, the native head fold / local qkv0 and speculation on the fused schedule are done; the parallel-block
+  checkpoint and 7B quality remain.*
 - Tests: `tests/engine/test_fused2_headfold.py` (34), `tests/engine/test_fused_parallel.py` (16); `tests/engine` 1262
   passed, 15 skipped (CUDA); ruff clean on the new files.
 
@@ -4535,3 +4538,121 @@ Tests:
   * `tests/factory/test_fused2_factory.py`: 16 passed;
   * `tests/hemask/test_pks56.py`: 4 passed;
   * `tests/factory`: 491 passed, 9 CUDA skips.
+## 2026-11-27 — The fused high-RTT schedule in the client library (`schedule="fused" | "auto"`, opt-in, default off)
+
+Follow-up of the fusion study (section above): fused2 with the folded LM head and layer 0's qkv local is now a real,
+opt-in schedule of the client library, end to end on the CPU test provider, with the native driver, the encrypted
+K56 factory, speculation and the RTT/bandwidth-based `auto`. The default (`schedule="standard"`) is unchanged: its
+outputs, wire, masks and checks are untouched.
+
+**What is wired** (docs: `docs/sdk/configuration.md#schedule-standard-or-fused`, `docs/sdk/scaling.md`):
+* **SDK** (`pgw.sdk.schedule`, `SDKOptions.schedule`, `PGW_SCHEDULE`): `"fused"` runs fused2 + folded head +
+  local qkv0 on ring K56A12C53 with p61 checks; `"auto"` measures the link once when the model starts (RTT median of
+  empty authenticated probes, 512 KiB up and down on the new `POST /pgw/v1/link/probe`; no content), estimates ms per
+  token of both schedules from public shapes (`trips x RTT + bytes / bandwidth + client work`) and picks fused only
+  when the provider serves it, RTT >= `schedule_auto_rtt_ms` (3) and fused is >= `schedule_auto_margin` (10 %)
+  faster; the decision and its inputs are in `status()["models"][m]["schedule_decision"]`. The schedule is decided
+  once per model and client and never changes afterwards (a later link change does not switch it; tested). `"fused"` against a provider
+  without it raises `NotFoundError` (never a silent switch of reference); `"auto"` falls back to standard with the
+  reason. Refused combinations: `prefix_cache=True`, `factory_weights="stream"`, `lane != "auto"`,
+  `masked_head="off"`, `native=False`. `pgw chat --schedule`.
+* **Enrollment** advertises `schedules: ["standard", "fused"]` and `fused_ring` per model when the provider serves the
+  head-fold fused2 entry and fused2 maskgen.
+* **Mask factory** (SDK child): `schedule = "fused2"` with `fused2_head` (new `FactorySettings` fields), K56 pair-mask
+  segments with the folded head's entry, its own pks-v3 hint over the fused linears (`hint-fused/`), and the
+  **top-digit K56 plan** (`fused2_he_digits = "top"`, 3-4 ordinary K32 pks-v3 products per mask, the merged
+  `TopDigitProducts`) behind the same `matmul(key, r)` interface as the 7-digit split (still the reference /
+  fallback: `fused2_he_digits = "split"`). The direct K56 scheme (`pgw.hemask.pks56`) stays reference-only.
+  Store format: the segment header accepts `<L>.lm_head/f2`; reservations cover `all_linears()`.
+* **Provider**: `PGW_SERVICE_FUSED2_HEAD=on|also` derives the head-fold fused2 lane entry from its pack (the last
+  down with migration multipliers, the folded head as the last item's second stage). **Item table v2** (the head
+  pair `(L-1).down+L.lm_head/f2` appended; ticket field `fused2_items`; a v1 service is refused by a v2 gateway and
+  vice versa, fail closed); **item table v3** for parallel blocks (`[o | down]` + next `[qkv ; gate_up]` per layer;
+  prototype). **Pair-safe lane multi frames** (`pgw-lane`): a pair item (`x_hat` rows then `R_hat` rows) is one
+  executor call, never merged with a neighbour or cut at a row boundary (the earlier merge would have corrupted pair
+  bodies; a v2 gateway uses multi frames for pair items only with a v2 service). On a CPU provider the pair op runs
+  on `int8_ring_matmul` (exact; `PGW_RING64_CPU=triton` keeps the interpreter for kernel tests).
+* **Gateway / engine**: `head_mode = "provider_int8"` with fused2 = the folded head; `fused2_local_qkv0`; strict
+  speculation allowed with the folded head (fixed `spec_rows` rows, masked filler rows, dummy passes); the last
+  trip's single (rows without logits) and head items in ONE lane multi call, and prompt rows above `max_rows` in
+  multi calls (round trips per prompt trip = ceil(rows / max_multi_rows) instead of ceil(rows / 8)); the lane
+  provider applies the public multipliers of the single last down itself (the service computes `W1 x_hat` only).
+  Bug fixed on the way: the fused2 TLS lane connect passed the module instead of `TripChannel` (never exercised
+  before; `lane = "tls"` with fused2 could not connect).
+* **Native driver** (`rust/pgw-fast/src/decode_f2.rs`): head fold (the last trip as the pair with the folded head,
+  logits returned from `end()`) and local qkv0 (`set_local_qkv0`: the exact int8 product in the driver, rows split
+  over the pool for wide outputs); a pass runs natively when every row gets logits (decode; verify passes of
+  `last_logits = rows`), else the Python path. `PGW_FUSED2_SPLIT` also splits the head's logit scaling.
+
+**Measured** (CPU test provider on this shared 4-vCPU box behind `benchmarks/delay_proxy.py` on its HTTPS and lane
+ports; `benchmarks/sdk_fused_wan.py`; `benchmarks/results/fused2/sdk_wan_{tiny,qwen05b}_cpu_2026-11-27.json`; greedy
+streamed answers, decode rate from the first to the last streamed token; plain local masks so the factory is off the
+measured path):
+
+| model | schedule | trips / token | tok/s at RTT 0 / 5 / 20 ms | client CPU ms / token (RTT 0 / 5 / 20) |
+|---|---|---|---|---|
+| tiny (L = 2) | standard | 9 | 37.4 / 13.2 / 4.6 | 6.8 / 8.3 / 10.3 |
+| tiny (L = 2) | fused | **4** | **114 / 33.5 / 10.8** | 3.6 / 5.2 / 5.9 |
+| Qwen2.5-0.5B (L = 24) | standard | 97 | 2.65 / 1.04 / 0.41 | 53 / 83 / 94 |
+| Qwen2.5-0.5B (L = 24) | fused | **48** | **4.18 / 2.01 / 0.80** | 57 / 62 / 71 |
+
+Every fused answer equals the fused plaintext reference bit for bit; 0 integrity failures. At 0.5B the CPU provider's
+own K56 products take ~220-235 ms per token (measured from the lane's reported compute; a GPU's job), so the rates
+are provider-bound; the RTT term matches the trip counts (standard loses ~0.6 s per token from RTT 0 to 5 ms, fused
+~0.25 s). Client CPU includes the lane's reply spin. The native fused driver's own work per decode pass at 0.5B:
+15.3-15.7 ms on the loaded box. **Client work per pair trip at 32B widths** (`benchmarks/fused2_driver_cpu_bench.py
+--preset 32b --layers 2`, `benchmarks/results/fused2/driver_cpu_32b_split_2026-11-27.json`, two runs each): 0.95 /
+1.10 ms serial, **0.75 / 0.75 ms** with `PGW_FUSED2_SPLIT=4` (pair A, the gate/up side: 1.15-1.37 -> 0.75 ms); the
+client library now sets it (4 on >= 4 CPUs, else 2; same bits). Layer 0's local qkv at 32B is a memory-bound 37 MB
+int8 GEMV (~4-9 ms on this box; 1 MB at 0.5B, 16.5 MB at 7B): a win at consumer RTTs, a loss in-datacentre at 32B.
+Bytes per token are 1.74x standard (same values, 7 bytes each): `auto` weighs them; by its model a 7B fused client
+breaks even with standard at 20 ms RTT and ~50 Mbit/s each way, and wins only above that (0.5B: fused ~1.4x faster at
+20 ms / 50 Mbit/s; `pgw.sdk.schedule.estimate_ms`).
+
+**Quality.** Production derivation (int8 fold from the pack, migration 8 bits, folded head: what the SDK and the
+provider derive; new config `f2i8mighead8` of `benchmarks/fused2_quality.py`), Qwen2.5-0.5B-Instruct, 4088 wikitext
+tokens (`benchmarks/results/fused2/quality_qwen05b_headfold_i8.json`): ppl **19.902** vs 19.847 for the current
+pipeline, top-1 = float 96.21 %, the same top-1 as the current pipeline at **97.43 %** of positions (the float-fold
+variant of the study: 19.887 / 97.19 %); every row at 12 activation bits, `|H|` <= 41.4, `|Z|` <= 48.5 bits.
+**7B**: the Kaggle kernel `pgw-fused2-quality-7b` (`benchmarks/kaggle/build.py`; T4 x 2: float16 reference on the
+GPUs, the exact integer pipelines `stdmh` and `f2i8mighead8` on the CPU, 2048 wikitext tokens) is built and smoke-
+tested locally on 0.5B; it was not pushed in this session because another agent's kernel (`pgw-depth-05b`) was
+running the whole time (one kernel at a time). A watcher pushes it once the account has no running kernel.
+
+**Tests** (this box, one directory at a time, absolute `PYTHONPATH`): new `tests/sdk/test_fused_schedule.py` (9: enrollment offers the schedule; greedy and seeded-sampled answers ==
+the fused reference bit for bit with the head folded on the provider; exactly 2L lane calls per decode pass, native
+driver; a provider tampering with every fused lane result -> `IntegrityError`, integrity failure counted, no answer;
+option validation, `"fused"` refused and `"auto"` falling back against a provider without it; `"auto"` measures the
+link (standard on loopback, fused at a forced 20 ms) and keeps its choice when the link changes; the encrypted pks-v3
+factory with the top-digit plan == reference; status is public JSON; strict speculation == the non-speculative
+reference with `spec_rows` rows per verify pass), `tests/engine/test_fused2_native_headfold.py` (11: item table v2,
+native == Python == plain bit for bit with byte-identical bodies and no body for layer 0's qkv, no payload row
+repeated, 2L calls and 2 checks per pair trip, prompt rows without logits via the single item in one pair-safe multi
+frame, tamper of H / consistent H / Z / Z without residual / skipped multipliers / one logit of the head caught
+natively, a weight-free table without the qkv0 matrix refused, v1/v2 tickets refused across), `tests/engine/
+test_fused_parallel_lane.py` (4: item table v3, parallel schedule over the real lane == plain, L + 1 calls per pass,
+tamper caught), `tests/core/test_ring64.py` (+1: the CPU exact pair op == the Python-int reference),
+`tests/native/test_scale32_knobs.py` (+1: the head-fold driver with `PGW_FUSED2_SPLIT`, same bits). Suites:
+`tests/engine` 1277 passed, 15 skipped (CUDA); `tests/sdk` 222 passed after the store fix below (one stall-timing test
+failed once under load and passes alone); `tests/service -k "lane or multi or fused"` 121 passed; fused2 factory /
+store / lane / parallel / ring64 suites 120 passed; `tests/gateway/test_fused2_gateway.py` 7 passed; `tests/docs`
+(without the environment-only `test_numbers`) 80 passed; `tests/gateway` 282 passed (`test_setup.py::test_wizard_happy_path` fails the same way on the merged base commit, unrelated; `test_qwen05b_masked_bit_identical_across_formats` was OOM-killed under the box's shared load and left out), `tests/maskstore` 247, `tests/chat` 46, `tests/cli` 210 passed. Found and fixed by the tests: with the head folded,
+the last down's and the head's store cursors are not aligned (the down also serves the rows without logits), so a
+pair take could cross the head's segment extent ("mask rows misaligned"): a pair take is now bounded by both keys'
+extents.
+
+**Remaining gaps**: 
+* 7B quality of the shipped derivation (Kaggle kernel built, waiting for the account's running kernel).
+* GPU: the head item's CUDA graphs (a 152k-row second stage) and the pair-safe multi frames on the GPU lane are
+  untested (RunPod session 6 covers the pair op shapes); the provider's fused entry duplicates the int8 weights in
+  memory next to the standard entry (`PGW_SERVICE_FUSED2_HEAD=on` serves the fused entry; the standard pack stays).
+* Mask cost: a fused (K56) slot costs ~3-4x a standard slot in client factory CPU and provider maskgen (top-digit
+  plan) and 1.75x the disk; the stock defaults are byte-based (`mask_store_gb`). The direct K56 scheme stays
+  reference-only (review Q9). `pgw sdk prepare` does not pre-build the fused hint (built on first use).
+* Client work: the pair B side's quantization (pairwise sums over the intermediate width) is still serial; local qkv0
+  is a memory-bound GEMV that costs ~1 trip at 32B on a consumer CPU (could become link-dependent); multi-sequence
+  steps and prompt passes take the Python fused path (decode and verify passes are native).
+* `auto` uses a coarse model (client work scaled from 32B, no device time) and one probe at model start; the
+  measured link is not persisted across restarts. Not combined yet: `prefix_cache=True`, `factory_weights="stream"`,
+  the provider-built hint.
+* Parallel blocks: lane items (table v3) exist; no parallel-block checkpoint, so not exposed in the SDK.
