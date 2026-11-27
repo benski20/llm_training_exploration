@@ -184,6 +184,18 @@ def test_llama_byte_identical(tiny_llama_hf_dir: Path, tmp_path: Path) -> None:
     assert_same_pack(tmp_path / "ref", tmp_path / "new")
 
 
+def test_qwen3_byte_identical(tmp_path: Path) -> None:
+    """Qwen3 (per-head q/k norms as plain tensors): the shard-wise packer writes the same pack as pack_checkpoint."""
+    from tests.engine.test_qwen3 import _save_qwen3
+
+    d = _save_qwen3(tmp_path / "q3", seed=13)
+    pack_checkpoint(d, tmp_path / "ref", name="tq3")
+    stream_pack_checkpoint(VirtualShards(d, round_robin(d, 3)), tmp_path / "new", work_dir=tmp_path / "w", name="tq3")
+    assert_same_pack(tmp_path / "ref", tmp_path / "new")
+    with ModelPack.open(tmp_path / "new", verify="full") as p:
+        assert "layers.0.q_norm" in p.manifest.tensors
+
+
 def test_quantize_blocks_equal_whole(monkeypatch: pytest.MonkeyPatch) -> None:
     """Row blocks (here 3 rows) give the whole-matrix quantization bit for bit, across part boundaries."""
     from pgw.core.ring import quantize_weight_rows

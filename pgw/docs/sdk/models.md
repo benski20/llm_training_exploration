@@ -88,6 +88,12 @@ generation keeping up. A small pilot machine will be slower.
 Larger Qwen2.5 models (14B, 32B, 72B; their fingerprints are already pinned, above) and other open-weight
 families are planned. Tell us which models matter to you.
 
+The engine and the packer support the Qwen3 dense architecture (`model_type` `qwen3`; Apache 2.0) since 2026-11-27,
+ahead of any pin. Qwen3 gives more chat quality per layer than Qwen2.5, and every layer costs round trips: Qwen3-14B
+(40 layers) scores above Qwen2.5-32B (64 layers) on Arena-Hard in the Qwen3 report, at 161 round trips per token
+instead of 257. Qwen3 models are not accepted as `model=` until they are pinned
+([research note](../../research/reviews/consumer-model-depth.md)).
+
 For measurements only, a pinned model that is not supported yet can be enabled with
 `PGW_SDK_PREVIEW_MODELS=qwen2.5-32b-instruct` (a comma list; off by default). This is a **preview, not support**:
 sizing, defaults and these docs are not checked for those models. It relaxes no check: the provider's pack must

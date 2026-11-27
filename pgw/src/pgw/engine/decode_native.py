@@ -126,6 +126,8 @@ class NativeDecode:
 
     # ---- eligibility ----------------------------------------------------------------------------------
     def eligible(self, st: Any) -> bool:
+        if getattr(self.model, "qk_norms", None) is not None:  # no per-head q/k norm in the native driver
+            return False
         be = self.backend
         if len(st.seqs) != 1 or st.trees[0] is not None or st.extra:
             return False
@@ -390,6 +392,8 @@ class NativeDecode:
         call able to carry every answer's rows."""
         be = self.backend
         k = len(st.seqs)
+        if getattr(self.model, "qk_norms", None) is not None:
+            return False
         if not self.multi or k < 2 or st.extra or any(tr is not None for tr in st.trees):
             return False
         if not getattr(be, "trip_native_multi", False):

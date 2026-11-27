@@ -31,7 +31,13 @@ from pgw.core.errors import ConfigError, ShapeError
 from pgw.core.fingerprint import sha256_file
 from pgw.core.ring import quantize_weight_rows
 from pgw.core.types import LinearId, linear_ids
-from pgw.modelpack.arch import arch_config_from_hf, expected_linear_shape, hf_linear_parts, hf_plain_tensor_names
+from pgw.modelpack.arch import (
+    arch_config_from_hf,
+    expected_linear_shape,
+    hf_linear_parts,
+    hf_plain_tensor_names,
+    plain_tensor_shape,
+)
 from pgw.modelpack.loader import row_norm_sq_max
 from pgw.modelpack.manifest import (
     MANIFEST_FILE,
@@ -260,7 +266,7 @@ def _plan_plain(
 ) -> tuple[list[TensorPlan], dict[str, str]]:
     """The plain tensors to store (``plain.safetensors`` order) and their HF names, checked against the headers."""
     keys = src.keys()
-    hf_plain = hf_plain_tensor_names(arch.num_layers, arch.tie_word_embeddings)
+    hf_plain = hf_plain_tensor_names(arch.num_layers, arch.tie_word_embeddings, arch.arch)
     if not arch.tie_word_embeddings and "lm_head.weight" not in keys:
         raise ConfigError("tie_word_embeddings is false but the checkpoint has no lm_head.weight")
     pplans: list[TensorPlan] = []
@@ -268,7 +274,7 @@ def _plan_plain(
         if hf not in keys:
             raise ConfigError(f"checkpoint is missing {hf}", details={"tensor": hf})
         dt = _plain_storage_dtype(plain_dtype, pname, src.dtype(hf))
-        want = (arch.vocab_size, arch.hidden_size) if pname in _PLAIN_FLOAT_NAMES else (arch.hidden_size,)
+        want = plain_tensor_shape(arch, pname)
         if src.shape(hf) != want:
             raise ShapeError(f"{hf}: shape {list(src.shape(hf))} != expected {list(want)} from config.json")
         pplans.append(TensorPlan(pname, dt, want))

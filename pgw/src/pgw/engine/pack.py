@@ -103,10 +103,12 @@ def arch_config_from_hf(
     try:
         arch = ModelArch(arch_name)
     except ValueError as exc:
-        raise ConfigError(f"unsupported architecture {arch_name!r}; supported: qwen2, llama") from exc
+        raise ConfigError(f"unsupported architecture {arch_name!r}; supported: qwen2, llama, qwen3") from exc
     act = cfg.get("hidden_act", "silu")
     if act != "silu":
         raise ConfigError(f"unsupported activation {act!r}; only silu is supported")
+    if arch == ModelArch.QWEN3 and (cfg.get("use_sliding_window") or cfg.get("attention_bias")):
+        raise ConfigError("Qwen3 checkpoints with use_sliding_window or attention_bias are not supported")
     heads = int(cfg["num_attention_heads"])
     hidden = int(cfg["hidden_size"])
     head_dim = int(cfg.get("head_dim") or hidden // heads)
@@ -217,7 +219,7 @@ class InMemoryPack:
             linears[lid.key] = LinearWeights(lid, w8, sw, bias)
         plain: dict[str, torch.Tensor] = {}
         tied = arch.tie_word_embeddings or "lm_head.weight" not in state_dict
-        for pname, hname in hf_plain_tensor_names(arch.num_layers, tied).items():
+        for pname, hname in hf_plain_tensor_names(arch.num_layers, tied, arch.arch).items():
             if hname not in state_dict:
                 raise ConfigError(f"checkpoint is missing tensor {hname!r}")
             plain[pname] = state_dict[hname].detach().float()

@@ -316,8 +316,11 @@ class Manifest(BaseModel):
         names = ["embed_tokens", "final_norm"]
         if not self.arch.tie_word_embeddings:
             names.append("lm_head")
+        qk = self.arch.arch == ModelArch.QWEN3
         for i in range(self.arch.num_layers):
             names += [f"layers.{i}.input_norm", f"layers.{i}.post_attn_norm"]
+            if qk:
+                names += [f"layers.{i}.q_norm", f"layers.{i}.k_norm"]
         return names
 
     def linear_files(self) -> list[str]:
@@ -397,6 +400,9 @@ class Manifest(BaseModel):
         for i in range(a.num_layers):
             tensor(f"layers.{i}.input_norm", small, (h,))
             tensor(f"layers.{i}.post_attn_norm", small, (h,))
+            if a.arch == ModelArch.QWEN3:
+                tensor(f"layers.{i}.q_norm", small, (a.head_dim,))
+                tensor(f"layers.{i}.k_norm", small, (a.head_dim,))
         referenced = set(self.plain_tensor_names())
         for e in self.linears:
             referenced.update(t for t in (e.weight, e.scale, e.bias) if t is not None)

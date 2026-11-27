@@ -824,7 +824,7 @@ class TransformerModel:
         self.dtype = dtype
         a = self.pack.arch
         self.arch = a
-        if ModelArch(a.arch) not in (ModelArch.QWEN2, ModelArch.LLAMA):  # pragma: no cover - enum-limited
+        if ModelArch(a.arch) not in (ModelArch.QWEN2, ModelArch.LLAMA, ModelArch.QWEN3):  # pragma: no cover
             raise ConfigError(f"unsupported architecture {a.arch}")
         if a.num_heads % a.num_kv_heads:
             raise ConfigError("num_heads must be a multiple of num_kv_heads")
@@ -872,6 +872,13 @@ class TransformerModel:
         layers = range(a.num_layers)
         self.input_norms = [load(f"layers.{i}.input_norm", dtype=dtype, device=self.device) for i in layers]
         self.post_norms = [load(f"layers.{i}.post_attn_norm", dtype=dtype, device=self.device) for i in layers]
+        #: Qwen3: per-layer ``(q_norm, k_norm)`` weights ``(head_dim,)``; every q and k head is RMS-normalized
+        #: with them between the qkv trip and RoPE (gateway-side float work: no trip, no provider change).
+        #: None for qwen2 / llama (their layer is unchanged, bit for bit).
+        self.qk_norms: list[tuple[torch.Tensor, torch.Tensor]] | None = None
+        if ModelArch(a.arch) == ModelArch.QWEN3:
+            self.qk_norms = [(load(f"layers.{i}.q_norm", dtype=dtype, device=self.device),
+                              load(f"layers.{i}.k_norm", dtype=dtype, device=self.device)) for i in layers]
         if tuple(self.embed_tokens.shape) != (a.vocab_size, a.hidden_size):
             raise ShapeError(f"embed_tokens shape {tuple(self.embed_tokens.shape)} does not match the architecture")
         # Opt-in (PGW_EMBED_COMPACT=1): keep a bfloat16-exact embedding table in bfloat16 (half the RAM:
@@ -940,6 +947,8 @@ class TransformerModel:
             raise ConfigError(f"unknown float_ops {name!r} (one of {', '.join(FLOAT_OPS_NAMES)})")
         if self.device.type != "cpu" or self.dtype != torch.float32:
             raise ConfigError("float_ops='native' needs a CPU float32 model")
+        if self.qk_norms is not None:
+            raise ConfigError(f"float_ops={name!r} has no per-head q/k norm ({self.arch.arch.value}); use 'torch'")
         self.float_ops = NativeFloatOps(attn_block=NATIVE_ATTN_BLOCK if "-blocked" in name else 0,
                                         kv_bf16=name.endswith("-bf16kv"))
         log.info("float ops: %s pinned formulation (RMSNorm, RoPE, attention, SiLU in pgw_fast)", name)
@@ -1391,7 +1400,7 @@ class TransformerModel:
             cos, sin = st.rope[si]
             # q and k rotated in one call: the rotation is per (row, head) element with the row's cos/sin, so
             # the q and k heads side by side get exactly the operations they get one tensor at a time
-            qk = ops.rope(y[:, : nq + nk].reshape(rows, nh + kvh, hd), cos, sin)
+            qk = ops.rope(self._qk_heads(ops, y[:, : nq + nk].reshape(rows, nh + kvh, hd), layer), cos, sin)
             q, k = qk[:, :nh], qk[:, nh:]
             if not q.is_contiguous():
                 q = q.contiguous()
@@ -1419,6 +1428,15 @@ class TransformerModel:
         down = yield [LinearCall(lid_down, x, sess) for x, sess in zip(acts, sessions, strict=True)]
         st.hs = [h + y.to(self.dtype) for h, y in zip(hs, down, strict=True)]
 
+    def _qk_heads(self, ops: FloatOps, qk: torch.Tensor, layer: int) -> torch.Tensor:
+        """``qk (rows, H + KVH, hd)`` as RoPE gets it: unchanged, or (qwen3) each q head RMS-normalized with the
+        layer's ``q_norm`` and each k head with its ``k_norm`` (HF ``Qwen3Attention``: norm, then RoPE)."""
+        if self.qk_norms is None:
+            return qk
+        qw, kw = self.qk_norms[layer]
+        nh = self.num_heads
+        return torch.cat([ops.rms_norm(qk[:, :nh], qw, self.eps), ops.rms_norm(qk[:, nh:], kw, self.eps)], dim=1)
+
     def _fused2_attention(self, layer: int, st: PassState, qkv: list[torch.Tensor]) -> list[torch.Tensor]:
         """RoPE, KV-cache append and attention of one layer from its qkv outputs (as the standard layer
         does between its qkv and o trips); used by the fused2 schedule (:mod:`pgw.engine.fused2`)."""
@@ -1431,7 +1449,7 @@ class TransformerModel:
             rows = int(y.shape[0])
             v = y[:, nq + nk :].reshape(rows, kvh, hd)
             cos, sin = st.rope[si]
-            qk = ops.rope(y[:, : nq + nk].reshape(rows, nh + kvh, hd), cos, sin)
+            qk = ops.rope(self._qk_heads(ops, y[:, : nq + nk].reshape(rows, nh + kvh, hd), layer), cos, sin)
             q, k = qk[:, :nh], qk[:, nh:]
             if not q.is_contiguous():
                 q = q.contiguous()

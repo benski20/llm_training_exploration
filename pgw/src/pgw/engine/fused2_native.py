@@ -122,6 +122,8 @@ class Fused2NativeDecode:
 
     # ---- eligibility ----------------------------------------------------------------------------------
     def eligible(self, st: Any) -> bool:
+        if getattr(self.model, "qk_norms", None) is not None:  # no per-head q/k norm in the native driver
+            return False
         if len(st.seqs) != 1 or st.trees[0] is not None or st.extra:
             return False
         h = st.hs[0]

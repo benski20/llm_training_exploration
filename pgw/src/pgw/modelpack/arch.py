@@ -20,11 +20,14 @@ if TYPE_CHECKING:
 __all__ = [
     "HF_LINEAR_PARTS",
     "HF_PLAIN_TENSORS",
+    "HF_QK_NORM_TENSORS",
     "KNOWN_ROPE_TYPES",
     "arch_config_from_hf",
     "expected_linear_shape",
+    "has_qk_norm",
     "hf_linear_parts",
     "hf_plain_tensor_names",
+    "plain_tensor_shape",
 ]
 
 log = logging.getLogger(__name__)
@@ -51,13 +54,25 @@ HF_PLAIN_TENSORS: dict[str, str] = {
 }
 
 
+#: Qwen3's per-head q/k RMSNorm weights (``(head_dim,)`` each), plain tensors of qwen3 packs only.
+HF_QK_NORM_TENSORS: dict[str, str] = {
+    "layers.{i}.q_norm": "model.layers.{i}.self_attn.q_norm.weight",
+    "layers.{i}.k_norm": "model.layers.{i}.self_attn.k_norm.weight",
+}
+
+
+def has_qk_norm(arch: ModelArch | str) -> bool:
+    """Whether the architecture normalizes each q and k head (RMSNorm over ``head_dim``) before RoPE."""
+    return ModelArch(arch) == ModelArch.QWEN3
+
+
 def hf_linear_parts(arch: ModelArch | str, layer: int, kind: LinearKind) -> list[tuple[str, str, str | None]]:
     """``[(part_name, hf_weight_name, hf_bias_name_or_None), ...]`` for one linear group.
 
-    Qwen2 has biases on q/k/v only; Llama has no linear biases.
+    Qwen2 has biases on q/k/v only; Llama and Qwen3 have no linear biases.
     """
     a = ModelArch(arch)
-    if a not in (ModelArch.QWEN2, ModelArch.LLAMA):  # pragma: no cover - future archs
+    if a not in (ModelArch.QWEN2, ModelArch.LLAMA, ModelArch.QWEN3):  # pragma: no cover - future archs
         raise ConfigError(f"unsupported architecture {arch}")
     out: list[tuple[str, str, str | None]] = []
     for part, suffix in HF_LINEAR_PARTS[LinearKind(kind)]:
@@ -67,10 +82,15 @@ def hf_linear_parts(arch: ModelArch | str, layer: int, kind: LinearKind) -> list
     return out
 
 
-def hf_plain_tensor_names(num_layers: int, tie_word_embeddings: bool) -> dict[str, str]:
-    """PGW plain tensor name -> HF name for a model with ``num_layers`` layers."""
+def hf_plain_tensor_names(num_layers: int, tie_word_embeddings: bool,
+                          arch: ModelArch | str | None = None) -> dict[str, str]:
+    """PGW plain tensor name -> HF name for a model with ``num_layers`` layers (``arch`` qwen3 adds the per-head
+    ``layers.{i}.q_norm`` / ``layers.{i}.k_norm`` weights; without ``arch``: the qwen2 / llama set)."""
     out: dict[str, str] = {}
-    for k, v in HF_PLAIN_TENSORS.items():
+    table = dict(HF_PLAIN_TENSORS)
+    if arch is not None and has_qk_norm(arch):
+        table.update(HF_QK_NORM_TENSORS)
+    for k, v in table.items():
         if k == "lm_head" and tie_word_embeddings:
             continue
         if "{i}" in k:
@@ -131,7 +151,7 @@ def arch_config_from_hf(
 ) -> ArchConfig:
     """Build an :class:`~pgw.modelpack.manifest.ArchConfig` from an HF ``config.json`` dict.
 
-    Only dense decoder-only ``qwen2`` and ``llama`` models with SiLU MLPs are supported. EOS ids
+    Only dense decoder-only ``qwen2``, ``llama`` and ``qwen3`` models with SiLU MLPs are supported. EOS ids
     are the union (in order) of ``config.eos_token_id`` and ``generation_config.eos_token_id``.
 
     Raises:
@@ -156,6 +176,8 @@ def arch_config_from_hf(
         raise ConfigError("Qwen2 checkpoints with use_sliding_window=true are not supported")
     if arch == ModelArch.LLAMA and (config.get("attention_bias") or config.get("mlp_bias")):
         raise ConfigError("Llama checkpoints with attention_bias/mlp_bias are not supported")
+    if arch == ModelArch.QWEN3 and (config.get("use_sliding_window") or config.get("attention_bias")):
+        raise ConfigError("Qwen3 checkpoints with use_sliding_window or attention_bias are not supported")
     if int(config.get("pretraining_tp", 1) or 1) != 1:
         log.info("ignoring pretraining_tp=%s (weights are stored unsplit)", config.get("pretraining_tp"))
     try:
@@ -197,6 +219,15 @@ def arch_config_from_hf(
         bos_token_id=int(bos) if bos is not None else None,
         eos_token_ids=tuple(eos),
     )
+
+
+def plain_tensor_shape(arch: ArchConfig, name: str) -> tuple[int, ...]:
+    """Shape of a plain tensor of a pack of ``arch`` (embeddings / head, norms, per-head q/k norms)."""
+    if name in ("embed_tokens", "lm_head"):
+        return (arch.vocab_size, arch.hidden_size)
+    if name.endswith((".q_norm", ".k_norm")):
+        return (arch.head_dim,)
+    return (arch.hidden_size,)
 
 
 def expected_linear_shape(arch: ArchConfig, lid: LinearId) -> tuple[int, int, list[tuple[str, int]]]:
