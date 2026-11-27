@@ -65,7 +65,7 @@ class Fused2Spec:
 
 def fused2_specs(weights: Any) -> list[Fused2Spec]:
     """The segment entries of a fused2 weight set, in pass order (``Fused2Weights.linears()``)."""
-    return [Fused2Spec(lin.key, lin.m, lin.n) for lin in weights.linears()]
+    return [Fused2Spec(lin.key, lin.m, lin.n) for lin in weights.all_linears()]
 
 
 @dataclass
@@ -198,7 +198,7 @@ class Fused2MaskGenerator:
         if native_rng and not _NATIVE_RNG:
             raise ConfigError("native_rng=True but pgw_fast.mask_rows_with_key is not available")
         self.native_rng = _NATIVE_RNG if native_rng is None else bool(native_rng)
-        self.lins = {lin.key: lin for lin in weights.linears()}
+        self.lins = {lin.key: lin for lin in weights.all_linears()}
         self.he = he
         self.pack = pack
         if he is not None and self.device.type != "cpu":

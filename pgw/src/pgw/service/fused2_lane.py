@@ -66,6 +66,9 @@ log = logging.getLogger(__name__)
 ENV_WEIGHTS = "PGW_SERVICE_FUSED2_WEIGHTS"
 ENV_FROM_PACK = "PGW_SERVICE_FUSED2_FROM_PACK"
 ENV_RING = "PGW_SERVICE_FUSED2_RING"
+#: With ``PGW_SERVICE_FUSED2_FROM_PACK``: ``off`` (default) the 2L + 1 item table (head on the gateway), ``on`` the
+#: head-fold table only (item table v2: the client library's ``schedule = "fused"``), ``also`` both entries per pack.
+ENV_HEAD = "PGW_SERVICE_FUSED2_HEAD"
 DEFAULT_RING = "K56A12C53"
 KIND_PAIR = "f2pair"
 KIND_SINGLE = "f2single"
@@ -111,7 +114,22 @@ def fused2_items(weights: Any) -> list[Fused2Item]:
             out.append(Fused2Item(f"{d.key}+{q.key}", d.key, q.key, d.n, d.m, q.m))
         else:
             out.append(Fused2Item(d.key, d.key, None, d.n, d.m, 0))
+    hd = getattr(w, "head", None)
+    if hd is not None:  # head_fold (item table v2): the last down's logit rows as a (down, folded head) pair
+        d = w.down[-1]
+        out.append(Fused2Item(f"{d.key}+{hd.key}", d.key, hd.key, d.n, d.m, hd.m))
     return out
+
+
+#: Version of the fused2 item table a lane ticket offers (``fused2_items`` field): 1 = the 2026-11-23 table (2L + 1
+#: items); 2 = with the folded-head pair item ``(L-1).down+L.lm_head/f2`` appended (``head_fold``). A gateway checks
+#: the whole table by name and the version, so a version-1 service is refused by a head-fold gateway (fail closed).
+ITEMS_V1, ITEMS_V2 = 1, 2
+
+
+def items_version(weights: Any) -> int:
+    """The item-table version of a fused2 weight set (2 with the folded head)."""
+    return ITEMS_V2 if getattr(weights, "head", None) is not None else ITEMS_V1
 
 
 def fused2_fingerprint(weights: Any, ring: RingParams | str) -> str:
@@ -120,7 +138,7 @@ def fused2_fingerprint(weights: Any, ring: RingParams | str) -> str:
     rp = ring if isinstance(ring, RingParams) else RingParams.from_name(ring)
     h = hashlib.sha256(b"pgw-fused2-lane-v1\0")
     h.update(str(getattr(weights, "fingerprint", "")).encode() + b"\0" + rp.name.encode() + b"\0")
-    by_key = {lin.key: lin for lin in weights.linears()}
+    by_key = {lin.key: lin for lin in weights.all_linears()}
     for it in fused2_items(weights):
         h.update(it.name.encode() + b"\0")
         for key in (it.k1, it.k2):
@@ -145,6 +163,8 @@ class Fused2LaneEntry:
     device: torch.device
     base_fingerprint: str = ""
     lock: Any = field(default_factory=threading.RLock)
+    #: The item table's version (:data:`ITEMS_V1` / :data:`ITEMS_V2`), offered in the lane ticket.
+    items_version: int = 1
     calls: int = 0
 
     @classmethod
@@ -156,7 +176,7 @@ class Fused2LaneEntry:
         dev = torch.device(device)
         if dev.type == "cuda" and dev.index is None:  # one spelling per device (locks and executors are per device)
             dev = torch.device("cuda", torch.cuda.current_device())
-        by_key = {lin.key: lin for lin in weights.linears()}
+        by_key = {lin.key: lin for lin in weights.all_linears()}
         items = fused2_items(weights)
         ops = []
         for it in items:
@@ -166,19 +186,22 @@ class Fused2LaneEntry:
             else:
                 ops.append(PairOp(rp.k, l1.w8, by_key[it.k2].w8, l1.hmul, device=dev, max_rows=max_rows,
                                   variant=variant))
-        return cls(fused2_fingerprint(weights, rp), rp, items, ops, dev, str(getattr(weights, "fingerprint", "")))
+        return cls(fused2_fingerprint(weights, rp), rp, items, ops, dev, str(getattr(weights, "fingerprint", "")),
+                   items_version=items_version(weights))
 
     @classmethod
-    def from_pack(cls, pack: Any, migrate_bits: int = 8, ring: RingParams | str = DEFAULT_RING, **kw: Any
-                  ) -> Fused2LaneEntry:
+    def from_pack(cls, pack: Any, migrate_bits: int = 8, ring: RingParams | str = DEFAULT_RING, *,
+                  head: bool = False, **kw: Any) -> Fused2LaneEntry:
         """Derive the public fused2 weights from the provider's own pack (int8 fold, pack-time migration
         multipliers :func:`pgw.modelpack.fused2_weights.migration_multipliers`; no calibration text, no float
-        checkpoint). Pure table derivation from :mod:`pgw.modelpack` (the service never imports the engine)."""
+        checkpoint). Pure table derivation from :mod:`pgw.modelpack` (the service never imports the engine).
+        ``head``: the folded LM head as the last trip's second stage (item table v2, the client library's
+        ``schedule = "fused"``); the last down then takes migration multipliers too (the final norm's gain)."""
         from pgw.modelpack.fused2_weights import Fused2Weights, migration_multipliers
 
-        mults = migration_multipliers(pack, int(migrate_bits)) if migrate_bits else None
+        mults = migration_multipliers(pack, int(migrate_bits), head=head) if migrate_bits else None
         # sigma=False: the pair op and the fingerprint use w8 and hmul only (no SVDs on the provider)
-        return cls.from_weights(Fused2Weights(pack, None, multipliers=mults, sigma=False), ring, **kw)
+        return cls.from_weights(Fused2Weights(pack, None, multipliers=mults, sigma=False, head=head), ring, **kw)
 
     def table(self) -> list[tuple[int, int, str]]:
         """``[(n, m, kind)]`` for :meth:`LaneService.set_model`."""
@@ -225,12 +248,18 @@ def load_fused2_entries(state: Any, *, device: str | torch.device | None = None,
     if from_pack:
         from pgw.modelpack import ModelPack
 
+        head_mode = os.environ.get(ENV_HEAD, "off").strip().lower() or "off"
+        if head_mode not in ("off", "on", "also"):
+            raise ConfigError(f"{ENV_HEAD} must be off, on or also, got {head_mode!r}")
+        heads = {"off": (False,), "on": (True,), "also": (False, True)}[head_mode]
         for m in state.registry.models():
             if m.pack_path is None or m.masked_head:
                 continue
             pack = ModelPack.open(m.pack_path, verify="fingerprint")
             try:
-                entries.append(Fused2LaneEntry.from_pack(pack, int(from_pack), ring, device=device, max_rows=max_rows))
+                for hd in heads:
+                    entries.append(Fused2LaneEntry.from_pack(pack, int(from_pack), ring, device=device,
+                                                             max_rows=max_rows, head=hd))
             finally:
                 pack.close()
     for e in entries:

@@ -592,6 +592,8 @@ class LaneManager:
             "max_rows": int(self.settings.lane_max_rows),
             "deadline_cap_ms": int(min(self.settings.max_deadline_s or 120.0, 3600.0) * 1000),
             **self._multi_offer(),
+            # fused2 lane models: the item table's version (2: with the folded-head pair item)
+            **({"fused2_items": int(self._f2slots[slot].items_version)} if slot in self._f2slots else {}),
         }
 
     def _multi_offer(self) -> dict[str, Any]:

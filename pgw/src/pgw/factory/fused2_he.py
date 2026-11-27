@@ -101,7 +101,7 @@ class Fused2HEPack:
         self.fingerprint = str(fingerprint)
         self.short_fingerprint = self.fingerprint[:12]
         self.name = name
-        self._lins = {he_key(lin.key): lin for lin in weights.linears()}
+        self._lins = {he_key(lin.key): lin for lin in weights.all_linears()}
 
     @staticmethod
     def _id(key: str) -> Any:
@@ -193,7 +193,7 @@ def build_fused2_he(settings: Any, weights: Any, fingerprint: str, k: int, *, re
 
         remote_backend = build_he_backend(settings, adapter, HE_RINGS[scheme], worker_index=worker_index,
                                           workers=workers)
-    shapes = {lin.key: (int(lin.m), int(lin.n)) for lin in weights.linears()}
+    shapes = {lin.key: (int(lin.m), int(lin.n)) for lin in weights.all_linears()}
     dsp = DigitSplitProducts(remote_backend, k=k, k_he=k_he, digit_bits=b, shapes=shapes, scheme=scheme)
     log.info("fused2 factory: K%d masks as %d x %d-bit digits on the encrypted %s factory (K%d)", k, dsp.digits, b,
              scheme, k_he)

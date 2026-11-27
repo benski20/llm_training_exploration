@@ -44,7 +44,7 @@ def is_store_session(session: Any) -> bool:
 
 def fused2_reservation_keys(weights: Any) -> list[str]:
     """The linear keys a fused2 reservation must cover, in pass order (the segment header order)."""
-    return [lin.key for lin in weights.linears()]
+    return [lin.key for lin in weights.all_linears()]
 
 
 def _schedule_of(session: Any) -> str | None:
