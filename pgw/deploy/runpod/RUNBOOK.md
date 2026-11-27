@@ -308,7 +308,7 @@ done
   * the per-pass device time of the parallel-block schedule (same weights as fused2, half the trips).
 * Not in scope: end to end over a WAN (the lane, the K56 store and the pks-v3 digit factory are not wired into the
   client library for fused schedules yet; see the review's production list).
-### 6. `maskcost` (PROPOSED: not in `jobs.py`, not launched; needs an explicit go-ahead and a `SESSIONS` entry)
+### 7. `maskcost` (PROPOSED: not in `jobs.py`, not launched; needs an explicit go-ahead and a `SESSIONS` entry)
 
 Purpose: pin down the consumer-scale mask cost of `research/reviews/mask-cost-consumer.md`. On a T4 the
 coalesced items' per-group part measured 3-5x the memplan model, so the H100 gain is 3.5-11x. This session says
