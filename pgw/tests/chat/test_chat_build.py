@@ -81,8 +81,8 @@ def test_app_source_never_injects_html() -> None:
 
 def test_fonts_ship_with_their_licences() -> None:
     fonts = {a.name.split("-")[0] for a in (STATIC / "assets").glob("*.woff2")}
-    assert {"inter", "source", "geist"} <= fonts
-    for lic in ("LICENSE-Inter.txt", "LICENSE-SourceSerif4.txt", "LICENSE-GeistMono.txt"):
+    assert {"ibm", "source"} <= fonts
+    for lic in ("LICENSE-IBMPlexSans.txt", "LICENSE-SourceSerif4.txt", "LICENSE-IBMPlexMono.txt"):
         assert "SIL OPEN FONT LICENSE" in (STATIC / "licenses" / lic).read_text(encoding="utf-8")
         assert (PGW_ROOT / "src" / "pgw" / "design" / "fonts" / lic).is_file()
 
