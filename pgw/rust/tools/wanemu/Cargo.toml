@@ -1,0 +1,17 @@
+[package]
+name = "pgw-wanemu"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+description = "Packet-level WAN emulator between two TUN devices (delay, jitter, loss, rate, queue) for the pgw WAN bench"
+publish = false
+
+# standalone: not a member of the pgw rust workspace (a bench tool, never shipped)
+[workspace]
+
+[dependencies]
+libc = "0.2"
+
+[profile.release]
+debug = false
+overflow-checks = true

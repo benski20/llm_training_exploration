@@ -1211,6 +1211,8 @@ class Accounts:
         if self.lane_hint is not None:
             with contextlib.suppress(Exception):
                 out["lane"] = self.lane_hint()
+        if getattr(s, "endpoints", None):  # region routing (docs/sdk/wan.md); absent = this service only
+            out["endpoints"] = list(s.endpoints)
         out["sdk"] = {"key_id": rec.key_id, "org_id": rec.org_id, "installation_id": inst, "env": rec.env,
                       "models_scope": list(rec.models), "limits": self.limits_view(rec, org),
                       "expires_at": rec.expires_at}

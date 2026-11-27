@@ -17,9 +17,10 @@ import urllib.request
 from collections.abc import Callable
 from typing import Any
 
-__all__ = ["GRAPHQL_URL", "REST_URL", "RunPodAPI", "RunPodError"]
+__all__ = ["CATALOG_URL", "GRAPHQL_URL", "REST_URL", "RunPodAPI", "RunPodError"]
 
 REST_URL = "https://rest.runpod.io/v1"
+CATALOG_URL = "https://api.runpod.io/v2/catalog/datacenters"
 GRAPHQL_URL = "https://api.runpod.io/graphql"
 
 #: ``transport(method, url, headers, body_bytes | None) -> (status, body_bytes)``
@@ -132,6 +133,16 @@ class RunPodAPI:
             raise RunPodError(self._redact(f"account query refused: {json.dumps(out['errors'])[:300]}"))
         me = ((out or {}).get("data") or {}).get("myself") or {}
         return dict(me) if isinstance(me, dict) else {}
+
+    # ---- data centres (read-only) --------------------------------------------------------------------
+    def datacenters(self, regions: str | None = None) -> list[dict[str, Any]]:
+        """``GET /v2/catalog/datacenters?include=GPU_AVAILABILITY,CPU_AVAILABILITY`` (the key needs the
+        ``catalog:read`` scope): every data centre with its region and GPU / CPU availability. Read-only."""
+        q = "?include=GPU_AVAILABILITY,CPU_AVAILABILITY" + (f"&regions={regions}" if regions else "")
+        out = self._call("GET", CATALOG_URL + q)
+        if isinstance(out, dict):
+            out = out.get("dataCenters") or out.get("data") or out.get("items") or []
+        return [r for r in out if isinstance(r, dict)] if isinstance(out, list) else []
 
     # ---- prices -------------------------------------------------------------------------------------
     def gpu_prices(self) -> dict[str, dict[str, Any]]:

@@ -86,7 +86,7 @@ def test_plan_fits_the_default_budget(capsys: pytest.CaptureFixture[str]) -> Non
     out = capsys.readouterr().out
     total = float(out.split("total (all sessions at their full TTL): $")[1].split(";")[0])
     assert 20 < total < 60
-    assert list(jobs.SESSIONS) == ["perf", "sdk7b", "sdk32b", "72b"]  # the runbook's priority order
+    assert list(jobs.SESSIONS) == ["perf", "sdk7b", "sdk32b", "72b", "wan"]  # the runbook's priority order
 
 
 def test_boot_payload_is_pod_job_and_the_start_command_carries_no_secret() -> None:
@@ -394,8 +394,8 @@ def test_sdk_steps_are_checked_before_any_pod() -> None:
 def test_session_disks_fit_the_shardwise_pack() -> None:
     """Volumes sized for the shard-wise packer (the pack plus ~2 shards of scratch, not the whole checkpoint) and the
     client cache plus its mask stock (docs/sdk/scaling.md)."""
-    pack_gb = {"qwen2.5-7b-instruct": 9, "qwen2.5-32b-instruct": 34}
-    cache_gb = {"qwen2.5-7b-instruct": 13.3, "qwen2.5-32b-instruct": 44.8}
+    pack_gb = {"qwen2.5-0.5b-instruct": 1.2, "qwen2.5-7b-instruct": 9, "qwen2.5-32b-instruct": 34}
+    cache_gb = {"qwen2.5-0.5b-instruct": 2.2, "qwen2.5-7b-instruct": 13.3, "qwen2.5-32b-instruct": 44.8}
     for cfg in jobs.SESSIONS.values():
         for s in cfg["steps"]:
             if s["kind"] == "sdk":
@@ -451,3 +451,105 @@ def test_factory_e2e_step_runs_on_and_off(tmp_path: Path, monkeypatch: pytest.Mo
     runs = [x for x in lines if "layer_cpu_ms_per_slot" in x]
     assert len(runs) == 2 and runs[0]["wire_fused"] is True and runs[1]["wire_fused"] is False
     assert all(x["run"]["cpu_model"] for x in lines if "run" in x)
+
+
+def test_wan_session_dry_run_one_client_pod_per_dc(state: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    def no_api() -> Any:
+        raise AssertionError("a dry run must not build an API client")
+
+    assert jobs.main(["launch", "wan", "--dc", "US-KS-2", "--max-usd", "20", "--dry-run"], api_factory=no_api) == 0
+    out = capsys.readouterr().out
+    assert "nothing created, nothing spent" in out and out.count("create_cpu_pod") == len(jobs.WAN_CLIENTS)
+    for dc in ("US-TX-3", "US-GA-2", "EU-RO-1"):
+        assert f'"{dc}"' in out
+    assert '"PGW_JOB_CLIENT_NAME": "far"' in out and "secret" not in out.lower().replace("secure", "")
+    assert jobs.main(["launch", "wan", "--dc", "EU-RO-1", "--max-usd", "20", "--dry-run",
+                      "--clients", "same=,ams=EU-NL-1:24"], api_factory=no_api) == 0
+    out = capsys.readouterr().out
+    assert out.count("create_cpu_pod") == 2 and '"EU-NL-1"' in out
+    with pytest.raises(SystemExit, match="multi-DC"):
+        jobs.main(["launch", "sdk7b", "--dc", "EU-RO-1", "--max-usd", "20", "--dry-run", "--clients", "a=X"],
+                  api_factory=no_api)
+    with pytest.raises(SystemExit, match="exceeds --max-usd"):
+        jobs.main(["launch", "wan", "--dc", "US-KS-2", "--max-usd", "5", "--dry-run"], api_factory=no_api)
+
+
+def test_wan_launch_skips_a_refused_remote_client(state: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    api = FakeAPI()
+    orig = api.create_pod
+
+    def create(spec: dict[str, Any]) -> dict[str, Any]:
+        if spec["name"].endswith("-far"):
+            api.calls.append(("refused", spec["name"]))
+            raise runpod_api.RunPodError("no CPU capacity", 400)
+        return orig(spec)
+
+    api.create_pod = create  # type: ignore[method-assign]
+    monkeypatch.setattr(jobs, "upload", lambda *a, **k: 0)
+    assert jobs.main(["launch", "wan", "--dc", "US-KS-2", "--max-usd", "20"], api_factory=lambda: api) == 0
+    rec = json.loads((state / "jobs.json").read_text())["sessions"]["wan"]
+    assert set(rec["pods"]) == {"gpu", "cpu-same-dc", "cpu-near", "cpu-mid"} and rec["refused_clients"] == ["far"]
+    specs = [c[1] for c in api.calls if c[0] == "create_pod"]
+    assert [s_["dataCenterIds"] for s_ in specs] == [["US-KS-2"], ["US-KS-2"], ["US-TX-3"], ["US-GA-2"]]
+    assert all(s_["env"]["PGW_JOB_PEER_POD"] == "pod0" for s_ in specs[1:])
+
+
+def test_wan_turns_one_client_at_a_time(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """run_turns (GPU side) and wait_turn / turn_done (CPU side) over the peer files, with a client that never
+    shows up skipped."""
+    import threading
+
+    monkeypatch.setenv("PGW_JOB_ROOT", str(tmp_path))
+    monkeypatch.setenv("PGW_JOB_STOP_AT", str(time.time() + 3600))
+    peer = tmp_path / "peer"
+
+    def get(name: str, timeout_s: float) -> bytes | None:
+        f = peer / name
+        t0 = time.time()
+        while time.time() - t0 < timeout_s:
+            if f.exists():
+                return f.read_bytes()
+            time.sleep(0.01)
+        return None
+
+    def put_remote(name: str, data: bytes) -> bool:
+        jobs.peer_put_local(name, data)
+        return True
+
+    monkeypatch.setattr(jobs, "peer_get", get)
+    monkeypatch.setattr(jobs, "peer_put_remote", put_remote)
+    monkeypatch.setattr(jobs.time, "sleep", lambda s: threading.Event().wait(min(s, 0.01)))
+    order: list[str] = []
+
+    def client(name: str) -> None:
+        local.name = name  # each "pod" has its own name: the lookup is per thread
+        assert jobs.wait_turn("sdk-m", timeout_s=20)
+        order.append(name)
+        jobs.turn_done("sdk-m", 0)
+
+    local = threading.local()
+    monkeypatch.setattr(jobs, "client_name", lambda: getattr(local, "name", ""))
+    ths = [threading.Thread(target=client, args=(n,)) for n in ("b", "a")]
+    for t in ths:
+        t.start()
+    out = jobs.run_turns("sdk-m", ["a", "ghost", "b"], budget_s=20, start_s=0.5)
+    for t in ths:
+        t.join(5)
+    assert out == {"a": "done", "ghost": "absent", "b": "done"} and order == ["a", "b"]
+    assert (peer / "turn-sdk-m").read_bytes() == b"-"
+
+
+def test_datacenters_is_one_read_only_catalog_call(capsys: pytest.CaptureFixture[str]) -> None:
+    seen: list[tuple[str, str]] = []
+
+    def transport(method: str, url: str, headers: dict[str, str], body: bytes | None) -> tuple[int, bytes]:
+        seen.append((method, url))
+        return 200, json.dumps([{"id": "US-KS-2", "name": "US Kansas 2", "region": "NORTH_AMERICA",
+                                 "gpuAvailability": [{"gpuTypeId": jobs.H100, "available": True}],
+                                 "cpuAvailability": [{"cpuFlavorId": "cpu5c"}]}]).encode()
+
+    api = runpod_api.RunPodAPI("k-test", transport=transport)
+    assert jobs.main(["datacenters", "--regions", "NORTH_AMERICA"], api_factory=lambda: api) == 0
+    out = capsys.readouterr().out
+    assert "| US-KS-2 | US Kansas 2 | NORTH_AMERICA |" in out and jobs.H100 in out
+    assert seen == [("GET", runpod_api.CATALOG_URL + "?include=GPU_AVAILABILITY,CPU_AVAILABILITY&regions=NORTH_AMERICA")]

@@ -282,6 +282,51 @@ Before relaunching, edit `SESSIONS["sdk7b"]["steps"]` in `jobs.py`: drop the `fa
 step's `"spec": "off"`, `"stages": "setup,conc"` and `"conc": "1,4,16"` (~60 min, ~$6). If you do, record the
 edit in the commit message.
 
+### 6. `wan`: the client over real wide-area paths, nearest first (docs/sdk/wan.md)
+
+```bash
+python deploy/runpod/jobs.py launch wan --dc US-KS-2 --max-usd 18 --dry-run | tail -1
+python deploy/runpod/jobs.py launch wan --dc US-KS-2 --max-usd 18
+# other client data centres (name=DC[:tokens], nearest first; empty DC = the GPU pod's own):
+python deploy/runpod/jobs.py launch wan --dc EU-RO-1 --max-usd 18 \
+    --clients same-dc=,eu-near=EU-CZ-1:48,eu-far=EU-SE-1:32,transatlantic=US-GA-2:16
+```
+
+* Pods: 1 x H100 SXM in `--dc` (40 GB volume) and one 16-vCPU CPU client pod per client data centre (50 GB disk
+  each): by default `same-dc` (the GPU's DC: the sub-millisecond floor), `near` US-TX-3, `mid` US-GA-2, `far`
+  EU-RO-1 (GPU in US-KS-2: roughly 10-15 / 20-30 / 100-120 ms RTT; the session measures the real values). TTL 175
+  min. **Wall ~150 min + setup; ~$16.6** at table prices (~$11 with `--gpu "NVIDIA L40S"`: RTT-bound numbers do not
+  need an H100, but then the 7B tok/s are not comparable with `sdk7b`). A client data centre without CPU capacity
+  is skipped at launch (recorded as `refused_clients`), the others still run; with no client at all the GPU pod is
+  terminated.
+* One client at a time: the GPU pod hands out turns (`turn-<step>` on the peer channel; a client that does not take
+  its turn within 15 min is skipped), nearest first, so the low-RTT end is measured first and no client's trips or
+  maskgen ever share the GPU or the NIC with another's. Per client and step:
+  * `lane_nic` (7B and 32B widths): TCP connect RTT, then 1-connection trips on the stub listener (transport only)
+    and the GPU listener (CUDA graphs), iterations sized to the RTT (~2 min per listener): `transport_us`,
+    `lane_fixed_us`, trip p50 / p99 over the real path;
+  * `sdk` at 0.5B (spec off) and 7B (spec off / draft_head), 1 stream, `--mask-scheme plain` (measurement only:
+    masks from the local factory pack, so no 34 GB hint build and no maskgen traffic per client; the trips, their
+    bytes and what the provider sees per trip are the same as with pks-v3; `sdk7b` measures pks-v3): the TCP/TLS
+    RTT (`rtt_probe.py`), setup, TTFT, decode tok/s, trips per token, ms per trip. Tokens per client: 64 / 48 / 32 /
+    16 (a 7B token costs ~113 RTTs: 16 tokens at 110 ms is ~3.5 min per run).
+* What it decides (docs/sdk/wan.md, "Who can get 20 tok/s"): the per-trip cost beyond one RTT over real paths at
+  each distance (the emulator's ground truth says 0.2-0.5 ms per trip plus cwnd effects on the 600 KB masked head
+  reply); whether RunPod's hosts keep `tcp_slow_start_after_idle=1` (the provider pod logs it in `env`; the
+  emulated fix needs `0` on the provider side); the RTT between RunPod data centres (an upper bound on what users
+  in those cities see to a GPU there); setup time over distance (the 0.5B / 7B pack download from the provider).
+* Low-RTT end: the same-DC client gives the floor (0.2-0.5 ms); for same-city-different-DC pairs pick two data
+  centres in one metro if RunPod lists them (`python deploy/runpod/jobs.py datacenters` prints the catalog with
+  GPU / CPU availability; e.g. two Kansas City or two Atlanta sites). A real consumer's access network adds
+  1-3 ms (fibre, wired), 5-15 ms (cable, Wi-Fi) or 15-40 ms (mobile) on top of what pod-to-pod measures.
+
+Choosing GPU locations near users: RunPod's catalog (`GET https://api.runpod.io/v2/catalog/datacenters`, scope
+`catalog:read`; `jobs.py datacenters`) lists every data centre with its continental region and GPU / CPU
+availability; ids are `<country>-<region>-<n>` (`US-KS-2`, `US-TX-3`, `US-GA-2`, `CA-MTL-3`, `EU-RO-1`, `EU-CZ-1`,
+`EU-SE-1`, `EU-NL-1`, ...). The list changes: always take it from the API, never from this file. For each candidate
+GPU data centre, run `wan` with clients in the data centres nearest to the user populations you care about, and
+use the measured pod-to-pod RTT plus the access network figures above.
+
 ## 4. Budget
 
 `python deploy/runpod/jobs.py plan` (table prices, Secure Cloud, each session at its full TTL including the
@@ -293,7 +338,8 @@ watchdog grace; `launch` recomputes with RunPod's live price):
 | 2 | sdk7b | 1 x H100 SXM | 32 vCPU | 105 | 130 | 9.52 | 7B TTFT, tok/s, trips/token, client CPU, speculation (shipped head), N = 1/4/16, prefix cache, concurrency rounds on/off, mask CPU per slot 7B-72B, maskgen progress |
 | 3 | sdk32b | 1 x H100 SXM | 32 vCPU | 140 | 165 | 12.06 | 32B provider and client end to end (preview opt-in, pin-checked), maskgen progress at 32B |
 | 4 | 72b | 2 x H100 SXM | - | 70 | 95 | 9.78 | 72B memory TP 1, device time TP 1/2, maskgen, 72B item time vs the watchdog bound |
-| | **total** | | | | | **39.74** | default cap `--budget-usd 60` |
+| 5 | wan | 1 x H100 SXM | 4 x 16 vCPU (4 DCs) | 150 | 175 | 16.64 | per-trip cost vs real RTT (same DC to cross-ocean), lane transport over distance, 0.5B / 7B tok/s and TTFT vs RTT |
+| | **total** | | | | | **56.38** | default cap `--budget-usd 60` (without `wan`: 39.74) |
 
 Prices: H100 SXM $2.99/h Secure (the `launch.py` table, 2026-11), CPU $0.04 per vCPU-hour, storage
 $0.10/GB-month (volumes now sized for the shard-wise packer: 20 / 40 / 80 / 20 GB; storage is cents either way).

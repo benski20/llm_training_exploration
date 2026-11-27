@@ -57,6 +57,7 @@ import struct
 import time
 from collections.abc import Sequence
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -441,6 +442,7 @@ class LaneManager:
                       "tls_client_ca_pem": tls.ca_file.read_bytes() if tls.ca_file is not None else None,
                       "require_client_cert": bool(tls.require_client_cert)}
             path = ""
+            wan_tcp_check()
         else:
             s.lane_socket.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
             path = str(s.lane_socket)
@@ -752,6 +754,33 @@ class LaneManager:
             if d.type == "cuda":
                 ex = device_executor(d)
                 ex.share_lock(self.svc.device_lock(int(d.index or 0)))
+
+
+def wan_tcp_check(proc: Path | None = None) -> dict[str, str]:
+    """Log the kernel TCP settings that cost a TCP lane round trips over a WAN (docs/sdk/wan.md) and return them.
+
+    ``net.ipv4.tcp_slow_start_after_idle = 1`` (every OS's default) collapses this side's congestion window to 10
+    segments after an idle gap longer than the RTO, and shrinks it while the sender is application-limited: the
+    first replies after a pause between chats (a 7B gate_up reply is 148 KB, the masked head's 594 KB) then take
+    2-4 extra RTTs (measured over the emulated WAN: 81 -> 21 ms at RTT 20 with 0). The provider sends the large
+    replies, so its setting is the one that matters; it is per network namespace (``docker run --sysctl
+    net.ipv4.tcp_slow_start_after_idle=0``, Kubernetes ``securityContext.sysctls`` once the kubelet allows it, or
+    ``sysctl -w`` on a host). Read-only here: the service never changes a kernel setting."""
+    base = proc or Path("/proc/sys/net/ipv4")
+    out: dict[str, str] = {}
+    for k in ("tcp_slow_start_after_idle", "tcp_congestion_control"):
+        try:
+            out[k] = (base / k).read_text().strip()
+        except OSError:
+            out[k] = "?"
+    if out["tcp_slow_start_after_idle"] == "1":
+        log.warning("TCP lane: net.ipv4.tcp_slow_start_after_idle=1 here; over a WAN the first replies after an idle "
+                    "gap take 2-4 extra round trips. Set it to 0 for this service's network namespace "
+                    "(docs/sdk/wan.md)")
+    else:
+        log.info("TCP lane: tcp_slow_start_after_idle=%s, congestion control %s", out["tcp_slow_start_after_idle"],
+                 out["tcp_congestion_control"])
+    return out
 
 
 def _socket_addr(host: str, port: int) -> str:

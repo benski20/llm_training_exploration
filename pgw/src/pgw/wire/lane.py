@@ -306,6 +306,31 @@ class TripChannelLike(Protocol):
     def close(self) -> None: ...
 
 
+def lane_keepalive_s() -> int:
+    """``PGW_LANE_KEEPALIVE_S`` (default 15, 0 = off): keep-alive idle time of TCP lane sockets (= the native
+    ``pgw_lane::tls::keepalive_s``)."""
+    try:
+        return max(0, min(7200, int(os.environ.get("PGW_LANE_KEEPALIVE_S", "15"))))
+    except ValueError:
+        return 15
+
+
+def tune_wan_socket(sock: socket.socket) -> None:
+    """Keep-alive (idle :func:`lane_keepalive_s`, 5 s interval, 3 probes) and ``TCP_USER_TIMEOUT`` = idle + 15 s on
+    a TCP lane socket, as the native channel does: an idle lane survives NATs and a dead path errors in seconds
+    (docs/sdk/wan.md). No byte of the stream changes; options the OS lacks are skipped."""
+    idle = lane_keepalive_s()
+    if idle == 0:
+        return
+    with contextlib.suppress(OSError):
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+    for opt, val in (("TCP_KEEPIDLE", idle), ("TCP_KEEPINTVL", 5), ("TCP_KEEPCNT", 3),
+                     ("TCP_USER_TIMEOUT", (idle + 15) * 1000)):
+        if hasattr(socket, opt):
+            with contextlib.suppress(OSError):
+                sock.setsockopt(socket.IPPROTO_TCP, getattr(socket, opt), val)
+
+
 def _recv_exact(sock: socket.socket, view: memoryview) -> None:
     got = 0
     n = len(view)
@@ -368,6 +393,7 @@ class PyTripChannel:
         raw = socket.create_connection((host, port), timeout=timeout_s)
         try:
             raw.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+            tune_wan_socket(raw)
             sock = context.wrap_socket(raw, server_hostname=host)
         except BaseException:
             raw.close()

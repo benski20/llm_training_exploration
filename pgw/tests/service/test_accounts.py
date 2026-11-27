@@ -509,6 +509,36 @@ def test_enroll_with_sdk_key_over_real_tls_gives_working_credentials(tiny_pack_d
             enroll_with_sdk_key(key.encode(), tmp_path / "etc2")
 
 
+@pytest.mark.timeout(240)
+def test_enroll_response_lists_region_endpoints(tiny_pack_dir: Path, tmp_path: Path) -> None:
+    """Region routing (docs/sdk/wan.md): ``endpoints`` goes into the SDK enrollment response and the client keeps the
+    validated list (the enrolled URL first) in enrollment.json; without the setting the response has none."""
+    import json as _json
+
+    from pgw.enroll.client import enroll_with_sdk_key
+    from pgw.enroll.service import ca_fingerprint, load_ca_pem
+    from tests.enroll_helpers import enroll_service
+
+    eps = [{"region": "eu-west", "url": "https://eu.example.net:8443", "models": [], "priority": 1}]
+    with enroll_service(tiny_pack_dir, tmp_path / "svc", accounts_db=tmp_path / "svc" / "accounts.db",
+                        accounts_refresh_s=0.2, endpoints=eps) as svc:
+        st = AccountsStore(svc.settings.accounts_db)
+        st.create_org("acme")
+        key, _rec = st.create_key("acme", "prod", svc.url, ca_fingerprint(load_ca_pem(svc.dirs["ca"])))
+        res = enroll_with_sdk_key(key.encode(), tmp_path / "etc", installation_name="laptop-1")
+        meta = _json.loads(res.files["meta"].read_text())
+    assert meta["endpoints"] == [{"region": "enrolled", "url": svc.url, "models": [], "priority": 0},
+                                 {"region": "eu-west", "url": "https://eu.example.net:8443", "models": [],
+                                  "priority": 1}]
+    with enroll_service(tiny_pack_dir, tmp_path / "svc2", accounts_db=tmp_path / "svc2" / "accounts.db",
+                        accounts_refresh_s=0.2) as svc:
+        st = AccountsStore(svc.settings.accounts_db)
+        st.create_org("acme")
+        key, _rec = st.create_key("acme", "prod", svc.url, ca_fingerprint(load_ca_pem(svc.dirs["ca"])))
+        res = enroll_with_sdk_key(key.encode(), tmp_path / "etc2", installation_name="laptop-2")
+        assert "endpoints" not in _json.loads(res.files["meta"].read_text())
+
+
 def test_lane_counters_are_metered_and_revoked_tenants_reported(tmp_path: Path, shared_registry: Any,
                                                                 pack_fp: str) -> None:
     """The native lane counts per (tenant, kind); its drain is attributed to the model of the tenant's tickets."""
