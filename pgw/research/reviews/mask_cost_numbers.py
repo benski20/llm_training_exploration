@@ -136,6 +136,85 @@ def client(model: str, gpu_ms: float | None) -> dict[str, Any]:
             "gpu_ms_per_slot": None if gpu_ms is None else round(gpu_ms, 2)}
 
 
+# ---- K56 masks for fused2 (section 12 of the note) -------------------------------------------------------------
+#: direct K56 parameter set (pgw.hemask.pks56) relative to one K32 product: provider 10/7 byte planes (GEMMs),
+#: 6/4 key-switch primes (products, NTTs), 10/7 upload and 60/36 reply bytes -> ~1.45; client 4/3 pad primes,
+#: 6/4 reply-key primes, 3/2 decryption primes -> ~1.4 (estimates from the operation counts; not benchmarked)
+K56_DIRECT_PROVIDER = 1.45
+K56_DIRECT_CLIENT = 1.4
+
+
+def _lin_affine(m: int, n: int, rates: PksRates, hide_upload: bool) -> tuple[float, float]:
+    t1, t16 = item_s(m, n, 1, rates, hide_upload), item_s(m, n, 16, rates, hide_upload)
+    g = (t16 - t1) / 15
+    return t1 - g, g
+
+
+def k56_slots_per_s(model: str, option: str, groups_per_hint: float = 1.0, g_scale: float = 1.0,
+                    rates: PksRates = H100_RATES, hide_upload: bool = True) -> float:
+    """K56 mask slots per second per GPU for fused2 (the same linears' shapes; the folded head as the head).
+
+    ``option``: ``digit7`` (today: 7 separate K32 products per mask), ``top`` (the top-digit plan, planes sent
+    separately), ``top_stacked`` (planes in one item: the hint once), ``digit7_stacked``, ``direct`` (pks-v3-K56),
+    ``k32`` (reference: a K32 slot). ``groups_per_hint``: groups of other customers sharing the hint (common seed).
+    """
+    from pgw.factory.fused2_he import digit_plan
+
+    total = 0.0
+    s = float(groups_per_hint)
+    for _, m, n in linears(model):
+        c, g = _lin_affine(m, n, rates, hide_upload)
+        g *= g_scale
+        planes = len(digit_plan(n, 56, 32))
+        if option == "k32":
+            total += (c + g * s) / s
+        elif option == "digit7":
+            total += 7 * (c + g * s) / s
+        elif option == "top":
+            total += planes * (c + g * s) / s
+        elif option == "top_stacked":
+            total += (c + planes * g * s) / s
+        elif option == "digit7_stacked":
+            total += (c + 7 * g * s) / s
+        elif option == "direct":
+            total += K56_DIRECT_PROVIDER * (c + g * s) / s
+        else:
+            raise ValueError(option)
+    return 256 / total
+
+
+def k56_client_planes(model: str) -> float:
+    """Client work of one top-digit K56 slot in K32 slots: rows encrypted (by n) and decrypted (by m), weighted
+    by the measured split of the K32 client parts (upload ~ 60 %, decryption + check ~ 40 %)."""
+    from pgw.factory.fused2_he import digit_plan
+
+    lins = linears(model)
+    pn = sum(len(digit_plan(n, 56, 32)) * n for _, _m, n in lins) / sum(n for _, _m, n in lins)
+    pm = sum(len(digit_plan(n, 56, 32)) * m for _, m, n in lins) / sum(m for _, m, _n in lins)
+    return 0.6 * pn + 0.4 * pm
+
+
+def k56_table() -> dict[str, Any]:
+    out: dict[str, Any] = {}
+    for model in MODELS_USED:
+        res: dict[str, Any] = {}
+        for gs in (1.0, 4.0):
+            for sh in (1, 64):
+                key = f"g_scale={gs:g} S={sh}"
+                res[key] = {o: round(k56_slots_per_s(model, o, sh, gs), 1)
+                            for o in ("k32", "digit7", "top", "top_stacked", "digit7_stacked", "direct")}
+        res["users_per_h100_spt2"] = {k: {o: round(v / (TOK_S * 2.0), 2) for o, v in d.items()}
+                                      for k, d in res.items() if k.startswith("g_scale")}
+        cp = k56_client_planes(model)
+        k32ms = sum(CLIENT_MS[model].values())
+        res["client_ms_per_slot_cpu"] = {"k32": round(k32ms, 1), "digit7": round(7 * k32ms, 1),
+                                         "top_digit": round(cp * k32ms, 1),
+                                         "direct (est.)": round(K56_DIRECT_CLIENT * k32ms, 1)}
+        res["client_top_planes"] = round(cp, 2)
+        out[model] = res
+    return out
+
+
 def table(client_gpu: dict[str, float] | None = None) -> dict[str, Any]:
     out: dict[str, Any] = {}
     for model in MODELS_USED:
@@ -179,6 +258,7 @@ def table(client_gpu: dict[str, float] | None = None) -> dict[str, Any]:
                            "masks": round(TOK_S * spt * (b["mask_up_MB"] + b["mask_down_MB"]) * 8e-3, 2)}
             for spt in SLOTS_PER_TOKEN}
         out[model] = res
+    out["k56_fused2"] = k56_table()
     return out
 
 

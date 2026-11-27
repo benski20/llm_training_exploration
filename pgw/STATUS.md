@@ -4482,7 +4482,7 @@ Full note: `research/reviews/mask-cost-consumer.md`; numbers: `research/reviews/
   * width-class `a` (a client cache of the public transforms, ~15 % of client CPU at one group per request);
   * GPU sampling with the existing device ChaCha20 (same streams).
 
-**Proposed RunPod stage** (`deploy/runpod/RUNBOOK.md`, session 6 `maskcost`; not in `jobs.py`, not launched,
+**Proposed RunPod stage** (`deploy/runpod/RUNBOOK.md`, session 7 `maskcost`; not in `jobs.py`, not launched,
 ~$3): coalescing at S = 1..64 and under concurrent callers on an H100, the per-group stage split, and the client
 kernels on an RTX 4090.
 
@@ -4502,3 +4502,34 @@ Tests:
     so the deterministic-seed test patches it;
   * `tests/docs/test_code_consistency.py`: 24 passed, with the three new switches listed;
 * `ruff` is clean on the changed files. mypy was not run: this environment's mypy lacks pydantic.
+
+**Addendum (same day): K56 masks for fused2** (input: `research/reviews/consumer-round-trips.md`; note section 12).
+* **Measured cost today.** fused2's K56 masks come from 7 exact digit products on pks-v3 (K32): 7x provider maskgen
+  and ~7x client work per slot.
+* **Built (default off, bit-identical, no new cryptography):**
+  * The **top-digit plan** (`pgw.factory.fused2_he.digit_plan`, `TopDigitProducts`, `PGW_FUSED2_HE_DIGITS=top`). The
+    top 32 bits of `r` need only `W d mod 2^32`, which any K32 product returns. Balanced exact low digits cover the
+    rest: 3 products at `n = d` and 4 at `n = I` (2 instead of 4 at mlwe K40).
+  * **Stacked planes**: one call, so one provider item and one hint per chunk.
+  * Tested at bound-tight widths and on the real pks-v3 factory: segments identical to plain generation, 1 request
+    per linear and chunk instead of 7.
+  * Model, 32B H100 at consumer stock: **6.9 -> 41 K56 slots/s** (25 with the T4-measured per-group cost), about
+    1.2-1.6x a K32 slot.
+* **Prototyped (reference, needs review Q9):** `pgw.hemask.pks56`, a direct K56 parameter set.
+  * Upload `2^80`, `q1` 3 x 24-bit primes, `P` 3 x 28-bit, reply 60 bits.
+  * Noise 2^13.33 against 2^14.96, every term within 0.05 bit of v3's.
+  * Core-SVP 148.3 / 153.0 classical (134.6 / 138.9 quantum), against v3's 238.9 / 251.1: inside the HE-standard
+    128-bit tables. The conservative variant at n 8192 / 16384 gives 369 / 383 bits.
+  * Exact round trips are tested.
+  * Estimated at ~1.45x a K32 slot (provider) and ~1.4x (client). With the common seed it is ~2x the top-digit
+    plan: 32B S = 64, 350 against 180 slots/s.
+* **(b) No stage of a fused trip can stay at K32** exactly with perfect hiding: the carries of a K32 input mask are
+  data-dependent.
+* **(c) Per token, fused2 at 32B, 20 tok/s, 2 slots per token:**
+  * online 17 Gbit/s;
+  * masks 21 Gbit/s with the direct set, 47 Gbit/s with the top-digit plan;
+  * maskgen users per H100: 0.17 today, 1.0 top-digit stacked, 8.8 with direct + common seed + coalescing (model).
+* Tests:
+  * `tests/factory/test_fused2_factory.py`: 16 passed;
+  * `tests/hemask/test_pks56.py`: 4 passed;
+  * `tests/factory`: 491 passed, 9 CUDA skips.

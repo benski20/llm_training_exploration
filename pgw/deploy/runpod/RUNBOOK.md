@@ -328,6 +328,10 @@ where in that range an H100 is, and how many users it serves.
      (small; not written yet);
   4. `benchmarks/pks_ntt_bench.py --sections stages` at `G` = 1 / 16 / 64 to split the per-group part (`y` GEMM,
      key switch, reply copies) on an H100.
+  5. fused2 K56 masks: the top-digit plan with stacked planes against the 7-digit split, through
+     `TopDigitProducts` / `DigitSplitProducts` on the device provider at 32B shapes. Record provider seconds per K56
+     slot and check the segments are byte-identical. This needs a small driver, not written yet: the CPU test is
+     `tests/factory/test_fused2_factory.py::test_top_digits_pks_v3_equals_plain_bit_for_bit`.
 * 4090 step: `benchmarks/pks_client_gpu_bench.py --sections client` (eager kernels and the fused decryption),
   for a consumer-GPU data point.
 * Outputs: `gpu/results/maskcost/{pytest,coalesce_S*,coalesce_threads,stages_G*,client_4090}.json`.
