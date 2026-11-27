@@ -196,7 +196,8 @@ class PKSHintStore:
         weights) and fresh seeds (``seeds = (a_seed, ks_seed)``: given ones, e.g. a provisioning comparison)."""
         from pgw.hemask.hint_gemm import HintGemm
 
-        a_seed, ks_seed = seeds if seeds is not None else (new_seed(), new_seed())  # customer-chosen; both public
+        # customer-chosen (``a_seed`` public, or the common one with ``PGW_PKS_CRS_A``); ``ks_seed`` private
+        a_seed, ks_seed = seeds if seeds is not None else (pks.upload_seed(pack.fingerprint), new_seed())
 
         def items() -> Any:
             for lw in pack.iter_linears():
@@ -338,7 +339,7 @@ class HintBuild:
             if self.resumed:
                 log.info("pks-v3 hint build: resuming %s with %d finished linear(s)", self.dir, self.resumed)
         else:
-            self.a_seed, self.ks_seed = seeds if seeds is not None else (new_seed(), new_seed())
+            self.a_seed, self.ks_seed = seeds if seeds is not None else (pks.upload_seed(fingerprint), new_seed())
         self._save_state()
         self.k_hat = pks.ks_a(self.ks_seed)[None].astype(np.uint32)
         self.t0 = self._last = time.monotonic()

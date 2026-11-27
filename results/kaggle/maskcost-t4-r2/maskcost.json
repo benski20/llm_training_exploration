@@ -1,0 +1,212 @@
+{
+ "device": "cuda",
+ "torch": "2.11.0+cu130",
+ "gpu": "Tesla T4",
+ "coalesce": {
+  "items": 8,
+  "7B:0.gate_up": {
+   "m": 37888,
+   "n": 3584,
+   "alone_s": 2.9616,
+   "coalesced_s": 1.3502,
+   "one_item_s": 1.084,
+   "speedup": 2.193,
+   "speedup_one_item": 2.732,
+   "identical": true,
+   "one_item_identical": true,
+   "coalesced_runs": 2,
+   "model_t4_speedup": 5.171
+  },
+  "7B:0.down": {
+   "m": 3584,
+   "n": 18944,
+   "alone_s": 1.4375,
+   "coalesced_s": 0.3875,
+   "one_item_s": 0.3894,
+   "speedup": 3.71,
+   "speedup_one_item": 3.691,
+   "identical": true,
+   "one_item_identical": true,
+   "coalesced_runs": 2,
+   "model_t4_speedup": 5.437
+  },
+  "32B:0.gate_up": {
+   "m": 55296,
+   "n": 5120,
+   "alone_s": 5.7094,
+   "coalesced_s": 2.2618,
+   "one_item_s": 1.8493,
+   "speedup": 2.524,
+   "speedup_one_item": 3.087,
+   "identical": true,
+   "one_item_identical": true,
+   "coalesced_runs": 2,
+   "model_t4_speedup": 5.291
+  },
+  "32B:0.down": {
+   "m": 5120,
+   "n": 27648,
+   "alone_s": 2.8844,
+   "coalesced_s": 0.7919,
+   "one_item_s": 0.7836,
+   "speedup": 3.642,
+   "speedup_one_item": 3.681,
+   "identical": true,
+   "one_item_identical": true,
+   "coalesced_runs": 2,
+   "model_t4_speedup": 5.534
+  },
+  "32B:0.qkv": {
+   "m": 7168,
+   "n": 5120,
+   "alone_s": 0.8132,
+   "coalesced_s": 0.2684,
+   "one_item_s": 0.2688,
+   "speedup": 3.03,
+   "speedup_one_item": 3.025,
+   "identical": true,
+   "one_item_identical": true,
+   "coalesced_runs": 2,
+   "model_t4_speedup": 5.115
+  }
+ },
+ "client": {
+  "device": "cuda",
+  "per_shape": {
+   "7B:3584x3584": {
+    "count": 28,
+    "decrypt_fused_s": 0.00786,
+    "decrypt_fused_identical": 1.0,
+    "encrypt_s": 0.02695,
+    "encrypt_cached_a_s": 0.01627,
+    "noise_proxy_s": 0.00227,
+    "reply_key_s": 0.01722,
+    "decrypt_s": 0.01387
+   },
+   "7B:3584x18944": {
+    "count": 28,
+    "decrypt_fused_s": 0.00771,
+    "decrypt_fused_identical": 1.0,
+    "encrypt_s": 0.12489,
+    "encrypt_cached_a_s": 0.07102,
+    "noise_proxy_s": 0.01141,
+    "reply_key_s": 0.01704,
+    "decrypt_s": 0.01386
+   },
+   "7B:4608x3584": {
+    "count": 28,
+    "decrypt_fused_s": 0.00927,
+    "decrypt_fused_identical": 1.0,
+    "encrypt_s": 0.0233,
+    "encrypt_cached_a_s": 0.0142,
+    "noise_proxy_s": 0.00221,
+    "reply_key_s": 0.0173,
+    "decrypt_s": 0.01812
+   },
+   "7B:37888x3584": {
+    "count": 28,
+    "decrypt_fused_s": 0.05244,
+    "decrypt_fused_identical": 1.0,
+    "encrypt_s": 0.02332,
+    "encrypt_cached_a_s": 0.01408,
+    "noise_proxy_s": 0.00222,
+    "reply_key_s": 0.01613,
+    "decrypt_s": 0.12359
+   },
+   "7B:152064x3584": {
+    "count": 1,
+    "decrypt_fused_s": 0.20028,
+    "decrypt_fused_identical": 1.0,
+    "encrypt_s": 0.02339,
+    "encrypt_cached_a_s": 0.01411,
+    "noise_proxy_s": 0.00222,
+    "reply_key_s": 0.01661,
+    "decrypt_s": 0.48344
+   },
+   "32B:5120x5120": {
+    "count": 64,
+    "decrypt_fused_s": 0.00999,
+    "decrypt_fused_identical": 1.0,
+    "encrypt_s": 0.03594,
+    "encrypt_cached_a_s": 0.02141,
+    "noise_proxy_s": 0.00314,
+    "reply_key_s": 0.01735,
+    "decrypt_s": 0.02006
+   },
+   "32B:5120x27648": {
+    "count": 64,
+    "decrypt_fused_s": 0.00985,
+    "decrypt_fused_identical": 1.0,
+    "encrypt_s": 0.18059,
+    "encrypt_cached_a_s": 0.10236,
+    "noise_proxy_s": 0.01661,
+    "reply_key_s": 0.01696,
+    "decrypt_s": 0.01991
+   },
+   "32B:7168x5120": {
+    "count": 64,
+    "decrypt_fused_s": 0.01232,
+    "decrypt_fused_identical": 1.0,
+    "encrypt_s": 0.03594,
+    "encrypt_cached_a_s": 0.02131,
+    "noise_proxy_s": 0.00313,
+    "reply_key_s": 0.0166,
+    "decrypt_s": 0.02615
+   },
+   "32B:55296x5120": {
+    "count": 64,
+    "decrypt_fused_s": 0.07466,
+    "decrypt_fused_identical": 1.0,
+    "encrypt_s": 0.03594,
+    "encrypt_cached_a_s": 0.02139,
+    "noise_proxy_s": 0.00313,
+    "reply_key_s": 0.01684,
+    "decrypt_s": 0.17879
+   },
+   "32B:152064x5120": {
+    "count": 1,
+    "decrypt_fused_s": 0.1995,
+    "decrypt_fused_identical": 1.0,
+    "encrypt_s": 0.03598,
+    "encrypt_cached_a_s": 0.02138,
+    "noise_proxy_s": 0.00314,
+    "reply_key_s": 0.01792,
+    "decrypt_s": 0.48262
+   }
+  },
+  "ms_per_slot": {
+   "7B": 51.676,
+   "32B": 158.878
+  },
+  "ms_per_slot_cached_a": {
+   "7B": 42.574,
+   "32B": 128.336
+  },
+  "parts_ms_per_slot": {
+   "7B": {
+    "decrypt_fused_s": 9.235,
+    "encrypt_s": 21.797,
+    "encrypt_cached_a_s": 12.696,
+    "noise_proxy_s": 1.989,
+    "reply_key_s": 7.468,
+    "decrypt_s": 20.421
+   },
+   "32B": {
+    "decrypt_fused_s": 27.486,
+    "encrypt_s": 72.243,
+    "encrypt_cached_a_s": 41.701,
+    "noise_proxy_s": 6.516,
+    "reply_key_s": 17.006,
+    "decrypt_s": 63.114
+   }
+  },
+  "decrypt_fused_identical": {
+   "7B": true,
+   "32B": true
+  }
+ },
+ "ms_per_slot": {
+  "7B": 51.676,
+  "32B": 158.878
+ }
+}
