@@ -804,6 +804,7 @@ def _build_store(kind: str, hint_root: Path, ffp: str, mac_key: bytes, specs: di
                  weights: _Weights, session: Any, fp: str, masked_head: bool, progress: Progress,
                  stats: dict[str, float]) -> Any:
     from pgw.core.prng import new_seed
+    from pgw.hemask import pks
     from pgw.hemask.pks_backend import PKSHintStore
     from pgw.provision.hintcheck import CHALLENGE_COLS, SOUNDNESS_BITS
 
@@ -816,7 +817,8 @@ def _build_store(kind: str, hint_root: Path, ffp: str, mac_key: bytes, specs: di
         except BlockingIOError:
             raise ConfigError(f"pks-v3 hint store under {hint_root} is in use by another process; stop it first") \
                 from None
-        a_seed, ks_seed = new_seed(), new_seed()  # client-chosen (CSPRNG); only a_seed is ever sent
+        # client-chosen (CSPRNG; or the common seed with PGW_PKS_CRS_A); only a_seed is ever sent
+        a_seed, ks_seed = pks.upload_seed(str(fp)), new_seed()
         if kind == "provider":
             ph = _ProviderH(session, fp, a_seed, masked_head, list(specs))
             try:

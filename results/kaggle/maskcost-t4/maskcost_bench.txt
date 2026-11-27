@@ -1,0 +1,188 @@
+7B 0.gate_up {'m': 37888, 'n': 3584, 'alone_s': 2.9398, 'coalesced_s': 1.3458, 'speedup': 2.184, 'identical': True, 'coalesced_runs': 2, 'model_t4_speedup': 5.171}
+7B 0.down {'m': 3584, 'n': 18944, 'alone_s': 1.3945, 'coalesced_s': 0.387, 'speedup': 3.603, 'identical': True, 'coalesced_runs': 2, 'model_t4_speedup': 5.437}
+32B 0.gate_up {'m': 55296, 'n': 5120, 'alone_s': 5.4791, 'coalesced_s': 2.1433, 'speedup': 2.556, 'identical': True, 'coalesced_runs': 2, 'model_t4_speedup': 5.291}
+32B 0.down {'m': 5120, 'n': 27648, 'alone_s': 2.7647, 'coalesced_s': 0.7394, 'speedup': 3.739, 'identical': True, 'coalesced_runs': 2, 'model_t4_speedup': 5.534}
+32B 0.qkv {'m': 7168, 'n': 5120, 'alone_s': 0.7661, 'coalesced_s': 0.2547, 'speedup': 3.007, 'identical': True, 'coalesced_runs': 2, 'model_t4_speedup': 5.115}
+7B 3584 3584 28 {'encrypt_s': 0.023232009000025755, 'encrypt_cached_a_s': 0.013984135000043807, 'noise_proxy_s': 0.002230339999982789, 'reply_key_s': 0.0176979519999918, 'decrypt_s': 0.013712391000012758}
+7B 3584 18944 28 {'encrypt_s': 0.12521110500000532, 'encrypt_cached_a_s': 0.07131346100004521, 'noise_proxy_s': 0.011433189000001676, 'reply_key_s': 0.018121021000013116, 'decrypt_s': 0.013711486000033801}
+7B 4608 3584 28 {'encrypt_s': 0.02324066699998184, 'encrypt_cached_a_s': 0.013941824000028191, 'noise_proxy_s': 0.0022269209999876693, 'reply_key_s': 0.01715103200001522, 'decrypt_s': 0.018035091000001557}
+7B 37888 3584 28 {'encrypt_s': 0.023210123000012572, 'encrypt_cached_a_s': 0.013930209999955423, 'noise_proxy_s': 0.0022158780000154366, 'reply_key_s': 0.01774604500002397, 'decrypt_s': 0.12427995400003056}
+7B 152064 3584 1 {'encrypt_s': 0.023207134000017504, 'encrypt_cached_a_s': 0.013920125000026928, 'noise_proxy_s': 0.002222295999956714, 'reply_key_s': 0.01761580100003357, 'decrypt_s': 0.48652631199996677}
+32B 5120 5120 64 {'encrypt_s': 0.035824473999980455, 'encrypt_cached_a_s': 0.021283397999980025, 'noise_proxy_s': 0.0031374010000035923, 'reply_key_s': 0.017424543999993602, 'decrypt_s': 0.019780013000001873}
+32B 5120 27648 64 {'encrypt_s': 0.18156396299997368, 'encrypt_cached_a_s': 0.10276113600002645, 'noise_proxy_s': 0.016635285999996086, 'reply_key_s': 0.022971280999968258, 'decrypt_s': 0.019996260999960214}
+32B 7168 5120 64 {'encrypt_s': 0.03582798100001128, 'encrypt_cached_a_s': 0.0212333030000309, 'noise_proxy_s': 0.003134225999986029, 'reply_key_s': 0.01647889900004884, 'decrypt_s': 0.026360689999989972}
+32B 55296 5120 64 {'encrypt_s': 0.03584914699996489, 'encrypt_cached_a_s': 0.021332305000044016, 'noise_proxy_s': 0.003148296000006212, 'reply_key_s': 0.0161751360000153, 'decrypt_s': 0.17889559299999291}
+32B 152064 5120 1 {'encrypt_s': 0.03582107399995493, 'encrypt_cached_a_s': 0.021228258000007827, 'noise_proxy_s': 0.0031278729999826282, 'reply_key_s': 0.01683207799999309, 'decrypt_s': 0.4859579469999744}
+{
+ "device": "cuda",
+ "torch": "2.11.0+cu130",
+ "gpu": "Tesla T4",
+ "coalesce": {
+  "items": 8,
+  "7B:0.gate_up": {
+   "m": 37888,
+   "n": 3584,
+   "alone_s": 2.9398,
+   "coalesced_s": 1.3458,
+   "speedup": 2.184,
+   "identical": true,
+   "coalesced_runs": 2,
+   "model_t4_speedup": 5.171
+  },
+  "7B:0.down": {
+   "m": 3584,
+   "n": 18944,
+   "alone_s": 1.3945,
+   "coalesced_s": 0.387,
+   "speedup": 3.603,
+   "identical": true,
+   "coalesced_runs": 2,
+   "model_t4_speedup": 5.437
+  },
+  "32B:0.gate_up": {
+   "m": 55296,
+   "n": 5120,
+   "alone_s": 5.4791,
+   "coalesced_s": 2.1433,
+   "speedup": 2.556,
+   "identical": true,
+   "coalesced_runs": 2,
+   "model_t4_speedup": 5.291
+  },
+  "32B:0.down": {
+   "m": 5120,
+   "n": 27648,
+   "alone_s": 2.7647,
+   "coalesced_s": 0.7394,
+   "speedup": 3.739,
+   "identical": true,
+   "coalesced_runs": 2,
+   "model_t4_speedup": 5.534
+  },
+  "32B:0.qkv": {
+   "m": 7168,
+   "n": 5120,
+   "alone_s": 0.7661,
+   "coalesced_s": 0.2547,
+   "speedup": 3.007,
+   "identical": true,
+   "coalesced_runs": 2,
+   "model_t4_speedup": 5.115
+  }
+ },
+ "client": {
+  "device": "cuda",
+  "per_shape": {
+   "7B:3584x3584": {
+    "count": 28,
+    "encrypt_s": 0.02323,
+    "encrypt_cached_a_s": 0.01398,
+    "noise_proxy_s": 0.00223,
+    "reply_key_s": 0.0177,
+    "decrypt_s": 0.01371
+   },
+   "7B:3584x18944": {
+    "count": 28,
+    "encrypt_s": 0.12521,
+    "encrypt_cached_a_s": 0.07131,
+    "noise_proxy_s": 0.01143,
+    "reply_key_s": 0.01812,
+    "decrypt_s": 0.01371
+   },
+   "7B:4608x3584": {
+    "count": 28,
+    "encrypt_s": 0.02324,
+    "encrypt_cached_a_s": 0.01394,
+    "noise_proxy_s": 0.00223,
+    "reply_key_s": 0.01715,
+    "decrypt_s": 0.01804
+   },
+   "7B:37888x3584": {
+    "count": 28,
+    "encrypt_s": 0.02321,
+    "encrypt_cached_a_s": 0.01393,
+    "noise_proxy_s": 0.00222,
+    "reply_key_s": 0.01775,
+    "decrypt_s": 0.12428
+   },
+   "7B:152064x3584": {
+    "count": 1,
+    "encrypt_s": 0.02321,
+    "encrypt_cached_a_s": 0.01392,
+    "noise_proxy_s": 0.00222,
+    "reply_key_s": 0.01762,
+    "decrypt_s": 0.48653
+   },
+   "32B:5120x5120": {
+    "count": 64,
+    "encrypt_s": 0.03582,
+    "encrypt_cached_a_s": 0.02128,
+    "noise_proxy_s": 0.00314,
+    "reply_key_s": 0.01742,
+    "decrypt_s": 0.01978
+   },
+   "32B:5120x27648": {
+    "count": 64,
+    "encrypt_s": 0.18156,
+    "encrypt_cached_a_s": 0.10276,
+    "noise_proxy_s": 0.01664,
+    "reply_key_s": 0.02297,
+    "decrypt_s": 0.02
+   },
+   "32B:7168x5120": {
+    "count": 64,
+    "encrypt_s": 0.03583,
+    "encrypt_cached_a_s": 0.02123,
+    "noise_proxy_s": 0.00313,
+    "reply_key_s": 0.01648,
+    "decrypt_s": 0.02636
+   },
+   "32B:55296x5120": {
+    "count": 64,
+    "encrypt_s": 0.03585,
+    "encrypt_cached_a_s": 0.02133,
+    "noise_proxy_s": 0.00315,
+    "reply_key_s": 0.01618,
+    "decrypt_s": 0.1789
+   },
+   "32B:152064x5120": {
+    "count": 1,
+    "encrypt_s": 0.03582,
+    "encrypt_cached_a_s": 0.02123,
+    "noise_proxy_s": 0.00313,
+    "reply_key_s": 0.01683,
+    "decrypt_s": 0.48596
+   }
+  },
+  "ms_per_slot": {
+   "7B": 51.665,
+   "32B": 160.417
+  },
+  "ms_per_slot_cached_a": {
+   "7B": 42.69,
+   "32B": 129.746
+  },
+  "parts_ms_per_slot": {
+   "7B": {
+    "encrypt_s": 21.407,
+    "encrypt_cached_a_s": 12.432,
+    "noise_proxy_s": 1.989,
+    "reply_key_s": 7.803,
+    "decrypt_s": 20.466
+   },
+   "32B": {
+    "encrypt_s": 72.406,
+    "encrypt_cached_a_s": 41.735,
+    "noise_proxy_s": 6.526,
+    "reply_key_s": 18.328,
+    "decrypt_s": 63.156
+   }
+  }
+ },
+ "ms_per_slot": {
+  "7B": 51.665,
+  "32B": 160.417
+ }
+}
+
+---stderr---

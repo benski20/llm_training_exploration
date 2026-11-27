@@ -204,8 +204,9 @@ def build_fused2_generators(settings: FactorySettings, packs: list[Any], *, work
         else:
             bits = int(settings.fused2_migrate_bits)
             # sigma=False: masks and check vectors use w8 and hmul only (no SVDs per factory worker)
-            w = Fused2Weights(pack, None, multipliers=migration_multipliers(pack, bits) if bits else None,
-                              sigma=False)
+            head = bool(getattr(settings, "fused2_head", False))
+            w = Fused2Weights(pack, None, multipliers=migration_multipliers(pack, bits, head=head) if bits else None,
+                              sigma=False, head=head)
         for ring in settings.ring_names:
             fp = fused2_fingerprint(w, ring)
             he = None

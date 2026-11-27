@@ -49,6 +49,7 @@ __all__ = [
     "RING",
     "SWITCH",
     "FusedChoice",
+    "MultiUpload",
     "fused_self_test",
     "fused_status",
     "gemm_into",
@@ -64,6 +65,7 @@ __all__ = [
     "ring_rows",
     "ring_rows_async",
     "self_test",
+    "split_reply",
     "staged_copy",
 ]
 
@@ -801,7 +803,8 @@ def item_bytes(m: int, n: int, n_pad: int, cols: int, groups: int, work_bytes: i
     return held + max(build + upload, rows * _row_bytes(n_pad, cols, groups))
 
 
-def item(w: torch.Tensor, const: torch.Tensor, m: int, n: int, ring_t: Any, b: np.ndarray | PackedUpload,
+def item(w: torch.Tensor, const: torch.Tensor, m: int, n: int, ring_t: Any,
+         b: np.ndarray | PackedUpload | MultiUpload,
          ops: np.ndarray | PackedKeys, *, work_bytes: int | None = None, out: np.ndarray | PackedReply | None = None,
          out_b0: int = 0) -> np.ndarray | PackedReply:
     """The reply ``(G, m/32, 8192)`` uint64 of one pks-v3 item, computed on ``w``'s device.
@@ -816,17 +819,20 @@ def item(w: torch.Tensor, const: torch.Tensor, m: int, n: int, ring_t: Any, b: n
     reply ciphertexts depend only on their own 32 rows).
 
     ``b`` may be the upload's wire bytes (:class:`PackedUpload`, unpacked on the device when :data:`WIRE` says so,
-    else on the host), ``ops`` the reply keys' wire bytes (:class:`PackedKeys`, unpacked and range-checked on the
-    device when :data:`KEYS` says so, else on the host; a residue out of range raises ``ProtocolError`` before any
-    key switch); ``out`` an array or :class:`PackedReply` to write the reply rows into at reply ciphertext
-    ``out_b0`` (tensor-parallel shards), returned."""
+    else on the host) or several items' uploads side by side (:class:`MultiUpload`, coalesced items of one linear and
+    one public seed: the hint rows are computed once for all of their groups), ``ops`` the reply keys' wire bytes
+    (:class:`PackedKeys`, unpacked and range-checked on the device when :data:`KEYS` says so, else on the host; a
+    residue out of range raises ``ProtocolError`` before any key switch); ``out`` an array or :class:`PackedReply`
+    to write the reply rows into at reply ciphertext ``out_b0`` (tensor-parallel shards), returned."""
     dev = w.device
     np_ = int(w.shape[1])
     groups, cols = int(ops.shape[0]), int(b.shape[1])
     if m % PACK or n % RANK or b.shape[0] != n or cols != D * groups or w.shape[0] < m or np_ < n:
         raise ValueError("pks-v3 device item: bad shapes")
-    if isinstance(b, PackedUpload) and WIRE.impl(dev) != "fused":
-        b = b.host()
+    # the upload in parts (:class:`MultiUpload`: coalesced items, each part its own wire bytes or array)
+    parts: list[Any] = list(b.parts) if isinstance(b, MultiUpload) else [b]
+    if WIRE.impl(dev) != "fused":
+        parts = [p.host() if isinstance(p, PackedUpload) else p for p in parts]
     side = _side_stream(dev) if dev.type == "cuda" and _pinned_ok() else None
     aplanes = _a_planes(ring_t, np_) if isinstance(ring_t, torch.Tensor) else None  # queued first
     if aplanes is not None:
@@ -845,15 +851,29 @@ def item(w: torch.Tensor, const: torch.Tensor, m: int, n: int, ring_t: Any, b: n
         else:
             ops_t = _host_keys(ops, dev)
         bplanes = []
-        raw = _upload_bytes(b.data, dev) if isinstance(b, PackedUpload) else None
-        for c0 in range(0, cols, COL_BLOCK):
-            if raw is not None:
-                bt = _unpack56_cols(raw, n, cols, c0, min(cols, c0 + COL_BLOCK))
-            else:
-                bt = _upload(b[:, c0:c0 + COL_BLOCK], dev)  # type: ignore[index]
-            bplanes.append(planes_of(bt, np_))
-            del bt
-        del raw
+        pend: list[torch.Tensor] = []  # narrow column runs of consecutive parts, merged up to COL_BLOCK columns
+
+        def flush() -> None:
+            if pend:
+                bt = pend[0] if len(pend) == 1 else torch.cat(pend, dim=1)
+                pend.clear()
+                bplanes.append(planes_of(bt, np_))
+
+        for part in parts:
+            pc = int(part.shape[1])
+            raw = _upload_bytes(part.data, dev) if isinstance(part, PackedUpload) else None
+            for c0 in range(0, pc, COL_BLOCK):
+                if raw is not None:
+                    bt = _unpack56_cols(raw, n, pc, c0, min(pc, c0 + COL_BLOCK))
+                else:
+                    bt = _upload(part[:, c0:c0 + COL_BLOCK], dev)
+                if sum(int(x.shape[1]) for x in pend) + int(bt.shape[1]) > COL_BLOCK:
+                    flush()
+                pend.append(bt)
+                del bt
+            del raw
+        flush()
+        del parts
     if aplanes is None:
         aplanes = _a_planes(ring_t.result(), np_)
         del ring_t
@@ -878,9 +898,10 @@ def item(w: torch.Tensor, const: torch.Tensor, m: int, n: int, ring_t: Any, b: n
             check.verify()
             check = None
         y = torch.empty((r1 - r0, cols), dtype=torch.int64, device=dev)
-        for j, pl in enumerate(bplanes):
-            c0 = j * COL_BLOCK
+        c0 = 0
+        for pl in bplanes:  # column blocks in order (a part's last block may be narrower)
             gemm_into(wr, pl, cr, y[:, c0:c0 + pl.shape[1]], False)
+            c0 += int(pl.shape[1])
         res = _keyswitch_t(hs, ops_t, y)
         del hs, y
         copies.put(res, r0 // PACK, r1 // PACK)
@@ -1007,6 +1028,40 @@ class PackedUpload:
 
             self._host = unpack_bits(self.data, self.n * self.cols, 56).reshape(self.n, self.cols)
         return self._host
+
+
+class MultiUpload:
+    """The uploads of several coalesced items of one linear (``parts``: each a :class:`PackedUpload` or an
+    ``(n, 256 g)`` array), side by side as one ``(n, sum cols)`` upload: :func:`item` unpacks each part on its own
+    (no repacking), so one hint computation serves every group of every part
+    (:meth:`pgw.service.pks_provider.PKSProvider.run_items`).
+    """
+
+    def __init__(self, parts: list[Any]):
+        if not parts or len({int(p.shape[0]) for p in parts}) != 1 or any(int(p.shape[1]) % D for p in parts):
+            raise ValueError("pks-v3 coalesced upload: parts of different widths or partial groups")
+        self.parts = list(parts)
+        self.shape = (int(parts[0].shape[0]), sum(int(p.shape[1]) for p in parts))
+
+
+def split_reply(out: np.ndarray | PackedReply, groups: list[int]) -> list[bytes]:
+    """The wire bytes (``pack_bits(., 36)``) of each part's reply, ``groups`` reply groups per part in order, from a
+    coalesced item's reply (``(G, nb, 8192)`` values or a :class:`PackedReply`). Each group's reply is a function of
+    its own upload and keys and the shared public hint only, so every part's bytes equal its item computed alone."""
+    from pgw.hemask.wire import pack_bits
+
+    total = out.low.shape[0] if isinstance(out, PackedReply) else out.shape[0]
+    if sum(int(g) for g in groups) != total:
+        raise ValueError("split_reply: group counts do not add up")
+    res, g0 = [], 0
+    for g in groups:
+        g1 = g0 + int(g)
+        if isinstance(out, PackedReply):  # pack_bits layout of a (g, nb, NR) reply: the 32-bit words, then the tails
+            res.append(out.low[g0:g1].tobytes() + out.tail[g0:g1].tobytes())
+        else:
+            res.append(bytes(pack_bits(np.ascontiguousarray(out[g0:g1]).reshape(-1), 36)))
+        g0 = g1
+    return res
 
 
 class PackedReply:

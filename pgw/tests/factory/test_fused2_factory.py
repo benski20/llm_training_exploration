@@ -26,10 +26,13 @@ from pgw.factory.fused2_gen import Fused2MaskGenerator, reference_wr
 from pgw.factory.fused2_he import (
     DigitSplitProducts,
     Fused2HEPack,
+    TopDigitProducts,
     digit_bound_ok,
+    digit_plan,
     he_key,
     recombine_digits,
     split_digits,
+    split_plan,
 )
 
 RING = RingParams(56, 12, 53)
@@ -166,6 +169,43 @@ def test_digit_split_recombination_is_exact(k_he: int, b: int) -> None:
     # recombination of hand-made centered values
     ys = [torch.tensor([[(1 << k_he) - 1]]), torch.tensor([[1]])]  # -1, then +1 * 2^b
     assert int(recombine_digits(ys, 56, k_he, b)[0, 0]) == (1 << b) - 1
+
+
+@pytest.mark.parametrize(("k_he", "n", "products"), [(32, 5120, 3), (32, 27648, 4), (32, 29568, 4), (40, 29568, 2),
+                                                     (32, 96, 3)])
+def test_top_digit_plan_is_exact(k_he: int, n: int, products: int) -> None:
+    """The top-digit plan: balanced exact low digits plus one top digit mod 2^K_he; ``W r mod 2^56`` bit for bit at
+    the bound's widest digits, with extreme weight rows and extreme masks."""
+    plan = digit_plan(n, 56, k_he)
+    assert len(plan) == products and plan[-1] == (56 - k_he, k_he, False)
+    assert sum(w for _s, w, ex in plan if ex) == 56 - k_he
+    b = plan[0][1]
+    assert 128 * (1 << (b - 1)) * n < 1 << (k_he - 1)  # exact balanced digits
+    assert b == 56 - k_he or 128 * (1 << b) * n >= 1 << (k_he - 1)  # and the widest such (or all low bits at once)
+    g = torch.Generator().manual_seed(n)
+    w = {"x-f2": torch.randint(-128, 128, (19, n), dtype=torch.int8, generator=g)}
+    w["x-f2"][0] = -128
+    w["x-f2"][1] = 127
+    rows = SeedExpander(os.urandom(32)).ring_uniform_rows(n, 56, 0, 6, "r", "x")
+    rows[0] = (1 << 56) - 1
+    rows[1] = 0
+    rows[2] = (1 << 55) | ((1 << 23) + (1 << (b - 1)))  # balanced carries into the top digit
+    rows[3, : n // 2] = (1 << 56) - 1
+    for stack in (False, True):
+        he = _ExactHE(w, k_he)
+        top = TopDigitProducts(he, k=56, k_he=k_he, shapes={"x/f2": (19, n)}, stack=stack)
+        got = top.matmul("x/f2", rows.clone())
+        assert np.array_equal(got.numpy().view(np.uint64), reference_wr(rows, w["x-f2"], 56))
+        assert top.stats["digit_products"] == products
+        # stacked: one call of products x 6 mask rows; else one call of 6 rows per plane
+        assert he.seen == ([("x-f2", 6 * products, n)] if stack else [("x-f2", 6, n)] * products)
+    ds = split_plan(rows, plan, k_he)
+    assert all(int(d.min()) >= 0 and int(d.max()) < 1 << k_he for d in ds)  # every plane a valid K_he mask row
+    rec = torch.zeros_like(rows)
+    for (sh, wd, ex), d in zip(plan, ds, strict=True):
+        dd = torch.where(d >= 1 << (wd - 1), d - (1 << k_he), d) if ex else d
+        rec = (rec + (dd << sh)) & ((1 << 56) - 1)
+    assert torch.equal(rec, rows)  # r = sum 2^s d mod 2^56
 
 
 # ---- digit split: the real encrypted factories ------------------------------------------------------------------
@@ -320,3 +360,36 @@ def test_encrypted_fused2_checks_every_row_with_enough_vectors(f2w: Any) -> None
     assert us.shape[0] == private_check_vectors_for(gen.ring, lin.n) >= 2
     plain = Fused2MaskGenerator(f2w, RING, self_check_rows=2)
     assert plain.self_check_rows == 2 and plain._private(lin.key)[0].shape[0] == 2
+
+
+def test_top_digits_pks_v3_equals_plain_bit_for_bit(f2w: Any, maskgen_model: Any, tmp_path: Path) -> None:
+    """The top-digit plan on the real pks-v3 factory: the same segments as plain generation with 3-4 ordinary v3
+    requests per linear and chunk instead of 7."""
+    pytest.importorskip("pgw_ntt")
+    from pgw.hemask.pks_backend import InProcessPKSProvider, PKSHintStore, PKSMaskBackend, RemotePKS
+    from pgw.service.fused2_lane import fused2_fingerprint
+
+    fp = fused2_fingerprint(f2w, RING)
+    adapter = Fused2HEPack(f2w, fp)
+    try:
+        store = PKSHintStore.build(tmp_path / "pks", adapter)
+    except ConfigError as exc:  # pragma: no cover - shapes
+        pytest.skip(str(exc))
+    kern = {he_key(lin.key): maskgen_model.kernel(he_key(lin.key)) for lin in f2w.linears()}
+    inproc = InProcessPKSProvider(adapter, kernels=kern)
+    seen: list[int] = []
+
+    def post(body: bytes, rid: str, decode: Any) -> Any:
+        seen.append(len(body))
+        return inproc(body, rid, decode)
+
+    remote = RemotePKS(post, fp, {k: kk.out_features for k, kk in kern.items()}, store.a_seed)
+    be = PKSMaskBackend(adapter, RingParams.from_name("K32A12C27"), store, remote, groups_per_call=1)
+    shapes = {lin.key: (lin.m, lin.n) for lin in f2w.linears()}
+    he = TopDigitProducts(be, k=56, k_he=32, shapes=shapes, scheme="pks-v3")
+    plain, enc, _ = _plain_and_he_segments(f2w, he, tmp_path)
+    _assert_same_segments(plain, enc, f2w)
+    assert all(len(p) in (3, 4) for p in he.plans.values())
+    # stacked planes: chunks of 5 and 2 slots x 3-4 planes fit one 256-slot group: ONE ordinary v3 request per linear
+    # and chunk (the digit split above sends 7)
+    assert len(seen) == 2 * len(he.plans)

@@ -57,6 +57,7 @@ __all__ = [
     "ReplyKey",
     "a_mlwe_rows",
     "compact_hint",
+    "crs_a_seed",
     "decrypt_pks",
     "encrypt_rlwe",
     "ks_a",
@@ -359,6 +360,38 @@ class PKSParams:
 
 A_LABEL = "pgw/hemask/pks-v3/A"
 KS_LABEL = "pgw/hemask/pks-v3/ksk-a"
+#: Domain of the opt-in common public upload seed (:func:`crs_a_seed`).
+CRS_A_DOMAIN = b"pgw/hemask/pks-v3/crs-a/v1\x00"
+
+
+def crs_a_seed(fingerprint: str, epoch: str = "v1") -> bytes:
+    """The opt-in COMMON upload seed of a model (``PGW_PKS_CRS_A=1``, default off; pending review question Q8 of
+    ``research/reviews/mask-cost-consumer.md``): ``SHA-256(domain || fingerprint || 0 || epoch)``, a
+    nothing-up-my-sleeve value that every customer of the model derives LOCALLY (never accepted from the provider:
+    a provider-chosen ``a`` could be ``0``, which would make the upload ``e + 2^24 M``).
+
+    With a common ``A`` the provider's hint ``W8 A`` is the same for every customer of the model, so one hint
+    computation serves the groups of many customers (:meth:`pgw.service.pks_provider.PKSProvider.run_items`).
+    Each customer still draws its own fresh ternary ``t`` and CBD noise per (linear, group) and its own private
+    ``ks_seed``; ``a`` was already shared by all of a customer's groups (common-reference-string use). What
+    changes is only how many instances share one ``a`` (multi-user; see the note, section 4.2)."""
+    import hashlib
+
+    return hashlib.sha256(CRS_A_DOMAIN + fingerprint.encode() + b"\x00" + epoch.encode()).digest()
+
+
+def crs_enabled() -> bool:
+    """``PGW_PKS_CRS_A`` (default off): new hint stores use :func:`crs_a_seed` instead of a fresh upload seed."""
+    import os
+
+    return os.environ.get("PGW_PKS_CRS_A", "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def upload_seed(fingerprint: str) -> bytes:
+    """The upload seed of a new hint store: fresh (default) or, with :func:`crs_enabled`, the common one."""
+    from pgw.core import prng  # looked up at call time (tests replace the seed source)
+
+    return crs_a_seed(fingerprint) if crs_enabled() else prng.new_seed()
 
 
 def public_ring_rows(seed: bytes, n: int, linear: str) -> np.ndarray:

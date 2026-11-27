@@ -24,6 +24,7 @@ import logging
 import os
 import sys
 import threading
+import time
 from collections import OrderedDict
 from collections.abc import Mapping
 from typing import Any
@@ -151,6 +152,97 @@ def hint_bytes(m: int) -> int:
     return int(m) * pks.NU * 8
 
 
+def _result(r: Any) -> bytes | bytearray:
+    if isinstance(r, BaseException):
+        raise r
+    return r  # type: ignore[no-any-return]
+
+
+class _Batch:
+    __slots__ = ("closed", "done", "entries", "error", "groups", "results")
+
+    def __init__(self) -> None:
+        self.entries: list[Any] = []
+        self.groups = 0
+        self.closed = False
+        self.done = threading.Event()
+        self.results: list[Any] | None = None
+        self.error: BaseException | None = None
+
+
+class _Coalescer:
+    """Group commit of pks-v3 device items (``PGW_SERVICE_PKS_COALESCE_MS``, default ``0``: off).
+
+    The first item of a (model, kernel, linear, public seed) opens a batch and waits ``window_s`` (or until the
+    batch holds ``max_groups`` groups, ``PGW_SERVICE_PKS_COALESCE_GROUPS``, default 16); items arriving meanwhile
+    join it, then the opener runs them all as one device item (:meth:`PKSProvider.run_items`) and hands each its
+    reply. Only public data is shared between the items (the seed's hint); each reply is the item's own, bit for
+    bit. The joiners' worker threads wait for the opener (their maskgen slots stay held: queueing only)."""
+
+    def __init__(self, window_s: float, max_groups: int):
+        self.window_s = float(window_s)
+        self.max_groups = max(1, int(max_groups))
+        self._lock = threading.Lock()
+        self._open: dict[tuple[Any, ...], _Batch] = {}
+
+    @classmethod
+    def from_env(cls) -> _Coalescer | None:
+        raw = os.environ.get("PGW_SERVICE_PKS_COALESCE_MS", "").strip()
+        ms = float(raw) if raw else 0.0
+        if ms <= 0:
+            return None
+        return cls(ms / 1e3, int(os.environ.get("PGW_SERVICE_PKS_COALESCE_GROUPS", "16") or 16))
+
+    def submit(self, pv: PKSProvider, fp: str, kern: Any, it: Any, a_seed: bytes,
+               dims: Mapping[str, Any] | None) -> bytes | bytearray:
+        key = (fp, id(kern), it.linear, bytes(a_seed))
+        g = int(it.cols) // D
+        with self._lock:
+            batch = self._open.get(key)
+            if batch is not None and not batch.closed and batch.groups + g <= self.max_groups:
+                idx = len(batch.entries)
+                batch.entries.append(it)
+                batch.groups += g
+                if batch.groups >= self.max_groups:
+                    batch.closed = True
+                    self._open.pop(key, None)
+                leader = False
+            else:
+                batch = _Batch()
+                batch.entries.append(it)
+                batch.groups = g
+                idx, leader = 0, True
+                if g >= self.max_groups:
+                    batch.closed = True
+                else:
+                    self._open[key] = batch
+        if not leader:
+            batch.done.wait()
+            if batch.error is not None:
+                raise batch.error
+            assert batch.results is not None
+            return _result(batch.results[idx])
+        deadline = time.monotonic() + self.window_s
+        while not batch.closed:
+            left = deadline - time.monotonic()
+            if left <= 0:
+                break
+            time.sleep(min(left, 0.002))
+        with self._lock:
+            batch.closed = True
+            if self._open.get(key) is batch:
+                self._open.pop(key, None)
+            entries = list(batch.entries)
+        try:
+            batch.results = pv.run_items(fp, kern, entries, a_seed, dims, return_exceptions=True)
+        except BaseException as exc:
+            batch.error = exc
+            raise
+        finally:
+            batch.done.set()
+        return _result(batch.results[0])
+
+
 class PKSProvider:
     """Switched-hint cache and the v3 item computation (thread-safe).
 
@@ -189,6 +281,9 @@ class PKSProvider:
         self.builds = 0
         self.items = 0
         self.device_items = 0
+        self.coalesced_items = 0
+        self.coalesced_runs = 0
+        self._coalescer: _Coalescer | None = _Coalescer.from_env()
 
     def switched_hint(self, fp: str, kern: Any, linear: str, a_seed: bytes) -> np.ndarray:
         key = (fp, bytes(a_seed), linear)
@@ -281,6 +376,16 @@ class PKSProvider:
         return ok
 
     def _run_device(self, kern: Any, it: Any, a_seed: bytes, b: Any, ops: Any) -> bytes | bytearray | None:
+        out = self._run_device_out(kern, it, a_seed, b, ops)
+        if out is None:
+            return None
+        from pgw.service import pks_gpu
+
+        return out.buf if isinstance(out, pks_gpu.PackedReply) else pack_bits(out.reshape(-1), V3_Y_BITS)
+
+    def _run_device_out(self, kern: Any, it: Any, a_seed: bytes, b: Any, ops: Any) -> Any:
+        """The device item's reply object (a ``PackedReply`` or a ``(G, m/32, 8192)`` array), or ``None`` after a
+        device failure (the caller falls back to the cache path)."""
         from pgw.service import pks_gpu
 
         parts = _device_operands(kern)
@@ -327,11 +432,77 @@ class PKSProvider:
                 self._item_ok[str(p[4])] = False
             return None
         self.device_items += 1
-        return out.buf if isinstance(out, pks_gpu.PackedReply) else pack_bits(out.reshape(-1), V3_Y_BITS)
+        return out
 
     def run_item(self, fp: str, kern: Any, it: Any, a_seed: bytes, dims: Mapping[str, Any] | None = None
                  ) -> bytes | bytearray:
-        """The packed v3 reply of one item (``dims``: the model's ``{linear: (m, n)}``, for the hint policy)."""
+        """The packed v3 reply of one item (``dims``: the model's ``{linear: (m, n)}``, for the hint policy).
+
+        With coalescing on (``PGW_SERVICE_PKS_COALESCE_MS`` > 0, default off) and the device path chosen, the item
+        waits up to that long for other items of the same model, linear, kernel and public seed (other requests:
+        the same customer's or, with the opt-in common seed :func:`pgw.hemask.pks.crs_a_seed`, other customers') and
+        they run as one device item (:meth:`run_items`): one hint computation for all of their groups. The bytes
+        are the same as alone."""
+        co = self._coalescer
+        if co is not None and co.window_s > 0 and self.use_device(fp, kern, it.linear, dims):
+            return co.submit(self, fp, kern, it, a_seed, dims)
+        return self._run_item(fp, kern, it, a_seed, dims)
+
+    def run_items(self, fp: str, kern: Any, items: list[Any], a_seed: bytes,
+                  dims: Mapping[str, Any] | None = None, *, return_exceptions: bool = False) -> list[Any]:
+        """The packed v3 replies of several items of ONE linear under ONE public seed, as :meth:`run_item` gives
+        them one by one (bit for bit), computed as a single device item whose hint rows (the ``W8 A`` GEMM, the
+        switch and the key switch's forward NTTs) are shared by all of their groups. Each group's reply depends only
+        on its own upload, its own reply keys and the public hint, so nothing of one item enters another's reply.
+
+        Falls back to :meth:`run_item` per item when the device path is not chosen, when there is one item, and when
+        the coalesced item fails (e.g. one item's reply keys out of range: then only that item is refused; with
+        ``return_exceptions`` its entry is the exception and the others still get their replies)."""
+
+        def each() -> list[Any]:
+            res: list[Any] = []
+            for it in items:
+                try:
+                    res.append(self._run_item(fp, kern, it, a_seed, dims))
+                except Exception as exc:
+                    if not return_exceptions:
+                        raise
+                    res.append(exc)
+            return res
+
+        if len(items) <= 1 or not self.use_device(fp, kern, items[0].linear, dims):
+            return each()
+        from pgw.service import pks_gpu
+
+        n, m = int(kern.in_features), int(kern.out_features)
+        if n % RANK or m % PACK:
+            raise ProtocolError(f"maskgen v3: {items[0].linear} ({m} x {n}) is not a pks-v3 shape")
+        if len({it.linear for it in items}) != 1:
+            raise ValueError("run_items: items of different linears")
+        groups = [int(it.cols) // D for it in items]
+        wire = pks_gpu.wire_layout_ok() and all(int(it.b_bits) == 56 for it in items)
+        try:
+            for it, g in zip(items, groups, strict=True):
+                if int(it.cols) % D or len(it.ksk) != g * V3_KSK_BYTES:
+                    raise ProtocolError("maskgen v3: reply key size mismatch")
+            parts = [pks_gpu.PackedUpload(it.b, n, int(it.cols)) if wire
+                     else unpack_bits(it.b, n * int(it.cols), it.b_bits).reshape(n, int(it.cols)) for it in items]
+            if pks_gpu.keys_layout_ok():
+                keys: Any = pks_gpu.PackedKeys(b"".join(bytes(it.ksk) for it in items), sum(groups))
+            else:
+                keys = np.concatenate([unpack_ksk(it.ksk, g) for it, g in zip(items, groups, strict=True)])
+            out = self._run_device_out(kern, items[0], a_seed, pks_gpu.MultiUpload(parts), keys)
+        except ProtocolError:  # one item's data refused: run each alone so only that one fails
+            out = None
+        if out is None:
+            return each()
+        self.items += len(items)
+        self.coalesced_items += len(items)
+        self.coalesced_runs += 1
+        return list(pks_gpu.split_reply(out, groups))
+
+    def _run_item(self, fp: str, kern: Any, it: Any, a_seed: bytes, dims: Mapping[str, Any] | None = None
+                  ) -> bytes | bytearray:
         n, m, cols = int(kern.in_features), int(kern.out_features), int(it.cols)
         if n % RANK or m % PACK:
             raise ProtocolError(f"maskgen v3: {it.linear} ({m} x {n}) is not a pks-v3 shape")

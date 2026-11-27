@@ -157,6 +157,9 @@ _NON_FIELD_ENV = {
     "PGW_NTT",  # native NTT switch read by pgw.hemask.ntt
     "PGW_PKS_NATIVE",  # native pks-v3 switch read by pgw.hemask.pks_native
     "PGW_REQUIRE_NATIVE",  # build-time switch read by setup.py (fail when the extensions cannot be compiled)
+    "PGW_SERVICE_PKS_COALESCE_MS",  # pks-v3 coalesced device items (pgw.service.pks_provider._Coalescer)
+    "PGW_SERVICE_PKS_COALESCE_GROUPS",
+    "PGW_PKS_CRS_A",  # the opt-in common upload seed (pgw.hemask.pks.upload_seed)
 }
 
 

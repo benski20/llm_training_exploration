@@ -4400,3 +4400,136 @@ at 5-50 ms RTT, privacy and integrity unchanged. All new paths default off; the 
   schedules, a parallel-block checkpoint (LayerNorm / GELU architecture in the engine), 7B+ quality of the folded head.
 - Tests: `tests/engine/test_fused2_headfold.py` (34), `tests/engine/test_fused_parallel.py` (16); `tests/engine` 1262
   passed, 15 skipped (CUDA); ruff clean on the new files.
+
+## 2026-11-27: mask cost at consumer scale (20 tok/s up to 32B): cost model, coalesced provider items, client GPU kernels
+
+Full note: `research/reviews/mask-cost-consumer.md`; numbers: `research/reviews/mask_cost_numbers.py`.
+
+**Finding 1: bandwidth, not mask compute, blocks a consumer device on the internet.**
+* Per slot, the online trips move 30.3 MB at 32B (9.5 MB at 7B) and pks-v3 masks another 42.7 MB (13.6 MB).
+* At 20 tok/s and 2 slots per token that is ~23 Gbit/s per user at 32B and ~7 Gbit/s at 7B.
+* Any scheme where the provider makes the masks needs at least 4 B per input and per output value, so it at least
+  doubles the traffic; pks-v3 is close to that floor.
+* Only masks made on the device remove that traffic. A device holding `W8` and a GPU can compute `W8 r`; this is
+  exact and private by construction.
+* **The 32B / 20 tok/s / consumer-internet target needs a change to the online trips** (outside mask generation).
+
+**Finding 2: at consumer stock sizes, the provider's work is 85-87 % public hint.**
+* A consumer at 32B holds one 256-slot group (19.2 MB of masks per slot), so every item recomputes `W8 A` and the
+  key switch's forward NTTs for 256 slots.
+* The result is 48 slots/s per H100 at 32B, not the 135 quoted for 1024-slot items.
+
+**Built (default off, exact):**
+* **Coalesced items.** `PKSProvider.run_items`: several items of one linear and one public seed run as one device
+  item, with the hint computed once for all their groups. Supporting pieces: `pks_gpu.MultiUpload` (each item's
+  wire bytes unpacked on its own, one-group parts merged into 512-column plane blocks) and
+  `pks_gpu.split_reply`.
+  * `PGW_SERVICE_PKS_COALESCE_MS` turns `run_item` into a group commit, capped by
+    `PGW_SERVICE_PKS_COALESCE_GROUPS` (16).
+  * A refused item (reply keys out of range) is isolated: the batch reruns item by item.
+* **The common upload seed.** `pks.crs_a_seed(fingerprint, epoch)` is SHA-256 of a public label, derived locally
+  and never taken from the provider. `PGW_PKS_CRS_A=1` makes hint builds and provisioning use it.
+  * This lets coalescing span customers. Each customer keeps its private `ks_seed` and fresh `t`, `e`, `t'`.
+  * Standard RLWE assumption unchanged. The multi-user precomputation question is **Q8**, pending the external
+    review, so the switch stays off.
+* **Client kernels for a GPU.** `pgw.hemask.pks_torch`: the upload pad (3-prime NTT and a centred CRT mod 2^56
+  with no int64 wrap-around), the upload bodies, the reply keys and the decryption, in exact torch.
+  `decrypt_fused` uses the provider's validated Triton MAC + inverse NTT kernel with one product.
+
+**Measured (Kaggle T4, `pgw-maskcost-t4`, two runs, ~3 min of GPU steps each; `results/kaggle/maskcost-t4{,-r2}`):**
+* Every reply was byte-identical: coalesced against one by one, and against one 8-group item.
+* `pytest` on CUDA: 13 passed, 3 skipped (the tests that need `pgw_pks`; they pass on CPU here).
+* 8 one-group items, coalesced against one by one:
+
+  | linear | 7B | 32B |
+  |---|---|---|
+  | gate_up | 2.19x | 2.52x |
+  | down | 3.71x | 3.64x |
+  | qkv | - | 3.03x |
+
+  The model predicted 5.1-5.5x. The hint part matches the model (0.74-1.15x); the per-group part is 3-5x the model
+  (reply copies, `y` GEMMs at 256-512 columns).
+* Client kernels on the T4, eager torch int64: 51.7 / 158.9 ms per slot at 7B / 32B, slower than one tuned CPU core
+  (34.5 / 113). The fused decryption runs at 9.2 / 27.5 ms against 20.4 / 63.1 eager; the eager int64 tail, not
+  timed separately, is the likely remainder.
+
+**Estimates (H100 model; range = model as is ... per-group part x 4 as on the T4):**
+
+| | today (one-group items) | coalesced, common seed, 8-GPU node, upload hidden |
+|---|---|---|
+| 32B, slots/s per H100 | 48 | 143-508 |
+| 7B, slots/s per H100 | 164 | 473-1684 |
+| 32B, users per H100 at 20 tok/s and 2 slots/token | 1.2 | 3.4-13.5 |
+| 7B, users per H100 at 20 tok/s and 2 slots/token | 4.1 | 12-48 |
+
+* Client cores per user (32B / 7B): 4.5 / 1.4 today. With fully fused GPU kernels, estimated 0.9 / 0.3 cores
+  plus ~16-24 % / 5-8 % of a T4-class GPU (~2 ms per slot on an RTX 4070 class at 32B).
+* Beyond the top of the provider range, the NIC binds: 500 slots/s x 42.7 MB is 171 Gbit/s per GPU at 32B.
+
+**Rejected or design only (verdicts in the note):**
+* Larger groups (rank 4): 4x the client stock.
+* A reply key or upload secret shared across linears: covers a passive provider only.
+* Mask stock shared across devices: reuse risk.
+* "HE online" (no masks): reply keys and the hint do not amortise over the rows of one trip.
+* pks-v4, the transposed hint and basis B: still rejected.
+* Fused trips need no larger hint (fused2's reparametrisation). K56 fused trips would need a K56 pks variant at
+  1.5-2x the cost per element (n = 8192 / 16384 to keep v3's margins; at n = 4096 the upload drops to 148-bit
+  core-SVP). **Keep fused trips at K32 for masking**, or pay the 1.5-2x.
+* Speculation rows already share all shareable work (a group); sharing `r` leaks differences.
+* Design, not built:
+  * a device hint cache (with the common seed: 34 GB at 7B on an H100, 114 GB at 32B on a B200 or MI300X);
+  * a tensor-core key switch (an Ozaki-style int8 split across groups; ~1.2-1.3x estimated overall);
+  * width-class `a` (a client cache of the public transforms, ~15 % of client CPU at one group per request);
+  * GPU sampling with the existing device ChaCha20 (same streams).
+
+**Proposed RunPod stage** (`deploy/runpod/RUNBOOK.md`, session 7 `maskcost`; not in `jobs.py`, not launched,
+~$3): coalescing at S = 1..64 and under concurrent callers on an H100, the per-group stage split, and the client
+kernels on an RTX 4090.
+
+**Process note.** The second Kaggle push overlapped another agent's `pgw-depth-05b` run by a few minutes. Its new
+run had started after my first kernel finished, and I misread the list order. My job was short (~5 min of T4);
+theirs was still running normally when mine completed.
+
+Tests:
+* `tests/service/test_pks_coalesce.py` (8; three need `pgw_pks`);
+* `tests/hemask/test_pks_torch.py` (4 on CPU, 8 with CUDA);
+* directories, one at a time:
+  * `tests/service`: 608 passed, 80 CUDA skips;
+  * `tests/hemask`: 484 passed, 20 skips, and 5 failures, all in
+    `test_native_sampling.py::test_backend_matmul_exact_for_every_schedule` (cpu_f64 schedules). They are
+    timing-sensitive under xdist on a loaded box and the test passes alone, 40/40;
+  * `tests/provision`: 55 passed, after `pks.upload_seed` was fixed to read `pgw.core.prng.new_seed` at call time
+    so the deterministic-seed test patches it;
+  * `tests/docs/test_code_consistency.py`: 24 passed, with the three new switches listed;
+* `ruff` is clean on the changed files. mypy was not run: this environment's mypy lacks pydantic.
+
+**Addendum (same day): K56 masks for fused2** (input: `research/reviews/consumer-round-trips.md`; note section 12).
+* **Measured cost today.** fused2's K56 masks come from 7 exact digit products on pks-v3 (K32): 7x provider maskgen
+  and ~7x client work per slot.
+* **Built (default off, bit-identical, no new cryptography):**
+  * The **top-digit plan** (`pgw.factory.fused2_he.digit_plan`, `TopDigitProducts`, `PGW_FUSED2_HE_DIGITS=top`). The
+    top 32 bits of `r` need only `W d mod 2^32`, which any K32 product returns. Balanced exact low digits cover the
+    rest: 3 products at `n = d` and 4 at `n = I` (2 instead of 4 at mlwe K40).
+  * **Stacked planes**: one call, so one provider item and one hint per chunk.
+  * Tested at bound-tight widths and on the real pks-v3 factory: segments identical to plain generation, 1 request
+    per linear and chunk instead of 7.
+  * Model, 32B H100 at consumer stock: **6.9 -> 41 K56 slots/s** (25 with the T4-measured per-group cost), about
+    1.2-1.6x a K32 slot.
+* **Prototyped (reference, needs review Q9):** `pgw.hemask.pks56`, a direct K56 parameter set.
+  * Upload `2^80`, `q1` 3 x 24-bit primes, `P` 3 x 28-bit, reply 60 bits.
+  * Noise 2^13.33 against 2^14.96, every term within 0.05 bit of v3's.
+  * Core-SVP 148.3 / 153.0 classical (134.6 / 138.9 quantum), against v3's 238.9 / 251.1: inside the HE-standard
+    128-bit tables. The conservative variant at n 8192 / 16384 gives 369 / 383 bits.
+  * Exact round trips are tested.
+  * Estimated at ~1.45x a K32 slot (provider) and ~1.4x (client). With the common seed it is ~2x the top-digit
+    plan: 32B S = 64, 350 against 180 slots/s.
+* **(b) No stage of a fused trip can stay at K32** exactly with perfect hiding: the carries of a K32 input mask are
+  data-dependent.
+* **(c) Per token, fused2 at 32B, 20 tok/s, 2 slots per token:**
+  * online 17 Gbit/s;
+  * masks 21 Gbit/s with the direct set, 47 Gbit/s with the top-digit plan;
+  * maskgen users per H100: 0.17 today, 1.0 top-digit stacked, 8.8 with direct + common seed + coalescing (model).
+* Tests:
+  * `tests/factory/test_fused2_factory.py`: 16 passed;
+  * `tests/hemask/test_pks56.py`: 4 passed;
+  * `tests/factory`: 491 passed, 9 CUDA skips.
