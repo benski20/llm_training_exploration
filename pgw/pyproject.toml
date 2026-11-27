@@ -108,7 +108,7 @@ version = { attr = "pgw.__version__" }
 where = ["src"]
 
 [tool.setuptools.package-data]
-pgw = ["py.typed", "observability/static/*", "console/static/**/*", "design/*.css", "design/fonts/*", "platform/static/*",
+pgw = ["py.typed", "observability/static/*", "console/static/**/*", "design/*.css", "design/fonts/*", "chat/static/**/*", "platform/static/*",
        "sdk/draft_heads/*.pgwhead", "sdk/draft_heads/README.md"]
 
 [tool.cibuildwheel]

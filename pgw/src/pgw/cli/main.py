@@ -11,6 +11,7 @@
     pgw service serve | service token create|hash | service enroll create|list|revoke
     pgw gateway enroll CODE --config-dir DIR   (pgw.gateway.cli)
     pgw gateway serve | gateway keys create|list|revoke  (pgw.gateway.cli)
+    pgw chat [--model M] [--no-browser]   private chat on this computer (pgw.chat.cli)
     pgw bench ring|factory|service
     pgw config show ROLE | config render TEMPLATE OUT
 
@@ -40,6 +41,7 @@ _LAZY = {
     "factory": ("pgw.factory.cli", "factory_group", "factory"),
     "gateway": ("pgw.gateway.cli", "gateway_group", "gateway"),
     "sdk": ("pgw.sdk.cli", "sdk_group", "gateway"),
+    "chat": ("pgw.chat.cli", "chat_command", "client"),
 }
 
 
