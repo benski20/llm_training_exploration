@@ -89,7 +89,8 @@ def build_weights(args: argparse.Namespace, pack: Any, tok: Any, ring: Any) -> A
         tries = [args.migrate_bits] + ([b for b in (6, 4) if b < args.migrate_bits] if args.auto_bits else [])
         probes: dict[str, float] = {}
         for b in tries:
-            w = Fused2Weights(pack, fl, multipliers=migration_multipliers(pack, b))
+            w = Fused2Weights(pack, fl, multipliers=migration_multipliers(pack, b, head=args.head_fold),
+                              head=args.head_fold)
             if not args.auto_bits:
                 break
             below = probe_rows_below_a(pack, w, ring, tok(CALIB_TEXT, return_tensors="pt").input_ids[0][:128])
@@ -143,8 +144,15 @@ def main() -> None:
                     "fused2 segments into a mask store and the gateway takes its rows from an incremental "
                     "reservation; with either, the gateway's model and backend run on weight-free tables")
     ap.add_argument("--threads", type=int, default=0)
+    ap.add_argument("--head-fold", action="store_true",
+                    help="the LM head folded into the last trip (pure migration, socket transport, in-process masks)")
+    ap.add_argument("--local-qkv0", action="store_true", help="layer 0's qkv computed exactly on the gateway")
     ap.add_argument("--json", default=None)
     args = ap.parse_args()
+    if (args.head_fold or args.local_qkv0) and (args.transport != "socket" or args.masks != "inproc"
+                                                or args.columns > 0 or args.migrate_bits <= 0):
+        raise SystemExit("--head-fold / --local-qkv0: socket transport, in-process masks, pure migration only")
+    f2kw = {"head_fold": args.head_fold, "local_qkv0": args.local_qkv0}
     if args.threads:
         torch.set_num_threads(args.threads)
     from transformers import AutoTokenizer
@@ -219,7 +227,7 @@ def main() -> None:
                                  spin_us=int(os.environ.get("PGW_LANE_SPIN_US", "400")))
             print(f"lane: graphs {ticket.get('graphs')}, provider start-up {ticket.get('startup_s')} s", flush=True)
         else:
-            dims = {lin.key: (lin.m, lin.n) for lin in w.linears()}
+            dims = {lin.key: (lin.m, lin.n) for lin in w.all_linears()}
             client = RemoteFused2Provider(address, ring.k, dims)
         connect_s = time.time() - t0
         ids = tok(args.prompt, return_tensors="pt").input_ids[0]
@@ -269,14 +277,14 @@ def main() -> None:
         else:
             src = Fused2MaskSource(w, ring)
             t_chk = time.time()
-            for lin in w.linears():
+            for lin in w.all_linears():
                 src.check_vectors(lin)  # u W8 mod p of every linear (factory precompute), off the measured path
             check_setup_s = time.time() - t_chk
             prefill_s = src.prefill(slots)
         print(f"provider up in {connect_s:.1f}s; masks for {slots} rows (slots) in {prefill_s:.1f}s", flush=True)
         be = Fused2MaskedBackend(ring, client, src, weights=gw_w)
         model = TransformerModel(pack, be)
-        sched = enable_fused2(model, gw_w, ring)
+        sched = enable_fused2(model, gw_w, ring, **f2kw)
         if session is not None:
             src = be.masks_for(session)
         cache = model.new_cache(slots + 1)
@@ -307,7 +315,9 @@ def main() -> None:
             "decode_tok_s": len(step_s) / sum(step_s) if step_s else None,
             "ms_per_token_p50": 1e3 * statistics.median(step_s) if step_s else None,
             "trips_per_token": dec_trips / max(1, len(step_s)),
-            "expected_trips_per_token": 2 * w.num_layers + 1,
+            "expected_trips_per_token": 2 * w.num_layers + (0 if args.local_qkv0 else 1),
+            "head": "folded into the last trip (provider)" if args.head_fold else "gateway float head",
+            "standard_trips_per_token_provider_head": 4 * w.num_layers + 1,
             "bytes_per_token": dec_bytes / max(1, len(step_s)),
             "trip_ms_p50": _pct(trip_ms, 0.5), "trip_ms_p90": _pct(trip_ms, 0.9),
             "provider_compute_ms_p50": _pct(comp_ms, 0.5),
@@ -335,7 +345,7 @@ def main() -> None:
         if not args.no_replay:
             t2 = time.time()
             plain = TransformerModel(pack, Fused2PlainBackend(ring))
-            enable_fused2(plain, w, ring)
+            enable_fused2(plain, w, ring, **f2kw)
             pc = plain.new_cache(slots + 1)
             n_rep = len(calls) if args.replay_calls <= 0 else min(len(calls), args.replay_calls)
             ref = [plain.forward(c, pc) for c in calls[:n_rep]]

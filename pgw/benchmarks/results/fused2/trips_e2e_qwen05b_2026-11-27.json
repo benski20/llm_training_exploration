@@ -1,0 +1,35 @@
+{
+ "model": "/root/.cache/huggingface/hub/models--Qwen--Qwen2.5-0.5B-Instruct/snapshots/7ae557604adf67be50417f59c2c2f167def9a775",
+ "layers": 24,
+ "prompt_tokens": 14,
+ "standard": {
+  "trip_plan": 97,
+  "expected": 97
+ },
+ "fused2-folded": {
+  "trips_per_token": 48.0,
+  "checks_per_token": 96.0,
+  "bytes_up_per_token": 1268736.0,
+  "bytes_down_per_token": 3184384.0,
+  "ms_per_token_cpu": 15993.079791166565,
+  "ttft_s_cpu": 56.51974960900043,
+  "exact": true,
+  "positions": 7,
+  "trip_plan": 48,
+  "expected_trips": 48,
+  "build_s": 470.9550018310547
+ },
+ "parallel": {
+  "trips_per_token": 25.0,
+  "checks_per_token": 49.0,
+  "bytes_up_per_token": 1124480.0,
+  "bytes_down_per_token": 3041920.0,
+  "ms_per_token_cpu": 13069.444987166664,
+  "ttft_s_cpu": 37.44043937399965,
+  "exact": true,
+  "positions": 7,
+  "trip_plan": 25,
+  "expected_trips": 25,
+  "build_s": 228.68719673156738
+ }
+}

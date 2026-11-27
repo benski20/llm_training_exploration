@@ -80,6 +80,7 @@ __all__ = [
     "FUSED2_META",
     "P61",
     "F2Linear",
+    "Fused2FoldedHead",
     "Fused2MaskSource",
     "Fused2MaskedBackend",
     "Fused2PlainBackend",
@@ -249,7 +250,8 @@ class Fused2Schedule:
 
     name = "fused2"
 
-    def __init__(self, weights: Fused2Weights, ring: RingParams):
+    def __init__(self, weights: Fused2Weights, ring: RingParams, *, head_fold: bool = False,
+                 local_qkv0: bool = False):
         if not ring.cap:
             raise ConfigError("fused2 needs a capped ring (e.g. K48A12C45)")
         if ring.cap + 1 >= 61:
@@ -258,8 +260,22 @@ class Fused2Schedule:
             if lin.gw is not None and (int(lin.gw.shape[1]) * ((1 << (lin.gbits - 1)) - 1)
                                        * (1 << ring.cap)) >= 1 << 63:
                 raise ConfigError(f"fused2 {lin.key}: gateway columns' product can exceed int64 at this cap")
+        if head_fold and weights.head is None:
+            raise ConfigError("fused2 head_fold needs weights with the folded head (Fused2Weights(head=True))")
+        if head_fold and weights.down[-1].sigma <= 0.0:
+            raise ConfigError("fused2 head_fold needs the last down's spectral-norm bound (sigma=True)")
         self.w = weights
         self.ring = ring
+        #: Opt-in (default off): the LM head is the second stage of the last trip (last down + folded head) for
+        #: the rows that need logits; the model's head mode must be :class:`Fused2FoldedHead`. 2L + 1 trips per
+        #: pass with the head on the provider (instead of 2L + 2 with a separate masked head trip).
+        self.head_fold = bool(head_fold)
+        #: Opt-in (default off): layer 0's qkv product (the folded ``W_qkv0 diag(g)`` times the quantized embedding
+        #: row, a public int8 matrix: 1 / 17 / 37 / 84 MB at 0.5B / 7B / 32B / 72B) is computed exactly on the
+        #: gateway: the same integers, one trip fewer per pass, the provider sees strictly less.
+        self.local_qkv0 = bool(local_qkv0)
+        #: Logit rows the folded head computed (diagnostics).
+        self.head_rows = 0
         #: Gateway integer MACs of split-fold columns (cost accounting).
         self.gateway_macs = 0
         #: When a dict: per first-linear key, the per-channel max ``|H| / hmul`` seen (calibration only).
@@ -272,7 +288,7 @@ class Fused2Schedule:
 
     def linears(self, model: Any, layer: int) -> Sequence[LinearId]:
         lids = [LinearId(layer, LinearKind.O), LinearId(layer, LinearKind.DOWN)]
-        return [LinearId(0, LinearKind.QKV), *lids] if layer == 0 else lids
+        return [LinearId(0, LinearKind.QKV), *lids] if layer == 0 and not self.local_qkv0 else lids
 
     def _hist(self, bits: np.ndarray) -> None:
         with self._lock:
@@ -307,8 +323,11 @@ class Fused2Schedule:
             for h in hs:
                 xq, s = quantize_single(torch.from_numpy(h), lin, ring)
                 trips.append((Fused2Trip("single", lin, xq, ring.cap), s))
-            ys = yield [LinearCall(LinearId(0, LinearKind.QKV), t.x, sess, {FUSED2_META: t})
-                        for (t, _), sess in zip(trips, sessions, strict=True)]
+            if self.local_qkv0:  # the same exact integers as the provider's product (no trip, no mask)
+                ys = [_exact(t.x, lin, ring) for t, _ in trips]
+            else:
+                ys = yield [LinearCall(LinearId(0, LinearKind.QKV), t.x, sess, {FUSED2_META: t})
+                            for (t, _), sess in zip(trips, sessions, strict=True)]
             qkv = [normed_output(y, lin, s, rinv_rows(h, eps), t.x)
                    for y, (t, s), h in zip(ys, trips, hs, strict=True)]
             self._gw(lin, trips)
@@ -336,6 +355,9 @@ class Fused2Schedule:
         # trip B: down + residual add -> next layer's qkv (input norm folded); the last layer: down only
         l1 = w.down[layer]
         last = layer + 1 >= w.num_layers
+        if last and self.head_fold:
+            yield from self._last_with_head(model, st, acts, hs1)
+            return
         l2 = None if last else w.qkv[layer + 1]
         trips = []
         for a, h in zip(acts, hs1, strict=True):
@@ -362,7 +384,91 @@ class Fused2Schedule:
         st.hs = [torch.from_numpy(h.astype(np.float32)).to(model.dtype) for h in hs2]
 
 
-def enable_fused2(model: Any, weights: Fused2Weights, ring: RingParams) -> Fused2Schedule:
+    def _last_with_head(self, model: Any, st: Any, acts: list[torch.Tensor], hs1: list[np.ndarray],
+                        l1: F2Linear | None = None, hd: F2Linear | None = None, lid: LinearId | None = None) -> Any:
+        """The last layer's trip B with the folded head: per sequence a pair call ``(down, head)`` for the rows
+        that need logits (the last row; every row with ``all_logits``; the last ``last_logits`` rows) and a single
+        call (down, multipliers applied) for the other rows, all in one trip. ``Z`` of the head rows is the
+        int8 head of the final-normed residual: ``logits = (Z * sw_head) * (s / rms(h))``."""
+        w, ring, eps = self.w, self.ring, float(model.eps)
+        l1 = w.down[-1] if l1 is None else l1
+        hd = w.head if hd is None else hd
+        assert hd is not None
+        ex = st.extra[FUSED2_META]
+        lid = LinearId(w.num_layers - 1, LinearKind.DOWN) if lid is None else lid
+        calls: list[LinearCall] = []
+        # (head rows, (trip, s) of the other rows or None, (trip, s) of the head rows)
+        plan: list[tuple[int, Any, Any]] = []
+        for seq, a, h, sess in zip(st.seqs, acts, hs1, st.sessions, strict=True):
+            rows = int(a.shape[0])
+            nh = rows if seq.all_logits else (min(rows, int(seq.last_logits)) if seq.last_logits > 0 else 1)
+            aq, rq, s, bits = quantize_pair(a, h, l1, hd, ring)  # every row bounded for both stages
+            self._hist(bits)
+            cut = rows - nh
+            lo = None
+            if cut:
+                lo = (Fused2Trip("single", l1, aq[:cut], ring.cap, None, rq[:cut]), s[:cut])
+                calls.append(LinearCall(lid, lo[0].x, sess, {FUSED2_META: lo[0]}))
+            hi = (Fused2Trip("pair", l1, aq[cut:], ring.cap, hd, rq[cut:]), s[cut:])
+            calls.append(LinearCall(lid, hi[0].x, sess, {FUSED2_META: hi[0]}))
+            plan.append((nh, lo, hi))
+        outs = yield calls
+        at = 0
+        hs2, logits = [], []
+        for nh, lo, hi in plan:
+            parts = []
+            if lo is not None:
+                y = outs[at]
+                at += 1
+                parts.append(residual_from(y + lo[0].r, l1, lo[1]))  # y includes hmul (single with multipliers)
+            y = outs[at]
+            at += 1
+            h2 = residual_from(y[:, : l1.m], l1, hi[1])
+            parts.append(h2)
+            logits.append(normed_output(y[:, l1.m :], hd, hi[1], rinv_rows(h2, eps)))
+            self.head_rows += nh
+            hs2.append(np.concatenate(parts, axis=0) if len(parts) > 1 else parts[0])
+        ex["h"], ex["qkv"] = hs2, []
+        ex["logits"] = logits
+        st.hs = [torch.from_numpy(h.astype(np.float32)).to(model.dtype) for h in hs2]
+
+
+class Fused2FoldedHead:
+    """:class:`pgw.engine.model.HeadMode` of :attr:`Fused2Schedule.head_fold`: the logits come from the last trip
+    (no head trip of its own; :meth:`linears` is empty). Same output forms as the gateway head: the last row's
+    logits, all rows' (``all_logits``) or :class:`pgw.engine.model.RowLogits` (``last_logits``)."""
+
+    name = "fused2_folded"
+    #: :meth:`pgw.engine.model.TransformerModel._steps` hands this head the pass state (the last trip's logits).
+    from_pass_state = True
+    supports_pad_rows = False
+    rows_exact = True
+
+    def linears(self, model: Any) -> Sequence[LinearId]:
+        return ()
+
+    def logits_from(self, model: Any, seqs: Sequence[Any], st: Any) -> list[Any]:
+        from pgw.engine.model import RowLogits
+
+        got = st.extra.get(FUSED2_META, {}).get("logits")
+        if got is None or len(got) != len(seqs):
+            raise ConfigError("the fused2 folded head needs the fused2 schedule with head_fold=True")
+        out: list[Any] = []
+        for s, h, lg in zip(seqs, st.hs, got, strict=True):
+            if s.last_logits > 0:
+                n = int(lg.shape[0])
+                out.append(RowLogits(h[-n:], model.final_norm, model.eps, model._head, lg))
+            else:
+                out.append(lg if s.all_logits else lg[-1])
+        return out
+
+    def steps(self, model: Any, seqs: Sequence[Any], hs: list[torch.Tensor]) -> Any:  # pragma: no cover
+        raise ConfigError("the fused2 folded head runs from the pass state (Fused2FoldedHead.logits_from)")
+        yield
+
+
+def enable_fused2(model: Any, weights: Fused2Weights, ring: RingParams, *, head_fold: bool = False,
+                  local_qkv0: bool = False) -> Fused2Schedule:
     """Install the fused2 schedule on ``model`` (its backend must take fused2 calls)."""
     if not getattr(model.backend, "fused2", False):
         raise ConfigError("the model's backend does not take fused2 calls")
@@ -373,7 +479,11 @@ def enable_fused2(model: Any, weights: Fused2Weights, ring: RingParams) -> Fused
         # fused2 decode driver (pgw.engine.fused2_native) reproduces bit for bit
         if not isinstance(model.float_ops, NativeFloatOps):
             raise ConfigError("fused2 runs on the torch or the native float ops")
-    sched = Fused2Schedule(weights, ring)
+    sched = Fused2Schedule(weights, ring, head_fold=head_fold, local_qkv0=local_qkv0)
+    if head_fold:
+        if getattr(model, "lm_head_fn", None) is not None:
+            raise ConfigError("the fused2 folded head does not combine with a draft head (lm_head_fn)")
+        model.head_mode = Fused2FoldedHead()
     model.schedule = sched
     return sched
 
@@ -494,6 +604,8 @@ class Fused2PlainBackend(LinearBackend):
     def _one(self, t: Fused2Trip) -> torch.Tensor:
         y1 = _exact(t.x, t.l1, self.ring)
         if t.kind == "single":
+            if t.l1.hmul is not None:  # a single trip of a first linear with multipliers (head_fold's other rows)
+                y1 = y1 * t.l1.hmul
             self._note("single", y1)
             return y1
         assert t.r is not None and t.l2 is not None
@@ -670,6 +782,8 @@ class Fused2MaskSource:
         for i in range(w.num_layers):
             plan.append((w.o[i], w.gu[i]))
             plan.append((w.down[i], w.qkv[i + 1] if i + 1 < w.num_layers else None))
+        if w.head is not None:  # head_fold: the last trip's logit rows are a (down, head) pair of their own key
+            plan.append((w.down[-1], w.head))
         return plan
 
     def prefill(self, rows: int) -> float:
@@ -774,8 +888,8 @@ class Fused2Provider:
 
     def __init__(self, weights: Fused2Weights, k: int):
         self.k = int(k)
-        self._w = {lin.key: PreparedWeight(lin.w8, cache_float=False) for lin in weights.linears()}
-        self._hmul = {lin.key: lin.hmul for lin in weights.linears() if lin.hmul is not None}
+        self._w = {lin.key: PreparedWeight(lin.w8, cache_float=False) for lin in weights.all_linears()}
+        self._hmul = {lin.key: lin.hmul for lin in weights.all_linears() if lin.hmul is not None}
         #: Every array the provider received (tests inspect what it saw).
         self.seen: list[tuple[str, torch.Tensor]] = []
         self.record = False
@@ -783,7 +897,11 @@ class Fused2Provider:
     def single(self, k1: str, x_hat: torch.Tensor) -> torch.Tensor:
         if self.record:
             self.seen.append((k1, x_hat.clone()))
-        return self._w[k1].matmul(x_hat, self.k)
+        y = self._w[k1].matmul(x_hat, self.k)
+        hm = self._hmul.get(k1)
+        if hm is not None:  # a first linear's single trip (head_fold's rows without logits): multipliers too
+            y = (y * hm) & ((1 << self.k) - 1)
+        return y
 
     def pair(self, k1: str, k2: str, r_hat: torch.Tensor, x_hat: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         if self.record:
@@ -957,7 +1075,10 @@ class Fused2MaskedBackend(LinearBackend):
                 self.f2.bytes_up += x_hat.numel() * bpe
                 y_hat = self.provider.single(t.l1.key, x_hat)
                 self.f2.bytes_down += y_hat.numel() * bpe
-                y = _center(y_hat - m.wr_x, k)
+                # a first linear with multipliers (head_fold's rows without logits): the provider returns
+                # hmul * W1 x_hat, so the correction is hmul * W1 r_x; the check vectors are (u * hmul) W1
+                wr = m.wr_x if t.l1.hmul is None else (m.wr_x * t.l1.hmul) & mask
+                y = _center(y_hat - wr, k)
                 self._verify(t.l1, t.x, y, ch=m.c1, masks=src)
                 return y
             assert t.r is not None and t.l2 is not None and m.v is not None and m.wv is not None

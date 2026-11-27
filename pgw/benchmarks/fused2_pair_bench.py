@@ -36,6 +36,15 @@ import numpy as np
 import torch
 
 SHAPES_7B = {"o": (3584, 3584), "gate_up": (37888, 3584), "down": (3584, 18944), "qkv": (4608, 3584)}
+#: Other Qwen2.5 shapes (``--model``); ``head`` = the LM head (152064 x hidden) for the folded-head pair item.
+SHAPES = {
+    "7b": {**SHAPES_7B, "head": (152064, 3584)},
+    "32b": {"o": (5120, 5120), "gate_up": (55296, 5120), "down": (5120, 27648), "qkv": (7168, 5120),
+            "head": (152064, 5120)},
+    "72b": {"o": (8192, 8192), "gate_up": (59136, 8192), "down": (8192, 29568), "qkv": (10240, 8192),
+            "head": (152064, 8192)},
+}
+LAYERS = {"7b": 28, "32b": 64, "72b": 80}
 SHAPES_TINY = {"o": (64, 64), "gate_up": (160, 64), "down": (64, 96), "qkv": (96, 64)}
 
 
@@ -83,6 +92,10 @@ def main(argv: list[str] | None = None) -> int:
                     help="variants to time (the first is the headline; 'sum' is the 2026-11-23 baseline)")
     ap.add_argument("--budget-s", type=float, default=0.0,
                     help="stop sweeping non-heuristic configurations after this many seconds (0: no limit)")
+    ap.add_argument("--model", default="7b", choices=sorted(SHAPES), help="Qwen2.5 shapes (GPU only)")
+    ap.add_argument("--extra-items", action="store_true",
+                    help="also the folded-head pair (last down + LM head) and the parallel-block pair "
+                         "([o | down] then [qkv ; gate_up]): research/reviews/consumer-round-trips.md")
     ap.add_argument("--prototype-timing", action="store_true", help="also time the prototype's eager pair")
     args = ap.parse_args(argv)
 
@@ -92,7 +105,10 @@ def main(argv: list[str] | None = None) -> int:
 
     cuda = torch.cuda.is_available()
     dev = torch.device("cuda:0" if cuda else "cpu")
-    shapes = SHAPES_TINY if args.tiny or not cuda else SHAPES_7B
+    shapes = dict(SHAPES_TINY if args.tiny or not cuda else SHAPES[args.model])
+    if args.tiny or not cuda:
+        shapes["head"] = (256, 64)
+    nl = LAYERS.get(args.model, 28)
     rows_list = [int(r) for r in args.rows.split(",") if r]
     if not cuda:
         rows_list = [r for r in rows_list if r <= 2]
@@ -114,6 +130,12 @@ def main(argv: list[str] | None = None) -> int:
     hm_d = torch.randint(1, 256, (shapes["down"][0],), generator=gen, dtype=torch.int64).to(dev)
     items = {"o+gate_up": (W["o"], W["gate_up"], hm_o), "down+qkv": (W["down"], W["qkv"], hm_d),
              "qkv(single)": (W["qkv"], None, None)}
+    if args.extra_items:
+        items["down+head"] = (W["down"], W["head"], hm_d)
+        par1 = torch.cat([W["o"], W["down"]], dim=1).contiguous()  # [W_o | W_down]: (d, d + I)
+        par2 = torch.cat([W["qkv"], W["gate_up"]], dim=0).contiguous()  # [W_qkv ; W_gate_up]: (qkv + 2I, d)
+        items["parallel o|down+qkv;gate_up"] = (par1, par2, hm_o)
+    W = {k_: v_ for k_, v_ in W.items() if k_ != "head"}  # the K32 single baselines: the four layer linears
     rmax = max(rows_list)
     sync = torch.cuda.synchronize if cuda else (lambda: None)
     rng = np.random.default_rng(3)
@@ -195,7 +217,8 @@ def main(argv: list[str] | None = None) -> int:
         del op, pw1, pw2
     out["pair"] = res
     if cuda:  # today's graphed single-linear K32 trip, same copies (the lane's [H2D, GEMV, D2H] graph)
-        from pgw.core.triton_gemv import ring_gemv, self_check as gemv_check
+        from pgw.core.triton_gemv import ring_gemv
+        from pgw.core.triton_gemv import self_check as gemv_check
 
         base: dict[str, Any] = {}
         if gemv_check(dev):
@@ -235,9 +258,17 @@ def main(argv: list[str] | None = None) -> int:
                 summ[f"{rk} rows, {v}"] = {
                     "o+gate_up pair / (o + gate_up singles)": round(a / (one["o"] + one["gate_up"]), 3),
                     "down+qkv pair / (down + qkv singles)": round(b / (one["down"] + one["qkv"]), 3),
-                    "per-token provider compute fused2 (28 layers, ms)": round(28 * (a + b), 3),
-                    "per-token provider compute standard K32 (28 layers, ms)": round(28 * sum(one.values()), 3),
+                    f"per-token provider compute fused2 ({nl} layers, ms)": round(nl * (a + b), 3),
+                    f"per-token provider compute standard K32 ({nl} layers, ms)": round(nl * sum(one.values()), 3),
                 }
+        if args.extra_items:
+            for rk in sorted({1, max(rows_list)}):
+                par = res.get("parallel o|down+qkv;gate_up", {}).get(str(rk), {}).get("graph_ms_best")
+                hd = res.get("down+head", {}).get(str(rk), {}).get("graph_ms_best")
+                if par is not None:
+                    summ[f"{rk} rows, parallel"] = {
+                        f"per-token provider compute parallel fused ({nl} layers, ms)": round(nl * par, 3),
+                        "down+head pair (ms)": hd}
         out["summary"] = summ
     out["wall_s"] = round(time.perf_counter() - t0, 1)
     print(json.dumps({k2: v for k2, v in out.items() if k2 != "pair"}, indent=1))
