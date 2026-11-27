@@ -439,6 +439,32 @@ The service admits by tenant (one tenant per SDK key): `tenant_max_inflight` (co
 process holds one lane connection set per model; a single lane call serves at most 8 rows, a multi call up to 64 items and 256 rows. Size the provider by rows
 per second (sum of all clients' tokens/s, prompt rows included); the client side never needs changes for it.
 
+## Consumer devices: mask cost per token (research, opt-in switches)
+
+`research/reviews/mask-cost-consumer.md` (2026-11-27) sizes pks-v3 masks for a consumer device at 20 tok/s.
+
+**Bandwidth comes first.** At 32B a slot costs 30.3 MB of online trips and 42.7 MB of masks: ~23 Gbit/s per user
+at 2 slots per token. At 7B it is ~7 Gbit/s. A consumer link carries neither, whatever the mask compute costs.
+
+**Provider throughput depends on the client's stock.** A client that holds one 256-slot group (32B with the default
+8 GB stock) makes every provider item recompute the public hint for 256 slots: ~48 slots/s per H100 at 32B. Two
+switches, both off by default, let one hint computation serve many groups:
+
+* `PGW_SERVICE_PKS_COALESCE_MS` on the provider: items of one linear and one public seed arriving within that many
+  milliseconds run as one device item. The replies are byte-identical to running each item alone.
+  `PGW_SERVICE_PKS_COALESCE_GROUPS` (16) caps a batch.
+* `PGW_PKS_CRS_A` on the client: new hint stores use the model's common public upload seed
+  (`pgw.hemask.pks.crs_a_seed`) instead of a fresh one, so the groups of different customers share one hint.
+  This is pending the external review (question Q8 of the note). Each customer keeps its own private
+  key-switching seed and fresh secrets.
+
+With both on, the estimate at 32B is 143-508 slots/s per H100 and 3.4-13.5 users per H100 at 2 slots per token
+(1.2 today). On a T4, 8 items took 2.2-3.7x less time coalesced than one by one.
+
+The client's NTT kernels port to a GPU in exact integer arithmetic. The torch prototype is
+`pgw.hemask.pks_torch`, bit-identical to the CPU kernels; fused, it is estimated at ~2 ms per slot on an RTX
+4070-class GPU, against 113 ms of one core.
+
 ## Measuring
 
 `benchmarks/sdk_concurrency_bench.py` runs N concurrent streams (and `--procs P` worker processes) against a

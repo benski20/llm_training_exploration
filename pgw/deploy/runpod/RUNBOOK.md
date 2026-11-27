@@ -282,6 +282,36 @@ Before relaunching, edit `SESSIONS["sdk7b"]["steps"]` in `jobs.py`: drop the `fa
 step's `"spec": "off"`, `"stages": "setup,conc"` and `"conc": "1,4,16"` (~60 min, ~$6). If you do, record the
 edit in the commit message.
 
+### 6. `maskcost` (PROPOSED: not in `jobs.py`, not launched; needs an explicit go-ahead and a `SESSIONS` entry)
+
+Purpose: pin down the consumer-scale mask cost of `research/reviews/mask-cost-consumer.md`. On a T4 the
+coalesced items' per-group part measured 3-5x the memplan model, so the H100 gain is 3.5-11x. This session says
+where in that range an H100 is, and how many users it serves.
+
+* Pods: 1 x H100 SXM (Secure, 20 GB volume, random weights). Optional: 1 x RTX 4090 Community pod for the client
+  kernels on a consumer GPU, ~$0.35 for 30 min. TTL 75 min. **Wall ~45 min + setup; ~$3.0** (H100 at $2.99/h,
+  plus ~$0.4 for the 4090 if taken).
+* GPU steps, H100:
+  1. `PGW_TEST_CUDA=1 pytest tests/hemask/test_pks_torch.py tests/service/test_pks_coalesce.py`;
+  2. `benchmarks/pks_client_gpu_bench.py --sections coalesce --items S` for `S` = 1, 4, 16, 64 at the 7B and 32B
+     shapes (the bench's five linears). Every reply must be byte-identical to the items one by one and to one
+     S-group item;
+  3. the same with `PGW_SERVICE_PKS_COALESCE_MS=50` and 2 concurrent callers per device, through
+     `PKSProvider.run_item` from N = 8 / 32 threads on the common seed (`pks.crs_a_seed`). Record
+     `coalesced_runs`, the groups per run and the seconds per group. This adds a `--threads` option to the bench
+     (small; not written yet);
+  4. `benchmarks/pks_ntt_bench.py --sections stages` at `G` = 1 / 16 / 64 to split the per-group part (`y` GEMM,
+     key switch, reply copies) on an H100.
+* 4090 step: `benchmarks/pks_client_gpu_bench.py --sections client` (eager kernels and the fused decryption),
+  for a consumer-GPU data point.
+* Outputs: `gpu/results/maskcost/{pytest,coalesce_S*,coalesce_threads,stages_G*,client_4090}.json`.
+* Decisions it feeds:
+  * whether `PGW_SERVICE_PKS_COALESCE_MS` gets a non-zero default on the provider (it is harmless without a
+    common seed);
+  * whether the per-group path (reply copies, `y` GEMM shapes, tensor-core key switch) is the next kernel work;
+  * the users-per-GPU figure quoted for consumer plans;
+  * the common seed stays opt-in until the external review answers Q8, whatever this measures.
+
 ## 4. Budget
 
 `python deploy/runpod/jobs.py plan` (table prices, Secure Cloud, each session at its full TTL including the

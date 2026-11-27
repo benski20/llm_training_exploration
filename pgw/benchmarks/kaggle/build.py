@@ -1020,6 +1020,30 @@ JOBS["pgw-pks-r3-t4"] = {"machine_shape": "NvidiaTeslaT4", "session_timeout_s": 
 ]}
 
 
+#: Mask cost at consumer scale (research/reviews/mask-cost-consumer.md): the customer's pks-v3 kernels on the GPU
+#: (exact torch, pytest on CUDA, then ms per slot at 7B / 32B shapes) and coalesced provider items (one hint for the
+#: groups of several items: byte-identical replies, measured speed-up against items one by one).
+_MASKCOST_TESTS = ("__init__.py", "test_pks_coalesce.py")
+JOBS["pgw-maskcost-t4"] = {"machine_shape": "NvidiaTeslaT4", "session_timeout_s": 45 * 60, "exclude": [
+    "scripts", "examples", "rust", "SPEC.md", "INTERFACE_NOTES.md", "STATUS.md",
+    *sorted(f"src/pgw/{p.name}" for p in (PGW / "src" / "pgw").iterdir()
+            if p.is_dir() and p.name not in _PKS_NTT_KEEP_SRC),
+    *sorted(f"tests/{p.name}" for p in (PGW / "tests").iterdir()
+            if p.name not in _PKS_NTT_KEEP_TESTS | {"hemask"}),
+    *sorted(f"tests/service/{p.name}" for p in (PGW / "tests" / "service").iterdir() if p.name not in _MASKCOST_TESTS),
+    *sorted(f"tests/hemask/{p.name}" for p in (PGW / "tests" / "hemask").iterdir()
+            if p.name not in ("__init__.py", "test_pks_torch.py")),
+    *sorted(f"benchmarks/{p.name}" for p in HERE.parent.iterdir() if p.name != "pks_client_gpu_bench.py")], "steps": [
+    {"kind": "shell", "name": "gpu_info", "cmd": "nproc; free -g; nvidia-smi; python -c 'import triton; "
+     "print(triton.__version__)'", "timeout": 120},
+    {"kind": "shell", "name": "pytest_cuda", "cmd": "PGW_TEST_CUDA=1 python -m pytest tests/hemask/test_pks_torch.py "
+     "tests/service/test_pks_coalesce.py -q -rs --timeout 900", "timeout": 1000},
+    {"kind": "shell", "name": "maskcost_bench",
+     "cmd": "python benchmarks/pks_client_gpu_bench.py --json /kaggle/working/maskcost.json --budget-s 1300 "
+            "--items 8 --reps 3", "timeout": 1500},
+]}
+
+
 def source_tarball(exclude: tuple[str, ...] = (), include_top: tuple[str, ...] = ()) -> bytes:
     """xz tarball of pgw/ without the excluded folders (plus ``exclude``: job-specific paths under pgw/;
     ``include_top``: top-level folders of :data:`EXCLUDE_TOP` this job needs after all)."""
