@@ -139,6 +139,13 @@ class Fused2StoreMasks:
         rows = int(trip.x.shape[0])
         if rows <= 0:
             raise ConfigError("fused2 trip without rows")
+        if trip.l2 is not None:
+            # the two keys' cursors need not be aligned (head_fold: the last down also serves the rows without
+            # logits, the head only the logit rows): take no more rows than BOTH current extents hold
+            for key in (trip.l1.key, trip.l2.key):
+                if self._ensure is not None:
+                    self._ensure(key, rows)
+                rows = max(1, min(rows, int(self.session.rows_until_boundary(key))))
         n1, r_x, wr_x, c1 = self._take(trip.l1.key, rows)
         tm = TripMasks(r_x, wr_x)
         tm.c1 = c1
