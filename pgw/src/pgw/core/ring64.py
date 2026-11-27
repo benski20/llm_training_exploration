@@ -469,10 +469,36 @@ class PairOp:
             raise ShapeError(f"ring64: rows {rows} outside 1..{self.max_rows}")
         if len(body) != self.in_bytes(rows):
             raise ShapeError(f"ring64: body has {len(body)} bytes, expected {self.in_bytes(rows)}")
+        if self.device.type == "cpu" and _cpu_exact():
+            return self._run_cpu(rows, body)
         src = torch.frombuffer(bytearray(body), dtype=torch.uint8)
         self.d_in[: len(body)].copy_(src)
         self._compute(rows)
         return bytes(self.d_out[: self.out_bytes(rows)].cpu().numpy().tobytes())
+
+    def _run_cpu(self, rows: int, body: bytes | bytearray | memoryview) -> bytes:
+        """The CPU provider's op without the Triton interpreter: exact ``W x mod 2^K`` by
+        :class:`pgw.core.ringmm.PreparedWeight` (digit GEMMs in float64 whose every partial sum is an exact
+        integer), the epilogue in wrapping int64. The same bytes as the kernels (the start-up self-check compares
+        it with the Python-int reference); CPU test providers and benchmarks only (a GPU runs the kernels)."""
+        from pgw.core.packing import pack_ring, unpack_ring
+        from pgw.core.ringmm import PreparedWeight
+
+        if getattr(self, "_pw1", None) is None:
+            self._pw1 = PreparedWeight(self.w1.cpu(), cache_float=True)
+            self._pw2 = None if self.w2 is None else PreparedWeight(self.w2.cpu(), cache_float=True)
+        k, mask = self.k, (1 << self.k) - 1
+        nx = rows * self.n1 * self.bpe
+        x = unpack_ring(memoryview(body)[:nx], (rows, self.n1), k)
+        y = self._pw1.matmul(x, k)
+        if self.w2 is None:
+            return pack_ring(y, k)
+        r = unpack_ring(memoryview(body)[nx:], (rows, self.m1), k)
+        if self.hmul is not None:
+            y = (y * self.hmul.cpu()) & mask
+        h = (r + y) & mask
+        assert self._pw2 is not None
+        return pack_ring(h, k) + pack_ring(self._pw2.matmul(h, k), k)
 
     def capture(self, rows: int, h_in: torch.Tensor, h_out: torch.Tensor, *, stream: Any, pool: Any) -> Any:
         """CUDA graph of one call reading pinned uint8 ``h_in[:in_bytes(rows)]`` and writing ``h_out``."""  # pragma: no cover
@@ -491,6 +517,12 @@ class PairOp:
         with torch.cuda.graph(g, pool=pool, stream=stream, capture_error_mode="thread_local"):
             body()
         return g
+
+
+def _cpu_exact() -> bool:
+    """CPU ops use the exact float64-digit path unless ``PGW_RING64_CPU=triton`` (the kernels in the Triton
+    interpreter: the GPU code path, for its CPU tests)."""
+    return os.environ.get("PGW_RING64_CPU", "exact").strip().lower() != "triton"
 
 
 def _rand_ring(gen: np.random.Generator, shape: tuple[int, ...], k: int) -> torch.Tensor:

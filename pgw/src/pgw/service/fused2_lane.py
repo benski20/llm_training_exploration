@@ -100,10 +100,33 @@ class Fused2Item:
         return self.m1 + self.m2
 
 
+def parallel_items(w: Any) -> list[Fused2Item]:
+    """Item table v3 of a parallel-block weight set (:class:`pgw.engine.fused_parallel.ParallelWeights`, opt-in
+    prototype: one trip per layer): layer 0's ``[qkv ; gate_up]`` single, per layer the pair ``([o | down], next
+    [qkv ; gate_up])``, the last layer's ``[o | down]`` single and, with the folded head, its pair with the head."""
+    L = int(w.num_layers)
+    s0 = w.second[0]
+    out = [Fused2Item(s0.key, s0.key, None, s0.n, s0.m, 0)]
+    for i in range(L):
+        f = w.first[i]
+        if i + 1 < L:
+            s = w.second[i + 1]
+            out.append(Fused2Item(f"{f.key}+{s.key}", f.key, s.key, f.n, f.m, s.m))
+        else:
+            out.append(Fused2Item(f.key, f.key, None, f.n, f.m, 0))
+    hd = getattr(w, "head", None)
+    if hd is not None:
+        f = w.first[-1]
+        out.append(Fused2Item(f"{f.key}+{hd.key}", f.key, hd.key, f.n, f.m, hd.m))
+    return out
+
+
 def fused2_items(weights: Any) -> list[Fused2Item]:
     """The trip items of a :class:`pgw.modelpack.fused2_weights.Fused2Weights` in pass order (gateway and service
-    agree)."""
+    agree); a parallel-block weight set (``first`` / ``second``) gives :func:`parallel_items`."""
     w = weights
+    if hasattr(w, "first") and hasattr(w, "second"):
+        return parallel_items(w)
     out = [Fused2Item(w.qkv[0].key, w.qkv[0].key, None, w.qkv[0].n, w.qkv[0].m, 0)]
     for i in range(w.num_layers):
         o, gu = w.o[i], w.gu[i]
@@ -127,8 +150,14 @@ def fused2_items(weights: Any) -> list[Fused2Item]:
 ITEMS_V1, ITEMS_V2 = 1, 2
 
 
+#: Item table v3: parallel-block weights (one pair item per layer; :func:`parallel_items`; opt-in prototype).
+ITEMS_V3 = 3
+
+
 def items_version(weights: Any) -> int:
-    """The item-table version of a fused2 weight set (2 with the folded head)."""
+    """The item-table version of a fused2 weight set (2 with the folded head, 3 for parallel blocks)."""
+    if hasattr(weights, "first") and hasattr(weights, "second"):
+        return ITEMS_V3
     return ITEMS_V2 if getattr(weights, "head", None) is not None else ITEMS_V1
 
 

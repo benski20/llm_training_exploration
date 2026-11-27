@@ -554,7 +554,7 @@ fn run_loop<T: Kv>(
         if p.xq[..t * n1].iter().any(|v| v.unsigned_abs() > bound as u64) {
             return Outcome::Overflow("fused2 input out of range".into());
         }
-        let mut t2 = Instant::now();
+        let t2: Instant;
         let pair = l2.is_some() && (!last || cfg.head_fold);
         if local {
             // local_qkv0: the exact integers of the provider's product, computed here (no mask, no trip, no check)
@@ -758,7 +758,28 @@ fn run_loop<T: Kv>(
             for r in 0..t {
                 residual_row(&p.y[r * m1..(r + 1) * m1], l1, svals[r], &mut p.h[r * hidden..(r + 1) * hidden]);
                 let rinv = rinv_row(&p.h[r * hidden..(r + 1) * hidden], cfg.eps, &mut tmp);
-                normed_row(&p.z[r * m2..(r + 1) * m2], hl, svals[r], rinv, &mut p.logits[r * m2..(r + 1) * m2]);
+                let parts = split_parts(m2);
+                if parts >= 2 {
+                    // the same element-wise products in fixed ranges on the pool (PGW_FUSED2_SPLIT)
+                    let f = svals[r] * rinv;
+                    let (zs, lp) = (&p.z[r * m2..(r + 1) * m2], SendPtr(p.logits[r * m2..].as_mut_ptr()));
+                    let ok = crate::prepare::pool::global().run(parts, &|i| {
+                        let (a, b) = range_of(m2, parts, i);
+                        for j in a..b {
+                            let mut v = (zs[j] as f64 * hl.scale[j]) * f;
+                            if let Some(bb) = &hl.bias {
+                                v += bb[j];
+                            }
+                            // SAFETY: element j is written by this task only; p.logits outlives the run.
+                            unsafe { *lp.get().add(j) = v as f32 };
+                        }
+                    });
+                    if !ok {
+                        return Outcome::Overflow("fused2: internal error in a head task".into());
+                    }
+                } else {
+                    normed_row(&p.z[r * m2..(r + 1) * m2], hl, svals[r], rinv, &mut p.logits[r * m2..(r + 1) * m2]);
+                }
             }
         } else if last {
             for r in 0..t {

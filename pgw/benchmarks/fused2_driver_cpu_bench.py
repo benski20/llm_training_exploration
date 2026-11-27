@@ -47,6 +47,8 @@ def main() -> None:
     ap.add_argument("--shm", action="store_true")
     ap.add_argument("--spin-us", type=int, default=400)
     ap.add_argument("--json", default=None)
+    ap.add_argument("--head-fold", action="store_true",
+                    help="the client library's schedule='fused': folded head + local qkv0 (2L trips per pass)")
     args = ap.parse_args()
 
     from pgw.core import RingParams
@@ -70,11 +72,12 @@ def main() -> None:
     work.mkdir(parents=True, exist_ok=True)
     pack = ModelPack.open(build_pack(work, args.preset, args.layers))
     t0 = time.perf_counter()
-    cached = work / f"f2w-{args.preset}-{args.layers}-v{pack.arch.vocab_size}.pt"  # the tables, reused across runs
+    hf = bool(args.head_fold)
+    cached = work / f"f2w-{args.preset}-{args.layers}-v{pack.arch.vocab_size}{'-head' if hf else ''}.pt"  # the tables, reused across runs
     if cached.exists():
         weights = Fused2Weights.load(cached)
     else:
-        weights = Fused2Weights(pack, None, multipliers=migration_multipliers(pack, 8))
+        weights = Fused2Weights(pack, None, multipliers=migration_multipliers(pack, 8, head=hf), head=hf)
         weights.save(cached)
     print(f"fused2 tables: {time.perf_counter() - t0:.1f}s", file=sys.stderr)
     items = fused2_items(weights)
@@ -96,7 +99,10 @@ def main() -> None:
     ch = fast.TripChannel.connect_service_uds(sock, ticket, 30.0, 8, int(args.spin_us))
     if args.shm:
         assert ch.attach_shm() is True and ch.transport == "shm"
-    prov = LaneFused2Provider(ch, [it.name for it in items], items_of(weights), ring.k, max_rows=8)
+    from pgw.engine.fused2_lane import single_multipliers
+
+    prov = LaneFused2Provider(ch, [it.name for it in items], items_of(weights), ring.k, max_rows=8,
+                              hmul=single_multipliers(weights))
     src = Fused2MaskSource(weights, ring)
     passes = args.tokens + 3
     t0 = time.perf_counter()
@@ -105,7 +111,7 @@ def main() -> None:
     be = Fused2MaskedBackend(ring, prov, src)
     model = TransformerModel(pack, be)
     model.set_float_ops("native")
-    enable_fused2(model, weights, ring)
+    enable_fused2(model, weights, ring, head_fold=hf, local_qkv0=hf)
     nd = enable_fused2_native(model)
 
     g = torch.Generator().manual_seed(7)
@@ -141,7 +147,7 @@ def main() -> None:
     b = per_kind.get(kinds[2], {}).get("local_us", 0.0)
     res = {
         "preset": args.preset, "layers": L, "ring": ring.name, "transport": "shm" if args.shm else "uds",
-        "decode_passes": passes - 3, "trips_per_pass": 2 * L + 1,
+        "decode_passes": passes - 3, "trips_per_pass": 2 * L + (0 if hf else 1), "head_fold": hf,
         "local_us_per_trip": round(tot[3] / 1e3 / max(1, tot[2]), 1),
         "lane_us_per_trip": round(tot[4] / 1e3 / max(1, tot[2]), 1),
         "per_kind": per_kind,

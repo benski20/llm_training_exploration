@@ -208,6 +208,7 @@ def connect_fused2_lane(ticket: dict[str, Any], weights: Any, ring: Any, *, clie
 def ch_is_shm(ch: Any) -> bool:
     """Whether a native lane channel moved to the shared-memory transport (multi frames need the socket)."""
     try:
-        return str(ch.transport()) == "shm" if callable(getattr(ch, "transport", None)) else False
+        t = getattr(ch, "transport", "")
+        return str(t() if callable(t) else t) == "shm"
     except Exception:  # pragma: no cover - defensive
         return True

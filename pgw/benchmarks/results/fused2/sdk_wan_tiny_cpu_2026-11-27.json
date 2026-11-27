@@ -1,0 +1,88 @@
+{
+ "model": "tiny",
+ "tokens": 12,
+ "reps": 3,
+ "configs": [
+  {
+   "schedule": "standard",
+   "rtt_ms": 0.0,
+   "trips_per_token": 9.0,
+   "decode_tok_s": 37.416895629021006,
+   "client_cpu_ms_per_token": 6.771272727272727,
+   "bytes_up_per_token": 13696.0,
+   "bytes_down_per_token": 22544.0,
+   "provider_ms_per_token": null,
+   "native_decode": true,
+   "integrity_failures": 0,
+   "ring": "K32A12C27"
+  },
+  {
+   "schedule": "fused",
+   "rtt_ms": 0.0,
+   "trips_per_token": 4.0,
+   "decode_tok_s": 114.43128276607074,
+   "client_cpu_ms_per_token": 3.645454545454608,
+   "bytes_up_per_token": 21616.0,
+   "bytes_down_per_token": 34748.0,
+   "provider_ms_per_token": 1.7198333333333335,
+   "native_decode": true,
+   "integrity_failures": 0,
+   "ring": "K56A12C53",
+   "equals_fused_reference": true
+  },
+  {
+   "schedule": "standard",
+   "rtt_ms": 5.0,
+   "trips_per_token": 9.0,
+   "decode_tok_s": 13.186194249775074,
+   "client_cpu_ms_per_token": 8.29381818181824,
+   "bytes_up_per_token": 13696.0,
+   "bytes_down_per_token": 22544.0,
+   "provider_ms_per_token": null,
+   "native_decode": true,
+   "integrity_failures": 0,
+   "ring": "K32A12C27"
+  },
+  {
+   "schedule": "fused",
+   "rtt_ms": 5.0,
+   "trips_per_token": 4.0,
+   "decode_tok_s": 33.460525103691346,
+   "client_cpu_ms_per_token": 5.198272727272801,
+   "bytes_up_per_token": 21616.0,
+   "bytes_down_per_token": 34748.0,
+   "provider_ms_per_token": 1.3585,
+   "native_decode": true,
+   "integrity_failures": 0,
+   "ring": "K56A12C53",
+   "equals_fused_reference": true
+  },
+  {
+   "schedule": "standard",
+   "rtt_ms": 20.0,
+   "trips_per_token": 9.0,
+   "decode_tok_s": 4.598114660711087,
+   "client_cpu_ms_per_token": 10.261272727272699,
+   "bytes_up_per_token": 13696.0,
+   "bytes_down_per_token": 22544.0,
+   "provider_ms_per_token": null,
+   "native_decode": true,
+   "integrity_failures": 0,
+   "ring": "K32A12C27"
+  },
+  {
+   "schedule": "fused",
+   "rtt_ms": 20.0,
+   "trips_per_token": 4.0,
+   "decode_tok_s": 10.825921445757086,
+   "client_cpu_ms_per_token": 5.9402727272726,
+   "bytes_up_per_token": 21616.0,
+   "bytes_down_per_token": 34748.0,
+   "provider_ms_per_token": 1.7989166666666667,
+   "native_decode": true,
+   "integrity_failures": 0,
+   "ring": "K56A12C53",
+   "equals_fused_reference": true
+  }
+ ]
+}

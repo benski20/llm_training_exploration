@@ -290,3 +290,34 @@ def test_fused_with_the_encrypted_pks_v3_factory(pks_provider: Provider, tmp_pat
 def test_status_json_is_public(plain_client: Any) -> None:
     st = plain_client.status()
     json.dumps(st)  # serializable, no tensors
+
+
+def test_strict_speculation_on_the_fused_schedule(fprovider: Provider, tmp_path_factory: pytest.TempPathFactory
+                                                  ) -> None:
+    """Strict speculation with the fused schedule: fixed ``spec_rows`` rows per verify pass (masked filler rows),
+    the folded head's logits for every verified row, dummy passes after the answer; the answer is bit-identical
+    to the fused reference without speculation, and every decode pass carries exactly ``spec_rows`` rows in 2L
+    lane calls whatever the drafts."""
+    msgs = [{"role": "user", "content": "Repeat: the cat sat on the mat. the cat sat on the mat. the cat sat on"}]
+    body = {"temperature": 0, "max_tokens": 10, "logprobs": True, "top_logprobs": 2, "extra_body": {"ignore_eos": True}}
+    c = _client(fprovider, fprovider.new_key("fused-spec"), tmp_path_factory.mktemp("sdk-fused-spec"),
+                speculation="lookup", spec_rows=3, mask_target_slots=600, mask_low_water_slots=300)
+    try:
+        r = c.chat.completions.create(model=MODEL, messages=msgs, **body)
+        ref = fused_reference(fprovider.pack_dir, body, msgs)
+        assert _lpc(r) == ref["choices"][0]["logprobs"]["content"]
+        rt = c._engine.models[MODEL].runtime  # type: ignore[attr-defined]
+        prov = rt.backend.provider
+        prov.record = []
+        r2 = c.chat.completions.create(model=MODEL, messages=msgs, **body)
+        assert _lpc(r2) == _lpc(r)
+        L = int(rt.model.num_layers)
+        rows = [n for _, n, _ in prov.record]
+        # after the prompt pass: only 3-row items (spec_rows), 2L per pass
+        decode = rows[2 * L * 3:]  # skip the prompt pass's multi pieces generously
+        assert decode and set(decode[-2 * L:]) == {3}, rows
+        st = c.status()["models"][MODEL]
+        assert st["schedule"] == "fused" and st["integrity_failures"] == 0
+        assert rt.generator.spec_rows == 3 and rt.generator.spec_strict
+    finally:
+        c.close()
