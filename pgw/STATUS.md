@@ -83,6 +83,12 @@ measurement-only preview opt-in `PGW_SDK_PREVIEW_MODELS` (pinned models only, st
 unchanged), the shipped draft head is used by default, and the day's provider device paths, the maskgen watchdog's
 bound, the client CPU rounds, the prefix cache and the client mask cost per server core have stages of their own.
 
+**Over a WAN** (2026-11-27 section at the end, docs/sdk/wan.md): measured on an emulated WAN, a trip costs one RTT
+plus 0.04-0.1 ms of lane stack (0.14-0.29 ms for 150-220 KB replies); the provider needs
+`tcp_slow_start_after_idle=0` (else 2-4 extra RTTs after every pause) and now warns; lane sockets keep alive. For a
+consumer device, bandwidth (9.5 MB per 7B token, 30 MB at 32B) and random loss (0.1 %: 2.3x per trip) bind before
+RTT: 20 tok/s at 7B / 32B is out of reach of mainstream consumer links with today's wire format.
+
 **Open:**
 * the external cryptographic review of pks-v3 and the external audit of the Rust `unsafe` code;
 * whether 14B / 32B / 72B join `SUPPORTED_MODELS` (a product decision; their pins and the shard-wise packer ship);
@@ -4630,3 +4636,81 @@ modes.
   * `tests/docs`: 18 failures, all `test_numbers.py` reading `results/kaggle/*.log` files absent from this worktree
     (pre-existing; unrelated).
 * `ruff` is clean on the new and changed files.
+
+## 2026-11-27: the client over a WAN (emulated-WAN harness, per-trip cost, loss, QUIC, region routing, RunPod `wan`)
+
+Target of the day: each trip over a WAN as close to one RTT as physics allows, users on the nearest GPU; then the
+coordinator's target, 20 tok/s up to 32B from a consumer device. Everything here is in docs/sdk/wan.md; numbers
+from this shared 4-vCPU box (other jobs running), the network part is the point.
+
+**Harness** (`benchmarks/wan_bench.py`, `wan_emu.py`, `wan_report.py`; `rust/tools/wanemu`). No `tc netem` here, so
+a packet-level emulator: two network namespaces joined by two TUN devices and `pgw-wanemu` (per direction:
+bottleneck rate + drop-tail queue, delay, jitter, Bernoulli / Gilbert-Elliott loss; MTU 1500). Both kernels run
+real TCP end to end; each namespace's congestion control (cubic by default; this box defaults to BBR) and
+`tcp_slow_start_after_idle` are set explicitly, per side. Three benches: `lane` (the native TLS listener with its
+benchmark executor vs bare TCP of the same bytes, every 0.5B / 7B / 32B trip size, a decode pass, idle gaps),
+`sdk` (`pgw.OpenAI` against `tests/sdk/provider_main.py`, the `sdk_trip_profile.py` measurement, bit-identity
+checked across RTTs), `quic` (a quinn prototype of the lane's traffic, `rust/tools/quicbench`). Emulator lateness
+40-80 us per packet on average (reported per run).
+
+**Results** (`benchmarks/results/wan/`):
+* Per trip (lane, 1 row): one RTT + 0.15-0.9 ms at RTT 1-50 ms for decode trips, of which the lane stack (`lane -
+  raw`) is **0.04-0.10 ms** (0.14-0.29 ms for 148-216 KB replies, 0.2-0.7 ms for the 594 KB head reply), the rest
+  this box's emulator path. Whole 7B decode pass: +0.29 / 0.37 / 0.37 / 0.64 / 1.24 ms per trip at RTT 1 / 2 / 5 / 20
+  / 50 (the head's 594 KB reply sometimes needs a second flight at RTT >= 20).
+* Restart after idle (first 7B gate_up trip after a gap): 1 s gap at RTT 20: 61 ms, 3 s: 81 ms (vs 20.7);
+  provider-side `tcp_slow_start_after_idle=0`: 20.8 / 20.9 (fixed); provider BBR: 22.3-25.2 but +0.3-2.1 ms on
+  every trip; both sides `0`: 20.9.
+* Random loss (7B pass, ms per trip, RTT 20): 0 % 21.2, 0.1 % 49.2, 1 % 118 (TCP lane, cubic); provider BBR 37.8 /
+  70.7; QUIC (quinn) BBR both ends 24.4-35.1 / 32.5-35.5, but +0.9 ms (4 MB initial window) to +16 ms per trip on a
+  clean path.
+* End to end (0.5B, CPU provider; tok/s / TTFT / ms per trip): RTT 0 2.31 / 3.5 s / 4.5; 1 ms 2.01 / 2.8 s / 5.1;
+  2 ms 1.55 / 2.9 s / 6.6; 5 ms 1.02 / 3.1 s / 9.9; 20 ms 0.41 / 5.9 s / 25.0; 50 ms 0.18 / 10.0 s / 55.7; 97 trips
+  per token at every RTT; excess per trip over the RTT 0 run -0.4 to +0.45 ms up to 20 ms, +1.2 ms at 50 (noise of
+  the shared CPU provider: its compute moved 2.9-4.6 ms per trip); every RTT bit-identical. 100 / 20 Mbit/s link:
+  1.16 tok/s, TTFT 14.3 s at RTT 0 (bandwidth: 2.55 MB per token, ~22 MB up for the prompt), as modelled.
+
+**Fixes** (outputs bit-identical; authentication, TLS, masks, checks unchanged):
+* Lane keep-alive: TCP lane sockets had none, so an idle lane behind a NAT that forgets idle flows meant a reset or a
+  stall until the trip timeout. Now `SO_KEEPALIVE` (idle 15 s, 5 s x 3) and `TCP_USER_TIMEOUT` (idle + 15 s) on the
+  native client (`pgw-fast` `connect_tls_with`), the Python `PyTripChannel` and the provider's listener (`pgw-lane`
+  `tls::tune_wan_socket`); `PGW_LANE_KEEPALIVE_S` (0 = off). On by default: socket options only, empty ACK probes.
+* Provider TCP check: `pgw service` logs a warning at start when the TCP lane runs with
+  `tcp_slow_start_after_idle=1` (`pgw.service.lane.wan_tcp_check`, read-only); the fix (`0` for the provider's
+  namespace: `docker run --sysctl`, Kubernetes sysctls, `sysctl -w`) is measured above.
+* Checked, nothing to fix: Nagle (`TCP_NODELAY` both ends), delayed ACKs, TLS record sizing, connection setup and
+  tickets (warm-up, off the critical path; 3-3.5 RTT to open a lane), the WebSocket fallback.
+
+**QUIC verdict**: not adopted as the default (worse on clean paths, the only ones that can approach the target);
+a measured case for an opt-in QUIC lane on lossy access (1 %: 3.5x), because QUIC lets the client own its
+congestion controller. Integration (same frames, TLS 1.3 and ticket binding, UDP fallback, choice by measured loss)
+not done; default off until a real-network run confirms it.
+
+**Bandwidth and location** (`benchmarks/wan_model.py`, calibrated by the runs above): bytes per token are a floor
+of the scheme (uniform ring elements: 0.5B 2.5 MB, 7B 9.5 MB, 32B 30 MB; fused2's K40 1.25x), plus pks-v3 mask
+replies unless prefilled. 20 tok/s with 4 tokens per pass and fused2 needs at 7B RTT <= 3.2 ms and ~2.5 Gbit/s, at
+32B RTT <= 1.2 ms and ~10 Gbit/s. Modelled: 7B ~27 tok/s only on 10G fibre within ~1.5 ms of a metro-edge GPU, ~7 on
+1G fibre, < 1 on cable / 5G; 32B <= 10 tok/s on any consumer link, 20+ only co-located. A metro edge is required for
+interactive 7B on fibre and is not enough for the target without fewer bytes per token (docs/sdk/wan.md, "What
+would change this").
+
+**Region routing** (designed, provider side included; engine switch-over not wired): `ServiceSettings.endpoints`
+(validated with the client's parser) -> `endpoints` in the SDK enrollment response -> `enrollment.json`;
+`pgw.sdk.regions`: payload-free TCP-handshake probes (no TLS, no SNI, no credentials), nearest healthy endpoint
+serving the model's fingerprint with hysteresis (20 % and 1 ms), failover order. The mask stock is bound to (pack
+fingerprint, ring, scheme), not to a host: an endpoint with the same fingerprint uses the same stock and hint.
+
+**RunPod `wan` session** (`deploy/runpod/jobs.py`, RUNBOOK section 6; dry-run tested, not launched): one H100
+provider (default US-KS-2), one 16-vCPU client pod per data centre (same DC, US-TX-3, US-GA-2, EU-RO-1; `--clients`),
+one client at a time via turns on the peer channel (nearest first; an absent client skipped), lane trips at 7B /
+32B widths over the real path, then the client library at 0.5B and 7B (`--mask-scheme plain`: same trips, no
+per-client 34 GB hint). ~$16.6 at table prices (TTL 175 min); `jobs.py plan` total $56.38 for five sessions under
+the $60 cap. `jobs.py datacenters`: read-only catalog call (`GET /v2/catalog/datacenters`) to pick locations.
+
+**Tests**: `tests/sdk/test_regions.py` (17), `tests/wire/test_wan_tuning.py` (3), `tests/service/test_accounts.py`
+(+1: endpoints in the enrollment response and enrollment.json), `tests/deploy/test_runpod_jobs.py` (+4: wan dry run,
+a refused remote client skipped, turns, the catalog command; the plan and disk checks extended), pgw-lane
+`tls::tests` (socket options). Runs, one directory at a time with the rebuilt `pgw_fast`: tests/wire 337
+passed; tests/sdk 230 passed, 1 opt-in skip (14 min); tests/deploy (`-n 2`) 151 passed, 1 skip (promtool); tests/service
+(`-n 2`) 601 passed, 80 skips (CUDA); tests/enroll 9 passed; tests/docs only the 18 known environment-only
+`test_numbers` failures; ruff clean on the changed files (one pre-existing long line in `pgw/wire/lane.py`).

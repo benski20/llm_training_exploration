@@ -122,8 +122,47 @@ SESSIONS: dict[str, dict[str, Any]] = {
         "steps": [{"kind": "perf", "phases": "env,memory,device_time,maskgen", "models": "qwen2.5-72b",
                    "budget_min": 60}]},
 }
+#: ``wan`` (docs/sdk/wan.md): one GPU provider, client pods in other data centres at increasing distance, measured one
+#: client at a time (turns handed out by the GPU pod, nearest first, so the low-RTT end is measured even if the TTL
+#: runs short and no client's maskgen or trips disturb another's). ``clients``: name, data centre (``None`` = the GPU
+#: pod's own), per-client token count (fewer far away: a 7B token costs ~113 RTTs). Override with ``--clients``.
+WAN_CLIENTS = [{"name": "same-dc", "dc": None, "tokens": 64}, {"name": "near", "dc": "US-TX-3", "tokens": 48},
+               {"name": "mid", "dc": "US-GA-2", "tokens": 32}, {"name": "far", "dc": "EU-RO-1", "tokens": 16}]
+SESSIONS["wan"] = {
+    "what": "WAN: GPU provider in one DC (default US-KS-2), CPU clients in the same DC and in DCs at increasing "
+            "distance, one at a time: TCP/TLS RTT, lane trip p50 over the real path (stub + GPU listener, 7B / 32B "
+            "widths, 1 connection), then the client library at 0.5B and 7B (spec off / draft_head): setup, TTFT, "
+            "tok/s, trips per token, ms per trip vs RTT",
+    "gpu": H100, "gpu_count": 1, "client_vcpus": 16, "volume_gb": 40, "client_disk_gb": 50, "minutes": 150,
+    "clients": WAN_CLIENTS,
+    "steps": [{"kind": "lane_nic", "presets": "7b,32b", "nic_minutes": 10, "conc": "1", "budget_s": 120},
+              {"kind": "sdk", "model": "qwen2.5-0.5b-instruct", "spec": "off", "conc": "1", "tokens": 64,
+               "mask_store_gb": 8, "stages": "setup,spec", "runs": 2, "mask_scheme": "plain"},
+              {"kind": "sdk", "model": "qwen2.5-7b-instruct", "spec": "off,draft_head", "conc": "1", "tokens": 64,
+               "mask_store_gb": 16, "stages": "setup,spec", "runs": 2, "mask_scheme": "plain"}]}
 SETUP_MIN = 15
 MARGIN_MIN = 10
+
+
+def session_clients(cfg: dict[str, Any]) -> list[dict[str, Any]]:
+    """The client pods of a session: ``cfg["clients"]`` (multi-DC sessions) or one unnamed client."""
+    if not cfg.get("client_vcpus"):
+        return []
+    return list(cfg.get("clients") or [{"name": "", "dc": None}])
+
+
+def parse_clients(spec: str) -> list[dict[str, Any]]:
+    """``--clients same-dc=,near=US-TX-3:48,far=EU-RO-1:16``: name=DC[:tokens] (empty DC = the GPU pod's)."""
+    out = []
+    for item in [x for x in spec.split(",") if x]:
+        name, _, rest = item.partition("=")
+        dc, _, tok = rest.partition(":")
+        if not name or not name.replace("-", "").isalnum() or len(name) > 24:
+            raise SystemExit(f"--clients: bad name {name!r}")
+        out.append({"name": name, "dc": dc or None, "tokens": int(tok) if tok else 32})
+    if not out:
+        raise SystemExit("--clients: no client")
+    return out
 
 
 # ============================================================================================ session side
@@ -177,7 +216,7 @@ def session_estimate(cfg: dict[str, Any], ttl_min: float, gpu_price_h: float) ->
     if cfg["client_vcpus"]:
         cpu = launch.estimate(launch.CPU_VCPU_PRICE_H * cfg["client_vcpus"], "", ttl_min,
                               volume_gb=cfg["client_disk_gb"], network_volume=False)
-        cpu_usd = cpu.total_usd
+        cpu_usd = cpu.total_usd * len(session_clients(cfg))
     return {"gpu_usd": round(gpu.total_usd, 2), "cpu_usd": round(cpu_usd, 2),
             "total_usd": round(gpu.total_usd + cpu_usd, 2), "hours": round(gpu.hours, 2)}
 
@@ -197,7 +236,8 @@ def cmd_plan(args: argparse.Namespace) -> int:
         ttl = session_minutes(name, cfg)
         est = session_estimate(cfg, ttl, table_price(cfg["gpu"], cfg["gpu_count"]))
         total += est["total_usd"]
-        client = f"{cfg['client_vcpus']} vCPU" if cfg["client_vcpus"] else "-"
+        n = len(session_clients(cfg))
+        client = ((f"{n} x " if n > 1 else "") + f"{cfg['client_vcpus']} vCPU") if cfg["client_vcpus"] else "-"
         print(f"| {i} | {name} | {cfg['gpu_count']} x {cfg['gpu']} | {client} | {cfg['minutes']} | {ttl:.0f} | "
               f"{est['total_usd']:.2f} | {cfg['what'][:60]}... |")
     print(f"\ntotal (all sessions at their full TTL): ${total:.2f}; default --budget-usd 60")
@@ -214,11 +254,20 @@ def gpu_spec(name: str, cfg: dict[str, Any], *, dc: str, stop_at: float, env: di
 
 
 def cpu_spec(name: str, cfg: dict[str, Any], *, dc: str, stop_at: float, env: dict[str, str],
-             flavor: str) -> dict[str, Any]:
-    return {"name": f"pgw-job-{name}-cpu", "imageName": CPU_IMAGE, "computeType": "CPU", "cpuFlavorIds": [flavor],
+             flavor: str, client: str = "") -> dict[str, Any]:
+    return {"name": f"pgw-job-{name}-cpu" + (f"-{client}" if client else ""), "imageName": CPU_IMAGE,
+            "computeType": "CPU", "cpuFlavorIds": [flavor],
             "vcpuCount": cfg["client_vcpus"], "dataCenterIds": [dc], "containerDiskInGb": cfg["client_disk_gb"],
             "ports": [f"{CONTROL_PORT}/http"], "supportPublicIp": True, "dockerStartCmd": ["bash", "-c", BOOT_CMD],
             "env": {**env, "PGW_JOB_STOP_AT": str(int(stop_at))}}
+
+
+def client_env(cfg: dict[str, Any], cl: dict[str, Any]) -> dict[str, str]:
+    """A multi-DC client pod's identity: its name, every client's name in turn order, its token count."""
+    if not cfg.get("clients"):
+        return {}
+    return {"PGW_JOB_CLIENT_NAME": cl["name"], "PGW_JOB_CLIENTS": json.dumps([c["name"] for c in cfg["clients"]]),
+            "PGW_JOB_CLIENT_TOKENS": str(int(cl.get("tokens") or 32))}
 
 
 def redacted(spec: dict[str, Any]) -> dict[str, Any]:
@@ -275,6 +324,26 @@ def cmd_check_key(args: argparse.Namespace, api: RunPodAPI) -> int:
     return 0
 
 
+def cmd_datacenters(args: argparse.Namespace, api: RunPodAPI) -> int:
+    """Read-only: RunPod's data-centre catalog (id, name, region, whether H100 / CPU pods are listed available), to
+    pick the ``wan`` session's GPU and client data centres (RUNBOOK.md section 6)."""
+    try:
+        rows = api.datacenters(args.regions)
+    except RunPodError as exc:
+        print(f"catalog not available ({exc}); the key needs the catalog:read scope")
+        return 1
+    print("| id | name | region | GPU types available | CPU available |")
+    print("|---|---|---|---|---|")
+    for r in sorted(rows, key=lambda r: str(r.get("id"))):
+        gpus = r.get("gpuAvailability") or []
+        cpus = r.get("cpuAvailability") or []
+        gnames = sorted({str(g.get("gpuTypeId") or g.get("displayName") or g.get("id"))
+                         for g in gpus if isinstance(g, dict) and (g.get("available", True) or g.get("stockStatus"))})
+        print(f"| {r.get('id')} | {r.get('name', '')} | {r.get('region', '')} | "
+              f"{', '.join(gnames[:6]) + (' ...' if len(gnames) > 6 else '') or '-'} | {'yes' if cpus else '-'} |")
+    return 0
+
+
 def check_sdk_steps(steps: list[dict[str, Any]]) -> list[str]:
     """Refuse, before any pod exists, an sdk step the client library would refuse only after the provider's download
     and pack: a model without a baked pin, an unpinned provider model, or a ``draft_head`` mode without a head. A
@@ -314,6 +383,10 @@ def cmd_launch(args: argparse.Namespace, api: RunPodAPI | None) -> int:
         cfg["gpu_count"] = args.gpu_count
     if args.no_client:
         cfg["client_vcpus"] = 0
+    if getattr(args, "clients", None):
+        if not cfg.get("clients"):
+            raise SystemExit("--clients: only for a multi-DC session (wan)")
+        cfg["clients"] = parse_clients(args.clients)
     if any(s["kind"] in ("lane_nic", "sdk", "factory_e2e") for s in cfg["steps"]) and not cfg["client_vcpus"]:
         raise SystemExit("this session needs its client pod (lane_nic / sdk / factory_e2e steps)")
     extras = [Path(e).resolve() for e in args.extra]
@@ -361,10 +434,10 @@ def cmd_launch(args: argparse.Namespace, api: RunPodAPI | None) -> int:
     print(f"  bundle {bundle} ({bundle.stat().st_size / 1e6:.1f} MB, sha256 {sha[:16]}...)")
     if args.dry_run:
         print(json.dumps({"create_gpu_pod": redacted(g)}, indent=1))
-        if cfg["client_vcpus"]:
-            c = cpu_spec(args.session, cfg, dc=args.dc, stop_at=stop_at, flavor=args.cpu_flavor,
-                         env={**common, "PGW_JOB_ROLE": "cpu", "PGW_JOB_PAIR_TOKEN": pair_token,
-                              "PGW_JOB_PEER_POD": "<gpu pod id>"})
+        for cl in session_clients(cfg):
+            c = cpu_spec(args.session, cfg, dc=cl.get("dc") or args.dc, stop_at=stop_at, flavor=args.cpu_flavor,
+                         client=cl["name"], env={**common, **client_env(cfg, cl), "PGW_JOB_ROLE": "cpu",
+                                                 "PGW_JOB_PAIR_TOKEN": pair_token, "PGW_JOB_PEER_POD": "<gpu pod id>"})
             print(json.dumps({"create_cpu_pod": redacted(c)}, indent=1))
         print("dry run: nothing created, nothing spent")
         return 0
@@ -379,21 +452,38 @@ def cmd_launch(args: argparse.Namespace, api: RunPodAPI | None) -> int:
     rec["pods"]["gpu"] = {"id": gid, "watchdog_pid": launch.spawn_watchdog(gid, stop_at, terminate=True)}
     save_state(st)
     print(f"  GPU pod {gid} created (watchdog terminates it at TTL + {launch.WATCHDOG_GRACE_MIN:.0f} min)")
-    if cfg["client_vcpus"]:
-        c = cpu_spec(args.session, cfg, dc=args.dc, stop_at=stop_at, flavor=args.cpu_flavor,
-                     env={**common, "PGW_JOB_ROLE": "cpu", "PGW_JOB_PAIR_TOKEN": pair_token, "PGW_JOB_PEER_POD": gid})
+    clients = session_clients(cfg)
+    multi = bool(cfg.get("clients"))
+    for cl in clients:
+        role = f"cpu-{cl['name']}" if multi else "cpu"
+        dc = cl.get("dc") or args.dc
+        c = cpu_spec(args.session, cfg, dc=dc, stop_at=stop_at, flavor=args.cpu_flavor, client=cl["name"],
+                     env={**common, **client_env(cfg, cl), "PGW_JOB_ROLE": "cpu", "PGW_JOB_PAIR_TOKEN": pair_token,
+                          "PGW_JOB_PEER_POD": gid})
         try:
             cp = api.create_pod(c)
         except RunPodError as exc:
+            if multi:  # a remote DC without CPU capacity: measure the others (recorded)
+                print(f"client pod {cl['name']} in {dc} refused ({exc}); continuing without it", file=sys.stderr)
+                rec.setdefault("refused_clients", []).append(cl["name"])
+                save_state(st)
+                continue
             print(f"client pod refused ({exc}); stopping the GPU pod", file=sys.stderr)
             api.terminate_pod(gid)
             rec["active"] = False
             save_state(st)
             return 1
         cid = str(cp["id"])
-        rec["pods"]["cpu"] = {"id": cid, "watchdog_pid": launch.spawn_watchdog(cid, stop_at, terminate=True)}
+        rec["pods"][role] = {"id": cid, "dc": dc,
+                             "watchdog_pid": launch.spawn_watchdog(cid, stop_at, terminate=True)}
         save_state(st)
-        print(f"  client pod {cid} created")
+        print(f"  client pod {cid} created ({role}, {dc})")
+    if multi and len(rec["pods"]) == 1:
+        print("no client pod could be created; stopping the GPU pod", file=sys.stderr)
+        api.terminate_pod(gid)
+        rec["active"] = False
+        save_state(st)
+        return 1
     return upload(args.session, st, timeout_min=args.start_timeout_min)
 
 
@@ -595,6 +685,77 @@ def minutes_left() -> float:
     return (float(os.environ.get("PGW_JOB_STOP_AT", time.time() + 86400)) - time.time()) / 60
 
 
+def client_name() -> str:
+    """This client pod's name in a multi-DC session (wan), else ``""``."""
+    return os.environ.get("PGW_JOB_CLIENT_NAME", "")
+
+
+def client_names() -> list[str]:
+    try:
+        return [str(x) for x in json.loads(os.environ.get("PGW_JOB_CLIENTS") or "[]")]
+    except ValueError:
+        return []
+
+
+def run_turns(tag: str, names: list[str], *, budget_s: float, start_s: float = 900.0) -> dict[str, str]:
+    """GPU side of a multi-DC session: hand the turn for ``tag`` to each client in order (``turn-<tag>`` holds the
+    name) and wait for its ``<tag>.<name>.started`` (``start_s``: a pod that never shows up is skipped) and
+    ``<tag>.<name>.done`` (``budget_s``). One client measures at a time: no other client's trips or maskgen share
+    the GPU or the provider's NIC meanwhile."""
+    out: dict[str, str] = {}
+    for name in names:
+        if minutes_left() < 3:
+            out[name] = "ttl"
+            continue
+        peer_put_local(f"turn-{tag}", name.encode())
+        if not peer_wait_local(f"{tag}.{name}.started", timeout_s=min(start_s, max(30.0, (minutes_left() - 2) * 60))):
+            out[name] = "absent"
+            print(f"{tag}: client {name} did not take its turn; next", flush=True)
+            continue
+        ok = peer_wait_local(f"{tag}.{name}.done", timeout_s=min(budget_s, max(30.0, (minutes_left() - 2) * 60)))
+        out[name] = "done" if ok else "timeout"
+        print(f"{tag}: client {name} {out[name]}", flush=True)
+    peer_put_local(f"turn-{tag}", b"-")  # nobody's turn any more
+    return out
+
+
+def wait_turn(tag: str, timeout_s: float) -> bool:
+    """CPU side: wait until ``turn-<tag>`` names this client, then say so (``<tag>.<name>.started``)."""
+    me = client_name().encode()
+    t0 = time.time()
+    while time.time() - t0 < timeout_s:
+        raw = peer_get(f"turn-{tag}", timeout_s=max(10.0, timeout_s - (time.time() - t0)))
+        if raw is None:
+            return False
+        if raw.strip() == me:
+            peer_put_remote(f"{tag}.{client_name()}.started", b"1")
+            return True
+        if raw.strip() == b"-":
+            return False
+        time.sleep(10)
+    return False
+
+
+def turn_done(tag: str, rc: int) -> None:
+    if client_name():
+        peer_put_remote(f"{tag}.{client_name()}.done", str(rc).encode())
+
+
+def _tcp_rtt_ms(host: str, port: int, n: int = 10) -> float:
+    import socket as _s
+    import statistics as _st
+
+    xs = []
+    for _ in range(n):
+        t0 = time.perf_counter()
+        try:
+            with _s.create_connection((host, port), timeout=5):
+                xs.append((time.perf_counter() - t0) * 1e3)
+        except OSError:
+            pass
+    return _st.median(xs) if xs else 100.0
+
+
 def _smoke() -> list[str]:
     return ["--cpu"] if os.environ.get("PGW_JOB_CPU_SMOKE") == "1" else []
 
@@ -631,6 +792,19 @@ def gpu_lane_nic(step: dict[str, Any], res: Path, py: str) -> int:
 
     th = threading.Thread(target=publish, daemon=True)
     th.start()
+    names = client_names()
+    if names:  # multi-DC: the clients drive the listeners one at a time, per preset
+        def turns() -> None:
+            for pre in step["presets"].split(","):
+                while not stop.is_set() and not (out / f"lane_nic_{pre}.json").exists():
+                    time.sleep(3)
+                if stop.is_set():
+                    return
+                time.sleep(5)  # the publisher's next pass
+                res_ = run_turns(f"lane_nic_{pre}", names, budget_s=3 * float(step.get("budget_s", 120)) + 60)
+                (res / f"lane_nic_{pre}_turns.json").write_text(json.dumps(res_))
+
+        threading.Thread(target=turns, daemon=True).start()
     rc = _run([py, "deploy/runpod/provider_perf_session.py", "--out", str(out), "--phases", "lane_nic",
                "--host", os.environ.get("RUNPOD_PUBLIC_IP", ""), "--nic-minutes", str(step["nic_minutes"]),
                "--nic-port", str(nic_ports()[0]), "--nic-stub-port", str(nic_ports()[1]),
@@ -659,12 +833,28 @@ def cpu_lane_nic(step: dict[str, Any], res: Path, py: str) -> int:
         info = res / f"lane_nic_{pre}_info.json"
         info.write_text(raw.decode())
         meta = json.loads(raw)
-        rc |= _run([py, "benchmarks/lane_nic_bench.py", "client", "--info", str(info),
-                    "--port", str(meta.get("public_port") or meta["port"]),
-                    "--stub-port", str(meta.get("public_stub_port") or meta["stub_port"]),
-                    "--conc", "1,4,16,64", "--iters", "400", "--json", str(res / f"lane_nic_{pre}_client.json")],
-                   res / "lane_nic_client.log", timeout=step["nic_minutes"] * 60)
+        iters, timeout = 400, step["nic_minutes"] * 60
+        if client_name():
+            tag = f"lane_nic_{pre}"
+            if not wait_turn(tag, timeout_s=max(60.0, (minutes_left() - 5) * 60)):
+                print(f"lane_nic {pre}: no turn for {client_name()}", flush=True)
+                info.unlink()
+                continue
+            # a stub + GPU pair of 1-connection runs (4 linears x iters each) within the turn's budget
+            rtt = _tcp_rtt_ms(meta["host"], int(meta.get("public_stub_port") or meta["stub_port"]))
+            budget = float(step.get("budget_s", 120))
+            iters = int(max(30, min(400, budget * 1e3 / (8 * 4 * max(0.2, rtt)))))
+            timeout = 3 * budget
+        r1 = _run([py, "benchmarks/lane_nic_bench.py", "client", "--info", str(info),
+                   "--port", str(meta.get("public_port") or meta["port"]),
+                   "--stub-port", str(meta.get("public_stub_port") or meta["stub_port"]),
+                   "--conc", step.get("conc", "1,4,16,64"), "--iters", str(iters),
+                   "--json", str(res / f"lane_nic_{pre}_client.json")],
+                  res / "lane_nic_client.log", timeout=timeout)
+        rc |= r1
         info.unlink()  # the throwaway tickets
+        if client_name():
+            turn_done(f"lane_nic_{pre}", r1)
     return rc
 
 
@@ -744,6 +934,11 @@ def gpu_sdk(step: dict[str, Any], res: Path, py: str) -> int:
                                                                 "key_id": rec.get("key_id")}, indent=1))
         peer_put_local(f"sdk-{model}.json", json.dumps({"url": boot["service_url"], "ca_sha256": boot["ca_sha256"],
                                                         "key": key, "fingerprint": fp}).encode())
+        names = client_names()
+        if names:  # multi-DC: one client at a time, nearest first
+            turns = run_turns(f"sdk-{model}", names, budget_s=float(step.get("client_budget_min", 40)) * 60)
+            (res / f"sdk-{model}-turns.json").write_text(json.dumps(turns))
+            return 0 if turns and all(v == "done" for v in turns.values()) else 1
         ok = peer_wait_local(f"sdk-{model}.done", timeout_s=max(60.0, (minutes_left() - 3) * 60))
         print(f"sdk {model}: client {'done' if ok else 'did not finish before the TTL'}", flush=True)
         return 0 if ok else 1
@@ -768,6 +963,9 @@ def cpu_sdk(step: dict[str, Any], res: Path, py: str) -> int:
         print(f"sdk {model}: the provider never published its key", flush=True)
         return 1
     info = json.loads(raw)
+    if client_name() and not wait_turn(f"sdk-{model}", timeout_s=max(60.0, (minutes_left() - 5) * 60)):
+        print(f"sdk {model}: no turn for {client_name()}", flush=True)
+        return 1
     env = dict(os.environ, PGW_API_KEY=info["key"])
     for k in [k for k in env if k.startswith("PGW_JOB_")]:
         env.pop(k)
@@ -780,7 +978,11 @@ def cpu_sdk(step: dict[str, Any], res: Path, py: str) -> int:
     if info.get("fingerprint") != pin:  # the client refuses this provider (FingerprintMismatchError): a finding
         print(f"sdk {model}: WARNING the provider's pack {str(info.get('fingerprint'))[:16]}... is not the baked pin "
               f"{str(pin)[:16]}...; the client library will refuse it", flush=True)
-    base = [py, "deploy/runpod/sdk_remote_bench.py", "--model", model, "--tokens", str(step.get("tokens", 128)),
+    tokens = int(os.environ.get("PGW_JOB_CLIENT_TOKENS") or step.get("tokens", 128)) if client_name() \
+        else step.get("tokens", 128)
+    base = [py, "deploy/runpod/sdk_remote_bench.py", "--model", model, "--tokens", str(tokens),
+            *(["--runs", str(step["runs"])] if step.get("runs") else []),
+            *(["--mask-scheme", step["mask_scheme"]] if step.get("mask_scheme") else []),
             "--mask-store-gb", str(step.get("mask_store_gb", 24)), "--cache", "/workspace/pgw-client"]
     if step.get("draft_head"):  # an override (--extra); else the head the library ships pinned for the model
         base += ["--draft-head", step["draft_head"]]
@@ -797,7 +999,10 @@ def cpu_sdk(step: dict[str, Any], res: Path, py: str) -> int:
                "--out", str(res / f"sdk-{model}-{rr['name']}")]
         rc |= _run(cmd, res / f"sdk-{model}-{rr['name']}.log", env={**env, **rr.get("env", {})},
                    timeout=max(60.0, (minutes_left() - 3) * 60))
-    peer_put_remote(f"sdk-{model}.done", str(rc).encode())
+    if client_name():
+        turn_done(f"sdk-{model}", rc)
+    else:
+        peer_put_remote(f"sdk-{model}.done", str(rc).encode())
     return rc
 
 
@@ -880,6 +1085,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--price-per-hour", type=float, default=None, help="USD per GPU-hour if the API has no price")
     p.add_argument("--cpu-flavor", default=launch.DEFAULT_CPU_FLAVOR)
     p.add_argument("--no-client", action="store_true")
+    p.add_argument("--clients", default=None,
+                   help="multi-DC sessions (wan): name=DC[:tokens],... nearest first (empty DC = the GPU pod's)")
     p.add_argument("--extra", action="append", default=[], help="file shipped as extras/<name> (the draft head)")
     p.add_argument("--start-timeout-min", type=float, default=20.0)
     p.add_argument("--dry-run", action="store_true")
@@ -890,7 +1097,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("session", nargs="?")
     p = sub.add_parser("log")
     p.add_argument("session")
-    p.add_argument("role", choices=["gpu", "cpu"])
+    p.add_argument("role", help="gpu, cpu, or cpu-<client> (multi-DC sessions)")
     p.add_argument("--chars", type=int, default=6000)
     p = sub.add_parser("fetch")
     p.add_argument("session")
@@ -899,6 +1106,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("session", nargs="?")
     p.add_argument("--all", action="store_true")
     p.add_argument("--terminate", action="store_true")
+    p = sub.add_parser("datacenters", help="read-only: RunPod's data-centre catalog (pick wan locations)")
+    p.add_argument("--regions", default=None, help="e.g. NORTH_AMERICA,EUROPE")
     sub.add_parser("teardown-check", help="exit 1 while any pod runs")
     sub.add_parser("pod", help=argparse.SUPPRESS)
     return ap
@@ -921,6 +1130,8 @@ def main(argv: list[str] | None = None, *, api_factory: Any = RunPodAPI) -> int:
     api = api_factory()
     if args.cmd == "check-key":
         return cmd_check_key(args, api)
+    if args.cmd == "datacenters":
+        return cmd_datacenters(args, api)
     if args.cmd == "launch":
         return cmd_launch(args, api)
     if args.cmd == "status":

@@ -1,0 +1,18 @@
+[package]
+name = "pgw-quicbench"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+description = "QUIC (quinn) vs TCP request/reply trips over the emulated WAN: the evaluation behind docs/sdk/wan.md's QUIC verdict"
+publish = false
+
+# standalone: not a member of the pgw rust workspace (an evaluation tool, never shipped)
+[workspace]
+
+[dependencies]
+quinn = { version = "0.11", default-features = false, features = ["runtime-tokio", "rustls-ring", "log"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
+tokio = { version = "1", features = ["rt", "net", "time", "io-util", "macros"] }
+
+[profile.release]
+debug = false

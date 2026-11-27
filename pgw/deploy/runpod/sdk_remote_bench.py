@@ -129,6 +129,8 @@ def make_client(args: argparse.Namespace, **over: Any) -> Any:
                           "max_concurrent": max(8, max(args.conc_list)), "mask_admission": args.admission}
     if args.mask_workers:
         kw["mask_workers"] = args.mask_workers
+    if args.mask_scheme:  # measurement only (the wan session): the same trips, masks made locally
+        kw["mask_scheme"] = args.mask_scheme
     if args.smoke:
         from pgw.sdk import LocalPackProvisioner
 
@@ -426,6 +428,9 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--fill-timeout", type=float, default=1800.0)
     ap.add_argument("--mask-workers", type=int, default=0, help="0: the library's default")
     ap.add_argument("--admission", default="entitled", choices=["entitled", "overcommit"])
+    ap.add_argument("--mask-scheme", default=None, choices=["plain", "pks-v3"],
+                    help="measurement only: override the library's mask scheme (plain: masks from the local factory "
+                         "pack, no maskgen traffic; the trips and what the provider sees per trip are the same)")
     ap.add_argument("--preview", action="store_true",
                     help="measurement-only: enable --model through PGW_SDK_PREVIEW_MODELS (pinned, not supported yet; "
                          "still verified against its baked pin)")

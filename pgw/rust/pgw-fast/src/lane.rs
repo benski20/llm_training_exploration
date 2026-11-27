@@ -852,6 +852,7 @@ mod chan {
             }
             let tcp = tcp.ok_or(last)?;
             tcp.set_nodelay(true)?;
+            pgw_lane::tls::tune_wan_socket(&tcp); // keep-alive + user timeout: idle lanes survive NATs over a WAN
             tcp.set_read_timeout(Some(timeout))?;
             tcp.set_write_timeout(Some(timeout))?;
             let mut stream = rustls::StreamOwned::new(tls, tcp);

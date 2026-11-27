@@ -37,6 +37,7 @@ Client library (`pip install pgw-sdk`, `from pgw import OpenAI`: the gateway run
 | Developers, operators | [Scaling](sdk/scaling.md) | many concurrent streams and worker processes on one client machine: limits in order, sizing table, mask cost per slot |
 | Users, developers | [PGW Chat](sdk/chat.md) | private chat on your own computer (`pgw chat`): setup, models, speed, what is private, the local app's security |
 | Developers, operators | [Reliability](sdk/reliability.md) | what happens on each failure: network, provider restart, revocation, certificates, factory crashes, disk full, damaged cache, cancellation, shutdown |
+| Developers, operators | [WAN](sdk/wan.md) | a consumer device to hosted GPUs: per-trip cost vs RTT (emulated WAN harness), bandwidth per token, who can reach a given speed, region routing, the RunPod `wan` session |
 | Security reviewers | [Security model summary](sdk/security.md) | what is and is not protected, review status (pks-v3 pending external review) |
 | Pilot customers | [Pilot hand-off](sdk/pilot-handoff.md) | one page: what you get, five-minute setup on RunPod, what to test, privacy promise |
 | Everyone | [Changelog](sdk/changelog.md) | client library releases |

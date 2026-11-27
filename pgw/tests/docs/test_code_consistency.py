@@ -145,6 +145,7 @@ _NON_FIELD_ENV = {
     "PGW_TRIP_DECRYPT_AHEAD",
     "PGW_LANE_SPIN_AUTO_US",
     "PGW_LANE_WAIT_PREFETCH",
+    "PGW_LANE_KEEPALIVE_S",  # keep-alive idle of TCP lane sockets (pgw.wire.lane / pgw_lane::tls; docs/sdk/wan.md)
     "PGW_LANE_MULTI",  # lane format 2 multi calls (pgw.wire.service_lane.build_lane_client; NATIVE_ENV sets it)
     "PGW_SERVICE_LANE_MULTI",  # lane format 2 offer of the service lane (pgw.service.lane._multi_items)
     "PGW_SYNC_MULTI",  # several-answer decode passes on the plaintext thread (MaskedBackend; NATIVE_ENV sets it)

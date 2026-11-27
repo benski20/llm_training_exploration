@@ -325,6 +325,15 @@ def _enroll_flow(c: Any, config_dir: Path, paths: dict[str, Path], name: str, pa
     meta: dict[str, Any] = {"tenant": tenant, "service_url": c.service_url, "gateway_name": name,
                             "enrolled_at": time.time(),
             "ca_fingerprint": c.ca_fingerprint_hex if c.pinned else None, "models": models}
+    if data.get("endpoints"):  # region routing (pgw.sdk.regions, docs/sdk/wan.md): kept only when valid
+        from pgw.sdk.regions import parse_endpoints
+
+        try:
+            meta["endpoints"] = [{"region": e.region, "url": e.url, "models": sorted(e.models),
+                                  "priority": e.priority}
+                                 for e in parse_endpoints(data["endpoints"], enrolled_url=c.service_url)]
+        except ValueError as exc:
+            log.warning("ignoring the provider's endpoint list: %s", exc)
     atomic_write_text(paths["meta"], json.dumps(meta, indent=2) + "\n", mode=0o644)
     files["meta"] = paths["meta"]
     log.info("enrolled as tenant %s with %s (%d model(s))", tenant, c.service_url, len(entries))

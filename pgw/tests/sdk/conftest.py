@@ -54,7 +54,7 @@ def _ca(cn: str) -> tuple[Any, Any]:
     return cert, key
 
 
-def _server_leaf(ca: tuple[Any, Any]) -> tuple[bytes, bytes]:
+def _server_leaf(ca: tuple[Any, Any], ips: tuple[str, ...] = ("127.0.0.1",)) -> tuple[bytes, bytes]:
     from cryptography import x509
     from cryptography.hazmat.primitives import hashes, serialization
     from cryptography.hazmat.primitives.asymmetric import ec
@@ -66,7 +66,7 @@ def _server_leaf(ca: tuple[Any, Any]) -> tuple[bytes, bytes]:
             .issuer_name(ca[0].subject).public_key(key.public_key()).serial_number(x509.random_serial_number())
             .not_valid_before(now - dt.timedelta(minutes=5)).not_valid_after(now + dt.timedelta(days=2))
             .add_extension(x509.BasicConstraints(ca=False, path_length=None), critical=True)
-            .add_extension(x509.SubjectAlternativeName([x509.IPAddress(ipaddress.ip_address("127.0.0.1"))]),
+            .add_extension(x509.SubjectAlternativeName([x509.IPAddress(ipaddress.ip_address(i)) for i in ips]),
                            critical=False)
             .add_extension(x509.ExtendedKeyUsage([ExtendedKeyUsageOID.SERVER_AUTH]), critical=False)
             .add_extension(x509.AuthorityKeyIdentifier.from_issuer_public_key(ca[1].public_key()), critical=False)
@@ -76,12 +76,13 @@ def _server_leaf(ca: tuple[Any, Any]) -> tuple[bytes, bytes]:
                               serialization.NoEncryption()))
 
 
-def make_pki(d: Path) -> dict[str, Any]:
-    """Provider CA + server certificate for 127.0.0.1 + client-issuing CA, as files under ``d``."""
+def make_pki(d: Path, ips: tuple[str, ...] = ("127.0.0.1",)) -> dict[str, Any]:
+    """Provider CA + server certificate for 127.0.0.1 (and any further ``ips``) + client-issuing CA, as files under
+    ``d``."""
     from cryptography.hazmat.primitives import serialization
 
     ca, client_ca = _ca("provider-ca"), _ca("client-issuing-ca")
-    srv_pem, srv_key = _server_leaf(ca)
+    srv_pem, srv_key = _server_leaf(ca, ips)
     out: dict[str, Any] = {}
     files = {"ca.pem": ca[0].public_bytes(serialization.Encoding.PEM), "server.pem": srv_pem, "server.key": srv_key,
              "client-ca.pem": client_ca[0].public_bytes(serialization.Encoding.PEM),

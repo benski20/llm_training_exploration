@@ -21,6 +21,54 @@ use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 /// ALPN protocol of the lane (= `pgw.wire.lane.LANE_ALPN`, pgw-fast `lane::ALPN`).
 pub const ALPN: &[u8] = b"pgw-lane/1";
 
+/// Keep-alive idle time of TCP lane sockets in seconds: `PGW_LANE_KEEPALIVE_S` (default 15; 0 = off).
+///
+/// Over a WAN an idle lane connection (between chats) crosses NATs and stateful firewalls that forget idle TCP
+/// flows (carrier-grade NAT and some home routers after 30 s to a few minutes). A forgotten flow turns the next
+/// trip into a reset or, worse, a silent drop that waits for the trip timeout. Keep-alive probes (empty ACKs, no
+/// payload: the peer learns nothing it does not already know) keep the mapping and detect a dead path; with them
+/// `TCP_USER_TIMEOUT` bounds how long unacknowledged data or probes may wait before the socket errors (idle + 3
+/// probes 5 s apart), so a dead path fails over in seconds, not at the request timeout.
+pub fn keepalive_s() -> u32 {
+    std::env::var("PGW_LANE_KEEPALIVE_S").ok().and_then(|v| v.trim().parse::<u32>().ok()).unwrap_or(15).min(7200)
+}
+
+/// TCP options of a lane socket over a WAN (both ends): `SO_KEEPALIVE` with the [`keepalive_s`] idle time,
+/// 5 s probe interval, 3 probes, and `TCP_USER_TIMEOUT` = idle + 15 s (Linux; elsewhere the OS's keep-alive
+/// timers). Changes no byte of the stream. Best effort: an option the OS refuses is skipped.
+pub fn tune_wan_socket(tcp: &TcpStream) {
+    use std::os::fd::AsRawFd;
+    let idle = keepalive_s();
+    if idle == 0 {
+        return;
+    }
+    let fd = tcp.as_raw_fd();
+    let set = |level: libc::c_int, opt: libc::c_int, v: libc::c_int| {
+        // SAFETY: valid socket fd, a c_int option value of the right size.
+        unsafe {
+            libc::setsockopt(
+                fd,
+                level,
+                opt,
+                (&v as *const libc::c_int).cast(),
+                std::mem::size_of::<libc::c_int>() as libc::socklen_t,
+            );
+        }
+    };
+    set(libc::SOL_SOCKET, libc::SO_KEEPALIVE, 1);
+    #[cfg(target_os = "linux")]
+    {
+        set(libc::IPPROTO_TCP, libc::TCP_KEEPIDLE, idle as libc::c_int);
+        set(libc::IPPROTO_TCP, libc::TCP_KEEPINTVL, 5);
+        set(libc::IPPROTO_TCP, libc::TCP_KEEPCNT, 3);
+        set(libc::IPPROTO_TCP, libc::TCP_USER_TIMEOUT, ((idle + 15) * 1000) as libc::c_int);
+    }
+    #[cfg(target_os = "macos")]
+    {
+        set(libc::IPPROTO_TCP, libc::TCP_KEEPALIVE, idle as libc::c_int);
+    }
+}
+
 /// SHA-256 of a DER certificate (the ticket binding).
 pub fn cert_digest(der: &[u8]) -> [u8; 32] {
     let d = ring::digest::digest(&ring::digest::SHA256, der);
@@ -91,6 +139,7 @@ impl TlsIo {
         stop: impl Fn() -> bool,
     ) -> io::Result<TlsIo> {
         tcp.set_nodelay(true)?;
+        tune_wan_socket(&tcp);
         tcp.set_read_timeout(Some(poll))?;
         tcp.set_write_timeout(Some(stall))?;
         let mut conn = rustls::ServerConnection::new(cfg).map_err(|e| io::Error::other(e.to_string()))?;
@@ -191,5 +240,38 @@ impl TlsIo {
 impl Read for TlsIo {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         self.s.read(buf)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::os::fd::AsRawFd;
+
+    fn opt(tcp: &TcpStream, level: libc::c_int, name: libc::c_int) -> libc::c_int {
+        let mut v: libc::c_int = -1;
+        let mut len = std::mem::size_of::<libc::c_int>() as libc::socklen_t;
+        // SAFETY: valid fd, out-pointer of the right size.
+        let r =
+            unsafe { libc::getsockopt(tcp.as_raw_fd(), level, name, (&mut v as *mut libc::c_int).cast(), &mut len) };
+        assert_eq!(r, 0);
+        v
+    }
+
+    #[test]
+    fn wan_socket_options_keepalive_and_user_timeout() {
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let c = TcpStream::connect(l.local_addr().unwrap()).unwrap();
+        assert_eq!(opt(&c, libc::SOL_SOCKET, libc::SO_KEEPALIVE), 0);
+        tune_wan_socket(&c);
+        assert_ne!(opt(&c, libc::SOL_SOCKET, libc::SO_KEEPALIVE), 0);
+        #[cfg(target_os = "linux")]
+        {
+            let idle = keepalive_s() as libc::c_int;
+            assert_eq!(opt(&c, libc::IPPROTO_TCP, libc::TCP_KEEPIDLE), idle);
+            assert_eq!(opt(&c, libc::IPPROTO_TCP, libc::TCP_KEEPINTVL), 5);
+            assert_eq!(opt(&c, libc::IPPROTO_TCP, libc::TCP_KEEPCNT), 3);
+            assert_eq!(opt(&c, libc::IPPROTO_TCP, libc::TCP_USER_TIMEOUT), (idle + 15) * 1000);
+        }
     }
 }

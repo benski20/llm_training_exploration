@@ -1,0 +1,787 @@
+{
+ "bench": "lane",
+ "cc": "cubic",
+ "ssai": 1,
+ "server_cc": null,
+ "server_ssai": 0,
+ "rate_mbit": 0.0,
+ "up_mbit": null,
+ "runs": [
+  {
+   "tcp_connect_ms": 6.436,
+   "lane_connect_ms": 71.419,
+   "payloads": [
+    {
+     "preset": "7b",
+     "linear": "qkv",
+     "rows": 1,
+     "up_bytes": 14336,
+     "down_bytes": 18432,
+     "lane_p50_ms": 5.22,
+     "lane_p90_ms": 5.368,
+     "lane_p99_ms": 9.314,
+     "raw_p50_ms": 5.19,
+     "raw_p99_ms": 8.194,
+     "lane_over_raw_ms": 0.03,
+     "lane_excess_ms": 0.22,
+     "raw_excess_ms": 0.19
+    },
+    {
+     "preset": "7b",
+     "linear": "o",
+     "rows": 1,
+     "up_bytes": 14336,
+     "down_bytes": 14336,
+     "lane_p50_ms": 5.229,
+     "lane_p90_ms": 5.292,
+     "lane_p99_ms": 6.745,
+     "raw_p50_ms": 5.172,
+     "raw_p99_ms": 5.319,
+     "lane_over_raw_ms": 0.057,
+     "lane_excess_ms": 0.229,
+     "raw_excess_ms": 0.172
+    },
+    {
+     "preset": "7b",
+     "linear": "gate_up",
+     "rows": 1,
+     "up_bytes": 14336,
+     "down_bytes": 151552,
+     "lane_p50_ms": 5.694,
+     "lane_p90_ms": 6.007,
+     "lane_p99_ms": 9.218,
+     "raw_p50_ms": 5.52,
+     "raw_p99_ms": 7.984,
+     "lane_over_raw_ms": 0.174,
+     "lane_excess_ms": 0.694,
+     "raw_excess_ms": 0.52
+    },
+    {
+     "preset": "7b",
+     "linear": "down",
+     "rows": 1,
+     "up_bytes": 75776,
+     "down_bytes": 14336,
+     "lane_p50_ms": 5.471,
+     "lane_p90_ms": 5.729,
+     "lane_p99_ms": 6.225,
+     "raw_p50_ms": 5.381,
+     "raw_p99_ms": 6.812,
+     "lane_over_raw_ms": 0.09,
+     "lane_excess_ms": 0.471,
+     "raw_excess_ms": 0.381
+    },
+    {
+     "preset": "7b",
+     "linear": "head",
+     "rows": 1,
+     "up_bytes": 14336,
+     "down_bytes": 608256,
+     "lane_p50_ms": 7.584,
+     "lane_p90_ms": 9.016,
+     "lane_p99_ms": 10.848,
+     "raw_p50_ms": 7.286,
+     "raw_p99_ms": 15.817,
+     "lane_over_raw_ms": 0.298,
+     "lane_excess_ms": 2.584,
+     "raw_excess_ms": 2.286
+    }
+   ],
+   "pass": [
+    {
+     "preset": "7b",
+     "trips": 113,
+     "pass_p50_ms": 671.422,
+     "ms_per_trip": 5.9418,
+     "bytes_per_token": 9510912,
+     "excess_ms_per_trip": 0.9418
+    }
+   ],
+   "idle": [
+    {
+     "gap_ms": 0.0,
+     "lane_first_trip_p50_ms": 5.475,
+     "raw_first_trip_p50_ms": 5.514,
+     "client_cwnd_before": 20
+    },
+    {
+     "gap_ms": 100.0,
+     "lane_first_trip_p50_ms": 5.828,
+     "raw_first_trip_p50_ms": 5.548,
+     "client_cwnd_before": 20
+    },
+    {
+     "gap_ms": 300.0,
+     "lane_first_trip_p50_ms": 5.803,
+     "raw_first_trip_p50_ms": 5.613,
+     "client_cwnd_before": 20
+    },
+    {
+     "gap_ms": 1000.0,
+     "lane_first_trip_p50_ms": 6.016,
+     "raw_first_trip_p50_ms": 5.537,
+     "client_cwnd_before": 20
+    },
+    {
+     "gap_ms": 3000.0,
+     "lane_first_trip_p50_ms": 5.992,
+     "raw_first_trip_p50_ms": 5.594,
+     "client_cwnd_before": 20
+    }
+   ],
+   "raw_tcp_info": {
+    "rtt_us": 5778,
+    "snd_cwnd": 20,
+    "retrans_total": 3
+   },
+   "rtt_ms": 5.0,
+   "loss": 0.0,
+   "emulator": {
+    "up": {
+     "packets": 40362,
+     "bytes": 48771151,
+     "lost": 0,
+     "queue_drops": 0,
+     "max_backlog_us": 0,
+     "late_us_max": 117503,
+     "late_us_mean": 213.83
+    },
+    "down": {
+     "packets": 187534,
+     "bytes": 275579791,
+     "lost": 0,
+     "queue_drops": 0,
+     "max_backlog_us": 0,
+     "late_us_max": 68488,
+     "late_us_mean": 301.23
+    }
+   }
+  },
+  {
+   "tcp_connect_ms": 25.431,
+   "lane_connect_ms": 71.831,
+   "payloads": [
+    {
+     "preset": "7b",
+     "linear": "qkv",
+     "rows": 1,
+     "up_bytes": 14336,
+     "down_bytes": 18432,
+     "lane_p50_ms": 20.395,
+     "lane_p90_ms": 23.707,
+     "lane_p99_ms": 24.322,
+     "raw_p50_ms": 20.286,
+     "raw_p99_ms": 23.64,
+     "lane_over_raw_ms": 0.109,
+     "lane_excess_ms": 0.395,
+     "raw_excess_ms": 0.286
+    },
+    {
+     "preset": "7b",
+     "linear": "o",
+     "rows": 1,
+     "up_bytes": 14336,
+     "down_bytes": 14336,
+     "lane_p50_ms": 20.403,
+     "lane_p90_ms": 22.735,
+     "lane_p99_ms": 29.657,
+     "raw_p50_ms": 20.319,
+     "raw_p99_ms": 25.064,
+     "lane_over_raw_ms": 0.084,
+     "lane_excess_ms": 0.403,
+     "raw_excess_ms": 0.319
+    },
+    {
+     "preset": "7b",
+     "linear": "gate_up",
+     "rows": 1,
+     "up_bytes": 14336,
+     "down_bytes": 151552,
+     "lane_p50_ms": 21.869,
+     "lane_p90_ms": 24.721,
+     "lane_p99_ms": 25.439,
+     "raw_p50_ms": 20.647,
+     "raw_p99_ms": 30.657,
+     "lane_over_raw_ms": 1.222,
+     "lane_excess_ms": 1.869,
+     "raw_excess_ms": 0.647
+    },
+    {
+     "preset": "7b",
+     "linear": "down",
+     "rows": 1,
+     "up_bytes": 75776,
+     "down_bytes": 14336,
+     "lane_p50_ms": 20.707,
+     "lane_p90_ms": 23.484,
+     "lane_p99_ms": 25.269,
+     "raw_p50_ms": 20.814,
+     "raw_p99_ms": 24.029,
+     "lane_over_raw_ms": -0.107,
+     "lane_excess_ms": 0.707,
+     "raw_excess_ms": 0.814
+    },
+    {
+     "preset": "7b",
+     "linear": "head",
+     "rows": 1,
+     "up_bytes": 14336,
+     "down_bytes": 608256,
+     "lane_p50_ms": 22.91,
+     "lane_p90_ms": 27.23,
+     "lane_p99_ms": 41.859,
+     "raw_p50_ms": 23.268,
+     "raw_p99_ms": 34.161,
+     "lane_over_raw_ms": -0.358,
+     "lane_excess_ms": 2.91,
+     "raw_excess_ms": 3.268
+    }
+   ],
+   "pass": [
+    {
+     "preset": "7b",
+     "trips": 113,
+     "pass_p50_ms": 2391.131,
+     "ms_per_trip": 21.1605,
+     "bytes_per_token": 9510912,
+     "excess_ms_per_trip": 1.1605
+    }
+   ],
+   "idle": [
+    {
+     "gap_ms": 0.0,
+     "lane_first_trip_p50_ms": 20.657,
+     "raw_first_trip_p50_ms": 20.613,
+     "client_cwnd_before": 20
+    },
+    {
+     "gap_ms": 100.0,
+     "lane_first_trip_p50_ms": 20.842,
+     "raw_first_trip_p50_ms": 20.682,
+     "client_cwnd_before": 20
+    },
+    {
+     "gap_ms": 300.0,
+     "lane_first_trip_p50_ms": 20.884,
+     "raw_first_trip_p50_ms": 20.767,
+     "client_cwnd_before": 20
+    },
+    {
+     "gap_ms": 1000.0,
+     "lane_first_trip_p50_ms": 21.096,
+     "raw_first_trip_p50_ms": 20.868,
+     "client_cwnd_before": 20
+    },
+    {
+     "gap_ms": 3000.0,
+     "lane_first_trip_p50_ms": 21.384,
+     "raw_first_trip_p50_ms": 21.027,
+     "client_cwnd_before": 20
+    }
+   ],
+   "raw_tcp_info": {
+    "rtt_us": 20252,
+    "snd_cwnd": 20,
+    "retrans_total": 0
+   },
+   "rtt_ms": 20.0,
+   "loss": 0.0,
+   "emulator": {
+    "up": {
+     "packets": 37326,
+     "bytes": 48607969,
+     "lost": 0,
+     "queue_drops": 0,
+     "max_backlog_us": 0,
+     "late_us_max": 10528,
+     "late_us_mean": 279.74
+    },
+    "down": {
+     "packets": 186992,
+     "bytes": 275550326,
+     "lost": 0,
+     "queue_drops": 0,
+     "max_backlog_us": 0,
+     "late_us_max": 10223,
+     "late_us_mean": 281.64
+    }
+   }
+  },
+  {
+   "tcp_connect_ms": 6.57,
+   "lane_connect_ms": 72.841,
+   "payloads": [
+    {
+     "preset": "7b",
+     "linear": "qkv",
+     "rows": 1,
+     "up_bytes": 14336,
+     "down_bytes": 18432,
+     "lane_p50_ms": 5.234,
+     "lane_p90_ms": 5.538,
+     "lane_p99_ms": 15.62,
+     "raw_p50_ms": 5.172,
+     "raw_p99_ms": 38.827,
+     "lane_over_raw_ms": 0.062,
+     "lane_excess_ms": 0.234,
+     "raw_excess_ms": 0.172
+    },
+    {
+     "preset": "7b",
+     "linear": "o",
+     "rows": 1,
+     "up_bytes": 14336,
+     "down_bytes": 14336,
+     "lane_p50_ms": 5.226,
+     "lane_p90_ms": 5.311,
+     "lane_p99_ms": 5.383,
+     "raw_p50_ms": 5.181,
+     "raw_p99_ms": 220.664,
+     "lane_over_raw_ms": 0.045,
+     "lane_excess_ms": 0.226,
+     "raw_excess_ms": 0.181
+    },
+    {
+     "preset": "7b",
+     "linear": "gate_up",
+     "rows": 1,
+     "up_bytes": 14336,
+     "down_bytes": 151552,
+     "lane_p50_ms": 20.875,
+     "lane_p90_ms": 30.995,
+     "lane_p99_ms": 41.882,
+     "raw_p50_ms": 10.591,
+     "raw_p99_ms": 21.225,
+     "lane_over_raw_ms": 10.284,
+     "lane_excess_ms": 15.875,
+     "raw_excess_ms": 5.591
+    },
+    {
+     "preset": "7b",
+     "linear": "down",
+     "rows": 1,
+     "up_bytes": 75776,
+     "down_bytes": 14336,
+     "lane_p50_ms": 5.493,
+     "lane_p90_ms": 10.596,
+     "lane_p99_ms": 16.91,
+     "raw_p50_ms": 10.468,
+     "raw_p99_ms": 26.359,
+     "lane_over_raw_ms": -4.975,
+     "lane_excess_ms": 0.493,
+     "raw_excess_ms": 5.468
+    },
+    {
+     "preset": "7b",
+     "linear": "head",
+     "rows": 1,
+     "up_bytes": 14336,
+     "down_bytes": 608256,
+     "lane_p50_ms": 62.556,
+     "lane_p90_ms": 91.014,
+     "lane_p99_ms": 109.52,
+     "raw_p50_ms": 67.217,
+     "raw_p99_ms": 292.023,
+     "lane_over_raw_ms": -4.661,
+     "lane_excess_ms": 57.556,
+     "raw_excess_ms": 62.217
+    }
+   ],
+   "pass": [
+    {
+     "preset": "7b",
+     "trips": 113,
+     "pass_p50_ms": 1228.467,
+     "ms_per_trip": 10.8714,
+     "bytes_per_token": 9510912,
+     "excess_ms_per_trip": 5.8714
+    }
+   ],
+   "idle": [],
+   "raw_tcp_info": {
+    "rtt_us": 5198,
+    "snd_cwnd": 14,
+    "retrans_total": 7
+   },
+   "rtt_ms": 5.0,
+   "loss": 0.001,
+   "emulator": {
+    "up": {
+     "packets": 26169,
+     "bytes": 32971997,
+     "lost": 24,
+     "queue_drops": 0,
+     "max_backlog_us": 0,
+     "late_us_max": 11370,
+     "late_us_mean": 66.9
+    },
+    "down": {
+     "packets": 76081,
+     "bytes": 110627418,
+     "lost": 77,
+     "queue_drops": 0,
+     "max_backlog_us": 0,
+     "late_us_max": 33587,
+     "late_us_mean": 74.77
+    }
+   }
+  },
+  {
+   "tcp_connect_ms": 24.737,
+   "lane_connect_ms": 72.709,
+   "payloads": [
+    {
+     "preset": "7b",
+     "linear": "qkv",
+     "rows": 1,
+     "up_bytes": 14336,
+     "down_bytes": 18432,
+     "lane_p50_ms": 20.429,
+     "lane_p90_ms": 24.381,
+     "lane_p99_ms": 44.32,
+     "raw_p50_ms": 20.299,
+     "raw_p99_ms": 44.047,
+     "lane_over_raw_ms": 0.13,
+     "lane_excess_ms": 0.429,
+     "raw_excess_ms": 0.299
+    },
+    {
+     "preset": "7b",
+     "linear": "o",
+     "rows": 1,
+     "up_bytes": 14336,
+     "down_bytes": 14336,
+     "lane_p50_ms": 20.346,
+     "lane_p90_ms": 23.842,
+     "lane_p99_ms": 25.276,
+     "raw_p50_ms": 20.273,
+     "raw_p99_ms": 51.629,
+     "lane_over_raw_ms": 0.073,
+     "lane_excess_ms": 0.346,
+     "raw_excess_ms": 0.273
+    },
+    {
+     "preset": "7b",
+     "linear": "gate_up",
+     "rows": 1,
+     "up_bytes": 14336,
+     "down_bytes": 151552,
+     "lane_p50_ms": 81.043,
+     "lane_p90_ms": 108.246,
+     "lane_p99_ms": 188.192,
+     "raw_p50_ms": 60.914,
+     "raw_p99_ms": 128.325,
+     "lane_over_raw_ms": 20.129,
+     "lane_excess_ms": 61.043,
+     "raw_excess_ms": 40.914
+    },
+    {
+     "preset": "7b",
+     "linear": "down",
+     "rows": 1,
+     "up_bytes": 75776,
+     "down_bytes": 14336,
+     "lane_p50_ms": 40.772,
+     "lane_p90_ms": 61.055,
+     "lane_p99_ms": 81.123,
+     "raw_p50_ms": 40.675,
+     "raw_p99_ms": 80.932,
+     "lane_over_raw_ms": 0.097,
+     "lane_excess_ms": 20.772,
+     "raw_excess_ms": 20.675
+    },
+    {
+     "preset": "7b",
+     "linear": "head",
+     "rows": 1,
+     "up_bytes": 14336,
+     "down_bytes": 608256,
+     "lane_p50_ms": 224.1,
+     "lane_p90_ms": 324.485,
+     "lane_p99_ms": 388.157,
+     "raw_p50_ms": 209.878,
+     "raw_p99_ms": 325.61,
+     "lane_over_raw_ms": 14.222,
+     "lane_excess_ms": 204.1,
+     "raw_excess_ms": 189.878
+    }
+   ],
+   "pass": [
+    {
+     "preset": "7b",
+     "trips": 113,
+     "pass_p50_ms": 5562.483,
+     "ms_per_trip": 49.2255,
+     "bytes_per_token": 9510912,
+     "excess_ms_per_trip": 29.2255
+    }
+   ],
+   "idle": [],
+   "raw_tcp_info": {
+    "rtt_us": 20342,
+    "snd_cwnd": 20,
+    "retrans_total": 2
+   },
+   "rtt_ms": 20.0,
+   "loss": 0.001,
+   "emulator": {
+    "up": {
+     "packets": 27419,
+     "bytes": 33031637,
+     "lost": 24,
+     "queue_drops": 0,
+     "max_backlog_us": 0,
+     "late_us_max": 15619,
+     "late_us_mean": 228.2
+    },
+    "down": {
+     "packets": 76302,
+     "bytes": 110640350,
+     "lost": 78,
+     "queue_drops": 0,
+     "max_backlog_us": 0,
+     "late_us_max": 21333,
+     "late_us_mean": 304.4
+    }
+   }
+  },
+  {
+   "tcp_connect_ms": 6.385,
+   "lane_connect_ms": 23.546,
+   "payloads": [
+    {
+     "preset": "7b",
+     "linear": "qkv",
+     "rows": 1,
+     "up_bytes": 14336,
+     "down_bytes": 18432,
+     "lane_p50_ms": 10.313,
+     "lane_p90_ms": 15.499,
+     "lane_p99_ms": 226.317,
+     "raw_p50_ms": 10.337,
+     "raw_p99_ms": 15.262,
+     "lane_over_raw_ms": -0.024,
+     "lane_excess_ms": 5.313,
+     "raw_excess_ms": 5.337
+    },
+    {
+     "preset": "7b",
+     "linear": "o",
+     "rows": 1,
+     "up_bytes": 14336,
+     "down_bytes": 14336,
+     "lane_p50_ms": 5.58,
+     "lane_p90_ms": 15.442,
+     "lane_p99_ms": 220.923,
+     "raw_p50_ms": 5.223,
+     "raw_p99_ms": 22.115,
+     "lane_over_raw_ms": 0.357,
+     "lane_excess_ms": 0.58,
+     "raw_excess_ms": 0.223
+    },
+    {
+     "preset": "7b",
+     "linear": "gate_up",
+     "rows": 1,
+     "up_bytes": 14336,
+     "down_bytes": 151552,
+     "lane_p50_ms": 56.432,
+     "lane_p90_ms": 113.531,
+     "lane_p99_ms": 209.434,
+     "raw_p50_ms": 65.611,
+     "raw_p99_ms": 285.656,
+     "lane_over_raw_ms": -9.179,
+     "lane_excess_ms": 51.432,
+     "raw_excess_ms": 60.611
+    },
+    {
+     "preset": "7b",
+     "linear": "down",
+     "rows": 1,
+     "up_bytes": 75776,
+     "down_bytes": 14336,
+     "lane_p50_ms": 30.688,
+     "lane_p90_ms": 41.148,
+     "lane_p99_ms": 51.258,
+     "raw_p50_ms": 30.96,
+     "raw_p99_ms": 100.728,
+     "lane_over_raw_ms": -0.272,
+     "lane_excess_ms": 25.688,
+     "raw_excess_ms": 25.96
+    },
+    {
+     "preset": "7b",
+     "linear": "head",
+     "rows": 1,
+     "up_bytes": 14336,
+     "down_bytes": 608256,
+     "lane_p50_ms": 244.617,
+     "lane_p90_ms": 389.921,
+     "lane_p99_ms": 465.605,
+     "raw_p50_ms": 220.15,
+     "raw_p99_ms": 367.201,
+     "lane_over_raw_ms": 24.467,
+     "lane_excess_ms": 239.617,
+     "raw_excess_ms": 215.15
+    }
+   ],
+   "pass": [
+    {
+     "preset": "7b",
+     "trips": 113,
+     "pass_p50_ms": 3606.269,
+     "ms_per_trip": 31.9139,
+     "bytes_per_token": 9510912,
+     "excess_ms_per_trip": 26.9139
+    }
+   ],
+   "idle": [],
+   "raw_tcp_info": {
+    "rtt_us": 5134,
+    "snd_cwnd": 13,
+    "retrans_total": 44
+   },
+   "rtt_ms": 5.0,
+   "loss": 0.01,
+   "emulator": {
+    "up": {
+     "packets": 35868,
+     "bytes": 33744489,
+     "lost": 333,
+     "queue_drops": 0,
+     "max_backlog_us": 0,
+     "late_us_max": 8673,
+     "late_us_mean": 49.85
+    },
+    "down": {
+     "packets": 79029,
+     "bytes": 111762753,
+     "lost": 793,
+     "queue_drops": 0,
+     "max_backlog_us": 0,
+     "late_us_max": 8537,
+     "late_us_mean": 46.81
+    }
+   }
+  },
+  {
+   "tcp_connect_ms": 23.738,
+   "lane_connect_ms": 70.36,
+   "payloads": [
+    {
+     "preset": "7b",
+     "linear": "qkv",
+     "rows": 1,
+     "up_bytes": 14336,
+     "down_bytes": 18432,
+     "lane_p50_ms": 60.617,
+     "lane_p90_ms": 299.21,
+     "lane_p99_ms": 328.157,
+     "raw_p50_ms": 40.373,
+     "raw_p99_ms": 60.504,
+     "lane_over_raw_ms": 20.244,
+     "lane_excess_ms": 40.617,
+     "raw_excess_ms": 20.373
+    },
+    {
+     "preset": "7b",
+     "linear": "o",
+     "rows": 1,
+     "up_bytes": 14336,
+     "down_bytes": 14336,
+     "lane_p50_ms": 40.476,
+     "lane_p90_ms": 60.725,
+     "lane_p99_ms": 153.694,
+     "raw_p50_ms": 40.44,
+     "raw_p99_ms": 331.362,
+     "lane_over_raw_ms": 0.036,
+     "lane_excess_ms": 20.476,
+     "raw_excess_ms": 20.44
+    },
+    {
+     "preset": "7b",
+     "linear": "gate_up",
+     "rows": 1,
+     "up_bytes": 14336,
+     "down_bytes": 151552,
+     "lane_p50_ms": 222.283,
+     "lane_p90_ms": 303.393,
+     "lane_p99_ms": 394.103,
+     "raw_p50_ms": 221.945,
+     "raw_p99_ms": 550.0,
+     "lane_over_raw_ms": 0.338,
+     "lane_excess_ms": 202.283,
+     "raw_excess_ms": 201.945
+    },
+    {
+     "preset": "7b",
+     "linear": "down",
+     "rows": 1,
+     "up_bytes": 75776,
+     "down_bytes": 14336,
+     "lane_p50_ms": 141.502,
+     "lane_p90_ms": 197.33,
+     "lane_p99_ms": 436.334,
+     "raw_p50_ms": 121.946,
+     "raw_p99_ms": 418.659,
+     "lane_over_raw_ms": 19.556,
+     "lane_excess_ms": 121.502,
+     "raw_excess_ms": 101.946
+    },
+    {
+     "preset": "7b",
+     "linear": "head",
+     "rows": 1,
+     "up_bytes": 14336,
+     "down_bytes": 608256,
+     "lane_p50_ms": 772.63,
+     "lane_p90_ms": 1011.358,
+     "lane_p99_ms": 1244.777,
+     "raw_p50_ms": 818.201,
+     "raw_p99_ms": 1222.802,
+     "lane_over_raw_ms": -45.571,
+     "lane_excess_ms": 752.63,
+     "raw_excess_ms": 798.201
+    }
+   ],
+   "pass": [
+    {
+     "preset": "7b",
+     "trips": 113,
+     "pass_p50_ms": 13306.274,
+     "ms_per_trip": 117.7546,
+     "bytes_per_token": 9510912,
+     "excess_ms_per_trip": 97.7546
+    }
+   ],
+   "idle": [],
+   "raw_tcp_info": {
+    "rtt_us": 25747,
+    "snd_cwnd": 8,
+    "retrans_total": 49
+   },
+   "rtt_ms": 20.0,
+   "loss": 0.01,
+   "emulator": {
+    "up": {
+     "packets": 36317,
+     "bytes": 33830591,
+     "lost": 379,
+     "queue_drops": 0,
+     "max_backlog_us": 0,
+     "late_us_max": 250387,
+     "late_us_mean": 211.77
+    },
+    "down": {
+     "packets": 79029,
+     "bytes": 111719538,
+     "lost": 765,
+     "queue_drops": 0,
+     "max_backlog_us": 0,
+     "late_us_max": 11017,
+     "late_us_mean": 157.1
+    }
+   }
+  }
+ ]
+}

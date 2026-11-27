@@ -203,6 +203,13 @@ class ServiceSettings(PGWSettings):
     public_url: str | None = Field(
         None, description="Base URL gateways use to reach this service (https), written into enrollment codes",
     )
+    endpoints: list[dict[str, object]] | None = Field(
+        None, description="Region routing (docs/sdk/wan.md): the provider endpoints an enrolled client may use, "
+        "written into the SDK enrollment response: a list of {region, url (https://host:port), models (pack "
+        "fingerprints; empty = all), priority}. Every endpoint must present a certificate from the same CA as this "
+        "service and accept this deployment's credentials (shared accounts / client-issuing CA). None = this "
+        "service only",
+    )
     enrollment_ca_file: Path | None = Field(
         None, description="PEM certificate of the CA that issued this service's TLS certificate. Its SHA-256 goes "
         "into enrollment codes (gateways pin it on first contact) and enrolled gateways receive it as service CA",
@@ -315,6 +322,16 @@ class ServiceSettings(PGWSettings):
         if not out:
             raise ValueError("at least one ring must be served")
         return out
+
+    @field_validator("endpoints")
+    @classmethod
+    def _endpoints(cls, v: list[dict[str, object]] | None) -> list[dict[str, object]] | None:
+        if v is None:
+            return None
+        from pgw.sdk.regions import parse_endpoints
+
+        parse_endpoints(v)  # the client's own validation: refuse a list every client would refuse
+        return v
 
     @field_validator("cuda_graph_buckets")
     @classmethod
