@@ -214,6 +214,9 @@ async def test_multi_turn_with_prefix_reuse(tiny_pack_dir: Path, tmp_path: Path,
                 used.append(before - available(store, gw_pack))
                 out.append(r.json())
                 msgs.append({"role": "assistant", "content": out[-1]["choices"][0]["message"]["content"]})
+            pc = (await c.get("/admin/status", headers=ADMIN)).json()["models"][0]["prefix_cache"]
+            assert pc["mode"] == "conversation" and pc["hits"] == len(USER_TURNS) - 1 and pc["entries"] == 1
+            assert all(isinstance(v, int | float) for k, v in pc.items() if k != "mode")  # counters, no content
         return out, used
 
     ref_svc, ref_store = InProcessService(gw_pack), make_store(1500, name="ref")

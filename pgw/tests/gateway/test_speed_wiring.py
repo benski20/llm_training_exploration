@@ -772,6 +772,35 @@ def test_cpu_only_strict_speculation_config_is_accepted() -> None:
     assert _cfg().draft_head_path is None and _cfg().draft_backend == "auto"  # defaults off
 
 
+def test_status_reports_speculation_and_prefix_cache_settings() -> None:
+    """``/admin/status`` per model: the speculation mode and the prefix cache (public configuration only)."""
+    from types import SimpleNamespace
+
+    from pgw.gateway.runtime import ModelRuntime
+
+    def spec(**kw: Any) -> dict[str, Any]:
+        return ModelRuntime._speculation_status(SimpleNamespace(config=_cfg(**kw)))  # type: ignore[arg-type]
+
+    assert spec() == {"mode": "off"}
+    assert spec(spec_lookup=3, spec_tokens=0) == {"mode": "off"}
+    assert spec(spec_lookup=3) == {"mode": "lookup", "tokens": 2, "strict": False, "rows": None}
+    assert spec(draft_backend="feature_head", draft_head_path="/h.pt", spec_rows=3, spec_strict_passes=True,
+                spec_lookup=4) == {"mode": "draft_head", "tokens": 2, "strict": True, "rows": 3}
+    assert spec(draft_pack_path="/x")["mode"] == "draft_model"
+    pc = ModelRuntime._prefix_cache_status(SimpleNamespace(config=_cfg(), prefix_cache=None))  # type: ignore[arg-type]
+    assert pc == {"mode": "off"}
+    from pgw.engine.prefix_cache import ConversationPrefixCache
+
+    cache = ConversationPrefixCache(max_bytes=1 << 20, ttl_s=60.0, sweep_thread=False)
+    try:
+        pc = ModelRuntime._prefix_cache_status(SimpleNamespace(  # type: ignore[arg-type]
+            config=_cfg(float_ops="native", prefix_cache="conversation"), prefix_cache=cache))
+    finally:
+        cache.close()
+    assert pc["mode"] == "conversation" and pc["hits"] == 0 and pc["entries"] == 0 and pc["max_bytes"] == 1 << 20
+    assert all(isinstance(v, int | float) for k, v in pc.items() if k != "mode")  # counters only, no keys
+
+
 def test_phase_a_settings_are_no_longer_pending() -> None:
     assert set(gw_config.PENDING_SPEED_SETTINGS) == set()  # schedule = "fused2" landed (test_fused2_gateway.py)
     c = _cfg(lane="auto", lane_uds_dir=Path("/run/pgw"), lane_pool_wait_s=0.02, local_linears="auto",

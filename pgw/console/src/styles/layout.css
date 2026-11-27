@@ -10,14 +10,14 @@
   z-index: 1000;
   padding: 6px 12px;
   border: 1px solid var(--border, rgba(0, 0, 0, 0.12));
-  border-radius: 999px;
+  border-radius: 2px;
   background: var(--surface, #fff);
   color: var(--fg-muted, #555);
   font-size: 12px;
-  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.08);
+  box-shadow: var(--shadow-lg, none);
   pointer-events: none;
 }
-.demo-banner { max-width: min(720px, calc(100vw - 32px)); text-align: center; pointer-events: auto; border-radius: 12px; }
+.demo-banner { max-width: min(720px, calc(100vw - 32px)); text-align: center; pointer-events: auto; border-radius: 2px; }
 .demo-banner code {
   display: block;
   margin-top: 4px;

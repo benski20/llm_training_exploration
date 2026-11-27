@@ -20,7 +20,7 @@ SLA pilot. Three reasons:
 How to read this file: the verdict above is the v0.1.0 release view (2026-11-17). Workstreams append dated
 sections. The 2026-11-25 sections follow this summary. The 2026-11-19 to 2026-11-23 updates come next, then the
 release report's numbered sections (1-6). The **2026-11-26 sections are at the end**, ending with the RunPod
-runbook's launch-readiness pass. A note in *italics* marks a statement that a later section superseded.
+runbook's launch-readiness pass, followed by the 2026-11-27 web restyle (console and platform). A note in *italics* marks a statement that a later section superseded.
 
 **What the product is now.** The client library (`pip install pgw-sdk`, `from pgw import OpenAI`) runs the gateway
 in the application's process against our provider service. Defaults:
@@ -4243,3 +4243,46 @@ retry of the costliest session still fits the cap ($51.80 < $55).
 pod-scoped key (unchanged from the integration sweep); the bundle upload at ~29 MB; the shard-wise packer against
 the hub on a RunPod volume and its fingerprint equal to the pins; the metrics port sampler on a real service; the
 real 32B client setup (37 GB from the provider, local hint, 60 GB stock); every number.
+
+## 2026-11-27: web apps restyled (sharper, enterprise look; console demo data matches the product)
+
+The gateway console and the developer platform share one design system (`src/pgw/design/pgw.css`, every value a
+token; `docs/design/README.md`). The restyle is in that one file, so both apps change together:
+* **Geometry**: radius 2 px (4 px on dialogs), hairline 1 px borders, no soft shadows (one crisp 1 px drop on
+  overlays), square status dots, 30 px controls, 34 px table rows, tighter page and card rhythm.
+* **Palette**: graphite neutrals and one cobalt accent (`#1f4bd1` light; `#4f7fff` lines / `#2d5ae6` fills dark)
+  instead of the soft iris; muted status hues. Every text token meets AA 4.5:1 on its surfaces in both themes
+  (lowest: `--fg-subtle` 4.8:1 light, 4.7:1 dark on `--surface-active`; status colours >= 5.5:1 on their soft
+  backgrounds); primary buttons are filled with the accent (white text 7.0:1 light, 5.6:1 dark).
+* **Type**: IBM Plex Sans (variable) for UI and IBM Plex Mono for model names, fingerprints, ids and chart
+  ticks, replacing Inter and Geist Mono; both bundled from Fontsource 5.3.0, SIL OFL 1.1, licence files in
+  `src/pgw/design/fonts/`. Page titles 18 px; stat labels, table headers and nav groups are uppercase tracked
+  11 px labels; tabular numerals, numbers right-aligned.
+* **Focus**: a 2 px square outline with a 1 px offset everywhere; inputs a 1 px ring. Active nav, model and setup
+  step items carry a 2 px accent rule instead of a raised card.
+* **Charts**: 1.25 px lines with miter joins, a flat 6-9 % fill under the primary series (gradients removed),
+  hairline crisp grid, mono ticks, compact legends; sparklines are bare lines on a baseline; meters and share
+  bars square; the platform's stacked bars are separated by surface-colour hairlines.
+
+**Console API** (data already on the server; counts and configuration only): `/admin/status` models carry
+`speculation` (`mode` off / lookup / draft_head / draft_model, `tokens`, `strict`, `rows`) and `prefix_cache`
+(`mode` off / conversation and, when on, the cache's counters: hits, misses, reused tokens, entries, bytes, TTL;
+never keys or tokens). The Models page shows them in a new "Decoding" card with the prefix cache's privacy note
+(the provider sees only the new part of a prompt and can tell a request continued a cached conversation).
+Not added (not available to the gateway, so the console shows nothing for them): the mask scheme (`pks-v3` or
+`mlwe` is a mask factory setting) and the client library's `maskgen_stalled` / `ProviderStalledError` (they live
+in the client library's in-process factory, which runs without the console; `pgw sdk status` shows them).
+`docs/api/console-api.md` documents both.
+
+**Console demo data** (`console/src/mock/fixtures.ts`): Qwen2.5 7B / 3B / 0.5B instruct with their pinned
+fingerprints, ring K32A12C27, the masked LM head, 32k context; 7B with the draft head (strict, 3 rows) and the
+prefix cache on, 3B with prompt lookup and its stock below the low-water mark (runway of hours), 0.5B ready but
+preparing its first masks; the gateway's 900 s / 3600 s usage buckets. No preview models (14B / 32B / 72B are a
+client-library opt-in the gateway console has no notion of). The platform's demo data already matched.
+
+**Verified**: console `npm ci`, `npm run lint && npm run typecheck && npm test` (35 passed);
+`scripts/build-console.sh` (static rebuilt, build checks pass); `tests/console` and `tests/platform` incl. the
+Playwright browser test (128 passed) and the slow wheel test; `tests/gateway -m "not slow"` (282 passed, incl. a
+new status unit test; the prefix-reuse test now also asserts the cache counters in `/admin/status`); ruff clean
+on the changed Python files. All 94 screenshots in `docs/design/screenshots/` regenerated (`npm run screenshots`,
+`scripts/platform_screenshots.py`) with no console errors or CSP violations.

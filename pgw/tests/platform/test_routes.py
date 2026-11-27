@@ -274,8 +274,8 @@ def test_assets() -> None:
     c = make()
     for a, ctype in (("pgw.css", "text/css"), ("platform.css", "text/css"), ("platform.js", "text/javascript"),
                      ("theme.js", "text/javascript"), ("favicon.svg", "image/svg+xml"),
-                     ("fonts/inter-latin-wght-normal.woff2", "font/woff2"),
-                     ("fonts/geist-mono-latin-wght-normal.woff2", "font/woff2")):
+                     ("fonts/ibm-plex-sans-latin-wght-normal.woff2", "font/woff2"),
+                     ("fonts/ibm-plex-mono-latin-400-normal.woff2", "font/woff2")):
         r = c.get(f"/platform/assets/{a}")
         assert r.status_code == 200 and r.headers["content-type"].startswith(ctype), a
         assert r.headers["cache-control"] == "no-cache"

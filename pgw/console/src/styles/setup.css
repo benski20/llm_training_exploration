@@ -14,7 +14,7 @@
 .setup-title {
   font-size: var(--text-xl);
   font-weight: 600;
-  letter-spacing: -0.015em;
+  letter-spacing: var(--tracking-display);
 }
 .setup-sub,
 .setup-muted {
@@ -37,11 +37,12 @@
   gap: 2px;
 }
 .setup-step {
+  position: relative;
   width: 100%;
   display: flex;
   gap: 10px;
   align-items: flex-start;
-  padding: 10px 12px;
+  padding: 8px 12px;
   border-radius: var(--radius);
   text-align: left;
   color: var(--fg);
@@ -59,7 +60,15 @@
 .setup-step.is-active {
   background: var(--surface);
   border-color: var(--border);
-  box-shadow: var(--shadow-sm);
+}
+.setup-step.is-active::before {
+  content: "";
+  position: absolute;
+  left: -1px;
+  top: -1px;
+  bottom: -1px;
+  width: 2px;
+  background: var(--accent);
 }
 .setup-step.is-active .step-n {
   border-color: var(--accent);
@@ -183,8 +192,8 @@
 }
 .setup-estimate-n {
   font-size: var(--text-2xl);
-  font-weight: 600;
-  letter-spacing: -0.02em;
+  font-weight: 500;
+  letter-spacing: -0.01em;
   font-variant-numeric: tabular-nums;
 }
 .setup-list {
@@ -221,9 +230,9 @@
   display: grid;
   place-items: center;
   flex: none;
-  width: 22px;
-  height: 22px;
-  border-radius: 50%;
+  width: 20px;
+  height: 20px;
+  border-radius: var(--radius-sm);
   background: var(--surface-active);
   color: var(--fg-muted);
 }

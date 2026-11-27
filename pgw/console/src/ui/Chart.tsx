@@ -1,7 +1,7 @@
 // Small inline-SVG charts. All geometry is expressed as SVG attributes (CSP-safe: no style attrs),
 // colors come from CSS classes bound to design tokens so both themes work.
 
-import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent, type ReactNode } from "react";
 import { cx } from "../lib/cx";
 
 /** Track an element's content width (ResizeObserver; falls back to a fixed width in tests). */
@@ -55,24 +55,17 @@ export function niceScale(max: number, ticks = 4): { max: number; step: number }
 
 export function Sparkline({ values, height = 32, className, label }: { values: (number | null)[]; height?: number; className?: string; label?: string }) {
   const [ref, width] = useWidth<HTMLDivElement>(160);
-  const { line, area } = useMemo(() => {
+  const line = useMemo(() => {
     const vs = values.map((v) => (v === null ? NaN : v));
     const max = Math.max(1e-9, ...vs.filter(Number.isFinite));
     const n = Math.max(1, vs.length - 1);
-    const pts: Pt[] = vs.map((v, i) => [(i / n) * width, height - 2 - (v / max) * (height - 4)]);
-    return { line: linePath(pts), area: areaPath(pts, height) };
+    const pts: Pt[] = vs.map((v, i) => [(i / n) * width, height - 1.5 - (v / max) * (height - 3)]);
+    return linePath(pts);
   }, [values, width, height]);
-  const gid = useId();
   return (
     <div ref={ref} className={cx("spark", className)}>
       <svg width={width} height={height} role={label ? "img" : undefined} aria-label={label} aria-hidden={label ? undefined : true}>
-        <defs>
-          <linearGradient id={gid} x1="0" x2="0" y1="0" y2="1">
-            <stop offset="0" className="grad-stop-a" />
-            <stop offset="1" className="grad-stop-b" />
-          </linearGradient>
-        </defs>
-        {area ? <path d={area} fill={`url(#${gid})`} /> : null}
+        <line x1={0} x2={width} y1={height - 0.5} y2={height - 0.5} className="chart-grid" />
         <path d={line} className="spark-line" fill="none" />
       </svg>
     </div>
@@ -107,7 +100,6 @@ export function AreaChart({
 }) {
   const [ref, width] = useWidth<HTMLDivElement>(560);
   const [hover, setHover] = useState<number | null>(null);
-  const gid = useId();
   const padL = 44;
   const padR = 8;
   const padT = 8;
@@ -176,12 +168,6 @@ export function AreaChart({
           onBlur={() => setHover(null)}
           className="chart-svg"
         >
-          <defs>
-            <linearGradient id={gid} x1="0" x2="0" y1="0" y2="1">
-              <stop offset="0" className="grad-stop-a" />
-              <stop offset="1" className="grad-stop-b" />
-            </linearGradient>
-          </defs>
           {geo.ticks.map((t) => (
             <g key={t}>
               <line x1={padL} x2={padL + iw} y1={geo.yv(t)} y2={geo.yv(t)} className={cx("chart-grid", t === 0 && "chart-base")} />
@@ -199,7 +185,7 @@ export function AreaChart({
           )}
           {geo.paths.map((p, si) => (
             <g key={series[si].name}>
-              {p.area ? <path d={p.area} fill={`url(#${gid})`} /> : null}
+              {p.area ? <path d={p.area} className="chart-area" /> : null}
               <path d={p.line} fill="none" className={cx("chart-line", `tone-${series[si].tone ?? 1}`)} />
             </g>
           ))}
@@ -214,7 +200,7 @@ export function AreaChart({
               {series.map((s) => {
                 const v = s.values[hover];
                 return v === null || v === undefined ? null : (
-                  <circle key={s.name} cx={geo.xi(hover)} cy={geo.yv(v)} r={4} className={cx("chart-dot", `tone-${s.tone ?? 1}`)} />
+                  <rect key={s.name} x={geo.xi(hover) - 3} y={geo.yv(v) - 3} width={6} height={6} className={cx("chart-dot", `tone-${s.tone ?? 1}`)} />
                 );
               })}
             </g>
@@ -227,15 +213,15 @@ export function AreaChart({
 }
 
 /** Horizontal meter (e.g. mask inventory vs. capacity) with an optional threshold marker. */
-export function Meter({ value, max, threshold, tone = "accent", label, height = 6 }: { value: number; max: number; threshold?: number | null; tone?: "accent" | "ok" | "warn" | "bad"; label: string; height?: number }) {
+export function Meter({ value, max, threshold, tone = "accent", label, height = 4 }: { value: number; max: number; threshold?: number | null; tone?: "accent" | "ok" | "warn" | "bad"; label: string; height?: number }) {
   const [ref, width] = useWidth<HTMLDivElement>(200);
   const frac = max > 0 ? Math.max(0, Math.min(1, value / max)) : 0;
   const tx = threshold && max > 0 ? Math.max(0, Math.min(1, threshold / max)) * width : null;
   return (
     <div ref={ref} className="meter">
       <svg width={width} height={height + 4} role="meter" aria-label={label} aria-valuenow={value} aria-valuemin={0} aria-valuemax={max}>
-        <rect x={0} y={2} width={width} height={height} rx={height / 2} className="meter-track" />
-        <rect x={0} y={2} width={Math.max(frac > 0 ? height : 0, frac * width)} height={height} rx={height / 2} className={cx("meter-fill", `meter-${tone}`)} />
+        <rect x={0} y={2} width={width} height={height} className="meter-track" />
+        <rect x={0} y={2} width={Math.max(frac > 0 ? 2 : 0, frac * width)} height={height} className={cx("meter-fill", `meter-${tone}`)} />
         {tx !== null ? <line x1={tx} x2={tx} y1={0} y2={height + 4} className="meter-threshold" /> : null}
       </svg>
     </div>

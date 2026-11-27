@@ -17,15 +17,21 @@ export function rng(seed: number) {
 // Pinned "now" for stable screenshots: rounded to the hour of the real clock.
 export const NOW = Math.floor(Date.now() / 3_600_000) * 3_600_000 - 7 * 60_000;
 
+// The pinned fingerprints of the supported Qwen2.5 instruct models (pgw.sdk.provisioning.PINNED_MODELS).
 const FP = {
-  llama: "3fa9c2d1e07b5c8e9a41d2b7f60c1e83a9d4b2c7e5f81a03d6b9c2e4f7a18d05",
-  qwen: "8c41e7a92b0d3f6e1c58a7d4b9e2f03c6a1d8b5e7f2c4a9d0b3e6f81c7a5d2e9",
-  phi: "b27e9d4c1a83f05e6d2c9b7a4e1f8d03c5b6a9e2d7f4c1b8a0e3d6f9c2b5a8e1",
+  q7b: "f7c6fb4f5f8fbc5e4149972c07afdc749de8e5f9adc604d30edb7eb94b834b67",
+  q3b: "0ec0b8b24b2bc59632d9530e1bfd749b082c101f82c5ff819f8e8c5ff4d8d752",
+  q05b: "d773a502fb976d45070332cbd4222ee30bc971d14c7f9c56a317805c230c0b44",
 };
+export const RING = "K32A12C27";
+const M7 = "qwen2.5-7b-instruct";
+const M3 = "qwen2.5-3b-instruct";
+const M05 = "qwen2.5-0.5b-instruct";
+const SERVICE = { server: "pgw-service/0.1.0", origin: "https://compute.pgw.example:8443", max_rows_per_item: 8192 };
 
 export const models: ModelStatus[] = [
   {
-    name: "llama3-8b-instruct",
+    name: M7,
     mode: "masked",
     started: true,
     state: "ready",
@@ -33,15 +39,19 @@ export const models: ModelStatus[] = [
     connect_attempts: 1,
     ready: true,
     reason: "ok",
-    fingerprint: FP.llama,
-    fingerprint_short: FP.llama.slice(0, 12),
-    ring: "Z2^32",
-    max_context: 8192,
+    fingerprint: FP.q7b,
+    fingerprint_short: FP.q7b.slice(0, 12),
+    head_mode: "provider_int8",
+    schedule: "standard",
+    ring: RING,
+    max_context: 32768,
+    speculation: { mode: "draft_head", tokens: 2, strict: true, rows: 3 },
+    prefix_cache: { mode: "conversation", hits: 41_208, misses: 18_377, mismatches: 412, reused_tokens: 52_904_118, stored: 59_581, evicted: 1_904, expired: 56_870, entries: 318, bytes: 702_545_920, max_bytes: 1_073_741_824, ttl_s: 600 },
     sessions: { active: 7, waiting: 1, max_active: 32, max_queue: 256, rejected: 3, draining: false, rejected_by_reason: { queue_full: 0, timeout: 3 } },
     breaker: { open: false, trips: 0, cooldown_s: 300, open_for_s: null, last_code: null },
     freivalds_rate: 1,
-    service: { server: "pgw-service/0.1.0", origin: "https://compute.pgw.example:8443", max_rows_per_item: 8192 },
-    masks_available: 24_612_880,
+    service: SERVICE,
+    masks_available: 18_412_560,
     noise_monitor: { state: "ok", alarm: false, samples: 4_812_221, windows: 1_204, duplicate_rows: 0, reasons: [] },
     client: { requests: 912_440, attempts: 912_611, retries: 171, failures: 0, bytes_sent: 41_221_908_112, bytes_received: 38_014_222_710, last_rtt_s: 0.0182, stream_requests: 0 },
     backend: {
@@ -58,20 +68,24 @@ export const models: ModelStatus[] = [
     },
   },
   {
-    name: "qwen2.5-7b-instruct",
+    name: M3,
     mode: "masked",
     started: true,
     state: "ready",
     ready: true,
     reason: "ok",
-    fingerprint: FP.qwen,
-    fingerprint_short: FP.qwen.slice(0, 12),
-    ring: "Z2^32",
+    fingerprint: FP.q3b,
+    fingerprint_short: FP.q3b.slice(0, 12),
+    head_mode: "provider_int8",
+    schedule: "standard",
+    ring: RING,
     max_context: 32768,
+    speculation: { mode: "lookup", tokens: 2, strict: false, rows: null },
+    prefix_cache: { mode: "off" },
     sessions: { active: 2, waiting: 0, max_active: 32, max_queue: 256, rejected: 0, draining: false },
     breaker: { open: false, trips: 1, cooldown_s: 300, open_for_s: null, last_code: null },
-    freivalds_rate: 0.25,
-    service: { server: "pgw-service/0.1.0", origin: "https://compute.pgw.example:8443", max_rows_per_item: 8192 },
+    freivalds_rate: 1,
+    service: SERVICE,
     masks_available: 412_300,
     noise_monitor: { state: "ok", alarm: false, samples: 1_022_871, windows: 311, duplicate_rows: 0, reasons: [] },
     client: { requests: 208_116, attempts: 208_140, retries: 24, failures: 2, bytes_sent: 9_822_114_002, bytes_received: 9_100_871_224, last_rtt_s: 0.0211 },
@@ -81,33 +95,37 @@ export const models: ModelStatus[] = [
       round_trips: 208_116,
       bytes_up: 9_822_114_002,
       bytes_down: 9_100_871_224,
-      freivalds_checked: 160_052,
-      freivalds_skipped: 480_158,
+      freivalds_checked: 640_210,
+      freivalds_skipped: 0,
       integrity_failures: 0,
       remote_seconds: 3_902.1,
       local_seconds: 1_644.7,
     },
   },
   {
-    name: "phi-3-mini",
+    name: M05,
     mode: "masked",
-    started: false,
-    state: "connecting",
-    last_error: "compute service: connection refused",
-    connect_attempts: 4,
+    started: true,
+    state: "ready",
+    last_error: null,
+    connect_attempts: 1,
     ready: false,
-    reason: "connecting to compute service",
-    fingerprint: FP.phi,
-    fingerprint_short: FP.phi.slice(0, 12),
-    ring: "Z2^32",
-    max_context: 4096,
+    reason: "no mask slots",
+    fingerprint: FP.q05b,
+    fingerprint_short: FP.q05b.slice(0, 12),
+    head_mode: "provider_int8",
+    schedule: "standard",
+    ring: RING,
+    max_context: 32768,
+    speculation: { mode: "off" },
+    prefix_cache: { mode: "off" },
     sessions: { active: 0, waiting: 0, max_active: 16, max_queue: 128, rejected: 0, draining: false },
     breaker: { open: false, trips: 0, cooldown_s: 300, open_for_s: null, last_code: null },
     freivalds_rate: 1,
-    service: { server: "", origin: "https://compute-eu.pgw.example:8443", max_rows_per_item: 8192 },
-    masks_available: null,
+    service: SERVICE,
+    masks_available: 0,
     noise_monitor: { state: "warming", alarm: false, samples: 0, windows: 0, duplicate_rows: 0, reasons: [] },
-    client: { requests: 0, attempts: 4, retries: 0, failures: 4 },
+    client: { requests: 0, attempts: 1, retries: 0, failures: 0, last_rtt_s: 0.0179 },
     backend: {},
   },
 ];
@@ -118,15 +136,16 @@ export const status: Status = {
   production_policy: true,
   models,
   api_keys: 5,
-  egress_allowlist: ["https://compute-eu.pgw.example:8443", "https://compute.pgw.example:8443"],
+  egress_allowlist: ["https://compute.pgw.example:8443"],
   audit_log: "/var/log/pgw/audit.jsonl",
   telemetry: "disabled",
 };
 
 function bucketFor(w: UsageWindow): { n: number; bucket: number } {
+  // the gateway's buckets (docs/api/console-api.md): 60 s, 900 s, 3600 s
   if (w === "1h") return { n: 60, bucket: 60 };
-  if (w === "7d") return { n: 84, bucket: 7200 };
-  return { n: 48, bucket: 1800 };
+  if (w === "7d") return { n: 168, bucket: 3600 };
+  return { n: 96, bucket: 900 };
 }
 
 export function usage(w: UsageWindow): Usage {
@@ -156,7 +175,7 @@ export function usage(w: UsageWindow): Usage {
     };
   });
   const sumOf = (k: "requests" | "prompt_tokens" | "completion_tokens" | "errors" | "masks_consumed") => series.reduce((a, p) => a + p[k], 0);
-  const share = { "llama3-8b-instruct": 0.78, "qwen2.5-7b-instruct": 0.22 } as const;
+  const share = { [M7]: 0.81, [M3]: 0.19 } as const;
   const by_model = Object.fromEntries(
     Object.entries(share).map(([m, s]) => [
       m,
@@ -192,7 +211,7 @@ export function overview(): Overview {
     integrity_failures_total: 0,
     freivalds_checked_total: 2_578_272,
     stream_requests_total: 611_208,
-    privacy: { masked: true, ring: "Z2^32", freivalds_rate: 1, noise_monitor: { state: "ok", alarm: false } },
+    privacy: { masked: true, ring: RING, freivalds_rate: 1, noise_monitor: { state: "ok", alarm: false } },
   };
 }
 
@@ -208,24 +227,24 @@ export const masks = (): Masks => ({
     rollback_protection: { journal: true, counter: "tpm", hardware_counter: true, row_macs: true },
     low_water_slots: 500_000,
     inventory: [
-      { fingerprint: FP.llama, ring: "Z2^32", segments: 160, slots_total: 26_214_400, slots_available: 24_612_880, bytes_on_disk: 204_286_000_000 },
-      { fingerprint: FP.qwen, ring: "Z2^32", segments: 52, slots_total: 1_638_400, slots_available: 412_300, bytes_on_disk: 2_302_000_000 },
+      { fingerprint: FP.q7b, ring: RING, segments: 120, slots_total: 19_660_800, slots_available: 18_412_560, bytes_on_disk: 41_934_000_000 },
+      { fingerprint: FP.q3b, ring: RING, segments: 44, slots_total: 1_441_792, slots_available: 412_300, bytes_on_disk: 1_602_000_000 },
     ],
     tainted: false,
   },
   models: {
-    "llama3-8b-instruct": { fingerprint: FP.llama, ring: "Z2^32", available_slots: 24_612_880, low_water_slots: 500_000 },
-    "qwen2.5-7b-instruct": { fingerprint: FP.qwen, ring: "Z2^32", available_slots: 412_300, low_water_slots: 500_000 },
-    "phi-3-mini": { fingerprint: FP.phi, ring: "Z2^32", available_slots: null, low_water_slots: 500_000 },
+    [M7]: { fingerprint: FP.q7b, ring: RING, available_slots: 18_412_560, low_water_slots: 500_000 },
+    [M3]: { fingerprint: FP.q3b, ring: RING, available_slots: 412_300, low_water_slots: 500_000 },
+    [M05]: { fingerprint: FP.q05b, ring: RING, available_slots: 0, low_water_slots: 500_000 },
   },
 });
 
 const iso = (ms: number) => new Date(ms).toISOString().replace(/\.\d{3}Z$/, `.${String(ms % 1000).padStart(3, "0")}Z`);
 
 export const keys: ApiKeyRecord[] = [
-  { key_id: "4b1e9c07d2a3", name: "support-assistant", scopes: ["inference"], models: ["llama3-8b-instruct"], requests_per_minute: 600, tokens_per_minute: 400_000, daily_token_quota: 60_000_000, max_concurrent_requests: 16, created_at: iso(NOW - 41 * 86400e3), disabled: false, meta: {}, tokens_today: 41_822_310, last_used_at: iso(NOW - 12e3) },
+  { key_id: "4b1e9c07d2a3", name: "support-assistant", scopes: ["inference"], models: [M7], requests_per_minute: 600, tokens_per_minute: 400_000, daily_token_quota: 60_000_000, max_concurrent_requests: 16, created_at: iso(NOW - 41 * 86400e3), disabled: false, meta: {}, tokens_today: 41_822_310, last_used_at: iso(NOW - 12e3) },
   { key_id: "a90f3d6e18c2", name: "contracts-summarizer", scopes: ["inference"], models: [], requests_per_minute: 120, tokens_per_minute: 200_000, daily_token_quota: 20_000_000, max_concurrent_requests: 4, created_at: iso(NOW - 19 * 86400e3), disabled: false, meta: {}, tokens_today: 18_904_114, last_used_at: iso(NOW - 4 * 60e3) },
-  { key_id: "c3d82b5f7e01", name: "eval-harness", scopes: ["inference"], models: ["qwen2.5-7b-instruct"], requests_per_minute: null, tokens_per_minute: null, daily_token_quota: null, max_concurrent_requests: null, created_at: iso(NOW - 6 * 86400e3), disabled: false, meta: {}, tokens_today: 2_210_480, last_used_at: iso(NOW - 3 * 3600e3) },
+  { key_id: "c3d82b5f7e01", name: "eval-harness", scopes: ["inference"], models: [M3], requests_per_minute: null, tokens_per_minute: null, daily_token_quota: null, max_concurrent_requests: null, created_at: iso(NOW - 6 * 86400e3), disabled: false, meta: {}, tokens_today: 2_210_480, last_used_at: iso(NOW - 3 * 3600e3) },
   { key_id: "77e0a4c9b6d5", name: "ops-automation", scopes: ["inference", "admin"], models: [], requests_per_minute: 60, tokens_per_minute: null, daily_token_quota: null, max_concurrent_requests: 2, created_at: iso(NOW - 88 * 86400e3), disabled: false, meta: {}, tokens_today: 0, last_used_at: iso(NOW - 2 * 86400e3) },
   { key_id: "e5b2f1a08c94", name: "console-playground", scopes: ["inference"], models: [], requests_per_minute: 30, tokens_per_minute: 50_000, daily_token_quota: 1_000_000, max_concurrent_requests: 2, created_at: iso(NOW - 6 * 86400e3), disabled: false, meta: { builtin: "true" }, tokens_today: 14_212, last_used_at: iso(NOW - 26 * 60e3) },
 ];
@@ -240,11 +259,11 @@ export function auditEvents(): AuditEvent[] {
     const roll = r();
     if (roll < 0.03) {
       const action = ["key_create", "model_reload", "safety_reset", "console_login"][Math.floor(r() * 4)];
-      out.push({ ts: iso(t), event: action === "console_login" ? "console.login" : `admin.${action === "key_create" ? "key_created" : action}`, action, key_id: "admin-token", target: action === "key_create" ? keys[Math.floor(r() * 3)].key_id : action === "console_login" ? undefined : "llama3-8b-instruct", client: "10.20.4.18", status: action === "console_login" ? 200 : undefined });
+      out.push({ ts: iso(t), event: action === "console_login" ? "console.login" : `admin.${action === "key_create" ? "key_created" : action}`, action, key_id: "admin-token", target: action === "key_create" ? keys[Math.floor(r() * 3)].key_id : action === "console_login" ? undefined : M7, client: "10.20.4.18", status: action === "console_login" ? 200 : undefined });
       continue;
     }
     const k = inferenceKeys[Math.floor(r() * inferenceKeys.length)];
-    const model = k.models[0] ?? (r() < 0.8 ? "llama3-8b-instruct" : "qwen2.5-7b-instruct");
+    const model = k.models[0] ?? (r() < 0.8 ? M7 : M3);
     const err = r();
     const status = err < 0.015 ? 429 : err < 0.022 ? 503 : err < 0.026 ? 400 : 200;
     const code = { 429: "rate_limited", 503: "mask_exhausted", 400: "protocol", 200: undefined }[status];
@@ -273,7 +292,7 @@ export function auditEvents(): AuditEvent[] {
       finish_reason: status === 200 ? (r() < 0.9 ? "stop" : "length") : undefined,
       duration_ms: status === 200 ? Math.round(ttft + ct * (35 + r() * 20)) : Math.round(2 + r() * 10),
       mode: "masked",
-      ring: "Z2^32",
+      ring: RING,
       retry_after_s: status === 429 ? 2 : undefined,
     });
   }

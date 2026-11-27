@@ -130,9 +130,9 @@ def icon(name: str, size: int = 16, cls: str = "") -> str:
 
 
 LOGO = ('<svg class="logo-mark" width="22" height="22" viewBox="0 0 32 32" aria-hidden="true" focusable="false">'
-        '<rect width="32" height="32" rx="8" class="logo-bg"/><path d="M10 23V9.5h6.6a4.6 4.6 0 0 1 0 9.2H13.4" '
-        'fill="none" class="logo-fg" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/>'
-        '<circle cx="22.6" cy="22.4" r="2.3" class="logo-dot"/></svg>')
+        '<rect width="32" height="32" rx="3" class="logo-bg"/><path d="M10 23V9.5h6.6a4.6 4.6 0 0 1 0 9.2H13.4" '
+        'fill="none" class="logo-fg" stroke-width="2.6" stroke-linecap="square" stroke-linejoin="miter"/>'
+        '<rect x="20.4" y="20.2" width="4.4" height="4.4" class="logo-dot"/></svg>')
 
 
 # ---- components --------------------------------------------------------------------------------------
@@ -242,7 +242,7 @@ def _nice_max(v: float) -> float:
 
 
 #: Series opacities of the single-accent palette (stacked bars), strongest first.
-SERIES_OPACITY = (0.9, 0.62, 0.42, 0.26, 0.16)
+SERIES_OPACITY = (1.0, 0.66, 0.42, 0.26, 0.15)
 
 
 def bar_chart(days: Sequence[str], series: Sequence[tuple[str, Sequence[float]]], *, label: str,
@@ -252,7 +252,7 @@ def bar_chart(days: Sequence[str], series: Sequence[tuple[str, Sequence[float]]]
     totals = [sum(s[1][i] for s in series) for i in range(n)]
     top = _nice_max(max(totals, default=0))
     w = 1000.0
-    gap = 0.5 if n <= 31 else 0.3
+    gap = 0.34 if n <= 31 else 0.2
     bw = w / max(n, 1)
     rects = []
     for i, day in enumerate(days):
@@ -293,8 +293,8 @@ def bar_chart(days: Sequence[str], series: Sequence[tuple[str, Sequence[float]]]
 def share_bar(fraction: float) -> str:
     f = max(0.0, min(1.0, fraction))
     return (f'<svg class="share" viewBox="0 0 100 4" preserveAspectRatio="none" aria-hidden="true">'
-            f'<rect class="share-track" width="100" height="4" rx="2"/>'
-            f'<rect class="share-fill" width="{f * 100:.2f}" height="4" rx="2"/></svg>')
+            f'<rect class="share-track" width="100" height="4"/>'
+            f'<rect class="share-fill" width="{f * 100:.2f}" height="4"/></svg>')
 
 
 def _fmt_day(day: str) -> str:

@@ -156,6 +156,30 @@ export interface ClientStats {
   [k: string]: number | undefined;
 }
 
+/** Speculative decoding in effect (public configuration only). */
+export interface SpeculationStatus {
+  mode: "off" | "lookup" | "draft_head" | "draft_model" | string;
+  tokens?: number;
+  strict?: boolean;
+  rows?: number | null;
+}
+
+/** Conversation KV-prefix cache (opt-in): mode and, when on, counters and sizes (never keys or tokens). */
+export interface PrefixCacheStatus {
+  mode: "off" | "conversation" | string;
+  hits?: number;
+  misses?: number;
+  mismatches?: number;
+  reused_tokens?: number;
+  stored?: number;
+  evicted?: number;
+  expired?: number;
+  entries?: number;
+  bytes?: number;
+  max_bytes?: number;
+  ttl_s?: number;
+}
+
 export interface ModelStatus {
   name: string;
   mode: string; // "masked" | "local" | ...
@@ -168,7 +192,11 @@ export interface ModelStatus {
   fingerprint?: string | null;
   fingerprint_short?: string | null;
   ring: string;
+  head_mode?: string;
+  schedule?: string;
   max_context?: number | null;
+  speculation?: SpeculationStatus;
+  prefix_cache?: PrefixCacheStatus;
   sessions?: Sessions;
   breaker?: Breaker;
   freivalds_rate?: number | null;

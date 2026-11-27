@@ -1,5 +1,5 @@
 import { explainReason } from "../lib/readiness";
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { api } from "../api/client";
 import type { ModelStatus } from "../api/types";
 import { useGateway } from "../app/gateway";
@@ -42,6 +42,52 @@ function SplitBar({ a, b, labelA, labelB }: { a: number; b: number; labelA: stri
         </span>
       </div>
     </div>
+  );
+}
+
+const SPEC_LABEL: Record<string, string> = { off: "Off", lookup: "Prompt lookup", draft_head: "Draft head", draft_model: "Draft model" };
+
+/** Speculation and the opt-in prefix cache (public configuration and counters only). */
+function DecodingCard({ m }: { m: ModelStatus }) {
+  const sp = m.speculation;
+  const pc = m.prefix_cache;
+  const pcOn = !!pc && pc.mode !== "off";
+  const lookups = (pc?.hits ?? 0) + (pc?.misses ?? 0) + (pc?.mismatches ?? 0);
+  return (
+    <Card title="Decoding" description="Speculation and conversation prefix reuse">
+      <DescList
+        items={[
+          [
+            "Speculation",
+            sp ? (
+              <span className="badges">
+                <Badge tone={sp.mode === "off" ? "neutral" : "accent"}>{SPEC_LABEL[sp.mode] ?? sp.mode}</Badge>
+                {sp.mode !== "off" ? <span className="num muted">{fmtInt(sp.tokens)} drafts / pass{sp.strict ? ` · strict, ${fmtInt(sp.rows)} rows` : ""}</span> : null}
+              </span>
+            ) : (
+              "—"
+            ),
+          ],
+          ["Prefix cache", pc ? <Badge tone={pcOn ? "accent" : "neutral"}>{pcOn ? pc.mode : "off · opt-in"}</Badge> : "—"],
+          ...(pcOn
+            ? ([
+                ["Conversations cached", <span className="num">{fmtInt(pc.entries)}</span>],
+                ["Hit rate", <span className="num">{lookups ? `${fmtPercent((pc.hits ?? 0) / lookups)} of ${fmtInt(lookups)}` : "—"}</span>],
+                ["Prompt tokens reused", <span className="num">{fmtCompact(pc.reused_tokens)}</span>],
+                ["Memory", <span className="num">{fmtBytes(pc.bytes)} / {fmtBytes(pc.max_bytes)}</span>],
+                ["Idle expiry", <span className="num">{fmtDuration(pc.ttl_s)}</span>],
+              ] as [string, ReactNode][])
+            : []),
+        ]}
+      />
+      {pc ? (
+        <p className="card-note">
+          {pcOn
+            ? "Privacy: cached conversation state is plaintext in gateway memory only, bound to its API key, expires when idle and is wiped on eviction and on any integrity failure. The provider sees only the new part of each prompt and can tell that a request continued a cached conversation."
+            : "Opt-in (prefix_cache = \"conversation\"): skips the prompt pass and masks for the part of a prompt a previous turn already sent. The provider can then tell that a request continued a cached conversation."}
+        </p>
+      ) : null}
+    </Card>
   );
 }
 
@@ -92,10 +138,11 @@ function ModelDetail({ m, onChanged }: { m: ModelStatus; onChanged: () => void }
           items={[
             ["Fingerprint", m.fingerprint ? <Mono copy={m.fingerprint} title={m.fingerprint}>{m.fingerprint_short ?? shortHash(m.fingerprint)}</Mono> : "—"],
             ["Ring", <span className="mono">{m.ring}</span>],
-            ["Freivalds rate", m.freivalds_rate != null ? fmtPercent(m.freivalds_rate) : "—"],
-            ["Max context", fmtInt(m.max_context)],
+            ["Freivalds rate", <span className="num">{m.freivalds_rate != null ? fmtPercent(m.freivalds_rate) : "—"}</span>],
+            ["Max context", <span className="num">{fmtInt(m.max_context)}</span>],
             ["Service", m.service?.origin ? <span className="mono">{m.service.origin}</span> : "—"],
-            ["Masks available", fmtInt(m.masks_available)],
+            ["Masks available", <span className="num">{fmtInt(m.masks_available)}</span>],
+            ["LM head", m.head_mode ? (m.head_mode === "provider_int8" ? "masked (provider, int8)" : "gateway") : "—"],
           ]}
         />
       </Card>
@@ -113,6 +160,7 @@ function ModelDetail({ m, onChanged }: { m: ModelStatus; onChanged: () => void }
       </div>
 
       <div className="grid-2">
+        <div className="stack">
         <Card title="Compute backend" description="Cumulative counters since the model started">
           <DescList
             items={[
@@ -127,6 +175,8 @@ function ModelDetail({ m, onChanged }: { m: ModelStatus; onChanged: () => void }
           <div className="subhead">Time split</div>
           <SplitBar a={b.remote_seconds ?? 0} b={b.local_seconds ?? 0} labelA={`Remote ${fmtDuration(b.remote_seconds)}`} labelB={`Local ${fmtDuration(b.local_seconds)}`} />
         </Card>
+        <DecodingCard m={m} />
+        </div>
         <div className="stack">
           <Card title="Service client">
             <DescList

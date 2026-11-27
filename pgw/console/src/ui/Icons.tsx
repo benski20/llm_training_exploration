@@ -185,9 +185,9 @@ export const IconFile = (p: P) => (
 export function Logo({ size = 22 }: { size?: number }) {
   return (
     <svg width={size} height={size} viewBox="0 0 32 32" aria-hidden="true" focusable="false" className="logo-mark">
-      <rect width="32" height="32" rx="8" className="logo-bg" />
-      <path d="M10 23V9.5h6.6a4.6 4.6 0 0 1 0 9.2H13.4" fill="none" className="logo-fg" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" />
-      <circle cx="22.6" cy="22.4" r="2.3" className="logo-dot" />
+      <rect width="32" height="32" rx="3" className="logo-bg" />
+      <path d="M10 23V9.5h6.6a4.6 4.6 0 0 1 0 9.2H13.4" fill="none" className="logo-fg" strokeWidth="2.6" strokeLinecap="square" strokeLinejoin="miter" />
+      <rect x="20.4" y="20.2" width="4.4" height="4.4" className="logo-dot" />
     </svg>
   );
 }

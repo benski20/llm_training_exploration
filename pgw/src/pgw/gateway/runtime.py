@@ -1896,6 +1896,28 @@ class ModelRuntime:
         out["check"] = "p61 range + Freivalds, both stages, every trip"
         return out
 
+    def _speculation_status(self) -> dict[str, Any]:
+        """Speculative decoding in effect (public configuration only): ``mode`` is ``"off"``, ``"lookup"``
+        (prompt lookup), ``"draft_head"`` or ``"draft_model"``; ``strict`` when every pass sends a fixed row count."""
+        c = self.config
+        if not c.speculates:
+            return {"mode": "off"}
+        mode = ("draft_head" if c.draft_head_path is not None else
+                "draft_model" if c.draft_pack_path is not None else "lookup")
+        return {"mode": mode, "tokens": int(c.spec_tokens), "strict": c.spec_rows is not None,
+                "rows": int(c.spec_rows) if c.spec_rows is not None else None}
+
+    def _prefix_cache_status(self) -> dict[str, Any]:
+        """Conversation KV-prefix cache: ``mode`` and, when on, its counters and sizes (never keys or tokens)."""
+        out: dict[str, Any] = {"mode": self.config.prefix_cache}
+        cache = self.prefix_cache
+        if cache is not None and hasattr(cache, "status"):
+            try:
+                out.update({k: v for k, v in cache.status().items() if isinstance(v, int | float)})
+            except Exception:  # pragma: no cover - a status page must never fail on the cache
+                out["error"] = True
+        return out
+
     def status(self) -> dict[str, Any]:
         """Admin status: fingerprint, ring, mask inventory, sessions, service health."""
         ok, reason = self.ready()
@@ -1917,6 +1939,8 @@ class ModelRuntime:
             "sessions": self.admission.status(),
             "breaker": self.breaker.status(),
             "freivalds_rate": self.config.freivalds_rate if self.mode == "masked" else None,
+            "speculation": self._speculation_status(),
+            "prefix_cache": self._prefix_cache_status(),
         }
         if self.config.head_mode == "provider_int8":
             # the masked LM head: fingerprint is the derived one, base_fingerprint the pack's (config.fingerprint)

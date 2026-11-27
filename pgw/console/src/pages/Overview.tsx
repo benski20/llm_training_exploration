@@ -160,7 +160,7 @@ export function OverviewPage() {
           tone={o ? (o.integrity_failures_total > 0 ? "bad" : "ok") : undefined}
           sub={o && o.integrity_failures_total === 0 ? "None since start" : "Since start · alert on any"}
         />
-        <Stat label="Freivalds-checked calls" loading={!o} value={fmtCompact(o?.freivalds_checked_total)} sub={o?.privacy.freivalds_rate != null ? `check rate ${fmtPercent(o.privacy.freivalds_rate)}` : "since start"} />
+        <Stat label="Freivalds checks" loading={!o} value={fmtCompact(o?.freivalds_checked_total)} sub={o?.privacy.freivalds_rate != null ? `check rate ${fmtPercent(o.privacy.freivalds_rate)}` : "since start"} />
         <Stat label="Streaming requests" loading={!o} value={fmtCompact(o?.stream_requests_total)} sub="since start" />
       </div>
 

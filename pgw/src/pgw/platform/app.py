@@ -61,9 +61,9 @@ _ASSETS: dict[str, tuple[Path, str]] = {
     "platform.js": (STATIC_DIR / "platform.js", "text/javascript; charset=utf-8"),
     "theme.js": (STATIC_DIR / "theme.js", "text/javascript; charset=utf-8"),
     "favicon.svg": (STATIC_DIR / "favicon.svg", "image/svg+xml"),
-    "fonts/inter-latin-wght-normal.woff2": (DESIGN_DIR / "fonts/inter-latin-wght-normal.woff2", "font/woff2"),
-    "fonts/inter-latin-ext-wght-normal.woff2": (DESIGN_DIR / "fonts/inter-latin-ext-wght-normal.woff2", "font/woff2"),
-    "fonts/geist-mono-latin-wght-normal.woff2": (DESIGN_DIR / "fonts/geist-mono-latin-wght-normal.woff2", "font/woff2"),
+    **{f"fonts/{f}": (DESIGN_DIR / "fonts" / f, "font/woff2") for f in (
+        "ibm-plex-sans-latin-wght-normal.woff2", "ibm-plex-sans-latin-ext-wght-normal.woff2",
+        "ibm-plex-mono-latin-400-normal.woff2", "ibm-plex-mono-latin-500-normal.woff2")},
 }
 _MAX_FORM = 64 * 1024
 _KEY_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")

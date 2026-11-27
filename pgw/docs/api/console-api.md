@@ -103,7 +103,7 @@ set. Configuration and provider examples: [console-sso.md](../operations/console
 
 | method | path | role | notes |
 |---|---|---|---|
-| GET | `/admin/status` | viewer | existing: models, backend counters, sessions, breaker, client, noise monitor |
+| GET | `/admin/status` | viewer | existing: models, backend counters, sessions, breaker, client, noise monitor; per model also `speculation` and `prefix_cache` (below) |
 | GET | `/admin/masks` | viewer | existing: mask inventory per model |
 | GET | `/admin/keys` | viewer | existing: API keys (never the secret) |
 | POST | `/admin/keys` | admin | existing: create; the secret is shown once |
@@ -118,6 +118,18 @@ set. Configuration and provider examples: [console-sso.md](../operations/console
 Errors use the gateway's existing shape `{"error": {"message", "type", "code", "param"}}`.
 
 ### Computed fields (what the numbers mean)
+
+- `/admin/status` (2026-11-27): each model has `speculation` = `{"mode"}` with `mode` `"off"`, or
+  `{"mode", "tokens", "strict", "rows"}` with `mode` `"lookup"` (prompt lookup), `"draft_head"` or
+  `"draft_model"`, `tokens` the drafts per pass (`spec_tokens`), `strict` true when every pass sends a fixed
+  row count (`spec_rows`, else `null`); and `prefix_cache` = `{"mode"}` with `mode` `"off"` or
+  `"conversation"` (opt-in, `prefix_cache`), plus, when on, the cache's counters and sizes: `hits`, `misses`,
+  `mismatches`, `reused_tokens`, `stored`, `evicted`, `expired`, `refused`, `waits`, `wiped_all`, `entries`,
+  `bytes`, `max_bytes`, `ttl_s`, `settling`. Both are public configuration and counts: never cache keys,
+  tokens or content. Not in the API (the console shows nothing for them): the mask scheme (`pks-v3` or
+  `mlwe` is a mask factory setting the gateway does not see) and the client library's mask-generation
+  phases (`maskgen_stalled`, `ProviderStalledError`: they live in the client library's in-process factory,
+  which runs without the console; `pgw sdk status` shows them).
 
 - `/admin/overview`: `requests_24h`, `tokens_24h` (prompt + completion) and `errors_24h` come from the
   same audit-log aggregation as `/admin/usage?window=24h` (`inference` events). An error is an
