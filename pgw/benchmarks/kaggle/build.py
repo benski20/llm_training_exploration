@@ -965,7 +965,8 @@ JOBS["pgw-sdk-e2e-3b"] = _sdk_e2e_job("qwen2.5-3b-instruct", 2 * 3600)
 # engine's exact integer pipelines run on the CPU (the pinned references themselves); only the float reference
 # runs on the GPUs (float16, device_map auto over the T4 x 2: float32 does not fit). 2048 wikitext tokens.
 _REV_7B = "a09a35458c702b33eeacc393d103063234e8bc28"
-_F2Q_EXCLUDE = ["scripts", "examples", "tests", "rust", "src/pgw/sdk/draft_heads", "SPEC.md", "INTERFACE_NOTES.md", "STATUS.md",
+_F2Q_EXCLUDE = ["scripts", "examples", "tests", "rust", "src/pgw/sdk/draft_heads", "SPEC.md",
+                "INTERFACE_NOTES.md", "STATUS.md",
                 *sorted(f"benchmarks/{p.name}" for p in HERE.parent.iterdir() if p.name != "fused2_quality.py"),
                 *sorted(f"src/pgw/{p.name}" for p in (PGW / "src" / "pgw").iterdir()
                         if p.is_dir() and p.name in ("console", "platform", "chat", "design", "moe", "service", "gateway",
@@ -986,7 +987,7 @@ JOBS["pgw-fused2-quality-7b"] = {"machine_shape": "NvidiaTeslaT4x2", "exclude": 
             "pack_checkpoint(src, '/tmp/pack7b', name='qwen2.5-7b-instruct')\" && du -sh /tmp/pack7b && free -g"},
     {"kind": "shell", "name": "quality_7b", "timeout": 8 * 3600,
      "cmd": "python benchmarks/fused2_quality.py --model Qwen2.5-7B-Instruct --pack /tmp/pack7b --threads 4 "
-            "--configs stdmh:K32A12C27 f2i8mighead8:K56A12C53 f2mighead8:K56A12C53 --tokens 2048 --float-device cuda "
+            "--configs stdmh:K32A12C27 f2i8mighead8:K56A12C53 --tokens 2048 --float-device cuda "
             "--float-dtype float16 --ref /tmp/ref7b.pt --json /kaggle/working/quality_qwen7b_headfold.json"},
 ]}
 JOBS["pgw-sdk-e2e-15b"] = _sdk_e2e_job("qwen2.5-1.5b-instruct", 2 * 3600)

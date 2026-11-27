@@ -73,7 +73,7 @@ def main() -> None:
     pack = ModelPack.open(build_pack(work, args.preset, args.layers))
     t0 = time.perf_counter()
     hf = bool(args.head_fold)
-    cached = work / f"f2w-{args.preset}-{args.layers}-v{pack.arch.vocab_size}{'-head' if hf else ''}.pt"  # the tables, reused across runs
+    cached = work / f"f2w-{args.preset}-{args.layers}-v{pack.arch.vocab_size}{'-head' if hf else ''}.pt"  # reused
     if cached.exists():
         weights = Fused2Weights.load(cached)
     else:

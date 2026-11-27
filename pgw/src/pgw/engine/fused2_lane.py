@@ -124,7 +124,7 @@ class LaneFused2Provider:
         return torch.cat([h for h, _ in outs]), torch.cat([z for _, z in outs])
 
     def single(self, k1: str, x_hat: torch.Tensor) -> torch.Tensor:
-        n1, m1, _ = self._items[k1]
+        _n1, m1, _ = self._items[k1]
         rows = int(x_hat.shape[0])
         got = self._multi_chunks(k1, None, x_hat, None)
         if got is not None:
@@ -229,7 +229,7 @@ class LaneFused2Provider:
 
     def pair(self, k1: str, k2: str, r_hat: torch.Tensor, x_hat: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         name = f"{k1}+{k2}"
-        n1, m1, m2 = self._items[name]
+        _n1, m1, m2 = self._items[name]
         rows = int(x_hat.shape[0])
         got = self._multi_chunks(k1, k2, x_hat, r_hat)
         if got is not None:

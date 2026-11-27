@@ -123,8 +123,9 @@ def pass_shapes(arch: Any) -> dict[str, dict[str, float]]:
     # Z: qkv, or the head's vocab in the last layer)
     f_up = L * ((d + d) + (inter + d))
     f_down = L * ((d + 2 * inter) + d) + (L - 1) * qkv + vocab
-    return {"standard": {"trips": 4 * L + 1, "up": std_up * STANDARD_RING_BYTES, "down": std_down * STANDARD_RING_BYTES},
-            "fused": {"trips": 2 * L, "up": f_up * FUSED_RING_BYTES, "down": f_down * FUSED_RING_BYTES}}
+    sb, fb = STANDARD_RING_BYTES, FUSED_RING_BYTES
+    return {"standard": {"trips": 4 * L + 1, "up": std_up * sb, "down": std_down * sb},
+            "fused": {"trips": 2 * L, "up": f_up * fb, "down": f_down * fb}}
 
 
 def estimate_ms(arch: Any, link: LinkMeasurement, *, client_ms: dict[str, float] | None = None) -> dict[str, float]:

@@ -65,7 +65,6 @@ def _pack(work: Path) -> Path:
 
 def run(args: argparse.Namespace) -> dict[str, Any]:
     from delay_proxy import DelayProxy
-
     from tests.sdk.conftest import free_port, make_pki, start_provider, stop_provider
     from tests.sdk.test_fused_schedule import FUSED_ENV, fused_reference
 
@@ -87,7 +86,15 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                               public_port=pport, public_lane_port=plport)
         try:
             for sched in args.schedules:
-                results["configs"].append(one(prov, sched, rtt, work, args, ref_text))
+                for attempt in range(2):  # a transient lane failure on this loaded box: one fresh client again
+                    try:
+                        results["configs"].append(one(prov, sched, rtt, work / f"a{attempt}", args, ref_text))
+                        break
+                    except Exception as exc:
+                        print(f"{sched} rtt {rtt}: attempt {attempt} failed: {type(exc).__name__}: {exc}",
+                              flush=True)
+                        if attempt:
+                            results["configs"].append({"schedule": sched, "rtt_ms": rtt, "error": str(exc)[:300]})
                 print(json.dumps(results["configs"][-1]), flush=True)
         finally:
             stop_provider(prov)
@@ -111,10 +118,12 @@ def one(prov: Any, sched: str, rtt: float, work: Path, args: argparse.Namespace,
         rt = c._engine.models[MODEL].runtime  # type: ignore[attr-defined]
         be = rt.backend
         prov_obj = getattr(be, "provider", None)
-        rates, cpus, trips, provider_ms, ups, downs = [], [], [], [], [], []
+        rates, cpus, trips, provider_ms, ups, downs, locals_ = [], [], [], [], [], [], []
+        nd = getattr(getattr(rt.model, "schedule", None), "native_decode", None)
         text = ""
         for _ in range(args.reps):
             calls0 = _calls(rt)
+            loc0 = (int(nd.totals[0]), int(nd.totals[3])) if nd is not None else None
             cu0 = sum(getattr(prov_obj, "compute_us", []) or []) if prov_obj is not None else 0
             b0 = _bytes(rt)
             first = last = None
@@ -134,6 +143,10 @@ def one(prov: Any, sched: str, rtt: float, work: Path, args: argparse.Namespace,
             dec = max(1, n - 1)
             rates.append(dec / max(1e-9, (last - first)))
             cpus.append((cpu1 - cpu0) * 1e3 / dec)
+            if nd is not None and loc0 is not None and int(nd.totals[0]) > loc0[0]:
+                # the native fused driver's own work per decode pass (quantize, mask, pack, unpack, checks, float
+                # work; no lane wait, no spin): the client work the fused schedule adds per token
+                locals_.append((int(nd.totals[3]) - loc0[1]) / 1e6 / (int(nd.totals[0]) - loc0[0]))
             trips.append((_calls(rt) - calls_first) / dec)
             b1 = _bytes(rt)
             ups.append((b1[0] - b0[0]) / n)
@@ -144,6 +157,7 @@ def one(prov: Any, sched: str, rtt: float, work: Path, args: argparse.Namespace,
         st = c.status()["models"][MODEL]
         out = {"schedule": sched, "rtt_ms": rtt, "trips_per_token": statistics.median(trips),
                "decode_tok_s": statistics.median(rates), "client_cpu_ms_per_token": statistics.median(cpus),
+               "driver_local_ms_per_pass": statistics.median(locals_) if locals_ else None,
                "bytes_up_per_token": statistics.median(ups), "bytes_down_per_token": statistics.median(downs),
                "provider_ms_per_token": statistics.median(provider_ms) if provider_ms else None,
                "native_decode": (st.get("fused2") or {}).get("native_decode", st.get("native", {}).get("decode_native")),

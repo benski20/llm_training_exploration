@@ -478,27 +478,31 @@ class PairOp:
 
     def _run_cpu(self, rows: int, body: bytes | bytearray | memoryview) -> bytes:
         """The CPU provider's op without the Triton interpreter: exact ``W x mod 2^K`` by
-        :class:`pgw.core.ringmm.PreparedWeight` (digit GEMMs in float64 whose every partial sum is an exact
-        integer), the epilogue in wrapping int64. The same bytes as the kernels (the start-up self-check compares
-        it with the Python-int reference); CPU test providers and benchmarks only (a GPU runs the kernels)."""
+        :func:`pgw.core.ringmm.int8_ring_matmul` (int8 digit GEMMs with exact integer accumulation; no float copy
+        of the weight), the epilogue in wrapping int64. The same bytes as the kernels (the start-up self-check
+        compares it with the Python-int reference); CPU test providers and benchmarks only (a GPU runs the
+        kernels)."""
         from pgw.core.packing import pack_ring, unpack_ring
         from pgw.core.ringmm import PreparedWeight
+        from pgw.core.ringmm import int8_ring_matmul as _mm
 
-        if getattr(self, "_pw1", None) is None:
-            self._pw1 = PreparedWeight(self.w1.cpu(), cache_float=True)
-            self._pw2 = None if self.w2 is None else PreparedWeight(self.w2.cpu(), cache_float=True)
         k, mask = self.k, (1 << self.k) - 1
+
+        def int8_ring_matmul(a: torch.Tensor, w: torch.Tensor, kk: int) -> torch.Tensor:
+            return _mm(a, w, kk) if kk <= 56 else PreparedWeight(w, cache_float=False).matmul(a, kk)
+
+        w1 = self.w1 if self.w1.device.type == "cpu" else self.w1.cpu()
         nx = rows * self.n1 * self.bpe
         x = unpack_ring(memoryview(body)[:nx], (rows, self.n1), k)
-        y = self._pw1.matmul(x, k)
+        y = int8_ring_matmul(x, w1, k) & mask
         if self.w2 is None:
             return pack_ring(y, k)
         r = unpack_ring(memoryview(body)[nx:], (rows, self.m1), k)
         if self.hmul is not None:
             y = (y * self.hmul.cpu()) & mask
         h = (r + y) & mask
-        assert self._pw2 is not None
-        return pack_ring(h, k) + pack_ring(self._pw2.matmul(h, k), k)
+        assert self.w2 is not None
+        return pack_ring(h, k) + pack_ring(int8_ring_matmul(h, self.w2.cpu(), k) & mask, k)
 
     def capture(self, rows: int, h_in: torch.Tensor, h_out: torch.Tensor, *, stream: Any, pool: Any) -> Any:
         """CUDA graph of one call reading pinned uint8 ``h_in[:in_bytes(rows)]`` and writing ``h_out``."""  # pragma: no cover

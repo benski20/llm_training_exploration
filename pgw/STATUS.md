@@ -46,7 +46,9 @@ Opt-in:
 * strict speculation (`speculation="lookup" | "draft_head"`; the shipped heads are trained on commercially usable
   prompt data only: see the last 2026-11-26 section);
 * `mask_admission="overcommit"`;
-* the weight-free factory (`factory_weights="stream"`).
+* the weight-free factory (`factory_weights="stream"`);
+* the fused high-RTT schedule (`schedule="fused" | "auto"`: 2L round trips per token instead of 4L + 1, K56 values,
+  its own pinned reference; fixed per model for the life of the client; see the last 2026-11-27 section).
 
 Pack format 2 (bf16 plain tensors, exact) is the default. Fingerprints for 0.5B, 1.5B, 3B and 7B are baked in
 (`PINNED_MODELS`), and for 14B / 32B / 72B ahead of support (usable for measurements only through

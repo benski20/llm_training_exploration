@@ -35,6 +35,7 @@ seconds. `Ctrl-C` in the terminal stops the app (its background mask processes s
 | `--factory-weights stream` | `PGW_FACTORY_WEIGHTS`, else `pack` | keep no int8 weights on disk (about 6 GB less at 7B; slightly more network). Recommended on laptops |
 | `--prefix-cache on` | `auto` (off with our masked output layer) | reuse earlier turns: faster long chats, but our service can tell that a request continued an earlier one ([below](#what-our-service-can-see)) |
 | `--speculation draft_head` | `PGW_SPECULATION`, else `off` | fewer round trips per token (0.5B and 7B; identical answers); your next message waits for the previous answer's remaining rounds |
+| `--schedule fused` (or `auto`) | `PGW_SCHEDULE`, else `standard` | half the round trips per token (`2 x layers` instead of `4 x layers + 1`), 1.74x the bytes; slightly different answers (its own fixed reference), so it is fixed for the life of the app (`auto` measures your link at start-up). The provider must offer it ([Configuration](configuration.md#schedule-standard-or-fused)) |
 | `--no-usage-reports` | reports on | stop sending the content-free per-request record (counts, timing, checks passed) |
 | `--max-tokens` | 1024 | longest answer |
 | `--cache-dir`, `--state-dir` | `PGW_CACHE_DIR`, `PGW_STATE_DIR` | where model data, masks and conversations live |

@@ -131,6 +131,7 @@ class SDKBackend:
         return {"mask_scheme": getattr(o, "mask_scheme", None), "masked_head": str(getattr(o, "masked_head", "auto")),
                 "prefix_cache": pc if isinstance(pc, str) else ("on" if pc else "off"),
                 "speculation": getattr(o, "speculation", "off"),
+                "schedule": getattr(o, "schedule", "standard"),
                 "factory_weights": getattr(o, "factory_weights", "pack"),
                 "usage_reports": bool(getattr(o, "usage_reports", True)),
                 "service_url": getattr(getattr(self.client, "_key", None), "service_url", None)}

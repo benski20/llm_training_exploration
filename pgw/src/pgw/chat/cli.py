@@ -50,6 +50,9 @@ def write_opener(path: Path, url: str) -> None:
               help="Reuse earlier turns' KV state (on: the provider can tell a turn continued an earlier one)")
 @click.option("--speculation", type=click.Choice(["off", "draft_head", "lookup"]), default=None,
               help="Strict speculative decoding (same answers; fewer round trips per token) [PGW_SPECULATION]")
+@click.option("--schedule", type=click.Choice(["standard", "fused", "auto"]), default=None,
+              help="Round trips per token: standard, fused (half the round trips on high-latency links; slightly "
+                   "different answers) or auto (measure the link) [PGW_SCHEDULE]")
 @click.option("--usage-reports/--no-usage-reports", default=True, show_default=True,
               help="Send the provider content-free request records (counts and timing it sees anyway)")
 @click.option("--max-tokens", type=click.IntRange(1, 8192), default=1024, show_default=True)
@@ -57,8 +60,8 @@ def write_opener(path: Path, url: str) -> None:
 @click.option("--cache-dir", type=click.Path(path_type=Path), default=None, help="[PGW_CACHE_DIR]")
 @click.option("--state-dir", type=click.Path(path_type=Path), default=None, help="[PGW_STATE_DIR]")
 def chat_command(model: str | None, port: int, no_browser: bool, no_history: bool, factory_weights: str | None,
-                 prefix_cache: str, speculation: str | None, usage_reports: bool, max_tokens: int, demo: bool,
-                 cache_dir: Path | None, state_dir: Path | None) -> None:
+                 prefix_cache: str, speculation: str | None, schedule: str | None, usage_reports: bool,
+                 max_tokens: int, demo: bool, cache_dir: Path | None, state_dir: Path | None) -> None:
     """Private chat on this computer: plaintext stays here, the GPU sees only masked data.
 
     Starts a server on 127.0.0.1 that only this browser session can use (a random token per launch) and opens the
@@ -95,7 +98,7 @@ def chat_command(model: str | None, port: int, no_browser: bool, no_history: boo
         opts: dict[str, Any] = {"usage_reports": usage_reports,
                                 "prefix_cache": {"auto": "auto", "on": True, "off": False}[prefix_cache]}
         for k, v in (("cache_dir", cache_dir), ("state_dir", state_dir), ("factory_weights", factory_weights),
-                     ("speculation", speculation)):
+                     ("speculation", speculation), ("schedule", schedule)):
             if v is not None:
                 opts[k] = v
         try:
