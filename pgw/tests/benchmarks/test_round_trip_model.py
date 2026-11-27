@@ -80,3 +80,38 @@ def test_draft_head_mode_uses_the_measured_tau_and_pays_the_head_steps() -> None
     assert with_head["pass_ms"] == pytest.approx(without["pass_ms"] + with_head["draft"])
     # the shipped head beats speculation off on open chat at a same-data-center RTT
     assert with_head["ms_per_token"] < rt.sdk_ms_per_token("7B", 0.2)["ms_per_token"]
+
+
+# ---- --links: the bandwidth term (research/reviews/consumer-bandwidth.md) ------------------------------------------
+@pytest.mark.parametrize("model", ["0.5B", "7B", "32B"])
+def test_row_bytes_match_the_wire_formats(model: str) -> None:
+    """K32: 4 B per masked element; fused K56: 7 B; element counts as the engine's trip plans move them."""
+    L, d, inter, q, vocab = rt.C_SHAPES[model]
+    up, down = rt.row_bytes(model, "standard (today, 4L+1)", "k32")
+    assert up == 4 * (L * (3 * d + inter) + d) and down == 4 * (L * (q + 2 * d + 2 * inter) + vocab)
+    fu, fd = rt.row_bytes(model, "fused2 folded head, local qkv0 (2L)", "k32")
+    assert fu == 7 * (L * (d + inter) + 2 * L * d)
+    assert fd == 7 * (L * (2 * d + 2 * inter + q) - q + vocab)
+    nu, nd = rt.row_bytes(model, "standard (today, 4L+1)", "narrow")
+    assert nu == up * 28 / 32 and nd == down * 28 / 32
+    cu, _ = rt.row_bytes(model, "standard (today, 4L+1)", "carry16")
+    assert cu == up / 2
+    assert rt.row_bytes(model, "standard (today, 4L+1)", "k32", logits=False)[1] == down - 4 * vocab
+
+
+def test_link_term_adds_to_the_pass_and_masks_cost_bandwidth() -> None:
+    link = rt.LINKS["cable 100/10"]
+    s = "standard (today, 4L+1)"
+    a = rt.link_ms("7B", s, 1, link, "k32")
+    assert rt.link_ms("7B", s, 3, link, "k32") == pytest.approx(3 * a)
+    assert rt.link_ms("7B", s, 1, link, "k32", "pks-v3") > 2 * a  # pks-v3 masks more than double the traffic
+    assert rt.link_ms("7B", s, 1, link, "carry16") < rt.link_ms("7B", s, 1, link, "narrow") < a
+    up, down = rt.row_bytes("7B", s, "k32")
+    want = (up + rt.ACK_UP * down) / (10e6 * rt.LINK_EFF / 8) + down / (100e6 * rt.LINK_EFF / 8)
+    assert a == pytest.approx(1e3 * want)
+
+
+def test_links_table_prints(capsys: pytest.CaptureFixture[str]) -> None:
+    rt.links_main(5.0)
+    out = capsys.readouterr().out
+    assert "fibre 1000/1000" in out and "| 32B | standard | k32 | pks-v3 |" in out
