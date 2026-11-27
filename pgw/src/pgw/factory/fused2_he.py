@@ -46,8 +46,8 @@ import torch
 
 from pgw.core.errors import ConfigError
 
-__all__ = ["PROFILES", "DigitSplitProducts", "Fused2HEPack", "build_fused2_he", "digit_bound_ok", "he_key",
-           "recombine_digits", "split_digits"]
+__all__ = ["PROFILES", "DigitSplitProducts", "Fused2HEPack", "TopDigitProducts", "build_fused2_he", "digit_bound_ok",
+           "digit_plan", "he_key", "recombine_digits", "recombine_plan", "split_digits", "split_plan"]
 
 log = logging.getLogger(__name__)
 
@@ -92,6 +92,129 @@ def recombine_digits(ys: list[torch.Tensor], k: int, k_he: int, digit_bits: int)
     assert acc is not None
     acc &= np.uint64((1 << int(k)) - 1)
     return torch.from_numpy(acc.view(np.int64))
+
+
+# ---- the top-digit plan (``PGW_FUSED2_HE_DIGITS=top``, default off): fewer products, same exactness ----------
+#
+# Every digit at shift ``s`` contributes ``2^s (W d) mod 2^k``, so only ``W d mod 2^(k - s)`` is needed. For the
+# one digit at ``s = k - K_he`` (the top ``K_he`` bits of ``r``) that is ``W d mod 2^K_he``: exactly what the
+# encrypted factory returns, for ANY ``d`` in ``Z_{2^K_he}`` and with no exactness bound (24 + 32 = 56 at pks-v3).
+# Only the low ``k - K_he`` bits need exact products, and BALANCED digits (``|d| <= 2^(b-1)``) give one more bit:
+# ``|W d| <= 128 * 2^(b-1) * n < 2^(K_he - 1)``. At pks-v3 (K32) and Qwen2.5 widths that is ``b = 12`` for
+# ``n <= 4096 * 2`` (d = 3584 / 5120: 2 low digits) and ``b = 10`` for ``n <= 2^15`` (I = 18944 / 27648: 3 low
+# digits): 3 or 4 products per mask instead of 7 (8-bit unsigned digits), with the same scheme, the same wire and
+# the same provider view (each digit plane is an ordinary K32 mask row: the scheme hides any message).
+
+
+def digit_plan(n: int, k: int, k_he: int) -> list[tuple[int, int, bool]]:
+    """``[(shift, bits, exact), ...]``: balanced exact low digits of the largest width with
+    ``128 * 2^(b-1) * n < 2^(K_he - 1)``, then one top digit of ``K_he`` bits taken mod ``2^K_he``."""
+    low = int(k) - int(k_he)
+    if low < 0:
+        raise ConfigError("digit_plan: K_he above k")
+    b = 1
+    while 128 * (1 << b) * int(n) < (1 << (int(k_he) - 1)):  # b + 1 still exact: 128 * 2^((b+1)-1) * n < 2^(K-1)
+        b += 1
+    if b < 2:
+        raise ConfigError(f"digit_plan: no exact digit at K{k_he} for n = {n}")
+    plan, s = [], 0
+    while s < low:
+        w = min(b, low - s)
+        plan.append((s, w, True))
+        s += w
+    plan.append((low, int(k_he), False))
+    return plan
+
+
+def split_plan(r: torch.Tensor, plan: list[tuple[int, int, bool]], k_he: int) -> list[torch.Tensor]:
+    """The digit planes of ``r`` (int64 in ``[0, 2^k)``) under ``plan``, each as a K_he ring element in
+    ``[0, 2^K_he)`` (a negative balanced digit as its residue mod ``2^K_he``). ``r = sum 2^s d`` mod ``2^k``."""
+    rem = r.clone()
+    full = (1 << int(k_he)) - 1
+    out = []
+    for s, w, exact in plan:
+        if exact:
+            d = (rem >> s) & ((1 << w) - 1)
+            d = torch.where(d >= (1 << (w - 1)), d - (1 << w), d) if w > 1 else d  # balanced
+            rem = rem - (d << s)  # exact int64: |rem| stays below 2^57
+            out.append(d & full)
+            d.zero_()
+        else:
+            out.append((rem >> s) & full)  # the top bits (a carry past 2^k vanishes mod 2^k)
+    rem.zero_()
+    return out
+
+
+def recombine_plan(ys: list[torch.Tensor], plan: list[tuple[int, int, bool]], k: int, k_he: int) -> torch.Tensor:
+    """``sum 2^s y`` mod ``2^k``: exact digits' products centred (``|W d| < 2^(K_he - 1)``), the top digit's taken
+    as its residue mod ``2^K_he`` (only that is needed: ``2^s 2^K_he = 2^k``). Wrapping uint64 arithmetic."""
+    half, fullv = 1 << (int(k_he) - 1), 1 << int(k_he)
+    acc: np.ndarray | None = None
+    for (s, _w, exact), y in zip(plan, ys, strict=True):
+        yc = torch.where(y >= half, y - fullv, y) if exact else y & (fullv - 1)
+        term = np.ascontiguousarray(yc.numpy()).view(np.uint64) << np.uint64(s)
+        acc = term if acc is None else acc + term
+        yc.zero_()
+    assert acc is not None
+    acc &= np.uint64((1 << int(k)) - 1)
+    return torch.from_numpy(acc.view(np.int64))
+
+
+class TopDigitProducts:
+    """``W r mod 2^k`` with the top-digit plan (:func:`digit_plan`, per linear): 3-4 products per K56 mask at
+    pks-v3 instead of 7. Same interface as :class:`DigitSplitProducts`.
+
+    ``stack`` (default): the digit planes of a chunk go to the backend as ONE call of ``len(plan) x t`` mask rows
+    (each row an ordinary K_he mask row, encrypted in 256-slot groups under fresh secrets, exactly like more slots).
+    The provider then serves all planes of a linear in one item, so its public hint (``W8 A``, 85 % of a one-group
+    item) is computed once per chunk instead of once per plane, and a short chunk's planes share groups instead of
+    each padding its own."""
+
+    def __init__(self, backend: Any, *, k: int, k_he: int, shapes: dict[str, tuple[int, int]], scheme: str = "",
+                 stack: bool = True):
+        self.backend, self.k, self.k_he, self.scheme, self.stack = backend, int(k), int(k_he), scheme, bool(stack)
+        self.plans = {key: digit_plan(n, k, k_he) for key, (_m, n) in shapes.items()}
+        self.shapes = dict(shapes)
+        self.stats = {"digit_products": 0, "rows": 0, "he_s": 0.0, "split_s": 0.0, "recombine_s": 0.0}
+
+    @property
+    def resolved_backend(self) -> str:
+        counts = sorted({len(p) for p in self.plans.values()})
+        return f"he-topdigits:{self.scheme or 'he'}:K{self.k_he}x{'/'.join(map(str, counts))}"
+
+    def matmul(self, key: str, r: torch.Tensor) -> torch.Tensor:
+        plan = self.plans[key]
+        t0 = time.perf_counter()
+        ds = split_plan(r, plan, self.k_he)
+        t1 = time.perf_counter()
+        ys: list[torch.Tensor] = []
+        try:
+            if self.stack:
+                cat = torch.cat(ds)
+                y = self.backend.matmul(he_key(key), cat)
+                cat.zero_()
+                y = y if y.dtype == torch.int64 else y.to(torch.int64)
+                ys = [c.clone() for c in torch.split(y, int(r.shape[0]))]
+                y.zero_()
+            else:
+                for d in ds:
+                    y = self.backend.matmul(he_key(key), d)
+                    ys.append(y if y.dtype == torch.int64 else y.to(torch.int64))
+                    d.zero_()
+            t2 = time.perf_counter()
+            out = recombine_plan(ys, plan, self.k, self.k_he)
+        finally:
+            for d in ds:
+                d.zero_()
+            for y in ys:
+                y.zero_()
+        st = self.stats
+        st["digit_products"] += len(ds)
+        st["rows"] += int(r.shape[0])
+        st["split_s"] += t1 - t0
+        st["he_s"] += t2 - t1
+        st["recombine_s"] += time.perf_counter() - t2
+        return out
 
 
 class Fused2HEPack:
@@ -194,6 +317,13 @@ def build_fused2_he(settings: Any, weights: Any, fingerprint: str, k: int, *, re
         remote_backend = build_he_backend(settings, adapter, HE_RINGS[scheme], worker_index=worker_index,
                                           workers=workers)
     shapes = {lin.key: (int(lin.m), int(lin.n)) for lin in weights.linears()}
+    import os
+
+    if os.environ.get("PGW_FUSED2_HE_DIGITS", "").strip().lower() == "top":  # opt-in: 3-4 products instead of 7
+        top = TopDigitProducts(remote_backend, k=k, k_he=k_he, shapes=shapes, scheme=scheme)
+        log.info("fused2 factory: K%d masks by the top-digit plan on the encrypted %s factory (%s)", k, scheme,
+                 top.resolved_backend)
+        return top  # type: ignore[return-value]
     dsp = DigitSplitProducts(remote_backend, k=k, k_he=k_he, digit_bits=b, shapes=shapes, scheme=scheme)
     log.info("fused2 factory: K%d masks as %d x %d-bit digits on the encrypted %s factory (K%d)", k, dsp.digits, b,
              scheme, k_he)

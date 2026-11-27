@@ -282,7 +282,7 @@ Before relaunching, edit `SESSIONS["sdk7b"]["steps"]` in `jobs.py`: drop the `fa
 step's `"spec": "off"`, `"stages": "setup,conc"` and `"conc": "1,4,16"` (~60 min, ~$6). If you do, record the
 edit in the commit message.
 
-### 6. `maskcost` (PROPOSED: not in `jobs.py`, not launched; needs an explicit go-ahead and a `SESSIONS` entry)
+### 7. `maskcost` (PROPOSED: not in `jobs.py`, not launched; needs an explicit go-ahead and a `SESSIONS` entry)
 
 Purpose: pin down the consumer-scale mask cost of `research/reviews/mask-cost-consumer.md`. On a T4 the
 coalesced items' per-group part measured 3-5x the memplan model, so the H100 gain is 3.5-11x. This session says
@@ -302,6 +302,10 @@ where in that range an H100 is, and how many users it serves.
      (small; not written yet);
   4. `benchmarks/pks_ntt_bench.py --sections stages` at `G` = 1 / 16 / 64 to split the per-group part (`y` GEMM,
      key switch, reply copies) on an H100.
+  5. fused2 K56 masks: the top-digit plan with stacked planes against the 7-digit split, through
+     `TopDigitProducts` / `DigitSplitProducts` on the device provider at 32B shapes. Record provider seconds per K56
+     slot and check the segments are byte-identical. This needs a small driver, not written yet: the CPU test is
+     `tests/factory/test_fused2_factory.py::test_top_digits_pks_v3_equals_plain_bit_for_bit`.
 * 4090 step: `benchmarks/pks_client_gpu_bench.py --sections client` (eager kernels and the fused decryption),
   for a consumer-GPU data point.
 * Outputs: `gpu/results/maskcost/{pytest,coalesce_S*,coalesce_threads,stages_G*,client_4090}.json`.

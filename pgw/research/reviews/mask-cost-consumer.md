@@ -60,7 +60,18 @@ Prototypes (default off, exactness-tested):
      T4 and ~2 ms on an RTX 4070-class GPU (section 9).
    * The CPU keeps the wire framing, the writer and the keystream: ~22 ms per slot at 32B, 0.9 cores per user.
    * A Metal / wgpu port needs only 32-bit integer multiplies with high halves (section 6.2).
-4. Ideas rejected for consumer use:
+4. **K56 masks for fused trips (section 12).**
+   * Today's 7-digit factory makes a fused2 slot 7x a K32 slot.
+   * Without new cryptography, two changes bring it to 1.2-1.6x on the provider at consumer stock:
+     * the top-digit plan: 3-4 K32 products, because the top 32 bits need only `W d mod 2^32`;
+     * stacking the planes as extra slots of one item, so the hint is computed once.
+     Both are prototyped, bit-identical, and tested on the real pks-v3 factory.
+   * A direct K56 parameter set (`q = 2^80`, `q1 ~ 2^72`, `P ~ 2^84`; noise identical to v3 term for term;
+     148 / 153-bit core-SVP, inside the HE-standard tables) costs ~1.45x everywhere.
+     * Prototyped as an exact reference; it needs review (Q9).
+     * It wins by ~2x when the common seed is also adopted.
+   * No stage of the fused trip can stay at K32 exactly.
+5. Ideas rejected for consumer use:
    * a larger slot group (fewer key-switch products per value, but 4x the client stock);
    * reusing the upload secret or the reply key across linears (covers a passive provider only);
    * sharing mask stock across a user's devices (risks reuse);
@@ -399,11 +410,9 @@ The noise budget is `q1 / 2^33 = 2^14.98` against a worst case of `2^13.35`, wit
     * client 1.5-2x (3 decryption primes, the larger rings);
     * bytes 1.5x (10 B up, 7.5 B down).
 
-    That stacks on top of the online trips' 1.75x (K56 instead of K32). **The cheapest masking for fused trips is
-    to keep them at K32.**
-  * With K56 fused trips, the cheapest correct choice is the n = 8192 / n = 16384 parameter set above: it keeps
-    v3's margins at about 1.5-2x cost per element. No fusion-specific saving exists beyond the reparametrisation,
-    which is already in place.
+    That stacks on top of the online trips' 1.75x (K56 instead of K32). *Superseded by section 12:* the
+    stacked top-digit plan gets K56 masks at 1.2-1.6x a K32 slot with no new parameters, and the direct set's
+    cost there is ~1.45x.
 * **Speculation rows.** Every row of a strict-speculation pass is its own slot with a fresh `r`.
   * Can one hint serve a batch of row masks without reusing randomness? It already does: a group is 256 slots
     under one upload secret, one reply key and the public hint. Rows of one pass are slots of a group, with
@@ -600,7 +609,7 @@ it.
 
 ## 10. Proposed RunPod stage (not launched)
 
-`deploy/runpod/RUNBOOK.md`, stage 6 (`maskcost`): coalescing `S = 1, 4, 16, 64` on an H100 at 7B and 32B shapes
+`deploy/runpod/RUNBOOK.md`, session 7 (`maskcost`; the fusion study proposed a session 6): coalescing `S = 1, 4, 16, 64` on an H100 at 7B and 32B shapes
 with two concurrent items (upload hidden or not), the group commit under N synthetic customers on the common
 seed, and the client kernels on a consumer GPU (RTX 4090 community pod).
 
@@ -614,4 +623,160 @@ seed, and the client kernels on a consumer GPU (RTX 4090 community pod).
 * `src/pgw/hemask/pks_torch.py`: the client kernels in torch.
 * `tests/service/test_pks_coalesce.py`, `tests/hemask/test_pks_torch.py`.
 * `benchmarks/pks_client_gpu_bench.py`, `benchmarks/kaggle/build.py` job `pgw-maskcost-t4`.
-* `research/reviews/mask_cost_numbers.py`: every number of sections 1-7.
+* `research/reviews/mask_cost_numbers.py`: every number of sections 1-7 and 12 (`k56_fused2`).
+* `src/pgw/factory/fused2_he.py`: `digit_plan`, `split_plan`, `recombine_plan`, `TopDigitProducts`
+  (`PGW_FUSED2_HE_DIGITS=top`); `tests/factory/test_fused2_factory.py`.
+* `src/pgw/hemask/pks56.py` (the direct K56 reference); `tests/hemask/test_pks56.py`.
+
+## 12. K56 masks for fused trips (added 2026-11-27, after the fusion study)
+
+Input: `research/reviews/consumer-round-trips.md`. fused2, which halves trips (o -> gate_up and down -> next qkv
+in one trip, folded head), runs at ring K56C53 with p61 checks. Its masks are `W1 r_x mod 2^56` and
+`W2' v mod 2^56`: two single-stage products with the int8 shapes of today's linears, so the hint does not grow.
+Today they come from pks-v3 (K32) by digit decomposition (`pgw.factory.fused2_he`): 7 exact 8-bit digit
+products per mask, i.e. **7x provider maskgen and ~7x client factory work per slot** against a K32 slot.
+
+### 12.1 (b) Can part of the fused trip stay at K32? No, but the masks can mostly be K32 products
+
+* Stage 1 returns `H = R + hmul W1 x`, which reaches 41.5 bits measured (52-53 a priori). Stage 2 returns
+  `Z = W2' H`, up to 48.6 bits.
+* The provider forms `H_hat` and multiplies it in the same trip, so stage 1 must be computed in stage 2's ring.
+* Hiding needs `r_x` and `v` uniform mod `2^56`. Any K32 input mask, for example `x_hat = aq + r_x mod 2^32` lifted
+  to `[0, 2^32)`, creates a data-dependent carry `2^32 W1 c` that only `W`-sized client work removes.
+* A statistically hiding integer mask needs 12 + 40 + 7 + log n bits, more than 56.
+* So no stage stays at K32 with exact results and perfect hiding.
+
+**What can stay K32 is most of the mask product itself.** A digit of `r` at shift `s` contributes
+`2^s (W d) mod 2^56`, so only `W d mod 2^(56 - s)` is needed.
+* The top 32 bits (`s = 24`) need exactly `W d mod 2^32`, which is what pks-v3 returns for any `d`, with no
+  exactness bound.
+* Only the low 24 bits need exact products. Balanced digits (`|d| <= 2^(b-1)`) are exact while
+  `128 x 2^(b-1) x n < 2^31`: `b = 12` at `n = d` (3584 / 5120) and `b = 10` at `n = I` (18944 / 27648).
+
+**The top-digit plan** (`pgw.factory.fused2_he.digit_plan`, `TopDigitProducts`, `PGW_FUSED2_HE_DIGITS=top`,
+default off): **3 products per mask for the `d`-input linears and 4 for `down`, instead of 7.** For the mlwe v2
+factory at K40 it is 2 instead of 4.
+* Exactness: `W r = sum_s 2^s W d_s` over the integers. Each low product is centred exactly
+  (`|W d| < 2^31`, strict), and the top one is taken mod `2^32`. The sum is formed in wrapping uint64.
+* Tested:
+  * against `W r mod 2^56` at every bound-tight width (n = 5120 / 27648 / 29568, extreme weight rows, masks
+    `2^56 - 1`, 0, and balanced carries into the top digit);
+  * the planes recombine to `r`;
+  * every plane is a valid K32 ring element;
+  * on the real pks-v3 factory, the segments are bit-identical to plain generation (`tests/factory/test_fused2_factory.py`).
+* Privacy is the digit factory's argument, unchanged. Each plane is an ordinary K32 mask row encrypted under fresh
+  secrets; the scheme hides any message. The provider sees 3-4 instead of 7 times a K32 segment's rows, a public
+  count.
+
+**Stacked planes** (`TopDigitProducts(stack=True)`, the default of that class). The planes of a chunk go to the
+backend as one call of `planes x t` rows, i.e. as more slots of the same linear. The provider then serves them in
+one item. Its public hint (85 % of a one-group item) is computed once instead of once per plane, and short chunks
+share groups. Tested: 1 request per linear and chunk instead of 7.
+
+This combines with coalescing (section 4.1) and needs neither the common seed nor any new cryptography.
+
+### 12.2 (a) A direct K56 parameter set: `pks-v3-K56` (reference implementation; new parameters, needs review)
+
+`pgw.hemask.pks56` is pks-v3 with every modulus scaled so that one product is `W8 r mod 2^56`. Each noise term
+keeps its v3 value relative to the budget, because the terms depend on the moduli only through `q1 / 2^q`,
+`q1 / P` and `q1 / 2^yb`:
+
+| | pks-v3 (K32) | pks-v3-K56 |
+|---|---|---|
+| upload modulus | 2^56 | **2^80** (message scale 2^24 in both) |
+| q1 | 2 primes < 2^24 (2^47.98) | 3 primes < 2^24 (2^71.96) |
+| P | 2 primes < 2^30 (2^60) | 3 primes < 2^28 (2^84.0) |
+| key-switch RNS | 4 primes (2^108) | 6 primes (2^156); all in the fused kernels' range 2^23 < p < 2^30 |
+| reply | 36 bits | 60 bits |
+| pad primes (client) | 3 x 31 bits | 4 x 31 bits (`|a t| < 2^92`) |
+| worst-case noise (all-127 rows, n = 29568) / budget | 2^13.35 / 2^14.98 | **2^13.33 / 2^14.96** |
+
+Other properties:
+* Rings, ranks, packing, the hint form, the hybrid key switch and the hint-integrity rule are pks-v3's.
+* Tested (`tests/hemask/test_pks56.py`, exact Python integers, numpy NTTs):
+  * full round trips at 256 and 77 slots decrypt to exactly `W8 r mod 2^56` (extreme rows, `r = 2^56 - 1`);
+  * the measured error is inside the budget;
+  * every noise term is within 0.05 bit of v3's relative to its budget;
+  * the 1-bit refusal margin holds at the worst case.
+
+**Security** (the repo's primal-uSVP core-SVP model; ternary secret, CBD(21); the external estimator still to run):
+
+| instance | n | log2 q | core-SVP classical / quantum | HE-standard 128-bit limit (classical / quantum) |
+|---|---|---|---|---|
+| v3 upload | 4096 | 56 | 238.9 / 216.8 | 109 / 101 |
+| v3 reply key | 8192 | 108.0 | 251.1 / 227.9 | 218 / 202 |
+| **K56 upload** | 4096 | 80 | **148.3 / 134.6** | 109 / 101 |
+| **K56 reply key** | 8192 | 156.0 | **153.0 / 138.9** | 218 / 202 |
+| K56 upload at n = 8192 | 8192 | 80 | 368.8 / 334.7 | 218 / 202 |
+| K56 reply key at n = 16384 | 16384 | 156.0 | 383.4 / 347.9 | 438 / 411 |
+
+* **Same assumption** (decision-RLWE, ternary, CBD(21)), and both instances sit inside the HomomorphicEncryption.org
+  128-bit tables with slack.
+* **The concrete margin is lower than v3's**: 148 / 153 bits classical against 239 / 251, still above 128 classical
+  and quantum.
+* Under "same or stronger" it is therefore a reviewed-parameters decision, not a free change: **Q9 for the
+  reviewer.**
+* Keeping v3's margins needs n = 8192 for the upload (rank 32) and n = 16384 for the reply ring (64 rows per
+  ciphertext). That doubles the hint GEMM and roughly triples the key-switch products per value: ~2.5-3x a K32
+  slot instead of ~1.45x. It is listed as the conservative variant.
+
+**Cost of the direct set against one K32 product** (operation counts, not benchmarked):
+* provider ~1.45x: 10 instead of 7 byte planes in the `y` and hint GEMMs; 6 instead of 4 primes in the key
+  switch's products and NTTs; 10 / 7 upload bytes; 60 / 36 reply bits;
+* client ~1.4x: 4 / 3 pad primes, 6 / 4 reply-key primes, 3 / 2 decryption primes;
+* bytes 1.43x up and 1.67x down.
+
+Tensor cores do not change the ratio: the extra planes are int8 GEMMs and FP8 is not faster than int8 on
+H100/B200.
+
+### 12.3 (c) Cost per K56 slot and per token under fused2 (H100 model, upload hidden; `mask_cost_numbers.py`, `k56_fused2`)
+
+Provider slots/s per H100 at 32B. Ranges are the model as is ... per-group part x 4 (T4-measured). Users per H100
+are at 20 tok/s and 2 slots per token.
+
+| option | K32 slot today (reference) | digit x7 (today's K56) | top-digit, separate | **top-digit, stacked** | digit x7, stacked | **direct K56** |
+|---|---|---|---|---|---|---|
+| consumer stock, per-customer seed (S = 1) | 48 / 39 | 6.9 / 5.6 | 15 / 12 | **41 / 25** | 33 / 15 | 33 / 27 |
+| users per H100 | 1.2 / 1.0 | 0.17 / 0.14 | 0.38 / 0.31 | **1.0 / 0.6** | 0.8 / 0.4 | 0.8 / 0.7 |
+| common seed, coalesced (S = 64) | 508 / 143 | 73 / 20 | 162 / 46 | 180 / 47 | 83 / 21 | **350 / 99** |
+| users per H100 | 12.7 / 3.6 | 1.8 / 0.5 | 4.0 / 1.1 | 4.5 / 1.2 | 2.1 / 0.5 | **8.8 / 2.5** |
+
+At 7B (S = 1 / S = 64, model):
+
+| | K32 | digit x7 | top-digit, stacked | direct |
+|---|---|---|---|---|
+| slots/s | 166 / 1684 | 24 / 241 | 141 / 598 | 114 / 1162 |
+| users per H100 | 4.2 / 42 | 0.6 / 6.0 | 3.5 / 15.0 | 2.9 / 29.0 |
+
+* **Without new cryptography:** the stacked top-digit plan makes a K56 slot cost about 1.2-1.6x a K32 slot at
+  consumer stock, against 7x today. This is the immediate fix: 6x more fused2 users per GPU.
+  * The 7-digit factory stacked would also drop to 1.5-2.6x. Its 7 planes multiply the per-group part, which is
+    why the top-digit plan matters once the hint is shared.
+* **With the common seed (S = 64):**
+  * the hint is shared anyway, and the per-group part times the plane count dominates;
+  * the direct K56 set is then the cheapest, ~1.45x a K32 slot and **~2x the stacked top-digit plan**;
+  * that is the case for reviewing it (Q9).
+* **Client per K56 slot** (one core, before GPU offload):
+
+  | model | K32 | digit x7 | top-digit (3.41 K32 slots of work) | direct |
+  |---|---|---|---|---|
+  | 32B | 113 ms | 793 | 387 | ~159 |
+  | 7B | 34.5 ms | 242 | 118 | ~48 |
+
+  With the GPU offload of section 6.2, scale the GPU share by the same factors.
+* **Per token, fused2 against today**, same slots per token (rows):
+  * the fusion halves the trips (2L instead of 4L + 1);
+  * the online bytes grow 1.75x (K56 words);
+  * the masks stored on the client grow 1.75x (7 B per value);
+  * the mask stream grows 1.43x up and 1.67x down with the direct set, or 3.4x with the top-digit plan (each plane
+    is a K32 upload and reply).
+  * At 32B and 20 tok/s with 2 slots per token: online 17 Gbit/s; masks 21 Gbit/s (direct) or 47 Gbit/s
+    (top-digit) per user.
+  * So for a consumer on the internet, fused2 trades RTT for bandwidth that is already the binding constraint
+    (section 3). Its masks are cheap only in GPU terms.
+* **Recommendation:**
+  1. Ship the stacked top-digit plan as the fused2 K56 factory once it passes a GPU end-to-end run: no new
+     assumption, bit-identical, ~6x the current K56 throughput.
+  2. Put `pks-v3-K56` (n 4096 / 8192, 148 / 153-bit core-SVP) to the external review as Q9, with the conservative
+     n 8192 / 16384 variant as the fallback. It doubles fused2 users per GPU over the top-digit plan only when the
+     common seed (Q8) is also adopted.
