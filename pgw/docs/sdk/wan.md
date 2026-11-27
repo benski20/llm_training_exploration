@@ -16,7 +16,7 @@ the client picks the nearest GPU.
   pause of more than ~200 ms (between two chats) took **2-4 extra RTTs** (81 ms instead of 21 ms at RTT 20 for one
   7B `gate_up` trip). `net.ipv4.tcp_slow_start_after_idle = 0` on the **provider** removes it completely (20.8 ms;
   measured); the provider now logs a warning when its namespace has `1`. BBR on the provider also removes it but
-  costs +1.4-2.4 ms on every trip (pacing), so it is not recommended.
+  costs +0.3-2.1 ms on every trip on a clean path (pacing), so it is not recommended.
 * **Bandwidth binds first for a consumer.** A 7B token moves 3.3 MB up and 6.2 MB down (9.5 MB; 32B: 30 MB) on
   the trips alone, plus ~7 MB (32B: ~22 MB) of pks-v3 mask replies unless the stock was filled while idle. On a
   1 Gbit/s link the trips' bytes alone take 76 ms per 7B token, as much as 38 trips' worth of RTT at 2 ms.
@@ -28,10 +28,12 @@ the client picks the nearest GPU.
   10G fibre. A metro-edge deployment (GPUs within ~50 km of the users) is necessary for any interactive speed at
   7B, but not sufficient for 20 tok/s: the bytes per token must shrink first (see [What would change
   this](#what-would-change-this)).
-* **QUIC: not adopted.** Trips are strictly sequential single request/reply exchanges, so QUIC's stream
-  independence has nothing to unblock; its loss recovery for a lost tail packet (PTO) costs about what TCP's tail
-  loss probe does; 0-RTT would only shorten connection setup (off the critical path) and replays early data. The
-  harness shows TCP's per-trip cost under 0.1-1 % loss (below); no measured gain justifies a second transport.
+* **QUIC: not adopted as the default; worth an opt-in for lossy links.** Random loss is what costs whole RTTs in
+  steady state: at 0.1 % loss and RTT 20 a 7B trip takes 49 ms instead of 21, at 1 % 118 ms (TCP's congestion
+  window collapses on random loss in both directions, and the client direction runs the client OS's controller).
+  A quinn prototype with BBR on both ends cuts 1 % loss to 32-36 ms per trip (3.5x), but costs +0.9 ms per trip
+  or more on a clean path. The gain comes from owning the client's congestion controller, not from streams or
+  0-RTT.
 * **Region routing designed, with the provider side** (`pgw.sdk.regions`, `endpoints` in the enrollment
   response): payload-free TCP-handshake probes, nearest healthy endpoint with hysteresis, failover order; the mask
   stock moves with the client when the endpoint serves the same pack fingerprint and ring.
@@ -63,6 +65,7 @@ python benchmarks/wan_bench.py lane --rtts 5,20,50 --server-ssai 0            # 
 python benchmarks/wan_bench.py lane --rtts 5,20 --loss 0,0.001,0.01           # loss
 python benchmarks/wan_bench.py sdk  --rtts 0,1,2,5,20,50 --tokens 16          # pgw.OpenAI end to end, 0.5B
 python benchmarks/wan_bench.py sdk  --rtts 20 --rate-mbit 100 --up-mbit 20    # a consumer access link
+python benchmarks/wan_bench.py quic --rtts 5,20 --loss 0,0.001,0.01           # QUIC (quinn) vs TCP, same trips
 python benchmarks/wan_report.py benchmarks/results/wan/*.json                 # tables
 python benchmarks/wan_model.py                                                # "who can get 20 tok/s"
 ```
@@ -129,7 +132,7 @@ replies; what remains is the bytes (the next section), not framing or syscalls.
 | 50 | 1 s | 151 | **50.9** | 56.0 | 50.9 |
 | 50 | 3 s | 201 | **51.1** | 56.0 | 50.8 |
 
-Per decode pass, BBR on the provider costs +1.4-2.4 ms per trip at RTT 20-50 (7B pass 2459 vs 2318 ms at RTT 20):
+Per decode pass, BBR on the provider costs +0.3-2.1 ms per trip at RTT 5-50 (7B pass 2459 vs 2318 ms at RTT 20):
 its pacing spreads every large reply. `ssai=0` changes nothing in steady state (same pass times within noise).
 
 What this means: within one answer the trips never pause long enough for the restart (it needs a gap longer than
@@ -144,11 +147,53 @@ change that per socket.
 
 ### Loss (`lane_loss.json`)
 
-LOSS_TABLE
+Random packet loss is the one WAN condition that costs whole RTTs in steady state. One 7B decode pass, ms per trip
+(`lane_loss.json`, `lane_loss_server_bbr.json`, `quic_vs_tcp*.json`; Bernoulli loss each way):
+
+| RTT | loss | TCP lane, cubic both ends | TCP lane, provider BBR | bare TCP, cubic | QUIC (quinn), cubic | QUIC, BBR | QUIC, BBR, 4 MB initial window |
+|---|---|---|---|---|---|---|---|
+| 5 | 0 | 5.94 | 5.51 | 5.41 | 7.79 | 13.5 | - |
+| 5 | 0.1 % | 10.9 | 9.34 | 13.9 | 8.77 | 6.45 | - |
+| 5 | 1 % | 31.9 | 23.3 | 41.2 | 24.2 | 14.1 | - |
+| 20 | 0 | 21.2 | 21.7 | 20.8 | 26.6 | 37.1 | 21.7 |
+| 20 | 0.1 % | 49.2 | 37.8 | 42.0-45.7 | 37.0 | 24.4 | 35.1 |
+| 20 | 1 % | 118 | 70.7 | 116-125 | 83.2 | 35.5 | 32.5 |
+
+Why: a 7B pass sends ~6,500 packets, so at 0.1 % about six are lost per token, and each loss does not cost one
+retransmission but a collapse of the congestion window: cubic treats it as congestion, and an application-limited
+request / reply stream regrows the window slowly, so for many trips afterwards the 148 KB `gate_up` replies need
+2-4 flights (p50 81 ms at RTT 20, 0.1 %). Recovery itself (RACK-TLP) is fast. The client's uploads suffer the same
+in the other direction (a 74 KB `down` input: p50 41 ms = 2 RTTs at 0.1 %), with the client OS's controller, which
+the application cannot choose. A loss-tolerant controller on **both** ends (QUIC, where the congestion controller
+is the application's own) recovers most of it: BBR at 1 % loss and RTT 20 is 3.5x faster than TCP. On a clean
+path the same QUIC stack costs +0.9 to +16 ms per trip (pacing, ACK delay, window growth; best with a 4 MB initial
+window: +0.9 ms over TCP at RTT 20).
 
 ### End to end, the client library (`sdk_*.json`, Qwen2.5-0.5B, CPU provider)
 
-SDK_TABLE
+`pgw.OpenAI` against the SDK tests' provider over the emulated path; every RTT gave the same tokens and
+log-probabilities (`bit_identical`). The CPU provider computes on this shared box (other jobs ran meanwhile), so
+its per-trip compute moved between 2.9 and 4.6 ms; the two excess columns cancel it differently (vs the RTT 0 run;
+and lane trip minus the provider's reported compute):
+
+| RTT ms | tok/s | TTFT ms | trips / token | ms per trip | excess vs RTT 0 | lane beyond compute - RTT | cold setup s |
+|---|---|---|---|---|---|---|---|
+| 0 | 2.31 | 3481 | 97 | 4.52 | 0 | 0.28 | 27.5 |
+| 1 | 2.01 | 2811 | 97 | 5.10 | -0.43 | -0.05 | 31.1 |
+| 2 | 1.55 | 2878 | 97 | 6.56 | 0.03 | 0.49 | 23.8 |
+| 5 | 1.02 | 3087 | 97 | 9.85 | 0.33 | 0.42 | 22.8 |
+| 20 | 0.41 | 5857 | 97 | 24.97 | 0.45 | 1.07 | 29.3 |
+| 50 | 0.18 | 9973 | 97 | 55.70 | 1.18 | 1.05 | 23.6 |
+
+With a 100 / 20 Mbit/s access link (`sdk_05b_100mbit.json`): RTT 0 1.16 tok/s (2.31 without the cap) and TTFT
+14.3 s (3.5 s); RTT 20 0.35 tok/s and 16.2 s. The model of `wan_model.py` predicts both: 0.5B moves 0.73 MB up and
+1.8 MB down per token, +0.44 s per token at 100 / 20 Mbit/s; the ~30-row prompt moves ~22 MB up (8.8 s at 20 Mbit/s).
+
+So the end-to-end trips cost what the transport bench says: one RTT plus 0.3-0.5 ms (most of it this box's
+emulator and loaded CPU) up to 20 ms, about 1 ms at 50 ms (the 594 KB head reply's second flight, the prompt
+pass's window growth), and TTFT grows by about `trips x RTT` plus a few RTTs of slow start for the prompt's
+bodies (RTT 50: +6.5 s for 97 trips = 4.85 s of RTT). Trips per token stay at 97 at every RTT (no speculation;
+fused2 and speculation change the count, not the per-trip cost).
 
 ## Per-trip WAN overhead: what was checked
 
@@ -162,29 +207,39 @@ SDK_TABLE
 | initial window | 10 segments on every OS; a new connection's first large reply takes `log2(size / 14 KB)` RTTs | connections are opened at warm-up (the RTT probe), not on a request's critical path |
 | idle connections behind NAT | no keep-alive on the lane: a forgotten NAT mapping meant a reset or a stall until the trip timeout | **fixed**: keep-alive 15 s / 5 s x 3 + `TCP_USER_TIMEOUT` on every lane socket |
 | head-of-line blocking under loss | trips are sequential: one message in flight per connection, so there is no other stream to block | none (see QUIC) |
+| random loss (0.1-1 %) | cubic collapses the window on random loss in both directions: 2.3x (0.1 %) to 5.6x (1 %) per trip at RTT 20 | not fixable in TCP on the client side (its OS's controller); an opt-in QUIC lane with BBR is the measured remedy (QUIC verdict) |
 | connection setup | TCP 1 RTT + TLS 1.3 1 RTT + lane open 1 RTT, plus `lane/open` on the HTTP channel (1 RTT): measured 3-3.5 RTT (`lane_connect_ms` 75 ms at RTT 20) | at warm-up; tickets single-use, valid 30 s for opening, connections stay open |
 | ticket refresh | a ticket only opens connections; open connections never need one. After a lane failure the client uses the stream channel for `retry_s` (30 s), then opens a new ticket | none |
 | WebSocket fallback | one RTT per trip like the lane (same TCP behaviour, keep-alive pings every 20 s already); 0.1-2 ms more CPU per trip | none |
 
 ## QUIC / UDP lane: verdict
 
-Not adopted, by the criteria of the task (a real gain in the harness, same authentication, TLS 1.3, framing and
-privacy):
+Evaluated with a quinn 0.11 prototype of the lane's traffic (`rust/tools/quicbench`: one long-lived
+bidirectional stream, TLS 1.3 rustls/ring, the same 8-byte framing, the 7B trip sizes and decode pass, against bare
+TCP on the same emulated path; `wan_bench.py quic`). Results in the loss table above. **Not adopted as the
+default; a measured case for an opt-in QUIC lane on lossy access networks.**
 
-* **No head-of-line blocking to remove.** A decode pass is a chain: trip i+1 needs trip i's answer, and one lane
-  connection carries one trip at a time. QUIC's independent streams only help when several messages are in flight;
-  here there is one.
-* **Loss recovery is not faster.** The costly loss is the last packet of a request or reply. Linux TCP recovers it
-  with RACK-TLP (probe after ~2 SRTT); QUIC with its probe timeout (SRTT + 4 RTTVAR + the peer's max_ack_delay,
-  25 ms by default), i.e. no better at the RTTs that matter. The harness's loss runs (above) show what TCP costs.
-* **0-RTT only shortens setup**, which is already off the critical path (warm-up), and 0-RTT data is replayable:
-  a trip must never be accepted twice.
-* **Cost**: a second transport with its own TLS integration, connection migration, UDP blocked on some networks
-  (corporate, some carriers), and a second audit surface.
-
-The case to revisit: connection migration for a mobile client switching networks mid-answer (Wi-Fi to cellular).
-Today such a switch resets the lane and the trip is retried on a new connection (the same masked bytes,
-docs/sdk/reliability.md).
+* **Clean paths (wired fibre, the only access that can approach the speed target): QUIC loses.** +0.9 ms per trip
+  over TCP at RTT 20 in the best configuration (BBR, 4 MB initial window), +1.6 to +16 ms otherwise (pacing,
+  quinn's 25 ms max ACK delay, window growth); its userspace per-packet path also costs ~0.2 ms more CPU per
+  150 KB reply (loopback). At 113 trips per token that is +100 ms per 7B token.
+* **Lossy paths (Wi-Fi, mobile, 0.1-1 % loss): QUIC with BBR on both ends wins** 1.2-2.2x at 0.1 % and 2.9-3.6x at
+  1 % (RTT 20, 1 %: 32-36 vs 116-125 ms per trip). The gain is not QUIC's streams or 0-RTT: it is that the
+  congestion controller of a QUIC client is the application's own, while a TCP client's is its OS's (cubic or
+  similar, which collapses the window on random loss). BBR on the provider's TCP side alone gets part of it (70.7 vs
+  118 ms per trip at 1 %) but costs +0.3-2.1 ms per trip on clean paths, so it is not recommended either.
+* **Head-of-line blocking**: nothing to unblock. A decode pass is a chain: trip i+1 needs trip i's answer, and one
+  connection carries one trip at a time.
+* **0-RTT**: only shortens connection setup (at warm-up, off the critical path), and 0-RTT data is replayable: a
+  trip must never be accepted twice, so it could not carry trips anyway.
+* **What an opt-in QUIC lane would keep identical**: the same A1 frames (headers with the same public fields, the
+  same `x_hat` / `y_hat` bodies) on one bidirectional stream, TLS 1.3 with the service's certificate and the
+  client's certificate, the single-use ticket in the open frame bound to that certificate, ALPN `pgw-lane/1`; the
+  provider would see exactly the per-trip information it sees today (plus UDP instead of TCP). What it needs before
+  it can be offered: an integration in `pgw-lane` / `pgw-fast` with its own audit, a UDP port on the provider,
+  fallback to TCP where UDP is blocked, and a rule for choosing it (the measured loss rate of the TCP lane:
+  `TCP_INFO` retransmissions) so that clean paths keep TCP. Default off until a RunPod / real-network run confirms
+  the emulated gain.
 
 ## Prompt pass over a WAN
 

@@ -23,7 +23,8 @@ Masks across regions. A mask slot is ``W8 r mod 2^K`` for the pack's int8 weight
 of its own) and checked by the client. The stock is therefore bound to (pack fingerprint, ring, scheme), not to a
 provider host: an endpoint serving the same pack fingerprint and ring consumes the same stock
 (:func:`stock_compatible`); an endpoint with another fingerprint (a different revision or quantisation) needs its
-own stock, and the client must not move a running request there. Nothing about masks or prompts is ever sent while probing.
+own stock, and the client must not move a running request there. Nothing about masks or prompts is ever sent while
+probing.
 """
 
 from __future__ import annotations
