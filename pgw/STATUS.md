@@ -24,6 +24,8 @@ runbook's launch-readiness pass, followed by the 2026-11-27 web restyle (console
 runbook's launch-readiness pass. A note in *italics* marks a statement that a later section superseded.
 Since 2026-11-27: **PGW Chat** (`pgw chat`), a private chat app whose plaintext stays on the user's device (last
 section).
+Consumer survey (2026-11-27, last section): no known cryptography gives private 20 tok/s at 32B over the consumer
+internet; recommendation is local-first for consumers, pgw in-cloud, FHE as a gated research track.
 
 **What the product is now.** The client library (`pip install pgw-sdk`, `from pgw import OpenAI`) runs the gateway
 in the application's process against our provider service. Defaults:
@@ -4630,3 +4632,56 @@ modes.
   * `tests/docs`: 18 failures, all `test_numbers.py` reading `results/kaggle/*.log` files absent from this worktree
     (pre-existing; unrelated).
 * `ruff` is clean on the new and changed files.
+
+## 2026-11-27: consumer chat at 20 tok/s up to 32B: cryptographic alternatives to masking (survey, cost model; no code)
+
+Note: `research/reviews/consumer-crypto-alternatives.md`. Cost model: `research/reviews/consumer_crypto_numbers.py`
+(standard library; published anchors plus stated scaling rules; nothing measured, no GPU used).
+
+**Verdict: no known approach reaches 20 tok/s at 32B for a consumer on the internet without trusted hardware or
+non-collusion.**
+
+* **Information-theoretic schemes (pgw's class).**
+  * They need ≥ 2L trips (L + 1 with parallel blocks).
+  * They move ≥ ~22 MB per row at 32B: RTT ≤ 0.4 T ms and ~4.5 Gbit/s.
+  * This is proved in the earlier reviews.
+* **Full FHE (one round trip per token).**
+  * Bytes are ~0.1 MB per token, plus 2-18 GB of evaluation keys once [est].
+  * Compute is ~10^5-10^6x plaintext serving.
+  * Published state of the art: Llama-3-8B decode at **12 s/token on 4x B200** (Park et al. 2026), and a 43 s
+    prefill with bootstraps at 7.5 ms (Cerium, SOSP'26).
+  * Extrapolated: Qwen2.5-7B / 32B at **~11 / ~43 s per token** (x/÷2), 3-10x slower at 1-4k context, **$25-108 /
+    $100-430 per 1000 tokens**.
+  * The sequential bootstrap chain sets a **latency floor ≥ 0.5-1.9 s/token at 32B** even with unlimited GPUs. A
+    bootstrap 10-30x faster than any published one is needed.
+  * Outputs are approximate: quality has been shown only in plaintext noise simulation.
+  * **No integrity.**
+* **Every hybrid is dominated:**
+  * HE for the linears with plaintext non-linears: 1.2x pgw's bytes plus HE compute;
+  * BOLT / BumbleBee / Nimbus: they also hide the weights, which open weights do not need;
+  * FSS (SIGMA, Llama2-7B): 255 GB of dealer keys per 128-token pass, and a trusted dealer;
+  * client-aided FHE refresh: a fresh ciphertext of ≥ N log Q bits per refresh, 13-131 MB/token;
+  * HE-MLP: L trips, about 10 s/token of HE;
+  * TFHE: 11 / 37 H100-s per token for the SiLU gates alone;
+  * PCG / VOLE: trims at most the mask upload, never the online trips.
+* **Model co-design** (polynomial activations, power-softmax, norm-free) helps FHE by 2-4x and lowers its floor by
+  3x. It does nothing for pgw. It needs a new model whose quality is unmeasured at 7B and above.
+* **An encrypted KV blob on the provider** (AEAD, bound to the conversation and a turn counter) is sound under
+  masking. It costs 57 / 262 KB per cached token, 100-400x cheaper than re-prefill, but the provider cannot compute
+  with it.
+
+**Recommendation (staged).**
+* **Now:** pgw is the in-cloud / enterprise product (exact, verified).
+* **0-3 months:** consumer local-first.
+  * PGW Chat gets an on-device engine running the same pinned int8 pipeline, bit-identical to hosted pgw.
+  * Local covers 7B everywhere it fits, and 32B on 48 GB+ / 500 GB/s+ machines.
+  * Remote pgw stays as "private slow mode" for 0.5B-3B.
+  * Add the KV blob.
+* **3-12 months:** metro GPUs (RTT ≤ 5 ms), a parallel-block 7B and K56 masks in the SDK, aiming at ~5-12 tok/s.
+* **Research only:** an FHE "async private" mode, gated on ≤ $1 per 1000 tokens and ≤ 2 s/token at 8B, with quality
+  measured in encrypted runs. Today it is 25-108x off on cost.
+* **Do not pursue:** FSS / 2PC non-linears, HE linears, client-aided refresh, HE-MLP, TFHE, garbled circuits.
+
+**Not done:**
+* No reproduction of any FHE figure (proposed: ≤ $200 on rented B200s before further investment).
+* Several literature figures are marked unverified in the note (seen only in search summaries).
