@@ -4926,3 +4926,12 @@ Full review: `research/reviews/consumer-model-depth.md` (numbers: `research/revi
 - Tests (absolute `PYTHONPATH`, one directory at a time): tests/engine 1225 passed, 15 skipped; tests/modelpack 129
   passed, 1 skipped; tests/docs only the 18 known environment-only `test_numbers` failures.
 
+
+## 2026-11-28: fused2 quality at 7B (Kaggle T4 x2, kernel `pgw-fused2-quality-7b`)
+
+Qwen2.5-7B-Instruct, 2044 held-out wikitext tokens, same derivation as the SDK and provider (int8 fold from the pack,
+migration 8 bits, folded head): float ppl 9.374; standard schedule with masked head (K32A12C27) 9.354; fused2 with the
+folded head (K56A12C53) **9.452** (+1.0 % vs standard), top-1 equal to the standard schedule at **96.8 %** of positions
+(97.1 % vs float for standard, 96.5 % for fused2); every row kept 12 activation bits; max |H| 40.2 bits, |Z| 48.6 bits
+(cap 53). Results: `benchmarks/results/fused2/kaggle_7b/quality_qwen7b_headfold.json`. This closes the 7B quality gap
+listed by the fused SDK work; `schedule="fused"` stays opt-in.

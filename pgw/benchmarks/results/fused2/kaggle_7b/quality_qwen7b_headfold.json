@@ -1,0 +1,39 @@
+{
+ "float": {
+  "ppl": 9.37438277615716,
+  "tokens": 2044
+ },
+ "stdmh:K32A12C27": {
+  "ppl": 9.354435850424485,
+  "top1_vs_float": 0.9706457925636007,
+  "top1_vs_base": 1.0,
+  "base": "stdmh:K32A12C27",
+  "prompt_max_dlogprob_next_vs_float": 1.5634882616156318,
+  "prompt_max_dlogprob_vocab_vs_float": 14.461046917522552,
+  "prompt_top1_vs_float": 0.9285714285714286,
+  "seconds": 708.3118321895599
+ },
+ "f2i8mighead8:K56A12C53": {
+  "ppl": 9.452075376097746,
+  "top1_vs_float": 0.9652641878669276,
+  "top1_vs_base": 0.9681996086105675,
+  "base": "stdmh:K32A12C27",
+  "prompt_max_dlogprob_next_vs_float": 1.5837097570446934,
+  "prompt_max_dlogprob_vocab_vs_float": 14.40427323131285,
+  "prompt_top1_vs_float": 0.8877551020408163,
+  "seconds": 1881.3101892471313,
+  "act_bits_hist": {
+   "12": 120176
+  },
+  "rows_below_A": 0.0,
+  "max_out_bits": {
+   "H": 40.22437140091693,
+   "Z": 48.57498338069318
+  },
+  "gateway_cost": {
+   "columns": 0,
+   "weight_bytes": 0,
+   "macs_per_token": 0
+  }
+ }
+}
