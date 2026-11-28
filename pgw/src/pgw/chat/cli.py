@@ -39,6 +39,18 @@ def write_opener(path: Path, url: str) -> None:
     atomic_write_text(path, html, mode=0o600)
 
 
+def chat_schedule(schedule: str | None, prefix_cache: str, factory_weights: str | None) -> str | None:
+    """The chat's schedule: an explicit ``--schedule`` or ``PGW_SCHEDULE`` wins (``None``: the SDK reads the env);
+    otherwise ``auto`` (fused only when the measured link makes it faster), unless an option the fused schedule
+    does not combine with is chosen (``--prefix-cache on``, stream weights), then ``standard``."""
+    if schedule is not None or os.environ.get("PGW_SCHEDULE"):
+        return schedule
+    stream = (factory_weights or os.environ.get("PGW_FACTORY_WEIGHTS", "")).strip().lower() == "stream"
+    if prefix_cache == "on" or stream:
+        return "standard"
+    return "auto"
+
+
 @click.command("chat")
 @click.option("--model", default=None, help="Model selected first (default: the one recommended for this machine)")
 @click.option("--port", type=int, default=0, show_default=True, help="Port on 127.0.0.1 (0: a free one)")
@@ -51,8 +63,9 @@ def write_opener(path: Path, url: str) -> None:
 @click.option("--speculation", type=click.Choice(["off", "draft_head", "lookup"]), default=None,
               help="Strict speculative decoding (same answers; fewer round trips per token) [PGW_SPECULATION]")
 @click.option("--schedule", type=click.Choice(["standard", "fused", "auto"]), default=None,
-              help="Round trips per token: standard, fused (half the round trips on high-latency links; slightly "
-                   "different answers) or auto (measure the link) [PGW_SCHEDULE]")
+              help="Round trips per token: standard, fused (half the round trips; slightly different answers) or "
+                   "auto (measure the link, fused only where faster). Default auto; standard with --prefix-cache on "
+                   "or stream weights [PGW_SCHEDULE]")
 @click.option("--usage-reports/--no-usage-reports", default=True, show_default=True,
               help="Send the provider content-free request records (counts and timing it sees anyway)")
 @click.option("--max-tokens", type=click.IntRange(1, 8192), default=1024, show_default=True)
@@ -97,6 +110,7 @@ def chat_command(model: str | None, port: int, no_browser: bool, no_history: boo
             raise click.ClickException("set PGW_API_KEY to your key")
         opts: dict[str, Any] = {"usage_reports": usage_reports,
                                 "prefix_cache": {"auto": "auto", "on": True, "off": False}[prefix_cache]}
+        schedule = chat_schedule(schedule, prefix_cache, factory_weights)
         for k, v in (("cache_dir", cache_dir), ("state_dir", state_dir), ("factory_weights", factory_weights),
                      ("speculation", speculation), ("schedule", schedule)):
             if v is not None:

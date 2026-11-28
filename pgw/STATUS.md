@@ -4935,3 +4935,12 @@ folded head (K56A12C53) **9.452** (+1.0 % vs standard), top-1 equal to the stand
 (97.1 % vs float for standard, 96.5 % for fused2); every row kept 12 activation bits; max |H| 40.2 bits, |Z| 48.6 bits
 (cap 53). Results: `benchmarks/results/fused2/kaggle_7b/quality_qwen7b_headfold.json`. This closes the 7B quality gap
 listed by the fused SDK work; `schedule="fused"` stays opt-in.
+
+## 2026-11-28: PGW Chat defaults to `schedule="auto"`
+
+`pgw chat` now passes `schedule="auto"` unless `--schedule` or `PGW_SCHEDULE` is set: the SDK measures the link once
+at start-up and uses fused2 only when it is served and estimated faster (RTT >= 3 ms, bandwidth included), else the
+standard schedule. With `--prefix-cache on` or stream weights (which fused does not combine with yet) the chat uses
+`standard`. The client library's own default stays `standard` (enterprise clients sit next to the GPU, where fused
+does not pay, and keep answers identical to today's). `pgw.chat.cli.chat_schedule`, tests in
+`tests/chat/test_cli_schedule.py` (8); docs `docs/sdk/chat.md`.

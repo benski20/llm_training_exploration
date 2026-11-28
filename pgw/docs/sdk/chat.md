@@ -35,7 +35,7 @@ seconds. `Ctrl-C` in the terminal stops the app (its background mask processes s
 | `--factory-weights stream` | `PGW_FACTORY_WEIGHTS`, else `pack` | keep no int8 weights on disk (about 6 GB less at 7B; slightly more network). Recommended on laptops |
 | `--prefix-cache on` | `auto` (off with our masked output layer) | reuse earlier turns: faster long chats, but our service can tell that a request continued an earlier one ([below](#what-our-service-can-see)) |
 | `--speculation draft_head` | `PGW_SPECULATION`, else `off` | fewer round trips per token (0.5B and 7B; identical answers); your next message waits for the previous answer's remaining rounds |
-| `--schedule fused` (or `auto`) | `PGW_SCHEDULE`, else `standard` | half the round trips per token (`2 x layers` instead of `4 x layers + 1`), 1.74x the bytes; slightly different answers (its own fixed reference), so it is fixed for the life of the app (`auto` measures your link at start-up). The provider must offer it ([Configuration](configuration.md#schedule-standard-or-fused)) |
+| `--schedule standard` / `fused` / `auto` | `PGW_SCHEDULE`, else **`auto`** (`standard` with `--prefix-cache on` or stream weights, which the fused schedule does not combine with yet) | `auto` measures your link once at start-up and uses the fused schedule only where it is faster: half the round trips per token (`2 x layers` instead of `4 x layers + 1`) but 1.74x the bytes, so it helps on fast links a few ms or more from the GPU and is skipped on slow uplinks or in the same data centre. Fused answers are slightly different from the standard schedule's (its own fixed, exactly computed reference; at 7B perplexity 9.45 vs 9.35, same top token 96.8 % of the time), so the choice is fixed for the life of the app and shown in its status; pass `--schedule standard` for answers identical to the library's default. The provider must offer the fused schedule, else `auto` uses standard ([Configuration](configuration.md#schedule-standard-or-fused)) |
 | `--no-usage-reports` | reports on | stop sending the content-free per-request record (counts, timing, checks passed) |
 | `--max-tokens` | 1024 | longest answer |
 | `--cache-dir`, `--state-dir` | `PGW_CACHE_DIR`, `PGW_STATE_DIR` | where model data, masks and conversations live |
@@ -115,4 +115,5 @@ The web app lives in `pgw/chat/` (React + TypeScript + Vite) and is built into `
 (`scripts/build-chat.sh`; `npm run dev:mock` runs it with canned data and no server, `?state=setup|stalled|slow|empty`
 selects a state). The server is `src/pgw/chat/server.py` (standard library only); its API is documented in the
 module. Tests: `tests/chat/` (server security, status mapping, the build, a Chromium smoke test, and an end-to-end
-test against the CPU test provider that checks the streamed answer is bit-identical to the library's).
+test against the CPU test provider that checks the streamed answer is bit-identical to the library's with the same
+schedule).
