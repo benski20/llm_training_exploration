@@ -298,7 +298,7 @@ def run_model(key: str, args, dev: str, docs: list[str], prompts: dict[str, list
 
             rev = HfApi().model_info(repo).sha
         tok = AutoTokenizer.from_pretrained(repo, revision=rev)
-        model = AutoModelForCausalLM.from_pretrained(repo, revision=rev, torch_dtype=torch.float16,
+        model = AutoModelForCausalLM.from_pretrained(repo, revision=rev, torch_dtype=torch.float16 if dev.startswith("cuda") else torch.float32,
                                                      attn_implementation="sdpa").to(dev)
     model.eval()
     qwen3 = "qwen3" in str(getattr(model.config, "model_type", ""))
@@ -484,6 +484,8 @@ def main() -> None:
     ap.add_argument("--report-k", default="25,40,50,60,75,100")
     ap.add_argument("--model-min", type=float, default=50, help="per-model budget before the report points")
     ap.add_argument("--report-extra-min", type=float, default=15)
+    ap.add_argument("--text", default="fineweb", choices=["fineweb", "wikitext"],
+                    help="held-out text: FineWeb-Edu (the harness's) or cached wikitext-103 (offline, no MC sets)")
     ap.add_argument("--smoke", action="store_true")
     ap.add_argument("--smoke-tokenizer", default="Qwen/Qwen2.5-0.5B-Instruct")
     args = ap.parse_args()
@@ -499,6 +501,19 @@ def main() -> None:
                    "select": [f"Tell me about item {i}." for i in range(args.n_sel_chat)],
                    "calib": [f"Describe thing {i}." for i in range(args.n_calib)]}
         mc: dict = {}
+    elif args.text == "wikitext":  # offline CPU cross-check: wikitext-103 (CC BY-SA 4.0) from the local cache
+        import pyarrow.parquet as pq
+        from huggingface_hub import hf_hub_download
+
+        path = hf_hub_download("Salesforce/wikitext", "wikitext-103-raw-v1/train-00000-of-00002.parquet",
+                               repo_type="dataset", local_files_only=True)
+        text = "".join(pq.read_table(path).column("text").to_pylist()[:400000])
+        n = args.n_ppl_docs + (args.n_sel_docs + args.n_calib) * 3 + 20
+        docs = [text[i * 8000:(i + 1) * 8000] for i in range(n)]
+        tp = H.ultrachat_prompts("test_sft", args.n_chat_eval + args.n_sel_chat, seed=2)
+        prompts = {"report": tp[: args.n_chat_eval], "select": tp[args.n_chat_eval:],
+                   "calib": H.ultrachat_prompts("train_sft", args.n_calib, seed=5)}
+        mc = {}
     else:
         docs = H.fineweb_docs(args.n_ppl_docs + (args.n_sel_docs + args.n_calib) * 3 + 20)
         tp = H.ultrachat_prompts("test_sft", args.n_chat_eval + args.n_sel_chat, seed=2)
