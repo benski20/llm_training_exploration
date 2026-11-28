@@ -210,6 +210,30 @@ class ServiceSettings(PGWSettings):
         "service and accept this deployment's credentials (shared accounts / client-issuing CA). None = this "
         "service only",
     )
+    endpoint_directory_key: str | None = Field(
+        None, description="Signed endpoint directory (docs/operations/placement.md): the Ed25519 public key (64 hex "
+        "digits) of the placement controller's directory signing key. Set: new SDK keys pin it (key format 2) and "
+        "the SDK enrollment response carries it. None = no signed directory (version-1 keys, unchanged)",
+    )
+    endpoint_directory_file: Path | None = Field(
+        None, description="The current signed endpoint directory, written by the placement controller, served "
+        "verbatim at GET /pgw/v1/endpoints/directory to authenticated clients (re-read when it changes)",
+    )
+    demand_reports: bool = Field(
+        False, description="Accept content-free demand reports (POST /pgw/v1/placement/report: model, endpoint "
+        "label, RTT bucket, peak streams; pgw.placement.telemetry) and aggregate them per hour; the source address "
+        "is mapped to a coarse region and dropped",
+    )
+    demand_regions_file: Path | None = Field(
+        None, description="JSON object {CIDR prefix: region label} for the demand reports' coarse region (e.g. a "
+        "GeoIP database cut at /20 or coarser); unknown addresses count as 'unknown'",
+    )
+    demand_k_min: int = Field(5, ge=2, description="Demand aggregates with fewer installations are suppressed")
+    demand_retention_days: float = Field(30.0, gt=0, le=400, description="Demand aggregates are deleted after this")
+    demand_export_token_sha256: list[str] | None = Field(
+        None, description="SHA-256 (hex) of the bearer token(s) of the placement controller for GET "
+        "/pgw/v1/placement/aggregates (none = the aggregates are not exported)",
+    )
     enrollment_ca_file: Path | None = Field(
         None, description="PEM certificate of the CA that issued this service's TLS certificate. Its SHA-256 goes "
         "into enrollment codes (gateways pin it on first contact) and enrolled gateways receive it as service CA",
@@ -322,6 +346,15 @@ class ServiceSettings(PGWSettings):
         if not out:
             raise ValueError("at least one ring must be served")
         return out
+
+    @field_validator("endpoint_directory_key")
+    @classmethod
+    def _directory_key(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        from pgw.sdk.directory import load_public_key
+
+        return load_public_key(v).hex()
 
     @field_validator("endpoints")
     @classmethod

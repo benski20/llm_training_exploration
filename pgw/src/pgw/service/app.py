@@ -14,6 +14,9 @@ Routes (SPEC.md section 6.2):
     POST /pgw/v1/sdk/enroll, GET /pgw/v1/sdk/usage, POST /pgw/v1/sdk/report   SDK keys, usage and the
                            content-free request log (when ``accounts_db`` is set; admin API under /pgw/v1/admin
                            with ``accounts_admin_api``; see :mod:`pgw.service.accounts`)
+    GET  /pgw/v1/endpoints/directory, POST /pgw/v1/placement/report, GET /pgw/v1/placement/aggregates
+                           the signed endpoint directory and content-free demand reports (when configured; see
+                           :mod:`pgw.service.placement_routes`)
     GET  /platform/...     the developer console (``PGW_PLATFORM_ENABLED=1``; :mod:`pgw.platform`)
 Run with hypercorn for HTTP/2 (``pgw service serve`` / ``python -m pgw.service``).
 
@@ -306,6 +309,10 @@ def create_app(
 
     # Client provisioning (public artifacts and pks-v3 hint operands; answers 'unavailable' unless s.provision).
     add_provision_routes(app, state)
+    if s.endpoint_directory_file is not None or s.demand_reports:  # placement (off unless configured)
+        from pgw.service.placement_routes import add_placement_routes
+
+        add_placement_routes(app, state)
     from pgw.wire.server import ComputeFastPath
 
     # Innermost middleware: compute requests skip routing and framework middleware (hot path). Any

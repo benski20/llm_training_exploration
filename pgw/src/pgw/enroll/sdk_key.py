@@ -10,6 +10,11 @@ padding, of::
     version (1 byte, = 1) | ca_sha256 (32 bytes) | key_id (8 bytes) | secret (24 bytes) | provider URL (UTF-8)
     | checksum (4 bytes)
 
+Version 2 (only for providers that publish a signed endpoint directory, docs/operations/placement.md) inserts
+``directory_key`` (32 bytes, the Ed25519 public key that signs the directory, :mod:`pgw.sdk.directory`) after
+``ca_sha256``; everything else is the same. A key without a directory key is always encoded as version 1, so every
+existing key keeps its exact string.
+
 ``ca_sha256`` is the SHA-256 of the DER encoding of the provider CA certificate, pinned exactly as in an
 enrollment code (:mod:`pgw.enroll.code`); 32 zero bytes = no pin, accepted for plain http to a loopback host
 only. ``key_id`` is public (``sk_`` + 16 hex digits in listings, logs and the audit). ``secret`` is 192 random
@@ -40,6 +45,7 @@ SDK_KEY_PREFIX = "pgw_"
 KEY_ID_BYTES = 8
 SECRET_BYTES = 24
 _VERSION = 1
+_VERSION_DIR = 2
 _FP_BYTES = 32
 _CHECK_BYTES = 4
 _CHECK_DOMAIN = b"pgw-sdk-key-v1"
@@ -89,6 +95,8 @@ class SDKKey:
         ca_sha256: SHA-256 of the provider CA (DER); 32 zero bytes = no pin (loopback http only).
         key_id: Public key id (8 bytes).
         secret: The credential (24 bytes).
+        directory_key: Pinned Ed25519 public key of the signed endpoint directory (32 bytes; version-2 keys), or
+            ``None``.
     """
 
     env: str
@@ -96,6 +104,7 @@ class SDKKey:
     ca_sha256: bytes
     key_id: bytes
     secret: bytes = field(repr=False)
+    directory_key: bytes | None = None
 
     def __post_init__(self) -> None:
         from pgw.enroll.code import validate_service_url
@@ -111,14 +120,16 @@ class SDKKey:
             raise ConfigError(f"key id must be {KEY_ID_BYTES} bytes")
         if len(self.secret) != SECRET_BYTES:
             raise ConfigError(f"secret must be {SECRET_BYTES} bytes")
+        if self.directory_key is not None and len(self.directory_key) != _FP_BYTES:
+            raise ConfigError("directory_key must be a 32-byte Ed25519 public key")
         if not self.pinned and not self.service_url.startswith("http://"):
             raise ConfigError("an https SDK key must pin the provider CA certificate")
 
     @classmethod
-    def new(cls, env: str, service_url: str, ca_sha256: bytes | None) -> SDKKey:
-        """Fresh key with a random id and secret."""
+    def new(cls, env: str, service_url: str, ca_sha256: bytes | None, directory_key: bytes | None = None) -> SDKKey:
+        """Fresh key with a random id and secret (``directory_key``: a version-2 key pinning it)."""
         return cls(env, service_url, ca_sha256 or bytes(_FP_BYTES), secrets.token_bytes(KEY_ID_BYTES),
-                   secrets.token_bytes(SECRET_BYTES))
+                   secrets.token_bytes(SECRET_BYTES), directory_key)
 
     @property
     def pinned(self) -> bool:
@@ -147,7 +158,11 @@ class SDKKey:
 
     def encode(self) -> str:
         """The printable key."""
-        body = (bytes([_VERSION]) + self.ca_sha256 + self.key_id + self.secret + self.service_url.encode("utf-8"))
+        if self.directory_key is None:
+            body = (bytes([_VERSION]) + self.ca_sha256 + self.key_id + self.secret + self.service_url.encode("utf-8"))
+        else:
+            body = (bytes([_VERSION_DIR]) + self.ca_sha256 + self.directory_key + self.key_id + self.secret
+                    + self.service_url.encode("utf-8"))
         raw = body + _checksum(self.env, body)
         return f"{SDK_KEY_PREFIX}{self.env}_" + base64.b32encode(raw).decode("ascii").rstrip("=").lower()
 
@@ -182,17 +197,23 @@ class SDKKey:
         body, check = raw[:-_CHECK_BYTES], raw[-_CHECK_BYTES:]
         if not secrets.compare_digest(check, _checksum(env, body)):
             raise SDKKeyError("the SDK key is damaged (its checksum does not match); copy it again")
-        if body[0] != _VERSION:
+        if body[0] not in (_VERSION, _VERSION_DIR):
             raise SDKKeyError(f"SDK key version {body[0]} is not supported by this library; update it")
         o = 1
         fp = body[o:o + _FP_BYTES]
         o += _FP_BYTES
+        dkey = None
+        if body[0] == _VERSION_DIR:
+            if len(body) < _MIN_BODY + _FP_BYTES:
+                raise SDKKeyError("the SDK key is too short; copy the whole key again")
+            dkey = body[o:o + _FP_BYTES]
+            o += _FP_BYTES
         kid = body[o:o + KEY_ID_BYTES]
         o += KEY_ID_BYTES
         secret = body[o:o + SECRET_BYTES]
         o += SECRET_BYTES
         try:
-            return cls(env, body[o:].decode("utf-8"), fp, kid, secret)
+            return cls(env, body[o:].decode("utf-8"), fp, kid, secret, dkey)
         except (UnicodeDecodeError, ConfigError) as exc:
             msg = exc.message if isinstance(exc, ConfigError) else "invalid provider URL"
             raise SDKKeyError(f"the SDK key is not usable: {msg}") from exc

@@ -175,9 +175,11 @@ class Provider:
 
 def start_provider(root: Path, pack_dir: Path, pki: dict[str, Any], *, extra_env: dict[str, str] | None = None,
                    ready_timeout_s: float = 300.0, port: int | None = None, lane_port: int | None = None,
-                   public_port: int | None = None, public_lane_port: int | None = None) -> Provider:
+                   public_port: int | None = None, public_lane_port: int | None = None,
+                   create_org: bool = True) -> Provider:
     """Start the provider. Every port is free unless given; ``public_port`` / ``public_lane_port`` are what the
-    provider tells clients (its SDK keys' URL, the lane tickets), e.g. a fault-injection proxy in front of it."""
+    provider tells clients (its SDK keys' URL, the lane tickets), e.g. a fault-injection proxy in front of it.
+    ``create_org=False``: a second endpoint sharing another provider's accounts (the organisation exists)."""
     import secrets as _secrets
 
     port, lane_port = port or free_port(), lane_port or free_port()
@@ -221,7 +223,8 @@ def start_provider(root: Path, pack_dir: Path, pki: dict[str, Any], *, extra_env
     prov = Provider(url, None, root / "provider.log", tamper, pki["ca_sha256"], lane_port, pack_dir,  # type: ignore[arg-type]
                     pki["ca.pem"], admin_token, root, env=env, port=port)
     _launch(prov, ready_timeout_s)
-    prov.admin("POST", "/orgs", json={"org_id": prov.org, "name": "Acme"})
+    if create_org:
+        prov.admin("POST", "/orgs", json={"org_id": prov.org, "name": "Acme"})
     return prov
 
 

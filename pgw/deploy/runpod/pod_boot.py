@@ -3,6 +3,8 @@
 
     pgw-runpod-boot            # provider (GPU pod; the image's start command set by launch.py)
     pgw-runpod-boot client     # client-side test pod (CPU, same data center): idles until its TTL, then stops
+    pgw-runpod-boot placement  # a GPU pod of the placement controller (pre-staged pack, own key, registration)
+    pgw-runpod-boot stage-packs  # the CPU packer pod that fills a data centre's network volume with packs
 
 Provider boot (as root, the container's PID 1 under tini; the service itself runs as uid 10001):
 
@@ -566,11 +568,280 @@ def client_main(env: dict[str, str]) -> int:
     return 0
 
 
+# ----------------------------------------------------------------------------------------- placement pods
+#: The per-data-centre network volume with the pre-staged packs (docs/operations/placement.md, "Fast cold start").
+PLACEMENT_PACKS = "/workspace/packs"
+#: Where a placement pod keeps its own TLS key: memory only (tmpfs), never the volume (shared by every pod there).
+PLACEMENT_KEY_DIR = "/dev/shm/pgw-pki"  # noqa: S108 - tmpfs on purpose (0700 dir, 0600 key)
+#: How often a serving placement pod re-reads the tenant credential digests from the controller.
+TENANT_SYNC_S = 30.0
+
+
+def placement_service_env(*, data: Path, pki: dict[str, Path], packs: list[Path], public_url: str,
+                          lane_public_port: int | None, extra: dict[str, str] | None = None,
+                          device: str = "auto") -> dict[str, str]:
+    """The service environment of a placement pod: like :func:`service_env` but with **no CA private key and no
+    accounts database on the pod**: no SDK enrollment and no admin API here (those stay with the enrolled endpoint);
+    tenants are authenticated against the digests the controller ships (tokens file, client-certificate subjects),
+    client certificates against the client-issuing CA's *certificate*."""
+    state = data / "state"
+    env = {
+        "PATH": "/opt/pgw/bin:/usr/local/bin:/usr/bin:/bin", "HOME": str(data / "home"), "LANG": "C.UTF-8",
+        "PYTHONUNBUFFERED": "1", "PGW_LOG_LEVEL": "INFO", "PGW_LOG_JSON": "true",
+        "PGW_SERVICE_HOST": "0.0.0.0",  # noqa: S104 - published through RunPod's public port mapping (TLS)
+        "PGW_SERVICE_PORT": str(SERVICE_PORT),
+        "PGW_SERVICE_METRICS_PORT": str(METRICS_PORT), "PGW_SERVICE_METRICS_HOST": "127.0.0.1",
+        "PGW_SERVICE_PACKS": json.dumps([str(p) for p in packs]), "PGW_SERVICE_VERIFY_PACKS": "full",
+        "PGW_SERVICE_DEVICE": device,
+        "PGW_SERVICE_TOKENS_FILE": str(state / "tenants.txt"),
+        "PGW_SERVICE_MTLS_TENANTS_FILE": str(state / "mtls-tenants.txt"),
+        "PGW_SERVICE_TLS__CERT_FILE": str(pki["server_cert"]),
+        "PGW_SERVICE_TLS__KEY_FILE": str(pki["server_key"]),
+        "PGW_SERVICE_TLS__CA_FILE": str(pki["client_ca"]),
+        "PGW_SERVICE_TLS__REQUIRE_CLIENT_CERT": "false",
+        "PGW_SERVICE_PUBLIC_URL": public_url,
+        "PGW_SERVICE_PROVISION": "true",
+        **PROVIDER_TUNING_ENV,
+    }
+    if lane_public_port is not None:
+        env["PGW_SERVICE_LANE_ADVERTISED_PORT"] = str(lane_public_port)
+    else:
+        env["PGW_SERVICE_LANE"] = "off"
+        env.pop("PGW_SERVICE_LANE_PORT", None)
+    for k, v in (extra or {}).items():
+        if k in PROTECTED_SETTINGS or k.startswith(("PGW_SERVICE_ACCOUNTS", "PGW_SERVICE_CLIENT_ISSUING_CA",
+                                                    "PGW_SERVICE_ENROLLMENT")):
+            raise BootError(f"{k} is set by the boot and cannot be overridden on a placement pod")
+        env[k] = v
+    return env
+
+
+def _controller(env: dict[str, str]) -> tuple[str, Any]:
+    import base64
+    import ssl
+
+    url = (env.get("PGW_PLACEMENT_CONTROLLER") or "").rstrip("/")
+    ca = env.get("PGW_PLACEMENT_CONTROLLER_CA_PEM_B64") or ""
+    if not url.startswith("https://") or not ca:
+        raise BootError("PGW_PLACEMENT_CONTROLLER (https) and PGW_PLACEMENT_CONTROLLER_CA_PEM_B64 are required")
+    return url, ssl.create_default_context(cadata=base64.b64decode(ca).decode())  # the controller's CA only
+
+
+def _post(url: str, body: dict[str, Any], ctx: Any, headers: dict[str, str] | None = None) -> tuple[int, bytes]:
+    req = urllib.request.Request(url, data=json.dumps(body).encode(), method="POST",  # noqa: S310 - https only
+                                 headers={"Content-Type": "application/json", **(headers or {})})
+    try:
+        with urllib.request.urlopen(req, timeout=60, context=ctx) as r:  # noqa: S310
+            return int(r.status), r.read()
+    except urllib.error.HTTPError as exc:
+        return int(exc.code), exc.read() or b""
+
+
+def _get(url: str, ctx: Any, headers: dict[str, str]) -> tuple[int, bytes]:
+    req = urllib.request.Request(url, headers=headers)  # noqa: S310 - https only
+    try:
+        with urllib.request.urlopen(req, timeout=60, context=ctx) as r:  # noqa: S310
+            return int(r.status), r.read()
+    except urllib.error.HTTPError as exc:
+        return int(exc.code), exc.read() or b""
+
+
+def write_tenants(state: Path, digests: dict[str, Any], uid: int | None = None) -> None:
+    """The controller's tenant credential digests -> the service's tokens and mTLS files (reloaded by it)."""
+    for name, key in (("tenants.txt", "tokens_file"), ("mtls-tenants.txt", "mtls_file")):
+        text = str(digests.get(key) or "")
+        if "PRIVATE KEY" in text:  # never: the feed carries digests and subjects only
+            raise BootError("the tenant feed carried key material; refusing it")
+        _write_private(state / name, text.encode(), uid)
+
+
+def placement_steps(env: dict[str, str], ctx: dict[str, Any], *, http_post: Any = None, http_get: Any = None,
+                    start_service: Any = None, check_device: Any = None) -> list[Any]:
+    """The boot of a placement pod as :class:`pgw.placement.registry.BootStep`s (timed; the first failure stops
+    the boot before anything is listed): verify the pre-staged packs against the pinned fingerprints -> device check
+    -> own key + CSR (tmpfs) -> register (leaf for RunPod's view of the pod's address) -> tenant digests -> start the
+    service (load, the service's own self-tests, ``/readyz``) -> ready (the controller probes like a client, then
+    lists the pod)."""
+    from pgw.placement.certs import make_csr
+    from pgw.placement.packs import verify_staged
+    from pgw.placement.registry import BootStep, registration_request
+
+    post = http_post or _post
+    get = http_get or _get
+    data = Path(env.get("PGW_RUNPOD_DATA") or DEFAULT_DATA)
+    uid = SERVICE_UID if os.geteuid() == 0 else None
+    packs_root = Path(env.get("PGW_PLACEMENT_PACKS") or PLACEMENT_PACKS)
+    key_dir = Path(env.get("PGW_PLACEMENT_KEY_DIR") or PLACEMENT_KEY_DIR)
+    models = parse_models(env.get("PGW_RUNPOD_MODELS"))
+    ctx.update(pod_id=env.get("RUNPOD_POD_ID") or "local", pod_name=env.get("PGW_PLACEMENT_POD_NAME") or "",
+               dc=env.get("PGW_PLACEMENT_DC") or "", model=models[0], token=env.get("PGW_PLACEMENT_TOKEN") or "",
+               selftests={}, fingerprints=[])
+
+    def verify(c: dict[str, Any]) -> None:
+        from pgw.modelpack.masked_head import head_fingerprint
+
+        expected = json.loads(env["PGW_PLACEMENT_EXPECT_FP"]) if env.get("PGW_PLACEMENT_EXPECT_FP") else {}
+        c["packs"] = []
+        for m in models:
+            pack = verify_staged(packs_root, m, expected=expected.get(m))  # raises on any mismatch
+            c["fingerprints"] += [pack.fingerprint, head_fingerprint(pack.fingerprint)]
+            c["packs"].append(packs_root / m)
+            pack.close()
+        c["selftests"]["pack_fingerprint"] = True
+
+    def device(c: dict[str, Any]) -> None:
+        ok = check_device() if check_device is not None else _cuda_ok()
+        if not ok:
+            raise BootError("no usable GPU")
+        c["selftests"]["device"] = True
+
+    def keygen(c: dict[str, Any]) -> None:
+        key_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+        key, csr = make_csr(c["pod_id"])
+        _write_private(key_dir / "server.key", key, uid)
+        c["csr_pem"] = csr
+        c["key_file"] = key_dir / "server.key"
+
+    def register(c: dict[str, Any]) -> None:
+        url, tls = _controller(env)
+        code, body = post(f"{url}/placement/v1/register", registration_request(c), tls)
+        if code != 200:
+            raise BootError(f"registration refused (HTTP {code})")
+        r = json.loads(body)
+        pki = data / "pki"
+        pki.mkdir(parents=True, exist_ok=True, mode=0o700)
+        for name, k in (("server.pem", "chain_pem"), ("root.pem", "root_pem"), ("client-ca.pem", "client_ca_pem")):
+            (pki / name).write_text(str(r[k]))
+            os.chmod(pki / name, 0o644)
+        c["pki"] = {"server_cert": pki / "server.pem", "server_key": c["key_file"], "client_ca": pki / "client-ca.pem",
+                    "root": pki / "root.pem"}
+        c["pod_secret"], c["public_url"] = str(r["pod_secret"]), str(r["url"])
+
+    def tenants(c: dict[str, Any]) -> None:
+        url, tls = _controller(env)
+        code, body = get(f"{url}/placement/v1/tenants", tls,
+                         {"PGW-Pod-Id": c["pod_id"], "PGW-Pod-Secret": c["pod_secret"]})
+        if code != 200:
+            raise BootError(f"tenant digests refused (HTTP {code})")
+        (data / "state").mkdir(parents=True, exist_ok=True, mode=0o700)
+        write_tenants(data / "state", json.loads(body), uid)
+
+    def service(c: dict[str, Any]) -> None:
+        lane = int(env["PGW_PLACEMENT_LANE_PUBLIC_PORT"]) if env.get("PGW_PLACEMENT_LANE_PUBLIC_PORT") else None
+        extra = checked_service_env(env.get("PGW_RUNPOD_SERVICE_ENV"))
+        senv = placement_service_env(data=data, pki=c["pki"], packs=c["packs"], public_url=c["public_url"],
+                                     lane_public_port=lane, extra=extra)
+        c["service"] = (start_service or _start_placement_service)(senv, data, uid)
+
+    def ready(c: dict[str, Any]) -> None:
+        url, tls = _controller(env)
+        code, _ = post(f"{url}/placement/v1/ready", {"pod_id": c["pod_id"], "pod_secret": c["pod_secret"]}, tls)
+        if code != 204:
+            raise BootError(f"activation refused (HTTP {code})")
+
+    return [BootStep("verify_pack", verify), BootStep("device", device), BootStep("keygen", keygen),
+            BootStep("register", register), BootStep("tenants", tenants), BootStep("service_ready", service),
+            BootStep("activate", ready)]
+
+
+def _cuda_ok() -> bool:
+    try:
+        import torch
+
+        return bool(torch.cuda.is_available())
+    except Exception:
+        return False
+
+
+def _start_placement_service(senv: dict[str, str], data: Path, uid: int | None) -> subprocess.Popen[bytes]:
+    _prepare_dirs(data, uid)
+    logf = open(data / "logs" / "service.log", "ab")
+    proc = subprocess.Popen([sys.executable, "-m", "pgw.cli", "service", "serve"], env=senv,
+                            stdout=logf, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
+                            preexec_fn=_demote(uid), cwd=str(data))
+    _wait_ready(SERVICE_PORT, proc, timeout_s=1800)  # load + the service's own device self-tests + warm-up
+    return proc
+
+
+def placement_main(env: dict[str, str]) -> int:
+    """A GPU pod started by the placement controller (``pgw-runpod-boot placement``): see :func:`placement_steps`.
+    The TTL guard starts first, as for every pod; after activation the tenant digests are re-read every
+    :data:`TENANT_SYNC_S`. The pod's leaf (24 h) outlives its TTL (at most 12 h by default), so it never renews."""
+    from pgw.placement.registry import PodBoot
+
+    stop_at = float(env["PGW_RUNPOD_STOP_AT"]) if env.get("PGW_RUNPOD_STOP_AT") else None
+    if stop_at is None:
+        raise BootError("a placement pod needs PGW_RUNPOD_STOP_AT (its TTL backstop)")
+    ctx: dict[str, Any] = {}
+
+    def drain() -> None:
+        p = ctx.get("service")
+        if p is not None and p.poll() is None:
+            p.send_signal(signal.SIGTERM)
+            with __import__("contextlib").suppress(subprocess.TimeoutExpired):
+                p.wait(timeout=45)
+
+    timer = StopTimer(stop_at, env.get("RUNPOD_POD_ID"), env.get("RUNPOD_API_KEY"), drain)
+    timer.start()
+    boot = PodBoot(placement_steps(env, ctx))
+    try:
+        boot.run(ctx)
+    finally:
+        log(f"placement boot timings (s): {json.dumps(boot.timings)}")
+    data = Path(env.get("PGW_RUNPOD_DATA") or DEFAULT_DATA)
+    uid = SERVICE_UID if os.geteuid() == 0 else None
+    url, tls = _controller(env)
+    proc = ctx["service"]
+    while proc.poll() is None and not timer.fired.is_set():
+        time.sleep(TENANT_SYNC_S)
+        code, body = _get(f"{url}/placement/v1/tenants", tls,
+                          {"PGW-Pod-Id": ctx["pod_id"], "PGW-Pod-Secret": ctx["pod_secret"]})
+        if code == 200:
+            write_tenants(data / "state", json.loads(body), uid)
+        elif code == 403:  # the controller removed this pod: stop serving
+            log("the controller no longer lists this pod; draining")
+            drain()
+    return 0
+
+
+def stage_packs_main(env: dict[str, str]) -> int:
+    """The CPU packer pod of a data centre: pack each model of ``PGW_RUNPOD_MODELS`` from its pinned revision into
+    the network volume (shard-wise, one checkpoint shard on disk at a time), verify it in full against the pinned
+    fingerprint, write ``fingerprints.json``, then stop. Re-running skips packs that already verify."""
+    from pgw.placement.packs import verify_staged
+
+    stop_at = float(env["PGW_RUNPOD_STOP_AT"]) if env.get("PGW_RUNPOD_STOP_AT") else None
+    timer = StopTimer(stop_at, env.get("RUNPOD_POD_ID"), env.get("RUNPOD_API_KEY"), lambda: None)
+    timer.start()
+    root = Path(env.get("PGW_PLACEMENT_PACKS") or PLACEMENT_PACKS)
+    root.mkdir(parents=True, exist_ok=True)
+    out = {}
+    for m in parse_models(env.get("PGW_RUNPOD_MODELS")):
+        try:
+            p = verify_staged(root, m)
+            log(f"{m}: already staged and verified")
+        except Exception:
+            ensure_pack(m, root, root / ".hf")
+            p = verify_staged(root, m)
+        out[m] = p.fingerprint
+        p.close()
+    (root / "fingerprints.json").write_text(json.dumps(out, indent=1) + "\n")
+    log(f"staged: {json.dumps(out)}")
+    if timer.stop_at is not None:
+        timer.stop_at = time.time()  # done: stop now
+        timer.fired.wait(120)
+    return 0
+
+
 def main(argv: list[str]) -> int:
     env = dict(os.environ)
     try:
         if argv[:1] == ["client"]:
             return client_main(env)
+        if argv[:1] == ["placement"]:
+            return placement_main(env)
+        if argv[:1] == ["stage-packs"]:
+            return stage_packs_main(env)
         return provider_main(env)
     except BootError as exc:
         log(f"ERROR: {exc}")

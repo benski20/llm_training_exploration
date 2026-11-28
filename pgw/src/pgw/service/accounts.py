@@ -138,6 +138,12 @@ def tenant_for_key(key_hex: str) -> str:
     return SDK_TENANT_PREFIX + key_hex
 
 
+def directory_key_bytes(settings: Any) -> bytes | None:
+    """The directory public key new SDK keys pin (``endpoint_directory_key``), or ``None`` (version-1 keys)."""
+    h = getattr(settings, "endpoint_directory_key", None)
+    return bytes.fromhex(str(h)) if h else None
+
+
 def attest_mac(admin_token_digest: bytes, nonce: bytes, ca_sha256: bytes) -> bytes:
     """``HMAC-SHA256(SHA-256(admin token), "pgw-admin-attest-v1" | nonce | ca_sha256)`` (``/pgw/v1/admin/attest``)."""
     return hmac.new(admin_token_digest, ATTEST_DOMAIN + nonce + ca_sha256, hashlib.sha256).digest()
@@ -367,7 +373,7 @@ class AccountsStore:
                    models: list[str] | None = None, expires_in_s: float | None = None,
                    daily_token_quota: int | None = None, rows_per_s: float | None = None,
                    burst_rows: int | None = None, max_installations: int | None = None,
-                   actor: str | None = None) -> tuple[SDKKey, KeyRecord]:
+                   actor: str | None = None, directory_key: bytes | None = None) -> tuple[SDKKey, KeyRecord]:
         """Create an SDK key; returns ``(key, record)``. Only the key's digest is stored.
 
         Raises:
@@ -387,7 +393,7 @@ class AccountsStore:
         _check_quota(max_installations, "max_installations")
         if rows_per_s is not None and not (isinstance(rows_per_s, int | float) and 0 < float(rows_per_s) < 1e9):
             raise ConfigError("rows_per_s must be positive")
-        key = SDKKey.new(env, service_url, ca_sha256)
+        key = SDKKey.new(env, service_url, ca_sha256, directory_key)
         now = self.clock()
         rec = KeyRecord(key_hex=key.key_id.hex(), org_id=org_id, name=name, env=env, models=models, created_at=now,
                         expires_at=None if expires_in_s is None else now + float(expires_in_s),
@@ -1223,6 +1229,8 @@ class Accounts:
                 out["lane"] = self.lane_hint()
         if getattr(s, "endpoints", None):  # region routing (docs/sdk/wan.md); absent = this service only
             out["endpoints"] = list(s.endpoints)
+        if getattr(s, "endpoint_directory_key", None):  # signed directory (docs/operations/placement.md)
+            out["endpoint_directory_key"] = str(s.endpoint_directory_key).lower()
         out["sdk"] = {"key_id": rec.key_id, "org_id": rec.org_id, "installation_id": inst, "env": rec.env,
                       "models_scope": list(rec.models), "limits": self.limits_view(rec, org),
                       "expires_at": rec.expires_at}
@@ -1443,7 +1451,8 @@ def add_admin_routes(app: Any, accounts: Accounts) -> None:
                     env=str(b.get("env") or s.sdk_key_env), models=[str(m) for m in models],
                     expires_in_s=b.get("expires_in_s"), daily_token_quota=b.get("daily_token_quota"),
                     rows_per_s=b.get("rows_per_s"), burst_rows=b.get("burst_rows"),
-                    max_installations=b.get("max_installations"), actor=actor(who))
+                    max_installations=b.get("max_installations"), actor=actor(who),
+                    directory_key=directory_key_bytes(s))
                 accounts.refresh()
                 return {"key": key.encode(), "record": rec.public()}
 

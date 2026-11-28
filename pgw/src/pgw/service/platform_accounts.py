@@ -36,7 +36,7 @@ from pgw.platform.client import (
     SdkKey,
     UsageRow,
 )
-from pgw.service.accounts import Accounts, served_models
+from pgw.service.accounts import Accounts, directory_key_bytes, served_models
 
 __all__ = ["ServiceAccountsClient"]
 
@@ -109,7 +109,7 @@ class ServiceAccountsClient:
         def go() -> CreatedKey:
             key, rec = self.store.create_key(org_id, name, str(s.public_url), self.accounts.ca_sha256,
                                              env=env or s.sdk_key_env, models=list(models or []),
-                                             actor=f"console:{actor}")
+                                             actor=f"console:{actor}", directory_key=directory_key_bytes(s))
             self.accounts.refresh()
             return CreatedKey(key=SdkKey.parse(rec.public()), secret=key.encode())
 

@@ -21,6 +21,7 @@ from __future__ import annotations
 import asyncio
 import concurrent.futures
 import contextlib
+import dataclasses
 import json
 import logging
 import os
@@ -189,6 +190,13 @@ class ModelHandle:
     #: why the next request reconnects the model first (credentials refused, client certificate replaced)
     reconnect: str | None = None
     last_reconnect_at: float = 0.0
+    #: routing = "signed": the endpoint this model runs on (pgw.sdk.regions.Endpoint), the session pointed at it,
+    #: the requests in flight (a model moves only when none is) and the most at once since the last demand report
+    endpoint: Any = None
+    session: Any = None
+    active: int = 0
+    peak_active: int = 0
+    demand_reported_at: float = -1e18
 
     def public(self) -> dict[str, Any]:
         """Status view (no secrets, no content)."""
@@ -206,6 +214,8 @@ class ModelHandle:
             out["local_errors"] = dict(self.local_errors)
         if self.halt is not None:
             out["integrity_halt"] = self.halt.public()
+        if self.endpoint is not None:
+            out["endpoint"] = {"region": self.endpoint.region, "url": self.endpoint.url}
         p = self.provisioned
         if p is not None:
             out["provisioned"] = {"fingerprint": p.fingerprint, "source": p.source, "pack_path": str(p.pack_path),
@@ -286,6 +296,11 @@ class Engine:
             from pgw.sdk.reports import Reporter
 
             self.reporter = Reporter(lambda: self.session)
+        #: routing = "signed" (pgw.sdk.directory.EndpointRouter), built at the first model start
+        self.router: Any = None
+        self._router_checked = False
+        self._maintain_task: asyncio.Future[None] | None = None
+        self._demand_off = False
 
     # ---- event loop ----------------------------------------------------------------------------
     def _ensure_loop(self) -> asyncio.AbstractEventLoop:
@@ -473,6 +488,8 @@ class Engine:
         if h is None:
             h = self.models[name] = ModelHandle(name)
         if h.state == "ready":
+            if h.reconnect is None and self.router is not None:
+                self._maybe_switch(h)
             if h.reconnect is None:
                 return h
             t = h.start_task
@@ -488,6 +505,111 @@ class Engine:
             t = h.start_task = asyncio.get_running_loop().create_task(self._start_guarded(h))
         await asyncio.shield(t)
         return h
+
+    # ---- region routing (routing = "signed"; pgw.sdk.directory, docs/sdk/wan.md) --------------------------------
+    def _directory_pin(self, session: Session) -> bytes | None:
+        """The pinned directory key: the SDK key's own (version 2), else the one the enrollment response carried
+        over the CA-pinned channel. A mismatch keeps the key's pin (and says so)."""
+        own = getattr(self.key, "directory_key", None)
+        sent = bytes.fromhex(session.directory_key) if session.directory_key else None
+        if own is not None:
+            if sent is not None and sent != own:
+                log.warning("the provider's endpoint directory key differs from the one this SDK key pins; using the "
+                            "key's")
+            return bytes(own)
+        return sent
+
+    def _ensure_router(self, session: Session) -> Any:
+        if self.options.routing != "signed" or self._router_checked:
+            return self.router
+        self._router_checked = True
+        pin = self._directory_pin(session)
+        if pin is None:
+            log.warning("routing='signed' but the provider pins no endpoint directory key: using %s only",
+                        session.service_url)
+            return None
+        from pgw.sdk.directory import DIRECTORY_PATH, EndpointRouter, VersionStore
+
+        def fetch(url: str) -> bytes:
+            with dataclasses.replace(session, service_url=url).http_client(timeout_s=10.0) as c:
+                r = c.get(DIRECTORY_PATH)
+                if r.status_code != 200:
+                    raise ConnectionError(f"HTTP {r.status_code}")
+                return bytes(r.content)
+
+        vs = VersionStore(self.layout.session_state_dir(self.key.key_id_hex) / "endpoint-directory.json")
+        self.router = EndpointRouter(session.service_url, pin, fetch, versions=vs,
+                                     refresh_s=self.options.routing_refresh_s, probe_s=self.options.routing_refresh_s)
+        return self.router
+
+    async def _route(self, h: ModelHandle, session: Session, fingerprint: str) -> Session:
+        """``session`` pointed at the endpoint this (re)starting model should use (routing = "signed")."""
+        router = self._ensure_router(session)
+        if router is None:
+            return session
+        await asyncio.to_thread(router.maintain)
+        ep = await asyncio.to_thread(router.select, fingerprint, h.endpoint)
+        if h.endpoint is not None and ep.url != h.endpoint.url:
+            router.switches += 1
+        h.endpoint = ep
+        if ep.url == session.service_url:
+            h.session = session
+            return session
+        lp = router.lane_port(ep.url)
+        routed = dataclasses.replace(session, service_url=ep.url,
+                                     lane={"transport": "tcp", "port": lp} if lp else None)
+        if lp and self._settings is not None:
+            from urllib.parse import urlsplit
+
+            origin = f"https://{urlsplit(ep.url).hostname}:{lp}"
+            if origin not in self._settings.egress_allowlist:  # the lane of a verified directory entry
+                self._settings = self._settings.model_copy(
+                    update={"egress_allowlist": [*self._settings.egress_allowlist, origin]})
+        h.session = routed
+        log.info("model %s: endpoint %s (%s)", h.name, ep.region, ep.url)
+        return routed
+
+    def _maybe_switch(self, h: ModelHandle) -> None:
+        """Between requests (none in flight on this model): move it if the router prefers another endpoint; refresh
+        and probe in the background when due (never on the request path)."""
+        r = self.router
+        if r is None or h.endpoint is None:
+            return
+        if (r.refresh_due() or r.probe_due()) and (self._maintain_task is None or self._maintain_task.done()):
+            self._maintain_task = asyncio.ensure_future(asyncio.to_thread(r.maintain))
+        if h.active > 0 or h.provisioned is None:
+            return
+        alt = r.preferred_switch(h.provisioned.fingerprint, h.endpoint)
+        if alt is not None:
+            h.reconnect = f"endpoint switch to {alt.region}"
+
+    def _report_demand(self, h: ModelHandle) -> None:
+        """At most hourly per model: the content-free demand record (model, endpoint label, RTT bucket, peak
+        streams; pgw.placement.telemetry) to the endpoint in use, from a daemon thread; failures are dropped."""
+        r = self.router
+        if r is None or h.endpoint is None or not self.options.usage_reports or self._demand_off:
+            return
+        now = time.monotonic()
+        if now - h.demand_reported_at < 3600.0:
+            return
+        rec = r.demand_record(h.name, h.endpoint.url)
+        if rec is None:
+            return
+        rec["peak_streams"] = min(256, max(1, h.peak_active))
+        h.demand_reported_at, h.peak_active = now, h.active
+        sess = h.session or self.session
+
+        def send() -> None:
+            from pgw.sdk.directory import DEMAND_REPORT_PATH
+
+            try:
+                with sess.http_client(timeout_s=10.0) as c:
+                    if c.post(DEMAND_REPORT_PATH, json=rec).status_code == 404:
+                        self._demand_off = True  # the provider does not take demand reports
+            except Exception:  # noqa: S110 - best effort, never affects a request
+                pass
+
+        threading.Thread(target=send, name="pgw-sdk-demand", daemon=True).start()
 
     async def _reconnect(self, h: ModelHandle) -> None:
         """Stop the model's runtime and start it again (enrolling again if the provider refuses the session): after
@@ -542,9 +664,6 @@ class Engine:
                 raise
 
     async def _start_model(self, h: ModelHandle) -> None:
-        from pgw.gateway.metrics import GatewayMetrics
-        from pgw.gateway.runtime import ModelRuntime
-
         old = h.runtime
         if old is not None and not getattr(old, "started", False):  # a failed earlier attempt
             h.runtime = None
@@ -562,6 +681,11 @@ class Engine:
         h.state = "provisioning"
         self.layout.ensure()
         ensure_private_dir(self.layout.models_dir)
+        rerouted = (self.router is not None and h.provisioned is not None
+                    and h.provisioned.fingerprint == str(entry["fingerprint"]).lower())
+        if rerouted:  # routing: a restart on another endpoint keeps the model's artifacts and head decision
+            await self._start_provisioned(h, session, entry, h.provisioned)
+            return
         # the masked LM head is decided first: a provisioned hint store covers the head linear only when asked
         h.masked_head = await self._decide_masked_head(session, str(entry["fingerprint"]).lower())
         self._write_status()
@@ -587,6 +711,15 @@ class Engine:
             raise IntegrityError(f"provisioned artifacts of {h.name!r} do not match the provider's fingerprint",
                                  details={"model": h.name})
         h.provisioned = prov
+        await self._start_provisioned(h, session, entry, prov, pkw)
+
+    async def _start_provisioned(self, h: ModelHandle, session: Session, entry: dict[str, Any], prov: Provisioned,
+                                 pkw: dict[str, Any] | None = None) -> None:
+        """The rest of :meth:`_start_model` once the model's artifacts are provisioned: store, schedule, ring, the
+        endpoint (routing), the runtime."""
+        from pgw.gateway.metrics import GatewayMetrics
+        from pgw.gateway.runtime import ModelRuntime
+
         if self.store is None:
             try:
                 self.store = await asyncio.to_thread(self._open_store)
@@ -605,6 +738,7 @@ class Engine:
         else:
             h.ring = self._pick_ring(entry)
         apply_native_env(self.options.native)
+        session = await self._route(h, session, prov.fingerprint)
         cfg = self._model_config(h, session, prov)
         self._settings.validate_policy([cfg])
         h.state = "connecting"
@@ -621,7 +755,7 @@ class Engine:
                         raise
                     # the provider no longer accepts the service token or certificate (rotated, lost, revoked):
                     # enroll again once (a revoked key then fails there with a clear AuthenticationError)
-                    session = await self.ensure_session(force=True)
+                    session = await self._route(h, await self.ensure_session(force=True), prov.fingerprint)
                     cfg = self._model_config(h, session, prov)
                     continue
                 if (repaired or rt.fingerprint or not self._in_cache(prov.pack_path)
@@ -635,6 +769,10 @@ class Engine:
                 log.warning("model %s: the cached model files are damaged (%s); downloading them again", h.name,
                             getattr(exc, "message", None) or type(exc).__name__)
                 await asyncio.to_thread(shutil.rmtree, prov.pack_path, True)
+                if pkw is None:
+                    pkw = {"session": self.session, "cache_dir": self.layout.models_dir}
+                    if _accepts(self.provisioner, "masked_head"):
+                        pkw["masked_head"] = h.masked_head
                 prov = adapt(await asyncio.to_thread(self.provisioner, h.name, **pkw), model=h.name)
                 if prov.fingerprint != str(entry["fingerprint"]).lower():
                     raise IntegrityError(f"provisioned artifacts of {h.name!r} do not match the provider's "
@@ -866,7 +1004,7 @@ class Engine:
         fused = h.schedule == "fused"
         if scheme == "pks-v3":
             hint_key = h.provisioned.hint_key_file or (sdir / "pks-hint.key")
-        s = self.session
+        s = h.session or self.session  # routing: the factory's maskgen goes to the model's endpoint
         prov = h.provisioned
         state_dir = self.layout.factory_dir(kid) / prov.fingerprint[:16]
         stream = getattr(prov, "factory_weights", "pack") == "stream"
@@ -1352,8 +1490,6 @@ class Engine:
         (``max_retries``); integrity failures never are. ``timeout_s``: this request's budget (default
         ``options.timeout_s``, plus ``ready_timeout_s`` while the model starts).
         """
-        from pgw.gateway.openai_render import chat_messages, sampling_params
-
         meta = meta if meta is not None else {}
         t0 = time.monotonic()
         deadline = t0 + (float(timeout_s) if timeout_s is not None else self.options.timeout_s)
@@ -1362,6 +1498,23 @@ class Engine:
         meta["t0"] = t0
         h, rt = await self._ready_runtime(
             req.model, deadline if timeout_s is not None else deadline + self.options.ready_timeout_s)
+        h.active += 1  # no await since ensure_model returned: a switch never starts under this request
+        h.peak_active = max(h.peak_active, h.active)
+        try:
+            async for item in self._chat_events_on(h, rt, req, conversation=conversation, meta=meta,
+                                                   timeout_s=timeout_s, deadline=deadline, rid=rid):
+                yield item
+        finally:
+            h.active -= 1
+            if self.router is not None:
+                self._report_demand(h)
+
+    async def _chat_events_on(self, h: ModelHandle, rt: Any, req: Any, *, conversation: str | None,
+                              meta: dict[str, Any], timeout_s: float | None, deadline: float,
+                              rid: str) -> AsyncIterator[tuple[Any, Any]]:
+        """The body of :meth:`_chat_events` once the model is ready (``h.active`` counts this request)."""
+        from pgw.gateway.openai_render import chat_messages, sampling_params
+
         meta["model"] = h.name
         meta["system_fingerprint"] = rt.fingerprint[:12] if rt.fingerprint else None
         msgs = chat_messages(req)
@@ -1418,6 +1571,17 @@ class Engine:
                     attempt += 1
                     log.info("request %s: retrying after %s (attempt %d)", rid, exc.code, attempt)
                     await asyncio.sleep(min(2.0, 0.25 * 2 ** attempt))
+                    if (self.router is not None and h.endpoint is not None
+                            and str(exc.code) in (str(ErrorCode.BACKEND_UNAVAILABLE), str(ErrorCode.UNAVAILABLE))):
+                        # failover before the first token: hold the endpoint out, refresh the directory, and move the
+                        # model if no other request runs on it (an answer in progress is never moved)
+                        self.router.report_failure(h.endpoint.url)
+                        if h.active == 1 and h.reconnect is None:
+                            h.reconnect = f"endpoint failover from {h.endpoint.region}"
+                            if sess is not None:
+                                await sess.close()
+                                sess = None
+                            h, rt = await self._ready_runtime(h.name, deadline)
                     continue
                 raise from_pgw_error(exc, request_id=rid) from exc
             finally:
@@ -1526,6 +1690,8 @@ class Engine:
                                "session": self.session.public() if self.session else None,
                                "models": {n: h.public() for n, h in list(self.models.items())},
                                "local_errors": dict(self.local_errors)}
+        if self.router is not None:  # routing = "signed": directory version, endpoints, probe RTTs (no secrets)
+            out["routing"] = self.router.status()
         return out
 
     def _status_path(self) -> Path:

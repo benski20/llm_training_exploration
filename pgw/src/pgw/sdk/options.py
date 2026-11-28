@@ -229,6 +229,15 @@ class SDKOptions:
             measurements are in ``status()``. Pin ``"standard"`` or ``"fused"`` for one reference across restarts.
         schedule_auto_rtt_ms: ``auto``: the least measured RTT (ms) at which ``fused`` may be picked (default 3).
         schedule_auto_margin: ``auto``: ``fused`` must be estimated at least this fraction faster (default 0.1).
+        routing: Region routing [``PGW_ROUTING``] (:mod:`pgw.sdk.directory`, docs/sdk/wan.md): ``"off"`` (default:
+            the SDK key's provider URL only) or ``"signed"`` (opt-in: fetch the provider's signed endpoint directory,
+            verify it with the pinned key, signature, expiry and version; probe the endpoints with payload-free TCP
+            handshakes and use the nearest healthy one serving the model's fingerprint; move a model only between
+            requests, never during an answer; fail over on a connection failure before the first token). Without a
+            pinned directory key or a valid directory it uses the provider URL only. The mask stock is shared across
+            endpoints of the same fingerprint (single use is the client's own ledger).
+        routing_refresh_s: ``signed``: seconds between directory refreshes and probe rounds (default 300; a failure
+            refreshes at once).
         log_level: Enable the library's structured (JSON) logs on stderr at this level [``PGW_SDK_LOG``]; ``None``
             = silent (records still reach handlers the application configures).
     """
@@ -273,6 +282,8 @@ class SDKOptions:
     schedule: Literal["standard", "fused", "auto"] = "standard"
     schedule_auto_rtt_ms: float = 3.0
     schedule_auto_margin: float = 0.1
+    routing: Literal["off", "signed"] = "off"
+    routing_refresh_s: float = 300.0
     extra: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
@@ -317,6 +328,9 @@ class SDKOptions:
         sch = os.environ.get("PGW_SCHEDULE", "").strip()
         if sch:
             base["schedule"] = sch
+        rt = os.environ.get("PGW_ROUTING", "").strip()
+        if rt:
+            base["routing"] = rt
         lvl = os.environ.get("PGW_SDK_LOG", "").strip()
         if lvl:
             base["log_level"] = lvl
@@ -393,6 +407,10 @@ class SDKOptions:
                 raise ValueError("schedule='fused' / 'auto' runs on the native float ops (native=True)")
         if not 0.0 <= float(self.schedule_auto_rtt_ms) <= 10000.0 or not 0.0 <= float(self.schedule_auto_margin) < 1:
             raise ValueError("schedule_auto_rtt_ms must be in [0, 10000] and schedule_auto_margin in [0, 1)")
+        if self.routing not in ("off", "signed"):
+            raise ValueError("routing must be 'off' or 'signed'")
+        if not 10.0 <= float(self.routing_refresh_s) <= 86400.0:
+            raise ValueError("routing_refresh_s must be between 10 and 86400 seconds")
         if self.timeout_s <= 0 or self.mask_wait_s < 0 or self.max_retries < 0 or self.max_concurrent < 1:
             raise ValueError("timeouts must be positive and max_concurrent >= 1")
 

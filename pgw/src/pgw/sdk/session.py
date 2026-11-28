@@ -73,6 +73,8 @@ class Session:
         models: The provider's model entries (``name``, ``fingerprint``, ``ring``, ...).
         lane: ``{"transport": "tcp", "port": int}`` when the provider offers its TCP+TLS trip lane.
         enrolled_at: Unix time of the enrollment.
+        directory_key: The signed endpoint directory's public key (64 hex) the provider sent at enrollment over
+            the CA-pinned channel, or ``None`` (pgw.sdk.directory; a version-2 SDK key's own pin takes precedence).
     """
 
     key_id: str
@@ -87,6 +89,7 @@ class Session:
     lane: dict[str, Any] | None = None
     enrolled_at: float = 0.0
     ca_fingerprint: str | None = None
+    directory_key: str | None = None
 
     def token(self) -> SecretStr:
         """The service bearer token (read from its 0600 file)."""
@@ -157,7 +160,19 @@ def load_session(key: SdkKey, layout: CacheLayout) -> Session | None:
         token_file=p["token"], ca_file=p["ca"] if p["ca"].is_file() else None,
         client_cert_file=p["client_cert"] if has_cert else None, client_key_file=p["client_key"] if has_cert else None,
         models=list(meta.get("models") or []), lane=meta.get("lane"), enrolled_at=float(meta.get("enrolled_at", 0)),
-        ca_fingerprint=meta.get("ca_fingerprint"))
+        ca_fingerprint=meta.get("ca_fingerprint"), directory_key=_directory_key(meta.get("directory_key")))
+
+
+def _directory_key(v: Any) -> str | None:
+    """A 64-hex Ed25519 public key, or ``None`` (anything else is ignored: routing then stays on the enrolled URL)."""
+    if not isinstance(v, str):
+        return None
+    try:
+        from pgw.sdk.directory import load_public_key
+
+        return load_public_key(v).hex()
+    except ValueError:
+        return None
 
 
 def _ca_file_matches(path: Path, pin: bytes) -> bool:
@@ -320,6 +335,9 @@ def _enroll(key: SdkKey, d: Path, *, transport: Any, timeout_s: float, client_na
             "client_name": name, "enrolled_at": time.time(),
             "ca_fingerprint": key.ca_fingerprint_hex if key.pinned else None, "client_cert": has_cert,
             "models": clean_models, "lane": lane}
+    dkey = _directory_key(data.get("endpoint_directory_key"))
+    if dkey is not None:
+        meta["directory_key"] = dkey
     atomic_write_text(p["meta"], json.dumps(meta, indent=2) + "\n", mode=0o600)
     log.info("enrolled SDK key %s with %s as tenant %s (%d model(s))", key.key_id_hex, key.service_url, tenant,
              len(clean_models))
