@@ -121,10 +121,37 @@ def parallel_items(w: Any) -> list[Fused2Item]:
     return out
 
 
+def mixed_items(w: Any) -> list[Fused2Item]:
+    """Item table v4 of a mixed sequential / parallel weight set (:class:`pgw.engine.fused_mixed.MixedWeights`,
+    opt-in): layer 0's input stage single; per sequential layer the pairs ``(o, gate_up)`` and ``(down, next input)``,
+    per parallel layer the pair ``([o | down], next input)``; the last layer's end linear single and, with the folded
+    head, its pair with the head. The layer map is implied by the item names (and bound by the lane fingerprint)."""
+    L = int(w.num_layers)
+    s0 = w.inp[0]
+    out = [Fused2Item(s0.key, s0.key, None, s0.n, s0.m, 0)]
+    for i in range(L):
+        o, gu = w.o[i], w.gu[i]
+        if o is not None and gu is not None:
+            out.append(Fused2Item(f"{o.key}+{gu.key}", o.key, gu.key, o.n, o.m, gu.m))
+        e = w.end[i]
+        if i + 1 < L:
+            q = w.inp[i + 1]
+            out.append(Fused2Item(f"{e.key}+{q.key}", e.key, q.key, e.n, e.m, q.m))
+        else:
+            out.append(Fused2Item(e.key, e.key, None, e.n, e.m, 0))
+    hd = getattr(w, "head", None)
+    if hd is not None:
+        e = w.end[-1]
+        out.append(Fused2Item(f"{e.key}+{hd.key}", e.key, hd.key, e.n, e.m, hd.m))
+    return out
+
+
 def fused2_items(weights: Any) -> list[Fused2Item]:
     """The trip items of a :class:`pgw.modelpack.fused2_weights.Fused2Weights` in pass order (gateway and service
     agree); a parallel-block weight set (``first`` / ``second``) gives :func:`parallel_items`."""
     w = weights
+    if hasattr(w, "layer_map") and hasattr(w, "end"):
+        return mixed_items(w)
     if hasattr(w, "first") and hasattr(w, "second"):
         return parallel_items(w)
     out = [Fused2Item(w.qkv[0].key, w.qkv[0].key, None, w.qkv[0].n, w.qkv[0].m, 0)]
@@ -152,10 +179,15 @@ ITEMS_V1, ITEMS_V2 = 1, 2
 
 #: Item table v3: parallel-block weights (one pair item per layer; :func:`parallel_items`; opt-in prototype).
 ITEMS_V3 = 3
+#: Item table v4: a mixed sequential / parallel layer map (:func:`mixed_items`; opt-in).
+ITEMS_V4 = 4
 
 
 def items_version(weights: Any) -> int:
-    """The item-table version of a fused2 weight set (2 with the folded head, 3 for parallel blocks)."""
+    """The item-table version of a fused2 weight set (2 with the folded head, 3 for parallel blocks, 4 for a mixed
+    layer map)."""
+    if hasattr(weights, "layer_map") and hasattr(weights, "end"):
+        return ITEMS_V4
     if hasattr(weights, "first") and hasattr(weights, "second"):
         return ITEMS_V3
     return ITEMS_V2 if getattr(weights, "head", None) is not None else ITEMS_V1

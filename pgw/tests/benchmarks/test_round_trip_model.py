@@ -115,3 +115,37 @@ def test_links_table_prints(capsys: pytest.CaptureFixture[str]) -> None:
     rt.links_main(5.0)
     out = capsys.readouterr().out
     assert "fibre 1000/1000" in out and "| 32B | standard | k32 | pks-v3 |" in out
+
+
+# ---- --layer-map / --mixed: mixed sequential / parallel layer maps (research/reviews/parallel-conversion.md) -------
+def test_mixed_layer_map_trips_and_bytes() -> None:
+    L = rt.C_SHAPES["7B"][0]
+    full_p = rt.add_layer_map("100%")
+    none_p = rt.add_layer_map("0%")
+    half = rt.add_layer_map("50%")
+    explicit = rt.add_layer_map("s" * 14 + "p" * 14)
+    try:
+        assert rt.consumer_pass_ms("7B", full_p, 20.0)["trips"] == L + 1
+        assert rt.consumer_pass_ms("7B", none_p, 20.0)["trips"] == 2 * L + 1
+        assert rt.consumer_pass_ms("7B", half, 20.0)["trips"] == 1 + 2 * 14 + 14
+        assert rt.consumer_pass_ms("7B", explicit, 20.0)["trips"] == 1 + 2 * 14 + 14
+        assert not rt.schedule_applies("32B", explicit) and rt.schedule_applies("7B", explicit)
+        # bytes: the all-parallel map moves what the parallel schedule moves; fewer trips, fewer residual bytes
+        assert rt.row_bytes("7B", full_p) == rt.row_bytes("7B", "parallel blocks fused (L+1)")
+        assert rt.row_bytes("7B", full_p)[0] < rt.row_bytes("7B", half)[0] < rt.row_bytes("7B", none_p)[0]
+        tok = [rt.consumer_tok_s("7B", s, 20.0) for s in (none_p, half, full_p)]
+        assert tok[0] < tok[1] < tok[2]
+    finally:
+        for n in (full_p, none_p, half, explicit):
+            rt.C_SCHEDULES.pop(n, None)
+            rt.C_MAPS.pop(n, None)
+    with pytest.raises(SystemExit):
+        rt.add_layer_map("spx")
+
+
+def test_mixed_table_prints_and_leaves_no_state(capsys: pytest.CaptureFixture[str]) -> None:
+    before_s, before_m = dict(rt.C_SCHEDULES), dict(rt.C_SHAPES)
+    rt.mixed_main([20.0])
+    out = capsys.readouterr().out
+    assert "Qwen3-14B (40) | trips | 81 | " in out and "| 41 |" in out
+    assert rt.C_SCHEDULES == before_s and rt.C_SHAPES == before_m

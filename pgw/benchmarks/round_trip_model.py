@@ -15,6 +15,10 @@ the per-trip overhead the Modal e2e implies (26 ms median trip at 17 ms RTT, so 
     python benchmarks/round_trip_model.py --twenty [--goal 20]   # the largest RTT per trip that still meets the goal
     python benchmarks/round_trip_model.py --links [--rtt 20]   # tok/s per consumer link class: bytes per row on the
         # link (wire widths, masks while chatting) added to the trips x RTT pass (consumer-bandwidth.md)
+    python benchmarks/round_trip_model.py --consumer --layer-map 25%,50%,spsp...   # adds mixed sequential / parallel
+        # schedules (pgw.engine.fused_mixed): a share of parallel layers, or an explicit map of 's' / 'p' per layer
+        # (used for the models of that depth only): 1 + 2 S + P trips per pass (parallel-conversion.md)
+    python benchmarks/round_trip_model.py --mixed [--rtt 5,20,50]   # tok/s vs the share of parallel layers
 """
 
 from __future__ import annotations
@@ -244,6 +248,49 @@ C_MASK_MS = {"0.5B": 9.0, "3B": 17.0, "7B": 35.0, "32B": 112.0, "72B": 166.0}
 C_MASK_K56_FACTOR = 6.0
 
 
+MIXED_PREFIX = "mixed "
+
+
+def mixed_trips(layer_map: str) -> int:
+    """Trips per pass of a mixed layer map (``pgw.engine.fused_mixed.trips_per_pass``; head folded, layer 0's input
+    trip kept): ``1 + 2 S + P``."""
+    return 1 + 2 * layer_map.count("s") + layer_map.count("p")
+
+
+def frac_map(L: int, frac: float) -> str:
+    """A map with ``round(frac L)`` parallel layers (which ones does not change the trip or byte model)."""
+    p = round(frac * L)
+    return "p" * p + "s" * (L - p)
+
+
+#: schedule name -> the layer map of a model with L layers (mixed schedules only; None: not for that depth).
+C_MAPS: dict[str, Any] = {}
+
+
+def add_layer_map(spec: str) -> str:
+    """Register a mixed schedule: ``"40%"`` (that share of each model's layers parallel) or an explicit map
+    (``"sspp..."``; models of another depth skip it). Returns the schedule's name."""
+    spec = spec.strip().lower()
+    if spec.endswith("%"):
+        f = float(spec[:-1]) / 100.0
+        if not 0.0 <= f <= 1.0:
+            raise SystemExit(f"--layer-map: share {spec} outside 0-100 %")
+        name = f"{MIXED_PREFIX}{spec} parallel (1+2S+P)"
+        C_SCHEDULES[name] = (lambda L, f=f: mixed_trips(frac_map(L, f)), 7, 1.22)
+        C_MAPS[name] = lambda L, f=f: frac_map(L, f)
+    else:
+        if not spec or set(spec) - {"s", "p"}:
+            raise SystemExit(f"--layer-map: {spec!r} is not a share (NN%) or a map of 's' / 'p'")
+        name = f"{MIXED_PREFIX}{spec.count('p')}/{len(spec)} parallel (1+2S+P)"
+        C_SCHEDULES[name] = (lambda L, m=spec: mixed_trips(m) if L == len(m) else -1, 7, 1.22)
+        C_MAPS[name] = lambda L, m=spec: m if L == len(m) else None
+    return name
+
+
+def schedule_applies(model: str, schedule: str) -> bool:
+    return C_SCHEDULES[schedule][0](C_SHAPES[model][0]) > 0
+
+
 def c_layer_elems(model: str) -> tuple[int, int, int]:
     """(inputs, outputs, int8 weights) of one layer's four linears."""
     _L, d, inter, q, _v = C_SHAPES[model]
@@ -324,6 +371,8 @@ def consumer_main(taus: list[float], rows_list: list[int], gw: str, rows_free: b
         for model in C_SHAPES:
             tp = tp32 if model in ("32B", "72B") else 1
             for sched in C_SCHEDULES:
+                if not schedule_applies(model, sched):
+                    continue
                 cells = [f"{consumer_tok_s(model, sched, r, tau, rows, tp=tp, gw=gw, rows_free=rows_free):.2f}"
                          for r in rtts]
                 b = consumer_pass_ms(model, sched, 20.0, rows, tp=tp, gw=gw, rows_free=rows_free)
@@ -346,6 +395,8 @@ def twenty_main(goal: float = 20.0) -> None:
         L = C_SHAPES[model][0]
         tp = 2 if model in ("32B", "72B") else 1
         for sched in C_SCHEDULES:
+            if not schedule_applies(model, sched):
+                continue
             cells = []
             for t in ts:
                 b = consumer_pass_ms(model, sched, 0.0, t, tp=tp, gw="target", rows_free=True)
@@ -396,6 +447,14 @@ def row_elements(model: str, schedule: str, logits: bool = True) -> dict[str, in
     if schedule.startswith("standard"):
         return {"in": L * (3 * d + inter) + (d if logits else 0), "out": L * (q + 2 * d + 2 * inter) + head_out,
                 "act": 0, "res": 0}
+    if schedule.startswith(MIXED_PREFIX):
+        # layer 0's input stage (d up; q, + 2I when parallel, down); per layer [a | m] up once, R once per trip; down
+        # H + Z per trip; head folded (fused_mixed's item table v4)
+        lm = C_MAPS[schedule](L)
+        S, P = lm.count("s"), lm.count("p")
+        act, res = d + L * (d + inter), d * (2 * S + P)
+        out = L * q + 2 * inter * L + d * (2 * S + P) + head_out
+        return {"in": 0, "out": 0, "act": act, "res": res + out}
     if schedule.startswith("parallel"):
         # layer 0 [qkv | gate_up] (d up, q + 2I down), then per layer up [a | m] + R, down H + Z; head folded
         act, res = d + L * (d + inter), L * d
@@ -415,7 +474,11 @@ def row_bytes(model: str, schedule: str, wire: str = "k32", logits: bool = True)
     L, d, _inter, _q, _vocab = C_SHAPES[model]
     if schedule.startswith("standard"):
         return e["in"] * bi / 8, e["out"] * bo / 8
-    up_res = (2 * L * d if not schedule.startswith("parallel") else L * d)
+    if schedule.startswith(MIXED_PREFIX):
+        lm = C_MAPS[schedule](L)
+        up_res = d * (2 * lm.count("s") + lm.count("p"))
+    else:
+        up_res = (2 * L * d if not schedule.startswith("parallel") else L * d)
     down = e["res"] - up_res
     return e["act"] * ba / 8 + up_res * br / 8, down * br / 8
 
@@ -468,8 +531,44 @@ def links_main(rtt_ms: float = 20.0) -> None:
             print(f"| {model} | {sched.split(' (')[0]} | {wire} | {masks} | " + " | ".join(cells) + " |")
 
 
+def mixed_main(rtts: list[float], tau: float = 1.0, rows: int = 1) -> None:
+    """tok/s of one stream vs the share of parallel layers (0 % = fused2 with the head folded and layer 0's input trip
+    kept, 2L + 1; 100 % = L + 1), H100 provider, measured client work, link time left out. Qwen3-14B (40 layers,
+    40 x 128 query + 2 x 8 x 128 key / value features) is added for this table only."""
+    shares = (0, 25, 40, 50, 60, 75, 100)
+    before = set(C_SCHEDULES)
+    names = [add_layer_map(f"{p}%") for p in shares]
+    C_SHAPES["Qwen3-14B"] = (40, 5120, 17408, 7168, 151936)
+    try:
+        print(f"\nMixed sequential / parallel layer maps: trips per pass and tok/s (tokens per pass {tau:g}, rows "
+              f"{rows})")
+        print("| model (layers) | RTT ms | " + " | ".join(f"{p} % parallel" for p in shares) + " |")
+        print("|---|---|" + "---|" * len(shares))
+        for model in C_SHAPES:
+            L = C_SHAPES[model][0]
+            tp = 2 if model in ("32B", "72B", "Qwen3-14B") else 1
+            print(f"| {model} ({L}) | trips | " + " | ".join(str(C_SCHEDULES[n][0](L)) for n in names) + " |")
+            for rtt in rtts:
+                cells = [f"{consumer_tok_s(model, n, rtt, tau, rows, tp=tp):.2f}" for n in names]
+                print(f"| {model} ({L}) | {rtt:g} | " + " | ".join(cells) + " |")
+    finally:
+        del C_SHAPES["Qwen3-14B"]
+        for n in set(C_SCHEDULES) - before:
+            del C_SCHEDULES[n]
+            C_MAPS.pop(n, None)
+
+
 def main() -> None:
     import sys
+
+    if "--layer-map" in sys.argv:
+        for spec in sys.argv[sys.argv.index("--layer-map") + 1].split(","):
+            add_layer_map(spec)
+    if "--mixed" in sys.argv:
+        rtts = ([float(x) for x in sys.argv[sys.argv.index("--rtt") + 1].split(",")] if "--rtt" in sys.argv
+                else [5.0, 20.0, 50.0])
+        mixed_main(rtts)
+        return
 
     if "--links" in sys.argv:
         rtt = float(sys.argv[sys.argv.index("--rtt") + 1]) if "--rtt" in sys.argv else 20.0

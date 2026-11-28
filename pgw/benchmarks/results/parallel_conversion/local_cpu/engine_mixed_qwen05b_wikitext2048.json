@@ -1,0 +1,98 @@
+{
+ "float": {
+  "ppl": 19.218623134392335,
+  "tokens": 2044
+ },
+ "f2i8mighead8:K56A12C53": {
+  "ppl": 19.18985425330954,
+  "top1_vs_float": 0.9603718199608611,
+  "top1_vs_base": 1.0,
+  "base": "f2i8mighead8:K56A12C53",
+  "prompt_max_dlogprob_next_vs_float": 2.2684438973042678,
+  "prompt_max_dlogprob_vocab_vs_float": 6.77195256492849,
+  "prompt_top1_vs_float": 0.9693877551020408,
+  "seconds": 804.2808663845062,
+  "act_bits_hist": {
+   "12": 103008
+  },
+  "rows_below_A": 0.0,
+  "max_out_bits": {
+   "H": 41.3112828341439,
+   "Z": 48.428331078897145
+  },
+  "gateway_cost": {
+   "columns": 0,
+   "weight_bytes": 0,
+   "macs_per_token": 0
+  }
+ },
+ "mix8=sssssssssssssssspsppssps:K56A12C53": {
+  "ppl": 20.004095775057444,
+  "top1_vs_float": 0.889921722113503,
+  "top1_vs_base": 0.8918786692759295,
+  "base": "f2i8mighead8:K56A12C53",
+  "prompt_max_dlogprob_next_vs_float": 2.6543259307653333,
+  "prompt_max_dlogprob_vocab_vs_float": 8.88555517272727,
+  "prompt_top1_vs_float": 0.8877551020408163,
+  "seconds": 85.65608024597168,
+  "act_bits_hist": {
+   "12": 94424
+  },
+  "rows_below_A": 0.0,
+  "max_out_bits": {
+   "H": 40.176502796721145,
+   "Z": 47.267218984617834
+  },
+  "gateway_cost": {
+   "columns": 0,
+   "weight_bytes": 0,
+   "macs_per_token": 0
+  }
+ },
+ "mix8=ssspssppssssspsspsppssps:K56A12C53": {
+  "ppl": 22.292994316139897,
+  "top1_vs_float": 0.7847358121330724,
+  "top1_vs_base": 0.7896281800391389,
+  "base": "f2i8mighead8:K56A12C53",
+  "prompt_max_dlogprob_next_vs_float": 3.681279849449155,
+  "prompt_max_dlogprob_vocab_vs_float": 17.01343082150077,
+  "prompt_top1_vs_float": 0.7448979591836735,
+  "seconds": 89.03509569168091,
+  "act_bits_hist": {
+   "12": 85840
+  },
+  "rows_below_A": 0.0,
+  "max_out_bits": {
+   "H": 39.26392411922813,
+   "Z": 46.5863390810355
+  },
+  "gateway_cost": {
+   "columns": 0,
+   "weight_bytes": 0,
+   "macs_per_token": 0
+  }
+ },
+ "mix8=ssspssppspssspppppppssps:K56A12C53": {
+  "ppl": 27.767679178665382,
+  "top1_vs_float": 0.6658512720156555,
+  "top1_vs_base": 0.6697651663405088,
+  "base": "f2i8mighead8:K56A12C53",
+  "prompt_max_dlogprob_next_vs_float": 8.040318805527692,
+  "prompt_max_dlogprob_vocab_vs_float": 25.04457075193564,
+  "prompt_top1_vs_float": 0.6530612244897959,
+  "seconds": 81.73608779907227,
+  "act_bits_hist": {
+   "12": 77256
+  },
+  "rows_below_A": 0.0,
+  "max_out_bits": {
+   "H": 39.26392411922813,
+   "Z": 46.5863390810355
+  },
+  "gateway_cost": {
+   "columns": 0,
+   "weight_bytes": 0,
+   "macs_per_token": 0
+  }
+ }
+}

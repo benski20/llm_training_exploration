@@ -1163,6 +1163,19 @@ class TransformerModel:
             finished, out = self._step(gen, res, rows)
         return finished, out
 
+    def _check_layer_map(self, sched: Any) -> None:
+        """A pack that declares parallel blocks (``arch.parallel_layers``, pinned by its fingerprint) runs only under
+        a schedule computing exactly that layer map (:mod:`pgw.engine.fused_mixed`): never as sequential blocks."""
+        from pgw.engine.fused_mixed import pack_layer_map
+
+        runs = getattr(sched, "runs_layer_map", None)
+        want = pack_layer_map(self.pack)
+        got = runs() if callable(runs) else None
+        if got != want:
+            raise ConfigError(f"this pack declares parallel blocks (layer map {want!r}); the "
+                              f"{getattr(sched, 'name', 'standard')} schedule runs {got or 'sequential blocks'} "
+                              "(use pgw.engine.fused_mixed)")
+
     def _trip_plan(self) -> tuple[int, bool]:
         """``(remote round trips per pass, any local linear)`` for the current hooks and backend."""
         is_local = getattr(self.backend, "local_linear", None)
@@ -1218,6 +1231,8 @@ class TransformerModel:
         if capture:
             self._capture(capture, st, -1)
         sched = self.schedule
+        if getattr(self.arch, "parallel_layers", None):
+            self._check_layer_map(sched)
         pads = self._pad_plan(seqs, ids)
         first_layer = 0
         if (pads is None and sched is None and not capture and getattr(self.backend, "decode_native", False)
