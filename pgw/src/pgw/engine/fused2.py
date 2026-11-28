@@ -778,6 +778,8 @@ class Fused2MaskSource:
     def trip_plan(self) -> list[tuple[F2Linear, F2Linear | None]]:
         """The ``(l1, l2)`` of every trip of one pass, in order (``l2`` None: a single trip)."""
         w = self.w
+        if callable(getattr(w, "trip_plan", None)):  # a mixed sequential / parallel weight set (fused_mixed)
+            return list(w.trip_plan())
         plan: list[tuple[F2Linear, F2Linear | None]] = [(w.qkv[0], None)]
         for i in range(w.num_layers):
             plan.append((w.o[i], w.gu[i]))

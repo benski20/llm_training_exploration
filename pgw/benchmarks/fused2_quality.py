@@ -110,6 +110,13 @@ def engine_runner(pack: Any, cfg: str, state: Any, calib: list[torch.Tensor] | N
         w = Fused2Weights(pack, None, multipliers=migration_multipliers(pack, b, head=True), head=True)
         model = TransformerModel(pack, Fused2PlainBackend(ring))
         return model, enable_fused2(model, w, ring, head_fold=True, local_qkv0=True)
+    if kind.startswith("mix"):  # "mix8=sspp...": a mixed sequential / parallel layer map (pgw.engine.fused_mixed),
+        from pgw.engine.fused_mixed import MixedWeights, enable_fused_mixed  # int8 fold, migration, folded head
+
+        bits, _, lm = kind[3:].partition("=")
+        mw = MixedWeights(pack, lm or None, bits=int(bits or 8), head=True)
+        model = TransformerModel(pack, Fused2PlainBackend(ring))
+        return model, enable_fused_mixed(model, mw, ring, head_fold=True, local_qkv0=True)
     if kind.startswith("f2mighead"):
         b = int(kind[9:] or 8)
         fl = hf_float_linears(state, pack.arch)

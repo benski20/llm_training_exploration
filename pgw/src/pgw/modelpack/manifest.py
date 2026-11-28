@@ -34,7 +34,16 @@ import json
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    SerializationInfo,
+    SerializerFunctionWrapHandler,
+    field_validator,
+    model_serializer,
+    model_validator,
+)
 
 from pgw.core.errors import ConfigError
 from pgw.core.fingerprint import compute_fingerprint, require_same_fingerprint, validate_fingerprint
@@ -185,6 +194,29 @@ class ArchConfig(BaseModel):
     bos_token_id: int | None = Field(default=None, ge=0)
     eos_token_ids: tuple[int, ...] = ()
     hidden_act: Literal["silu"] = "silu"
+    parallel_layers: tuple[int, ...] | None = Field(
+        default=None,
+        description="Layers that run as parallel attention + MLP blocks (the MLP reads the layer input: "
+        "h + attn(n1 h) + mlp(n2 h)); a partial parallel conversion of a sequential checkpoint, opt-in. Sorted, "
+        "distinct, in [0, num_layers); covered by the fingerprint when set. Absent (None) in every sequential pack, "
+        "which keeps its fingerprint (the field is left out of the serialized form when unset).",
+    )
+
+    @model_serializer(mode="wrap")
+    def _drop_unset_parallel(self, handler: SerializerFunctionWrapHandler, info: SerializationInfo) -> Any:
+        d = handler(self)
+        if isinstance(d, dict) and d.get("parallel_layers", 0) is None:
+            del d["parallel_layers"]
+        return d
+
+    @model_validator(mode="after")
+    def _check_parallel_layers(self) -> ArchConfig:
+        p = self.parallel_layers
+        if p is not None:
+            if list(p) != sorted(set(p)) or any(not 0 <= i < self.num_layers for i in p):
+                raise ValueError(f"parallel_layers must be sorted, distinct and in [0, {self.num_layers}), "
+                                 f"got {list(p)}")
+        return self
 
     @model_validator(mode="after")
     def _check_heads(self) -> ArchConfig:

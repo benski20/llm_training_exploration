@@ -19,7 +19,7 @@ import re
 import shutil
 import tempfile
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from contextlib import ExitStack
 from dataclasses import dataclass
 from pathlib import Path
@@ -579,6 +579,7 @@ def pack_checkpoint(
     license: str | None = None,
     progress: Callable[[str], None] | None = None,
     allow_unsupported_rope: bool = False,
+    parallel_layers: Sequence[int] | None = None,
 ) -> Manifest:
     """Quantize an HF checkpoint (hub repo id or local directory) into a PGW model pack.
 
@@ -604,6 +605,9 @@ def pack_checkpoint(
         progress: Optional callback called with each linear id after it is written.
         allow_unsupported_rope: Pack a checkpoint whose RoPE scaling type the PGW engine does not
             implement (the gateway would refuse to serve it); off by default.
+        parallel_layers: Opt-in (default None: the checkpoint's sequential blocks, the manifest unchanged): layers
+            to serve as parallel attention + MLP blocks (a partial parallel conversion; ``arch.parallel_layers``,
+            covered by the fingerprint). Such a pack runs only under :mod:`pgw.engine.fused_mixed` with that map.
 
     Returns:
         The written manifest (with fingerprint).
@@ -622,6 +626,9 @@ def pack_checkpoint(
         raise ConfigError(f"checkpoint {ckpt.name} has no config.json")
     arch = arch_config_from_hf(cfg, _read_json(ckpt / "generation_config.json"),
                                allow_unsupported_rope=allow_unsupported_rope)
+    if parallel_layers is not None:
+        arch = ArchConfig.model_validate({**arch.model_dump(),
+                                          "parallel_layers": sorted(int(i) for i in parallel_layers)})
     model_name = name or _default_name(info.repo)
     log.info("packing %s (%s, %d layers) -> %s", info.repo, arch.arch.value, arch.num_layers, Path(out_dir).name)
     with CheckpointReader(ckpt) as reader:
