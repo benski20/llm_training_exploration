@@ -4935,3 +4935,41 @@ folded head (K56A12C53) **9.452** (+1.0 % vs standard), top-1 equal to the stand
 (97.1 % vs float for standard, 96.5 % for fused2); every row kept 12 activation bits; max |H| 40.2 bits, |Z| 48.6 bits
 (cap 53). Results: `benchmarks/results/fused2/kaggle_7b/quality_qwen7b_headfold.json`. This closes the 7B quality gap
 listed by the fused SDK work; `schedule="fused"` stays opt-in.
+
+
+## 2026-11-28: training-free partial parallel conversion (sensitivity map, mixed layer maps in the engine and lane; opt-in)
+
+Review: `research/reviews/parallel-conversion.md` (tables: `research/reviews/parallel_conversion_numbers.py`). Angle 1 of
+the parallel-block study: convert only the layers that tolerate it (MLP reads `n2(h)` instead of `n2(h + attn)`), no
+retraining; a pass costs `1 + 2S + P` fused trips (S sequential, P parallel layers, head folded).
+
+- **Measured** (Kaggle T4, kernel `bensliv/pgw-parconv-r2`, `benchmarks/parallel_conversion.py`, results
+  `benchmarks/results/parallel_conversion/kaggle_t4_r2/`; harness metrics of `depth_prune_heal.py`, permissive data,
+  nothing trained): converting the best 25 % of the layers costs +3.6-8.4 % FineWeb-Edu perplexity, chat top-1
+  agreement with the original 0.86-0.92, MMLU -0.005 at Qwen2.5-3B / Qwen3-4B, 0.000 at Qwen3-1.7B, -0.02 / -0.06 at
+  0.5B / 1.5B; trips 49 -> 43, 57 -> 50, 73 -> 64 (~12 % fewer). 50 %: agreement 0.74-0.81; 100 %: every model breaks
+  (ppl 10^3-10^6). Within selection KL <= 0.1: 6 / 7 / 7 / 13 / 12 layers (0.5B / 1.5B / Qwen3-1.7B / 3B / Qwen3-4B).
+- **Findings**: per-layer damage is nearly additive (sum of single-layer KLs predicts the combined KL within 10-20 % up
+  to a third of the layers), so greedy marginal search gains 0-3 % over the single-layer ranking; the MLP-output change
+  `rel_out` (one calibration pass, no eval) ranks layers at Spearman 0.61-0.94 (as good as measured on Qwen3 up to
+  L/4, worse on Qwen2.5 after 2-4 layers); layers 0-1 and the last are never convertible; Qwen3's tolerant layers are a
+  contiguous late block. Estimate for Qwen3-14B: 10-16 layers, 81 -> 65-71 trips, ~1.1-1.2x tok/s at RTT 20 ms.
+  Verdict: a small lever without healing; the map is the starting point for the healing angles.
+- **Engine** (`pgw.engine.fused_mixed`, opt-in): `MixedWeights` / `MixedFusedSchedule` / `enable_fused_mixed`, any
+  per-layer map; an all-`s` map is fused2 bit for bit, all-`p` the parallel prototype. The exact integer pipeline at 0.5B
+  matches the float conversion within 0.5 % ppl, 12 activation bits on every row, |Z| <= 47.3 bits (K56A12C53;
+  `fused2_quality.py` config `mix8=<map>`, `benchmarks/results/parallel_conversion/local_cpu/`).
+- **Protocol**: optional `ArchConfig.parallel_layers` in the pack manifest (fingerprinted; absent and fingerprint-
+  neutral when unset: existing packs unchanged), `pack_checkpoint(parallel_layers=...)`; a pack declaring a map runs
+  only under a schedule computing exactly that map (fail closed). Lane item table v4 (`mixed_items`, ticket
+  `fused2_items = 4`, the lane fingerprint binds the items). `round_trip_model.py --layer-map` / `--mixed`.
+- **Privacy / integrity unchanged** (fused2's masks and checks): tests cover masked == plain bit for bit for mixed maps
+  on Qwen2 / Llama / Qwen3 tiny packs, single-use masks (no payload row repeats), both Freivalds checks of every pair
+  trip, tamper on parallel and sequential trips, the lane v4 path.
+- **Tests**: `tests/engine/test_fused_mixed.py` (95), `tests/engine/test_fused_mixed_lane.py` (4),
+  `tests/modelpack/test_parallel_layers.py` (2), `tests/benchmarks/test_round_trip_model.py` (+2). Suites: tests/engine
+  1389 passed, 15 skipped (CUDA); tests/modelpack 131 passed, 1 skipped; tests/service -k "lane or multi or fused" 121
+  passed.
+- **Not done**: the native fused2 decode driver for mixed maps, SDK exposure / pins for a mixed pack, the shard-wise
+  packer's `parallel_layers`, the encrypted K56 factory on mixed keys. GPU used: ~3.3 T4-hours (one single-T4 session;
+  a first T4 x 2 push sat queued and was deleted unrun).

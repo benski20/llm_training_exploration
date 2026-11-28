@@ -1,0 +1,7 @@
+[   0.1m] devices 0; queues [['qwen2.5-0.5b']]; mc 
+[transformers] `torch_dtype` is deprecated! Use `dtype` instead!
+[   0.1m] [qwen2.5-0.5b] Qwen/Qwen2.5-0.5B-Instruct@7ae557604adf67be50417f59c2c2f167def9a775 on cpu: L=24, hidden 896, qwen2
+[  10.3m] [qwen2.5-0.5b] data: report ppl (24, 1024), report chat 40, selection web (12, 512) chat 24 (2155 answer tokens), calibration 8 seqs; 616s
+[  11.0m] [qwen2.5-0.5b] sensitivity rel_out: 0:0.853 1:0.558 2:0.277 3:0.244 4:0.270 5:0.249 6:0.181 7:0.194 8:0.260 9:0.185 10:0.248 11:0.179 12:0.190 13:0.141 14:0.173 15:0.176 16:0.078 17:0.178 18:0.068 19:0.082 20:0.170 21:0.169 22:0.044 23:0.615
+[  20.8m] [qwen2.5-0.5b] base: sel {"web_kl": 0.0, "web_top1": 1.0, "web_ppl": 21.7685, "chat_kl": 0.0, "chat_top1": 1.0, "kl": 0.0}; report ppl 17.839 chat top1 0.9998  (184s)
+[  34.1m] [qwen2.5-0.5b] single-layer KL (796s): 0:3.5199 1:1.5202 2:0.1171 3:0.0310 4:0.0469 5:0.0452 6:0.0249 7:0.0266 8:0.2104 9:0.0391 10:0.0900 11:0.0478 12:0.0691 13:0.0249 14:0.0377 15:0.0397 16:0.0082 17:0.0422 18:0.0077 19:0.0119 20:0.0608 21:0.0675 22:0.0054 23:0.6738
