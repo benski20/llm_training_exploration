@@ -18,7 +18,7 @@ from pgw.placement.certs import (
     verify_chain,
 )
 from pgw.placement.publisher import DirectoryPublisher, Signer
-from pgw.placement.registry import BootStep, PodBoot, Registry, RegistrationError, registration_request
+from pgw.placement.registry import BootStep, PodBoot, RegistrationError, Registry, registration_request
 from pgw.sdk.directory import verify_directory
 
 FP = "f7c6fb4f5f8fbc5e4149972c07afdc749de8e5f9adc604d30edb7eb94b834b67"

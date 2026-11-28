@@ -30,7 +30,7 @@ def test_v2_roundtrip_and_damage() -> None:
     bad = s[:-3] + ("a" if s[-3] != "a" else "b") + s[-2:]
     with pytest.raises(SDKKeyError):
         SDKKey.parse(bad)
-    with pytest.raises(Exception):  # noqa: B017 - a directory key must be 32 bytes
+    with pytest.raises(Exception):
         SDKKey("live", "https://p.example:8443", CA, k.key_id, k.secret, b"short")
 
 

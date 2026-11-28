@@ -24,6 +24,9 @@ runbook's launch-readiness pass, followed by the 2026-11-27 web restyle (console
 runbook's launch-readiness pass. A note in *italics* marks a statement that a later section superseded.
 Since 2026-11-27: **PGW Chat** (`pgw chat`), a private chat app whose plaintext stays on the user's device (last
 section).
+Since 2026-11-28: **dynamic GPU placement near the users** (last section, docs/operations/placement.md): a placement
+controller, a signed endpoint directory the client verifies (`routing="signed"`, opt-in), per-pod certificates,
+pre-staged packs; designed, implemented and dry-run tested, not run on RunPod.
 Consumer survey (2026-11-27, last section): no known cryptography gives private 20 tok/s at 32B over the consumer
 internet; recommendation is local-first for consumers, pgw in-cloud, FHE as a gated research track.
 
@@ -4944,3 +4947,107 @@ standard schedule. With `--prefix-cache on` or stream weights (which fused does 
 `standard`. The client library's own default stays `standard` (enterprise clients sit next to the GPU, where fused
 does not pay, and keep answers identical to today's). `pgw.chat.cli.chat_schedule`, tests in
 `tests/chat/test_cli_schedule.py` (8); docs `docs/sdk/chat.md`.
+
+## 2026-11-28: dynamic GPU placement near the users (controller, signed endpoint directory, per-pod certificates; dry-run only)
+
+Design and operations: [docs/operations/placement.md](docs/operations/placement.md); client side in
+docs/sdk/wan.md ("Region routing"). Nothing ran on RunPod (no key here, no spend); every part is off unless enabled
+(`routing="off"` by default, the provider's routes need their settings, SDK keys stay format 1 unless a directory key
+is configured).
+
+**What is built.**
+* **Placement controller** (`pgw.placement`): `policy.Controller` turns the anticipated peak concurrent streams per
+  (metro, model) into desired pods per (RunPod data centre, model): a warm set per configured metro in its nearest
+  available data centre; a data centre opens when the modelled stream-tok/s gain per $/h of its pods is >= `gain_up`
+  and stays while >= `gain_keep` (hysteresis); capacity `POD_STREAMS` x 0.75 per pod (16 / 5 / 3 streams at 7B / 32B /
+  72B, an estimate from the H100 maskgen rates); scale-down only after a 30 min idle timeout and a 15 min minimum
+  lifetime; per-hour / per-day / total spend caps with priority admission (warm, running, capacity, gain), which also
+  drain running pods; GPU-availability fallback (a capacity refusal holds a data centre out 30 min; its metros go to
+  the next-best one; running pods stay). `forecast.Forecaster` (hour-of-week profile x trend) anticipates one cold
+  start ahead. `predict` = `round_trip_model.sdk_ms_per_token` (trips x RTT + fixed, equal within 0.2 %) plus
+  `wan_model` bytes per row; `catalog` has the data centres (approximate locations), metros with access mixes, the
+  RTT distance model and the launcher's prices (kept equal by a test).
+* **Content-free demand telemetry** (`telemetry`, `POST /pgw/v1/placement/report`, `demand_reports` off by default):
+  `{v, model, endpoint label, rtt_bucket, peak_streams}`, closed schema; coarse region from the source address via an
+  operator CIDR table, address dropped; per-hour aggregates of distinct installations (per-hour salt, discarded at
+  the hour's close) and peak streams; k < 5 suppressed; 30-day retention; exported to the controller with its own
+  token. The privacy argument (the provider already sees IP, model, timing, volume, concurrency) is in the doc.
+* **Signed endpoint directory** (`pgw.sdk.directory`, `pgw.placement.publisher`, `GET /pgw/v1/endpoints/directory`):
+  Ed25519 over a domain-separated JSON payload, version persisted before signing, 1 h validity (max 24 h). The client
+  checks the pinned key (**SDK key format 2** carries it after the CA pin; format-1 keys unchanged byte for byte; else
+  the `endpoint_directory_key` of the CA-pinned enrollment response; the key's pin wins), `key_id`, issue / expiry
+  times (5 min skew), **no rollback** (highest accepted version persisted 0600; same version only with the same
+  bytes), closed endpoint fields; anything invalid keeps the previous directory, an expired one falls back to the
+  SDK key's URL only.
+* **Client routing** (`SDKOptions.routing = "signed"`, `PGW_ROUTING`, opt-in; engine): the nearest healthy endpoint
+  serving the model's fingerprint (payload-free probes, `regions.choose` hysteresis); background refresh / probe
+  every `routing_refresh_s` (300 s); a model moves only when no request runs on it (decided at a request's start, so
+  a streamed answer keeps its endpoint); failover only before the first token (`backend_unavailable` /
+  `unavailable`: held out 2 min, refreshed, retried on the next); draining endpoints left; artifacts, masked-head and
+  schedule decisions kept across moves; the factory's maskgen follows the model's endpoint; hourly demand record;
+  `status()["routing"]`.
+* **Per-pod certificates** (`certs`): root (pinned, offline, `path_length=1`) -> pod-issuing CA (controller,
+  `path_length=0`, 90 d) -> one leaf per pod (24 h, P-256 key generated on the pod in tmpfs, SAN = the address
+  RunPod's API reports, never the pod's claim). One-time registration tokens (hash stored, bound to pod name / data
+  centre / model, 1 h). The secret-handling table is in the doc; no private key is shared or shipped.
+* **Registration** (`registry`, `server`, `pod_boot.py placement`): verify the pre-staged pack against the pinned
+  fingerprint (full hash) -> device -> keygen -> register (leaf) -> tenant credential digests (tokens file + subject
+  map only) -> service start (load, its own self-tests, `/readyz`) -> activate (the controller connects like a client:
+  pinned root only, exactly the issued leaf, `/readyz`, served fingerprints) -> listed; drain -> `draining` ->
+  removed -> terminated. Placement pods hold no CA key and no accounts database.
+* **Fast cold start** (`packs`, `pod_boot.py stage-packs`, `placement.py stage-packs`): one network volume per data
+  centre (`pgw-packs-<dc>`, 20 GB at 7B) filled by a CPU packer pod with the shard-wise packer; never trusted (full
+  verification at every boot). Estimated (`coldstart`, assumptions except SHA-256 1.5 GB/s per core measured here):
+  7B ready in **92 s** (image cached) / **167 s** (image pulled) vs 468 s packing at boot; 32B 227 s vs 1465 s;
+  "in use" adds half the 300 s refresh interval.
+* **RunPod** (`deploy/runpod/placement.py`): `plan`, `apply --dry-run` (`POST /pods` with `dataCenterIds`,
+  `networkVolumeId`, Secure Cloud, the one-time token redacted, a 12 h self-enforced TTL), `stage-packs` (network
+  volume + packer pod, cost-capped), `coldstart`, `serve` (the trial's controller: pods' API + control loop). RUNBOOK
+  section 3.9: a two-data-centre trial, <= 3 H100 pods for 2 h, cap $22 (not launched).
+* **Mask stock** (confirmed, tested): the store has no endpoint parameter (`reserve(fingerprint, ring, slots)`);
+  reservations before / after a switch and after a restart are disjoint, never re-issued, and another fingerprint or
+  ring gets nothing; the checks run on every trip on every endpoint.
+
+**Simulation** (`benchmarks/placement_sim.py`; `benchmarks/results/placement/`; 8 metros, 178 peak 7B streams,
+diurnal with a 09:00 surge, 48 h at 1-minute steps, `round_trip_model` tok/s, H100 $2.99/h):
+
+| policy | pods mean / max | $/h | $ per 1M tokens | RTT p50 / p90 / p99 ms | tok/s per user mean / p10 |
+|---|---|---|---|---|---|
+| single region (US-KS-2) | 17 / 17 | 50.8 | 961 | 49.2 / 160.9 / 170.6 | 0.20 / 0.05 |
+| static multi-region | 20 / 20 | 59.8 | 108 | 6.3 / 13.2 / 16.3 | 2.09 / 0.65 |
+| dynamic | 12.7 / 17 | **37.9** | **68** | 6.3 / 13.2 / 16.3 | 2.09 / 0.65 |
+
+Dynamic matches static multi-region latency at 37 % lower cost; one region is ~10x slower per user. Anticipation
+and pre-staging matter only around surges (32B, 6-minute surge: surge-window tok/s p10 0.29 with both, 0.24 without
+anticipation, 0.21 without pre-staged packs) because the 25 % headroom and neighbouring warm pods absorb the spill
+during a cold start; no pod was overloaded in any run. All demand, location and `POD_STREAMS` figures are
+assumptions; the ranking is the robust part.
+
+**Tests** (absolute `PYTHONPATH`, one directory at a time): new `tests/placement` (60: directory signature / tamper /
+domain / expiry / future / rollback incl. same-version-other-bytes / persisted versions / closed fields, the router's
+choice, hysteresis, failover, refresh from another endpoint, draining, expiry fallback; policy warm set, gain per $,
+capacity, idle timeout and min lifetime, keep-vs-open hysteresis, hour / day / total caps, availability fallback and
+hold, no GPU; forecaster; predictor == `round_trip_model` within 0.2 % and `wan_model` bytes; launcher prices; demand
+report schema, resolver, aggregation without identifiers, k-suppression, retention; per-pod leaves chain to the root
+only (name, root, expiry; Python `ssl` accepts leaf + intermediate), CSR / lifetime refusals, single-use bound tokens,
+registration -> activation -> signed directory -> drain -> removal, refusals (fingerprint, self-tests, token,
+binding), a staged pack with one flipped byte refused; mask reservations across endpoints disjoint and never
+re-issued; SDK key format 2), `tests/deploy/test_runpod_placement.py` (8: pod payloads, actuator dry-run create /
+drain / terminate, live calls through a fake transport with capacity fallback, caps and `--max-pods`, `tick`, the
+CLI dry runs, the placement service env without CA key or accounts, the pod's boot against the controller's API end
+to end and a tampered volume stopping it before registration), `tests/sdk/test_routing.py` (7: two real endpoints
+with per-pod leaves and shared accounts: nearest first and bit-identical, switch deferred past a streamed answer,
+draining left, failover when the endpoint dies, a foreign-key directory never used, the route closed to
+unauthenticated callers, the demand report's closed schema and export token), `tests/benchmarks/test_placement_sim.py`
+(4). Suites: tests/placement 60, tests/sdk 246 passed / 1 opt-in skip, tests/deploy 159 / 1 skip (promtool),
+tests/service 609 / 80 skips (CUDA), tests/enroll 9, tests/platform 32, tests/chat 54, tests/docs (without the
+environment-only `test_numbers`) 80; ruff clean on the changed files.
+
+**Open / needed for a live trial**: RunPod key and go-ahead (RUNBOOK 3.9, cap $22); a trial PKI (new root with
+`path_length=1`: the launcher's CA cannot sign an intermediate) and format-2 SDK keys; measure `POD_STREAMS`, the
+cold-start components, the network volume's read rate, RunPod's capacity-error texts and the catalog's availability
+fields. Not built: usage metering / quotas on placement pods (they authenticate from digests; quotas are enforced at
+the enrolled endpoint only, so quota-limited keys must not be routed to pods yet), leaf renewal (pod TTL 12 h < leaf
+24 h), controller restart reconciliation (adopt `pgw-place-` pods from `list_pods`). The routing end-to-end test uses
+`mask_scheme="plain"`; pks-v3 maskgen requests carry their own (client-key) operands and hold no per-provider
+state, but a switch with the pks-v3 factory running is not exercised by a test yet.

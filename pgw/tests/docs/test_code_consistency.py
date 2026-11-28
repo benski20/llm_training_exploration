@@ -133,6 +133,16 @@ _NON_FIELD_ENV = {
 
     "PGW_SPECULATION",  # SDKOptions.speculation (read in SDKOptions.from_env)
     "PGW_SCHEDULE",  # SDKOptions.schedule (read in SDKOptions.from_env)
+    "PGW_ROUTING",  # SDKOptions.routing (read in SDKOptions.from_env; pgw.sdk.directory)
+    "PGW_PLACEMENT_TOKEN",  # placement pods' environment (deploy/runpod/placement.py, pod_boot.placement_steps)
+    "PGW_PLACEMENT_CONTROLLER",
+    "PGW_PLACEMENT_CONTROLLER_CA_PEM_B64",
+    "PGW_PLACEMENT_PACKS",
+    "PGW_PLACEMENT_DC",
+    "PGW_PLACEMENT_POD_NAME",
+    "PGW_PLACEMENT_KEY_DIR",
+    "PGW_PLACEMENT_EXPECT_FP",
+    "PGW_PLACEMENT_LANE_PUBLIC_PORT",
     "PGW_SDK_LINK_RTT_MS",  # schedule="auto": a known link RTT instead of the probe (pgw.sdk.schedule.decide)
     "PGW_SERVICE_FUSED2_HEAD",  # the head-fold fused2 lane entry (pgw.service.fused2_lane.ENV_HEAD)
     "PGW_SERVICE_FUSED2_FROM_PACK",  # fused2 lane entries derived from the packs (pgw.service.fused2_lane)

@@ -19,9 +19,9 @@ RUNPOD_DIR = PGW / "deploy" / "runpod"
 if str(RUNPOD_DIR) not in sys.path:
     sys.path.insert(0, str(RUNPOD_DIR))
 
-import placement as rp  # noqa: E402
 import pod_boot  # noqa: E402
 
+import placement as rp  # noqa: E402
 from pgw.placement.policy import Controller, Ledger, PolicyConfig  # noqa: E402
 
 SECRET = "rpa_TESTKEY_placement_0123456789abcdef"  # noqa: S105 - fake RunPod API key
@@ -309,12 +309,12 @@ def test_pod_boot_refuses_a_tampered_volume(controller: dict[str, Any], tiny_pac
     controller["reg"].pinned["qwen2.5-0.5b-instruct"] = fp
     token = controller["reg"].expect("pgw-place-eu-1", "EU-FR-1", "qwen2.5-0.5b-instruct")
     monkeypatch.setattr(pod_boot, "_controller", lambda env: ("https://ctl:9443", None))
-    post, get = _http(controller["client"])
+    _post, get = _http(controller["client"])
     calls: list[str] = []
     steps = pod_boot.placement_steps(_pod_env(tmp, token, fp), {}, http_post=lambda *a, **k: calls.append("post"),
                                      http_get=get, start_service=lambda *a: calls.append("svc"),
                                      check_device=lambda: True)
-    with pytest.raises(Exception):  # noqa: B017 - FingerprintMismatchError or ConfigError: the boot stops
+    with pytest.raises(Exception):
         PodBoot(steps).run({})
     assert calls == [] and not controller["published"] and not controller["reg"].pods
     assert os.path.exists(dst)

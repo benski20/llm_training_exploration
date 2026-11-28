@@ -34,9 +34,11 @@ the client picks the nearest GPU.
   A quinn prototype with BBR on both ends cuts 1 % loss to 32-36 ms per trip (3.5x), but costs +0.9 ms per trip
   or more on a clean path. The gain comes from owning the client's congestion controller, not from streams or
   0-RTT.
-* **Region routing designed, with the provider side** (`pgw.sdk.regions`, `endpoints` in the enrollment
-  response): payload-free TCP-handshake probes, nearest healthy endpoint with hysteresis, failover order; the mask
-  stock moves with the client when the endpoint serves the same pack fingerprint and ring.
+* **Region routing, opt-in** (`routing="signed"`; `pgw.sdk.regions`, `pgw.sdk.directory`): a signed, expiring,
+  rollback-protected endpoint directory verified with a pinned key, payload-free TCP-handshake probes, nearest
+  healthy endpoint with hysteresis, moves only between requests, failover before the first token; the mask stock
+  moves with the client when the endpoint serves the same pack fingerprint and ring. The placement controller that
+  starts GPU pods near the demand is [docs/operations/placement.md](../operations/placement.md).
 * **Keep-alive on the lane** (fixed): idle lane connections had no keep-alive, so a NAT or firewall that forgets
   idle flows (carrier-grade NAT: often 30 s to a few minutes) turned the next trip into a reset or a silent stall
   until the trip timeout. Lane sockets (native and Python client, the provider's listener) now use keep-alive (idle
@@ -357,8 +359,30 @@ ledger, wherever the trips go. An endpoint serving another fingerprint (another 
 its own stock and is chosen only for that model. The provider of one region learns nothing about trips sent to
 another: each sees only its own trips' public fields, as today.
 
-Status: the module, the setting, the enrollment field and their tests ship; switching the engine's service URL
-from the probe result is the next step (opt-in), once a multi-region deployment exists to test it against.
+Status (2026-11-28): wired in the client library behind `routing="signed"` (default `"off"`), with a **signed
+endpoint directory** for providers whose endpoints come and go ([placement](../operations/placement.md)):
+
+* The provider publishes the current endpoints as `{"payload", "sig"}` (Ed25519 over a domain-separated JSON payload
+  with a strictly increasing `version`, `issued_at`, `expires_at`; `GET /pgw/v1/endpoints/directory`, authenticated).
+  The client verifies it with the key **pinned** in its SDK key (key format 2; format-1 keys unchanged) or sent in
+  the enrollment response over the CA-pinned channel, refuses an expired one, a future one, one older than the
+  highest version it ever accepted (persisted: no rollback across restarts) or a same-version document with other
+  bytes, and validates the endpoints as above. Without a valid directory it uses the SDK key's URL only.
+* `pgw.sdk.directory.EndpointRouter` refreshes it every `routing_refresh_s` (300 s) and at once after a failure,
+  probes as above, and the engine moves a model only **between requests** (a request in flight on it, a streamed
+  answer included, keeps its endpoint) and fails over only **before the first token** (`backend_unavailable` /
+  `unavailable`: the endpoint is held out for two minutes, the directory refreshed, the request retried on the
+  next). Draining endpoints take no new models. Each endpoint still has to chain to the pinned CA (per-pod
+  short-lived leaves under a pod-issuing intermediate, `pgw.placement.certs`), and the fingerprint and every trip are
+  checked as before.
+* With usage reports on, the client sends one content-free demand record per model and hour (model, the endpoint's
+  region label, the RTT bucket of the handshake probes, peak concurrent streams) that the placement controller
+  aggregates; the operator enables it (`demand_reports`) and the provider maps the source address to a coarse region
+  and drops it (privacy argument in [placement](../operations/placement.md#demand-telemetry-and-privacy)).
+* Tested end to end on two real endpoints (`tests/sdk/test_routing.py`): nearest first, bit-identical answers from
+  the same mask stock on both, a switch deferred past a streamed answer, a draining endpoint left, failover when the
+  current endpoint dies, a directory signed by another key never used, the directory route closed to unauthenticated
+  callers, the demand report's closed schema.
 
 ## RunPod `wan` session
 

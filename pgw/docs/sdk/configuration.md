@@ -40,6 +40,8 @@ behaviour of the OpenAI client it replaces.
 | `schedule` | `PGW_SCHEDULE`, else `"standard"` | how the per-token round trips are grouped: `"standard"` (`4 x layers + 1` round trips per token), `"fused"` (opt-in: `2 x layers` round trips per token, values 1.75x larger; for high-latency links such as consumer devices on the internet) or `"auto"` (measures the link when the model starts and picks one). `"fused"` gives slightly different answers (a different fixed reference, not bit-identical to `"standard"`), so the choice is fixed per model for the life of the client: [below](#schedule-standard-or-fused) |
 | `schedule_auto_rtt_ms` | 3 | `"auto"`: the least measured round-trip time (ms) at which `"fused"` may be picked |
 | `schedule_auto_margin` | 0.1 | `"auto"`: `"fused"` must be estimated at least this much faster per token (fraction) |
+| `routing` | `PGW_ROUTING`, else `"off"` | `"signed"` (opt-in): use the provider's signed endpoint directory (verified with the key pinned in the SDK key or at enrollment: signature, expiry, no rollback) and run each model on the nearest healthy endpoint serving its fingerprint; a model moves only between requests and fails over only before the first token; the mask stock is shared across endpoints of one fingerprint. `"off"`: the SDK key's provider URL only. [docs/sdk/wan.md](wan.md#region-routing), [placement](../operations/placement.md) |
+| `routing_refresh_s` | 300 | `"signed"`: seconds between directory refreshes and probe rounds (a failure refreshes at once) |
 | `log_level` | `PGW_SDK_LOG`, else silent | structured (JSON) logs on stderr at this level |
 
 ## Prefix cache
@@ -107,6 +109,7 @@ silently ignored.
 | `PGW_MASK_WORKERS` | a quarter of the CPUs | `mask_workers` |
 | `PGW_SPECULATION` | `off` | `speculation` |
 | `PGW_SCHEDULE` | `standard` | `schedule` |
+| `PGW_ROUTING` | `off` | `routing` |
 | `PGW_SDK_LINK_RTT_MS` | unset | `schedule="auto"`: use this round-trip time (ms) instead of measuring the link (tests, or a link you know) |
 | `PGW_MASK_ADMISSION` | `entitled` | `mask_admission` |
 | `PGW_FACTORY_STALL_S` | `120` | `factory_stall_s` |

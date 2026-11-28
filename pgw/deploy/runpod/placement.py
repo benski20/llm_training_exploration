@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Dynamic GPU pods on RunPod in the data centres nearest the users (docs/operations/placement.md; RUNBOOK
-section 7). The policy is :mod:`pgw.placement.policy`; this script turns its plans into RunPod API calls.
+section 3.9). The policy is :mod:`pgw.placement.policy`; this script turns its plans into RunPod API calls.
 
     python deploy/runpod/placement.py plan --demand demand.json --warm new-york=1,london=1     # no API call
     python deploy/runpod/placement.py stage-packs --dcs US-DE-1,EU-FR-1 --models qwen2.5-7b-instruct --dry-run
@@ -38,6 +38,9 @@ sys.path.insert(0, str(HERE))
 import launch  # noqa: E402  (stdlib only at import time)
 import pod_boot  # noqa: E402
 from runpod_api import RunPodAPI, RunPodError  # noqa: E402
+
+if (HERE.parents[1] / "src" / "pgw" / "placement").is_dir():  # this checkout's pgw first (an installed one may lag)
+    sys.path.insert(0, str(HERE.parents[1] / "src"))
 
 POD_PREFIX = "pgw-place-"
 PACKER_PREFIX = "pgw-packer-"
@@ -311,7 +314,7 @@ def cmd_apply(args: argparse.Namespace, api: RunPodAPI | None) -> int:
     ca = Path(args.controller_ca).read_bytes() if args.controller_ca else b"<controller CA PEM>"
     act = Actuator(api, c, image=args.image or os.environ.get("PGW_RUNPOD_IMAGE") or "<PGW_RUNPOD_IMAGE>",
                    volumes=volumes, controller_url=args.controller_url, controller_ca_pem=ca, dry_run=args.dry_run,
-                   max_pods=args.max_pods)
+                   max_pods=args.max_pods, ttl_h=args.pod_ttl_h)
     plan = c.plan(time.time(), load_demand(args.demand), act.fleet())
     print(json.dumps(plan.public(), indent=1))
     for rec in act.apply(plan):
@@ -322,7 +325,7 @@ def cmd_apply(args: argparse.Namespace, api: RunPodAPI | None) -> int:
 
 
 def build_service(args: argparse.Namespace, api: Any) -> dict[str, Any]:
-    """The controller of a live trial (RUNBOOK section 7): registry with the pod-issuing CA, the directory publisher
+    """The controller of a live trial (RUNBOOK section 3.9): registry with the pod-issuing CA, the directory publisher
     (writes the signed directory where the enrolled endpoint serves it), the pods' HTTP API and the control loop.
     Secrets read here: the pod-issuing CA key and the directory signing key (files 0600, refused otherwise)."""
     from cryptography import x509
@@ -366,7 +369,8 @@ def build_service(args: argparse.Namespace, api: Any) -> dict[str, Any]:
     c = build_controller(args)
     act = Actuator(api, c, image=args.image or os.environ.get("PGW_RUNPOD_IMAGE") or "", volumes=json.loads(
         args.volumes), controller_url=args.controller_url, controller_ca_pem=Path(args.controller_ca).read_bytes(),
-        expect=reg.expect, drain=reg.drain, remove=reg.remove, dry_run=args.dry_run, max_pods=args.max_pods)
+        expect=reg.expect, drain=reg.drain, remove=reg.remove, dry_run=args.dry_run, max_pods=args.max_pods,
+        ttl_h=args.pod_ttl_h)
     return {"app": app, "registry": reg, "publisher": pub, "controller": c, "actuator": act,
             "forecaster": Forecaster(), "ledger": Ledger(), "publish": publish}
 
@@ -397,13 +401,14 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--controller-url", default="https://<controller>:9443")
     p.add_argument("--controller-ca", default=None, help="the controller's CA certificate (PEM file)")
     p.add_argument("--max-pods", type=int, default=4)
+    p.add_argument("--pod-ttl-h", type=float, default=POD_TTL_H, help="each pod stops itself after this")
     p = sub.add_parser("stage-packs", help="per-data-centre network volumes + a CPU packer pod each")
     p.add_argument("--dcs", required=True)
     p.add_argument("--models", default="qwen2.5-7b-instruct")
     p.add_argument("--image", default=None)
     p.add_argument("--max-usd", type=float, default=3.0)
     p.add_argument("--dry-run", action="store_true")
-    p = sub.add_parser("serve", help="the live trial's controller: pods' API + the control loop (RUNBOOK 7)")
+    p = sub.add_parser("serve", help="the live trial's controller: pods' API + the control loop (RUNBOOK 3.9)")
     policy_args(p)
     p.add_argument("--dry-run", action="store_true", help="plan and log the payloads; create nothing")
     p.add_argument("--state-dir", required=True, help="root.pem, client-ca.pem, issuing-ca.{pem,key}, directory.key")
@@ -417,6 +422,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--controller-url", required=True)
     p.add_argument("--controller-ca", required=True)
     p.add_argument("--max-pods", type=int, default=4)
+    p.add_argument("--pod-ttl-h", type=float, default=POD_TTL_H, help="each pod stops itself after this")
     p.add_argument("--directory-validity-s", type=int, default=3600)
     p.add_argument("--tick-s", type=float, default=120.0)
     p.add_argument("--listen", default="0.0.0.0:9443")

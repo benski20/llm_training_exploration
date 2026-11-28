@@ -1,4 +1,4 @@
-"""Cold-start time of a GPU pod, by component (estimates unless stated; the trial in RUNBOOK section 7 measures them).
+"""Cold-start time of a GPU pod, by component (estimates unless stated; the trial in RUNBOOK section 3.9 measures them).
 
 Sequence (:mod:`pgw.placement.registry`): RunPod schedules the pod and starts the container -> the network volume
 is mounted -> the pre-staged pack is verified against its pinned fingerprint (every byte hashed) -> the service

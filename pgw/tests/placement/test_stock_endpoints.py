@@ -17,7 +17,7 @@ import pytest
 from pgw.core import RING_K40_A12
 from pgw.core.errors import MaskExhaustedError
 from pgw.sdk.regions import stock_compatible
-from tests.maskstore.conftest import FP, FP2, kp, make_model, open_store, write_segment  # noqa: F401 (fixtures)
+from tests.maskstore.conftest import FP, FP2, make_model, write_segment
 
 
 def _slots(res: Any) -> set[tuple[str, int]]:

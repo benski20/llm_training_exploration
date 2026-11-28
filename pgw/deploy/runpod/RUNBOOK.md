@@ -386,6 +386,61 @@ availability; ids are `<country>-<region>-<n>` (`US-KS-2`, `US-TX-3`, `US-GA-2`,
 GPU data centre, run `wan` with clients in the data centres nearest to the user populations you care about, and
 use the measured pod-to-pod RTT plus the access network figures above.
 
+### 9. `placement` (PROPOSED, not launched): dynamic pods in two data centres (docs/operations/placement.md)
+
+Not in `jobs.py` and not in the $60 budget above: it needs an explicit go-ahead, its own cap and a new PKI. Goal:
+measure what the placement design assumes (cold-start components, `POD_STREAMS`, the network volume's read rate,
+the catalog's availability format) and exercise the whole loop once: stage -> create -> verify -> register ->
+listed -> client moves -> drain -> terminate. Two data centres (e.g. `US-DE-1` and `EU-FR-1`, or whichever two
+`jobs.py datacenters` shows with H100 stock), 7B only, at most 3 GPU pods, 2 hours.
+
+**Budget**: packer pods 2 x 8 vCPU x <= 90 min ~ $0.96 at most; network volumes 2 x 20 GB ($2.80 per month, prorated
+cents; delete after); GPU pods at most 3 x $2.99 x 2 h = **$17.94**; the enrolled provider (`launch.py`, L40S, 2 h)
+~$1.8; one CPU client pod per data centre for 2 h ~ $0.64 each. Cap: `--max-usd-total 22`, `--max-usd-hour 9`,
+`--max-pods 3`. RunPod's own spend limit stays on.
+
+0. **Dry runs, no key needed**:
+
+   ```bash
+   python deploy/runpod/placement.py coldstart --model qwen2.5-7b-instruct
+   python deploy/runpod/placement.py stage-packs --dcs US-DE-1,EU-FR-1 --models qwen2.5-7b-instruct --dry-run
+   echo '{"new-york": {"qwen2.5-7b-instruct": 4}, "london": {"qwen2.5-7b-instruct": 14}}' > /tmp/demand.json
+   python deploy/runpod/placement.py apply --demand /tmp/demand.json --warm new-york=1 --dry-run \
+       --max-usd-hour 9 --max-usd-day 22 --max-usd-total 22 --max-pods 3 --pod-ttl-h 2.5
+   ```
+
+   Check the payloads: `dataCenterIds`, `networkVolumeId`, `cloudType: SECURE`, `PGW_RUNPOD_STOP_AT` about 12 h
+   ahead (`--pod-ttl-h 2.5` for the trial), the token redacted.
+1. **PKI for the trial** (on the controller machine, files 0600; the root never leaves it):
+   `pgw.placement.certs.new_root()` -> `root.pem` / key offline; `new_issuing_ca(root)` -> `issuing-ca.pem` /
+   `issuing-ca.key`; `pgw.placement.publisher.generate_key(state/directory.key)`; a controller TLS certificate for
+   the controller's public name. The enrolled provider gets a leaf from the issuing CA (chain = leaf + issuing CA);
+   SDK keys pin `root.pem` (the launcher's own CA is `path_length=0` and cannot be used for this).
+2. **Enrolled provider** (`launch.py`, one L40S in the first data centre) with `--service-env
+   PGW_SERVICE_ENDPOINT_DIRECTORY_KEY=<hex> --service-env PGW_SERVICE_ENDPOINT_DIRECTORY_FILE=/workspace/pgw/state/directory.json
+   --service-env PGW_SERVICE_DEMAND_REPORTS=true --service-env PGW_SERVICE_DEMAND_EXPORT_TOKEN_SHA256=[...]`; its
+   tokens / mTLS files are the tenant digests the controller ships to pods. New SDK keys are then format 2.
+3. **Stage packs**: `placement.py stage-packs --dcs US-DE-1,EU-FR-1 --models qwen2.5-7b-instruct --max-usd 1.5`.
+   Each packer pod verifies in full and stops itself; record the wall time per data centre and `fingerprints.json`
+   (must equal `PINNED_MODELS`).
+4. **Controller**: `placement.py serve --state-dir ... --directory-file ... --volumes '{"US-DE-1": "...", ...}'
+   --controller-url https://<name>:9443 --controller-ca ... --tls-cert ... --tls-key ... --warm new-york=1
+   --max-usd-hour 9 --max-usd-day 22 --max-usd-total 22 --max-pods 3 --pod-ttl-h 2.5 --tick-s 60`. Copy the directory file to the
+   enrolled provider's `directory.json` path after each publish (or run the controller on that pod).
+5. **Measure**: each pod's `boot_timings` (the controller logs them at registration): `verify_pack` gives the volume
+   read rate, `service_ready` the load + self-tests; the time from `create` to `activate`; then from a CPU client pod
+   in each data centre with `routing="signed"`: the directory version and endpoint in `status()`, decode tok/s at 1 /
+   4 / 8 / 16 / 24 concurrent streams on one pod (where tok/s per stream starts to fall is `POD_STREAMS`), the
+   switch after a pod is added (time until the client uses it), a drain (clients leave within one refresh) and a
+   terminate with a request in flight (failover before the first token; never during an answer).
+6. **Teardown**: `launch.py --stop --terminate`; terminate every `pgw-place-` / `pgw-packer-` pod
+   (`jobs.py teardown-check` lists running pods); delete both network volumes in the console. Record the spend from
+   `jobs.py check-key`.
+
+What it decides: `POD_STREAMS` and the cold-start defaults in `pgw.placement.coldstart` are replaced by the measured
+values; whether RunPod's capacity errors match `placement.CAPACITY_HINTS`; whether the catalog's availability
+fields drive `Controller.plan(availability=...)` as written.
+
 ## 4. Budget
 
 `python deploy/runpod/jobs.py plan` (table prices, Secure Cloud, each session at its full TTL including the

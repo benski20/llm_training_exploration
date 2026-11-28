@@ -31,14 +31,21 @@ The model weights are public. Their secrecy is not a goal.
   Mask material we help produce is self-checked with at least 40 bits of soundness against errors of our
   choosing before use.
 * **Authenticity of the service.** The certificate authority of our service is pinned by your key; TLS to
-  any other server fails.
+  any other server fails. With region routing (`routing="signed"`, opt-in) every endpoint, including GPU pods
+  started near you on demand, must chain to that same pinned CA (each pod has its own short-lived certificate;
+  no private key is shared), and the list of endpoints is signed with a second pinned key, expires, and can never
+  be rolled back to an older version ([placement](../operations/placement.md#signed-endpoint-directory)).
 * **Your credentials.** The client private key is generated on your machine and never leaves it. The SDK
   key is revocable by us at your request.
 
 ## What is not protected
 
 * **Metadata.** We see which model you use, token counts, request timing and traffic volume, and we keep
-  usage records for billing and capacity. Padding and dummy traffic are planned, not in this release.
+  usage records for billing and capacity. Padding and dummy traffic are planned, not in this release. With region
+  routing and usage reports on, the library also sends one content-free demand record per model and hour (the
+  endpoint's region label, a coarse RTT bucket, peak concurrent streams: facts the traffic already shows); we map
+  your connection's address to a coarse region, drop the address, and keep only hourly aggregates with small
+  counts suppressed ([details](../operations/placement.md#demand-telemetry-and-privacy)).
 * **Prefix cache hits** (opt-in, `prefix_cache=True`): a request that reuses a cached prompt prefix sends only
   its new tokens' rows, so we can tell that it continued an earlier request and roughly how long its context is.
   No content is revealed ([configuration](configuration.md#prefix-cache)).

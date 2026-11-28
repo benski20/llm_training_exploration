@@ -1,0 +1,254 @@
+{
+ "model": "7B",
+ "surge_min": 6.0,
+ "cold_start": {
+  "model": "qwen2.5-7b-instruct",
+  "prestaged": true,
+  "image_cached": false,
+  "components_s": {
+   "schedule": 15.0,
+   "image_pull": 75.0,
+   "mount": 5.0,
+   "verify_pack": 17.4,
+   "load": 2.9,
+   "service_init": 20.0,
+   "selftests": 30.0,
+   "register": 2.0
+  },
+  "ready_s": 167.3,
+  "in_use_s": 317.3,
+  "assumptions": {
+   "schedule_s": 15.0,
+   "image_gb": 9.0,
+   "pull_mb_s": 120.0,
+   "mount_s": 5.0,
+   "volume_mb_s": 500.0,
+   "hash_mb_s": 1500.0,
+   "hash_threads": 4.0,
+   "load_mb_s": 3000.0,
+   "service_init_s": 20.0,
+   "selftest_s": 30.0,
+   "register_s": 2.0,
+   "hf_mb_s": 150.0,
+   "pack_s_per_gb": 25.0
+  }
+ },
+ "price_h": 2.99,
+ "metro_peak": {
+  "new-york": 120.0,
+  "san-francisco": 90.0,
+  "chicago": 36.0,
+  "dallas": 30.0,
+  "london": 105.0,
+  "frankfurt": 75.0,
+  "stockholm": 18.0,
+  "tokyo": 60.0
+ },
+ "results": [
+  {
+   "policy": "single",
+   "hours": 48.0,
+   "cold_start_s": 167.3,
+   "pods_mean": 49.0,
+   "pods_max": 49,
+   "usd_per_hour": 146.50999999999848,
+   "usd_total": 7032.479999999927,
+   "rtt_ms": {
+    "p50": 49.218429283777965,
+    "p90": 160.94819872036845,
+    "p99": 170.64819872036844
+   },
+   "tok_s_per_user": {
+    "mean": 0.19887095269338048,
+    "p10": 0.05486949312846687,
+    "p50": 0.17865713409404163
+   },
+   "tok_s_by_metro": {
+    "chicago": 0.58,
+    "dallas": 0.54,
+    "frankfurt": 0.07,
+    "london": 0.08,
+    "new-york": 0.27,
+    "san-francisco": 0.21,
+    "stockholm": 0.07,
+    "tokyo": 0.05
+   },
+   "overloaded_share": 0.0,
+   "excess_rtt_ms": {
+    "mean": 72.56498686915182,
+    "p99": 160.14819872036844
+   },
+   "surge_tok_s": {
+    "mean": 0.19950435168010872,
+    "p10": 0.05486949312846687,
+    "excess_rtt_ms_p90": 160.14819872036844
+   },
+   "usd_per_million_tokens": 922.9078286638365,
+   "stream_hours": 10643.300419145675
+  },
+  {
+   "policy": "static",
+   "hours": 48.0,
+   "cold_start_s": 167.3,
+   "pods_mean": 52.0,
+   "pods_max": 52,
+   "usd_per_hour": 155.48000000001025,
+   "usd_total": 7463.040000000492,
+   "rtt_ms": {
+    "p50": 6.295585051821963,
+    "p90": 13.211796963706178,
+    "p99": 16.320358386804482
+   },
+   "tok_s_per_user": {
+    "mean": 2.087629929553805,
+    "p10": 0.653888138724442,
+    "p50": 1.3340206845237805
+   },
+   "tok_s_by_metro": {
+    "chicago": 3.14,
+    "dallas": 3.14,
+    "frankfurt": 1.03,
+    "london": 1.04,
+    "new-york": 1.53,
+    "san-francisco": 2.35,
+    "stockholm": 3.83,
+    "tokyo": 4.3
+   },
+   "overloaded_share": 0.0,
+   "excess_rtt_ms": {
+    "mean": 0.0,
+    "p99": 0.0
+   },
+   "surge_tok_s": {
+    "mean": 2.0899580710097347,
+    "p10": 0.653888138724442,
+    "excess_rtt_ms_p90": 0.0
+   },
+   "usd_per_million_tokens": 93.30038444198036,
+   "stream_hours": 10643.300419145675
+  },
+  {
+   "policy": "dynamic",
+   "hours": 48.0,
+   "cold_start_s": 167.3,
+   "pods_mean": 27.29201388888889,
+   "pods_max": 43,
+   "usd_per_hour": 81.60312152777787,
+   "usd_total": 3916.949833333338,
+   "rtt_ms": {
+    "p50": 6.295585051821963,
+    "p90": 13.211796963706178,
+    "p99": 16.320358386804482
+   },
+   "tok_s_per_user": {
+    "mean": 2.086985261148259,
+    "p10": 0.653888138724442,
+    "p50": 1.3340206845237805
+   },
+   "tok_s_by_metro": {
+    "chicago": 3.14,
+    "dallas": 3.14,
+    "frankfurt": 1.03,
+    "london": 1.04,
+    "new-york": 1.53,
+    "san-francisco": 2.35,
+    "stockholm": 3.83,
+    "tokyo": 4.3
+   },
+   "overloaded_share": 0.0,
+   "excess_rtt_ms": {
+    "mean": 0.005452052699739098,
+    "p99": 0.0
+   },
+   "surge_tok_s": {
+    "mean": 2.0692147614216005,
+    "p10": 0.653888138724442,
+    "excess_rtt_ms_p90": 0.0
+   },
+   "usd_per_million_tokens": 49.02480334208788,
+   "stream_hours": 10634.333264934581
+  },
+  {
+   "policy": "dynamic-reactive",
+   "hours": 48.0,
+   "cold_start_s": 167.3,
+   "pods_mean": 26.29722222222222,
+   "pods_max": 40,
+   "usd_per_hour": 78.62869444444469,
+   "usd_total": 3774.177333333345,
+   "rtt_ms": {
+    "p50": 6.295585051821963,
+    "p90": 13.211796963706178,
+    "p99": 16.320358386804482
+   },
+   "tok_s_per_user": {
+    "mean": 2.0863689033091726,
+    "p10": 0.653888138724442,
+    "p50": 1.3340206845237805
+   },
+   "tok_s_by_metro": {
+    "chicago": 3.14,
+    "dallas": 3.14,
+    "frankfurt": 1.03,
+    "london": 1.04,
+    "new-york": 1.53,
+    "san-francisco": 2.35,
+    "stockholm": 3.83,
+    "tokyo": 4.3
+   },
+   "overloaded_share": 0.0,
+   "excess_rtt_ms": {
+    "mean": 0.030357297862455758,
+    "p99": 0.0
+   },
+   "surge_tok_s": {
+    "mean": 2.042502668428001,
+    "p10": 0.653888138724442,
+    "excess_rtt_ms_p90": 0.0
+   },
+   "usd_per_million_tokens": 47.251808351846456,
+   "stream_hours": 10634.33326493458
+  },
+  {
+   "policy": "dynamic-unstaged",
+   "hours": 48.0,
+   "cold_start_s": 468.0833333333333,
+   "pods_mean": 27.355555555555554,
+   "pods_max": 43,
+   "usd_per_hour": 81.79311111111126,
+   "usd_total": 3926.06933333334,
+   "rtt_ms": {
+    "p50": 6.295585051821963,
+    "p90": 13.211796963706178,
+    "p99": 16.320358386804482
+   },
+   "tok_s_per_user": {
+    "mean": 2.0854932871490197,
+    "p10": 0.653888138724442,
+    "p50": 1.3340206845237805
+   },
+   "tok_s_by_metro": {
+    "chicago": 3.14,
+    "dallas": 3.14,
+    "frankfurt": 1.03,
+    "london": 1.04,
+    "new-york": 1.53,
+    "san-francisco": 2.35,
+    "stockholm": 3.83,
+    "tokyo": 4.3
+   },
+   "overloaded_share": 0.0,
+   "excess_rtt_ms": {
+    "mean": 0.028439508326179513,
+    "p99": 0.0
+   },
+   "surge_tok_s": {
+    "mean": 2.0094742787647113,
+    "p10": 0.5417958774392249,
+    "excess_rtt_ms_p90": 0.0
+   },
+   "usd_per_million_tokens": 49.2458717228956,
+   "stream_hours": 10618.834162170382
+  }
+ ]
+}
